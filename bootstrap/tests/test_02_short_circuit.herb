@@ -1,0 +1,19 @@
+-- Boolean operators (and/or/not) including a short-circuit proof: the
+-- right-hand operand of `false and X` and `true or X` is an expression
+-- that WOULD raise a runtime error if evaluated (tuple index out of
+-- range). The program completing cleanly proves it was not evaluated.
+
+func crash():
+    -- Indexing a 2-tuple at position 99 is a runtime error.
+    let t = (1, 2)
+    return t.99
+end
+
+func main():
+    let a = false and crash()       -- short-circuits to false
+    let b = true  or  crash()       -- short-circuits to true
+    let c = not true                -- false
+    let d = (not false) and (1 < 2) -- true
+    let e = (1 == 2) or  (1 == 1)   -- true
+    return (a, b, c, d, e)
+end

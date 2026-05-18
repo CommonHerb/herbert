@@ -1,0 +1,22 @@
+-- Growable array of ints: new_array(int), add, get, count. Also
+-- exercise an array whose element type is itself a tuple.
+
+func main():
+    let xs = new_array(int)
+    do add(xs, 10)
+    do add(xs, 20)
+    do add(xs, 30)
+    let n  = count(xs)        -- 3
+    let v0 = get(xs, 0)       -- 10
+    let v1 = get(xs, 1)       -- 20
+    let v2 = get(xs, 2)       -- 30
+
+    let pairs = new_array((int, bool))
+    do add(pairs, (1, true))
+    do add(pairs, (2, false))
+    let p_n = count(pairs)         -- 2
+    let p0  = get(pairs, 0).0      -- 1
+    let p1  = get(pairs, 1).1      -- false
+
+    return (n, v0, v1, v2, p_n, p0, p1)
+end

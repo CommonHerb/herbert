@@ -1,0 +1,34 @@
+-- Strings (including the empty string), index/length/equal, and the
+-- buffer pipeline new_buffer -> append -> freeze -> string.
+
+func main():
+    let s     = "hello"
+    let empty = ""
+    let len_s   = length(s)             -- 5
+    let len_e   = length(empty)         -- 0
+    let c0      = index(s, 0)           -- 104  ('h')
+    let c4      = index(s, 4)           -- 111  ('o')
+    let eq_same = equal(s, "hello")     -- true
+    let eq_diff = equal(s, "world")     -- false
+    let eq_emp  = equal(empty, "")      -- true
+
+    -- Build "abc" through a buffer and freeze it back to an immutable string.
+    let b = new_buffer()
+    do append(b, 'a')
+    do append(b, 'b')
+    do append(b, 'c')
+    let frozen = freeze(b)
+    let len_f  = length(frozen)         -- 3
+    let eq_f   = equal(frozen, "abc")   -- true
+
+    -- After freeze, the buffer is still alive and independently mutable.
+    do append(b, 'd')
+    let after = freeze(b)
+    let len_a = length(after)           -- 4
+    let eq_a  = equal(after, "abcd")    -- true
+    -- The earlier frozen snapshot is unaffected.
+    let eq_snapshot = equal(frozen, "abc")  -- true
+
+    return (len_s, len_e, c0, c4, eq_same, eq_diff, eq_emp,
+            len_f, eq_f, len_a, eq_a, eq_snapshot)
+end

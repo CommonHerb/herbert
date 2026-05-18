@@ -2,17 +2,38 @@ CC      ?= cc
 CFLAGS  ?= -std=c11 -Wall -Wextra -Wpedantic -O2
 
 BUILD   := build
+
+# --- Guard scanner -----------------------------------------------------
 SCANNER := $(BUILD)/scan
 TRACKED := $(BUILD)/tracked.txt
 
-.PHONY: check clean
+# --- Herbert interpreter ----------------------------------------------
+HERBERT      := $(BUILD)/herbert
+HERBERT_SRCS := \
+    bootstrap/util.c \
+    bootstrap/lex.c \
+    bootstrap/parse.c \
+    bootstrap/value.c \
+    bootstrap/eval.c \
+    bootstrap/main.c
+HERBERT_HDR  := bootstrap/herbert.h
+
+.PHONY: all check test clean
+
+all: $(HERBERT)
 
 check: $(SCANNER)
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
 
+test: $(HERBERT)
+	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_tests.sh
+
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<
+
+$(HERBERT): $(HERBERT_SRCS) $(HERBERT_HDR) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $(HERBERT_SRCS)
 
 $(BUILD):
 	@mkdir -p $(BUILD)

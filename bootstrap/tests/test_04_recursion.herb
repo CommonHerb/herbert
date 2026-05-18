@@ -1,0 +1,17 @@
+-- Functions with parameters and locals, plus GENUINE non-tail recursion:
+-- sum(n) = n + sum(n-1). The recursive call is not in tail position
+-- because we still have to add `n` to its result before returning.
+
+func sum(n):
+    if n == 0:
+        return 0
+    else:
+        let rest = sum(n - 1)
+        return n + rest
+    end
+end
+
+func main():
+    -- Sum of 1..10 is 55.
+    return sum(10)
+end

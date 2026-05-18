@@ -1,0 +1,9 @@
+-- Deferred-operation demonstration. Per SCOPE, slice on an immutable
+-- string is parsed normally but raises a clean "not implemented in this
+-- interpreter version" error when invoked. This file is intentionally
+-- NOT named test_*.herb so the standard runner skips it.
+
+func main():
+    let s = "hello"
+    return slice(s, 0, 3)
+end

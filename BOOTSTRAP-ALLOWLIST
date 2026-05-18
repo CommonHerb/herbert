@@ -18,7 +18,25 @@
 BOOTSTRAP-ALLOWLIST
 Makefile
 README.md
+bootstrap/tests/run_tests.sh
+bootstrap/tests/test_01_arith.expected
+bootstrap/tests/test_02_short_circuit.expected
+bootstrap/tests/test_03_if_elif.expected
+bootstrap/tests/test_04_recursion.expected
+bootstrap/tests/test_05_block_scope.expected
+bootstrap/tests/test_06_tuples.expected
+bootstrap/tests/test_07_array.expected
+bootstrap/tests/test_08_strings_buffer.expected
+bootstrap/tests/test_09_ref_vs_value.expected
+bootstrap/tests/test_10_tco.expected
 stack/.gitkeep
 tools/scan.c
 
 # --- bootstrap (host-language Herbert implementation: shrinks to zero) ---
+bootstrap/eval.c
+bootstrap/herbert.h
+bootstrap/lex.c
+bootstrap/main.c
+bootstrap/parse.c
+bootstrap/util.c
+bootstrap/value.c

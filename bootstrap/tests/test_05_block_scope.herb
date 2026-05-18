@@ -1,0 +1,36 @@
+-- Block-scoped `let`: the same name `y` is bound separately in each
+-- branch arm and does not leak past the arm's `end`. Each arm rebinds
+-- the enclosing `x` (which lives in the function's outer scope) via
+-- assignment (no `let`).
+
+func main():
+    let x = 100
+    if true:
+        let y = 1
+        x = x + y    -- x becomes 101
+    else:
+        let y = 99
+        x = x + y    -- not taken
+    end
+    -- y is gone here; if we let y again it is a fresh binding.
+    if false:
+        let y = 50
+        x = x + y    -- not taken
+    else:
+        let y = 7
+        x = x + y    -- x becomes 108
+    end
+    -- One more nested arm to show shadowing works across nesting too.
+    if x > 0:
+        let z = 1000
+        if x < 200:
+            let z = 2   -- inner z shadows outer z; only inner is visible here
+            x = x + z   -- x becomes 110
+        else:
+            x = x + z   -- not taken
+        end
+        -- The inner z is gone; outer z is still 1000 here.
+        x = x + z       -- x becomes 1110
+    end
+    return x
+end

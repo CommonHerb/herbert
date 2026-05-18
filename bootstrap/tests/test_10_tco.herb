@@ -1,0 +1,17 @@
+-- Tail-call stress test (IMPL-TCO).
+--
+-- countdown(n) recurses ten million deep with the self-call in tail
+-- position. Without TCO this would blow the C stack; with TCO, the
+-- single frame is reused and the program completes returning 0.
+
+func countdown(n):
+    if n == 0:
+        return 0
+    else:
+        return countdown(n - 1)
+    end
+end
+
+func main():
+    return countdown(10000000)
+end

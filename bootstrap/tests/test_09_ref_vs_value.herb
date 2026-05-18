@@ -1,0 +1,32 @@
+-- Reference vs value semantics.
+--
+-- An array is a reference type: passing it shares the same underlying
+-- storage, so a mutation inside the callee is visible to the caller.
+-- An integer is a value type: passing it copies the value, and a
+-- rebinding in the callee leaves the caller's binding untouched.
+
+func mutate_array(arr):
+    do add(arr, 99)
+    return 0
+end
+
+func change_int(n):
+    n = n + 1000
+    return n
+end
+
+func main():
+    -- reference type: array
+    let a = new_array(int)
+    do add(a, 1)
+    do add(a, 2)
+    let ignore = mutate_array(a)
+    let n_after = count(a)        -- 3 (1, 2, 99)
+    let last    = get(a, 2)       -- 99
+
+    -- value type: integer
+    let x  = 5
+    let xx = change_int(x)
+    -- x is unchanged outside change_int
+    return (n_after, last, x, xx)
+end

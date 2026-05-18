@@ -1,0 +1,24 @@
+-- if / elif / else, multi-arm chain selecting each arm in turn.
+
+func classify(n):
+    if n == 0:
+        return 100
+    elif n == 1:
+        return 200
+    elif n == 2:
+        return 300
+    elif n == 3:
+        return 400
+    else:
+        return 999
+    end
+end
+
+func main():
+    let r0  = classify(0)    -- hits the if
+    let r1  = classify(1)    -- hits the 1st elif
+    let r2  = classify(2)    -- hits the 2nd elif
+    let r3  = classify(3)    -- hits the 3rd elif
+    let r99 = classify(99)   -- hits the else
+    return (r0, r1, r2, r3, r99)
+end

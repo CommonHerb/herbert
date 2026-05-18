@@ -1,0 +1,16 @@
+-- Integer arithmetic, all six comparisons, and modular wrap on overflow.
+
+func main():
+    let a    = 7 + 5         -- 12
+    let b    = a - 3         -- 9
+    let lt   = a < b         -- false
+    let le   = b <= b        -- true
+    let gt   = a > b         -- true
+    let ge   = a >= b        -- true
+    let eq   = a == 12       -- true
+    let ne   = b != 9        -- false
+    let big  = 18446744073709551615   -- 2^64 - 1
+    let wrap = big + 1                 -- wraps to 0 (uint64 modular)
+    let sub  = 0 - 1                   -- wraps to 2^64 - 1
+    return (a, b, lt, le, gt, ge, eq, ne, wrap, sub)
+end

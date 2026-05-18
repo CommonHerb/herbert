@@ -1,0 +1,18 @@
+-- Tuples: construction, positional .N access, mixed element types,
+-- nested tuples reached via chained dot access.
+
+func main():
+    let mixed  = (42, true, "hi")
+    let nested = (mixed, (10, 20), false)
+
+    let a = mixed.0       -- 42
+    let b = mixed.1       -- true
+    let c = mixed.2       -- "hi"
+    let d = nested.0      -- (42, true, "hi")
+    let e = nested.0.2    -- "hi"
+    let f = nested.1.0    -- 10
+    let g = nested.1.1    -- 20
+    let h = nested.2      -- false
+
+    return (a, b, c, d, e, f, g, h)
+end
