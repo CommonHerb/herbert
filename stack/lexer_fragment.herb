@@ -1,0 +1,224 @@
+-- Herbert lexer fragment, written in Herbert. First real program on
+-- the Herbert stack.
+--
+-- Takes a Herbert source string and returns a growable array of token
+-- tuples in source order. A token is exactly two values:
+--
+--     ( kind, text )
+--
+-- where `kind` is an integer tag and `text` is an immutable string
+-- carrying the RAW source bytes of the token.
+--
+-- Kind constants:
+--     0 = IDENTIFIER  (letter/underscore start, then letter/digit/
+--                      underscore; keywords are NOT distinguished)
+--     1 = INTEGER     (run of decimal digits)
+--     2 = STRING      (`"` ... `"`, with \n \\ \" escapes consumed
+--                      but not decoded)
+--     3 = CHAR        (`'` one byte or one escape `'`)
+--     4 = PUNCT       (exactly one of `(` `)` `,` `:` `.`)
+--     5 = OPERATOR    (one of `=` `+` `-` `<` `>` `==` `!=` `<=` `>=`)
+--
+-- Raw rather than decoded text so that the byte length of `text`
+-- equals the number of source bytes consumed for that token, which
+-- keeps the slicing trivial and makes the .expected diff legible.
+--
+-- Scope: well-formed Herbert source only. Bytes outside the
+-- recognized set are out of scope; the fragment does not error on
+-- them. A bare `!` is not a valid Herbert token and will not appear
+-- in well-formed input; `!` only ever begins the two-byte operator
+-- `!=`.
+--
+-- Hot path: `scan` is self-recursive in tail position so a long
+-- input runs in flat stack space (IMPL-TCO). Each per-token helper
+-- (`end_of_ident`, `end_of_int`, `end_of_line`, `end_of_string`,
+-- `end_of_char`, `pour`) is itself self-recursive in tail position,
+-- so the C-side stack stays bounded regardless of source length.
+
+-- ---------- byte classifiers ----------
+
+func is_digit(c):
+    return c >= '0' and c <= '9'
+end
+
+func is_lower(c):
+    return c >= 'a' and c <= 'z'
+end
+
+func is_upper(c):
+    return c >= 'A' and c <= 'Z'
+end
+
+func is_alpha(c):
+    return is_lower(c) or is_upper(c)
+end
+
+func is_ident_start(c):
+    return is_alpha(c) or c == '_'
+end
+
+func is_ident_cont(c):
+    return is_ident_start(c) or is_digit(c)
+end
+
+func is_ws(c):
+    -- space, newline, tab (9), carriage return (13).
+    return c == ' ' or c == '\n' or c == 9 or c == 13
+end
+
+func is_two_byte_op_start(c):
+    -- bytes that may open a two-byte operator (==, !=, <=, >=)
+    return c == '=' or c == '!' or c == '<' or c == '>'
+end
+
+func is_one_byte_op(c):
+    -- bytes that stand alone as a one-byte operator (=, +, -, <, >)
+    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>'
+end
+
+-- ---------- per-token scanners ----------
+
+func end_of_ident(src, i, n):
+    if i >= n:
+        return i
+    elif is_ident_cont(index(src, i)):
+        return end_of_ident(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+func end_of_int(src, i, n):
+    if i >= n:
+        return i
+    elif is_digit(index(src, i)):
+        return end_of_int(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+-- Skip to the newline that ends a `--` comment, or to EOF. Returns
+-- the index of the newline byte itself (the main scan eats it on the
+-- next iteration as whitespace).
+func end_of_line(src, i, n):
+    if i >= n:
+        return i
+    elif index(src, i) == '\n':
+        return i
+    else:
+        return end_of_line(src, i + 1, n)
+    end
+end
+
+-- `i` is one past the opening `"`. Returns one past the closing `"`.
+-- A backslash starts a two-byte escape; both bytes are consumed
+-- without decoding.
+func end_of_string(src, i, n):
+    let c = index(src, i)
+    if c == '"':
+        return i + 1
+    elif c == '\\':
+        return end_of_string(src, i + 2, n)
+    else:
+        return end_of_string(src, i + 1, n)
+    end
+end
+
+-- `i` is one past the opening `'`. Returns one past the closing `'`.
+-- A char literal body is either one ordinary byte or a two-byte
+-- escape; the closing quote follows.
+func end_of_char(src, i, n):
+    if index(src, i) == '\\':
+        return i + 3
+    else:
+        return i + 2
+    end
+end
+
+-- Append src[from..to) byte-by-byte into b. Self-recursive in tail
+-- position so a long token does not deepen the C stack.
+func pour(src, from, to, b):
+    if from >= to:
+        return b
+    else:
+        do append(b, index(src, from))
+        return pour(src, from + 1, to, b)
+    end
+end
+
+-- Cut src[from..to) into a fresh immutable string. `slice` on an
+-- immutable string is deferred in the bootstrap interpreter, so we
+-- build a buffer and freeze it.
+func slice_text(src, from, to):
+    return freeze(pour(src, from, to, new_buffer()))
+end
+
+-- ---------- the main scan ----------
+--
+-- `out` is the growable token array; `do add(out, ...)` mutates it
+-- through array reference identity. The function is self-recursive
+-- in tail position on every branch. The two-byte operator check sits
+-- ahead of the one-byte operator check so `==` is one OPERATOR token
+-- (not two `=` tokens), and the comment check stays ahead of all
+-- operator handling so `--` never tokenizes as a minus.
+func scan(src, i, n, out):
+    if i >= n:
+        return out
+    end
+    let c = index(src, i)
+    if is_ws(c):
+        return scan(src, i + 1, n, out)
+    elif c == '-' and i + 1 < n and index(src, i + 1) == '-':
+        return scan(src, end_of_line(src, i + 2, n), n, out)
+    elif is_ident_start(c):
+        let j = end_of_ident(src, i + 1, n)
+        do add(out, (0, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif is_digit(c):
+        let j = end_of_int(src, i + 1, n)
+        do add(out, (1, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif c == '"':
+        let j = end_of_string(src, i + 1, n)
+        do add(out, (2, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif c == '\'':
+        let j = end_of_char(src, i + 1, n)
+        do add(out, (3, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2)))
+        return scan(src, i + 2, n, out)
+    elif is_one_byte_op(c):
+        do add(out, (5, slice_text(src, i, i + 1)))
+        return scan(src, i + 1, n, out)
+    else:
+        -- One of ( ) , : .
+        do add(out, (4, slice_text(src, i, i + 1)))
+        return scan(src, i + 1, n, out)
+    end
+end
+
+-- The fragment's external entry. Takes a Herbert source string and
+-- returns the array of (kind, text) token tuples.
+func lex_source(src):
+    return scan(src, 0, length(src), new_array((int, string)))
+end
+
+-- ---------- forcing-function test ----------
+--
+-- `main` runs `lex_source` on a byte-for-byte embedded copy of
+-- `stack/lexer_probe.herb` (the 786-byte hand-authored probe whose
+-- expected token sequence lives, in canonical form, in
+-- `stack/lexer_probe.expected`). The embedded literal below, once
+-- Herbert decodes its `\n`, `\\`, and `\"` escapes, is byte-identical
+-- to the probe file. The returned token array prints in canonical
+-- form (`[(kind, "text"), ...]`) and the harness diffs that against
+-- the hand-authored answer key — so the fragment's behavior is
+-- pinned against an oracle that was never produced by any lexer.
+
+func main():
+    let probe = "-- lexer_probe: a small complete Herbert program.\n-- Exercises every token kind for the lexer forcing-function test.\n\nfunc pick(c):\n    if c < '0':\n        return 0\n    elif c >= '0' and c <= '9':\n        return 1\n    elif c == '_':\n        return 2\n    else:\n        return 4\n    end\nend\n\nfunc tally(a, i, n, acc):\n    if i >= n:\n        return acc\n    end\n    let v = get(a, i)\n    if v != 0:\n        return tally(a, i + 1, n, acc + 1)\n    else:\n        return tally(a, i + 1, n, acc)\n    end\nend\n\nfunc build():\n    let b = new_buffer()\n    do append(b, 'h')\n    do append(b, '\\n')\n    let s = freeze(b)\n    let label = \"a\\nb\\\\c\"\n    let pair = (s, length(label))\n    return pair.1\nend\n\nfunc main():\n    let total = build() - 1\n    let ok = total <= 8 and total > 0\n    return ok\nend\n"
+    return lex_source(probe)
+end

@@ -1,0 +1,42 @@
+-- lexer_probe: a small complete Herbert program.
+-- Exercises every token kind for the lexer forcing-function test.
+
+func pick(c):
+    if c < '0':
+        return 0
+    elif c >= '0' and c <= '9':
+        return 1
+    elif c == '_':
+        return 2
+    else:
+        return 4
+    end
+end
+
+func tally(a, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    let v = get(a, i)
+    if v != 0:
+        return tally(a, i + 1, n, acc + 1)
+    else:
+        return tally(a, i + 1, n, acc)
+    end
+end
+
+func build():
+    let b = new_buffer()
+    do append(b, 'h')
+    do append(b, '\n')
+    let s = freeze(b)
+    let label = "a\nb\\c"
+    let pair = (s, length(label))
+    return pair.1
+end
+
+func main():
+    let total = build() - 1
+    let ok = total <= 8 and total > 0
+    return ok
+end

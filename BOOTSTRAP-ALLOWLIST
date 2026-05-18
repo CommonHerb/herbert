@@ -30,6 +30,7 @@ bootstrap/tests/test_08_strings_buffer.expected
 bootstrap/tests/test_09_ref_vs_value.expected
 bootstrap/tests/test_10_tco.expected
 stack/.gitkeep
+stack/lexer_probe.expected
 tools/scan.c
 
 # --- bootstrap (host-language Herbert implementation: shrinks to zero) ---
