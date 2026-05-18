@@ -24,8 +24,11 @@ Herbert can host itself — visible, so it cannot grow silently.
 
     make check
 
-Builds the scanner (`tools/scan.c`) into `build/scan` and runs it. Exits
-non-zero on any violation, printing each offending path labelled
+The Makefile writes `git ls-files` to `build/tracked.txt`, builds the
+scanner (`tools/scan.c`) into `build/scan`, and runs the scanner with the
+list path as its argument. The scanner is plain standard C: it reads the
+tracked-files list and `BOOTSTRAP-ALLOWLIST` and compares the two sets.
+Exits non-zero on any violation, printing each offending path labelled
 `unlisted` (tracked file missing from the allowlist) or `stale`
 (allowlist line with no tracked file).
 

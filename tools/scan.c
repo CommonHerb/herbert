@@ -1,20 +1,21 @@
 /*
  * Herbert bootstrap-allowlist scanner.
  *
- * Reads the set of git-tracked files via `git ls-files -z`, partitions on
- * the `.herb` suffix, and compares the non-`.herb` set against the lines of
- * BOOTSTRAP-ALLOWLIST at the repository root. The two sets must match
+ * Reads two plain text files — a tracked-files list whose path is passed
+ * on the command line (one repository-relative path per line, as produced
+ * by `git ls-files`) and BOOTSTRAP-ALLOWLIST at the repository root —
+ * partitions the tracked set on the `.herb` suffix, and compares the
+ * non-`.herb` set against the listed paths. The two sets must match
  * exactly; any discrepancy is a violation.
  *
  *   - tracked non-`.herb` file not listed   -> "unlisted"
- *   - listed path with no tracked file       -> "stale"
- *   - perfect match                          -> exit 0 with one OK line
+ *   - listed path with no tracked file      -> "stale"
+ *   - perfect match                         -> exit 0 with one OK line
  *
  * Output is sorted so identical repository state yields byte-identical
- * output across runs. Uses only the C standard library (and POSIX popen).
+ * output across runs. Plain ISO C; the scanner launches no process and
+ * has no external dependency.
  */
-
-#define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,38 +62,21 @@ static int ends_with(const char *s, const char *suf) {
     return ls >= lt && memcmp(s + ls - lt, suf, lt) == 0;
 }
 
-/* Read NUL-separated paths from `git ls-files -z` into out. */
-static void read_tracked(StrList *out) {
-    FILE *fp = popen("git ls-files -z", "r");
-    if (!fp) { perror("popen: git ls-files"); exit(2); }
+/* Read repository-relative paths from a plain text file, one per line.
+ * Trailing CR/LF is stripped; empty lines are skipped. */
+static void read_tracked(const char *path, StrList *out) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) { perror(path); exit(2); }
 
-    size_t cap = 4096, len = 0;
-    char *buf = (char *)xrealloc(NULL, cap);
-    int c;
-    while ((c = fgetc(fp)) != EOF) {
-        if (len + 1 >= cap) {
-            cap *= 2;
-            buf = (char *)xrealloc(buf, cap);
+    char line[4096];
+    while (fgets(line, sizeof(line), fp)) {
+        size_t n = strlen(line);
+        while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r')) {
+            line[--n] = '\0';
         }
-        if (c == '\0') {
-            buf[len] = '\0';
-            if (len > 0) sl_push(out, buf);
-            len = 0;
-        } else {
-            buf[len++] = (char)c;
-        }
+        if (n > 0) sl_push(out, line);
     }
-    if (len > 0) {
-        buf[len] = '\0';
-        sl_push(out, buf);
-    }
-    free(buf);
-
-    int rc = pclose(fp);
-    if (rc != 0) {
-        fprintf(stderr, "scan: `git ls-files -z` failed (status %d)\n", rc);
-        exit(2);
-    }
+    fclose(fp);
 }
 
 /* Read BOOTSTRAP-ALLOWLIST: one path per line; blank lines and lines whose
@@ -117,11 +101,17 @@ static void read_allowlist(const char *path, StrList *out) {
     fclose(fp);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc != 2) {
+        fprintf(stderr, "usage: %s <tracked-files-list>\n",
+                argc > 0 ? argv[0] : "scan");
+        return 2;
+    }
+
     StrList tracked = {0}, allow = {0}, non_herb = {0};
     StrList unlisted = {0}, stale = {0};
 
-    read_tracked(&tracked);
+    read_tracked(argv[1], &tracked);
     read_allowlist("BOOTSTRAP-ALLOWLIST", &allow);
 
     for (size_t i = 0; i < tracked.count; i++) {
