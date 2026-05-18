@@ -1,0 +1,24 @@
+# BOOTSTRAP-ALLOWLIST
+#
+# This file is the visible bootstrap boundary of the Herbert stack.
+# Every git-tracked file whose name does not end in `.herb` must appear
+# below, by exact repository-relative path. `.herb` files are never listed.
+#
+# The list shrinks toward empty as Herbert becomes able to host itself:
+# bootstrap entries are deleted when the corresponding host-language code
+# is replaced by an equivalent `.herb` implementation.
+#
+# Adding a line here is a deliberate, reviewable act, never incidental.
+# `make check` enforces that this file and the tracked file set match
+# exactly, in both directions.
+
+# --- scaffolding (stable: build, CI, guard, docs) ---
+.github/workflows/check.yml
+.gitignore
+BOOTSTRAP-ALLOWLIST
+Makefile
+README.md
+stack/.gitkeep
+tools/scan.c
+
+# --- bootstrap (host-language Herbert implementation: shrinks to zero) ---
