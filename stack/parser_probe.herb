@@ -1,0 +1,141 @@
+-- parser_probe.herb
+-- A complete, valid Herbert program. It is hand-authored to exercise every
+-- production of the Herbert grammar and to carry genuine nesting depth in
+-- expressions, calls, control flow, and tuples. It is the forcing-function
+-- probe for the parser: the parser fragment, run over this program's token
+-- stream, must build the syntax tree this program implies.
+
+func classify(c):
+  -- elif chain; comparisons; and; not; grouping
+  if c == 32:
+    return 0
+  elif c >= 48 and c <= 57:
+    return 1
+  elif not (c < 65) and c <= 90:
+    return 2
+  else:
+    return 3
+  end
+end
+
+func sum_to(n):
+  -- non-tail self-recursion
+  if n == 0:
+    return 0
+  else:
+    return n + sum_to(n - 1)
+  end
+end
+
+func sign_label(n):
+  -- if/elif with no else; let then rebind
+  let result = 0
+  if n == 0:
+    result = 1
+  elif n > 0:
+    result = 2
+  end
+  return result
+end
+
+func flags(x, y):
+  -- all six comparisons; and, or, not; boolean literals; precedence
+  let lt = x < y
+  let gt = x > y
+  let le = x <= y
+  let ge = x >= y
+  let eq = x == y
+  let ne = x != y
+  let some = lt or gt or le
+  let every = ge and eq and ne
+  let mixed = true or false and not lt
+  return mixed
+end
+
+func accumulate(n):
+  -- rebind; a let block-scoped inside an if arm; if with no else
+  let total = 0
+  let step = 1
+  total = total + step
+  step = step + 1
+  total = total + step
+  if n > 0:
+    let bump = n - 1
+    total = total + bump
+  end
+  return total
+end
+
+func depth(a, b):
+  -- control-flow nesting, three ifs deep
+  let r = 0
+  if a > 0:
+    if b > 0:
+      if a > b:
+        r = a - b
+      else:
+        r = b - a
+      end
+    else:
+      r = a
+    end
+  else:
+    r = 0
+  end
+  return r
+end
+
+func nested_tuple():
+  -- tuple construction; a nested tuple; chained positional access
+  let inner = (1, 2)
+  let outer = (inner, 3, (4, 5))
+  return outer.2.0
+end
+
+func build():
+  -- string and character literals with escapes; buffer and array built-ins
+  let s = "abc"
+  let blank = ""
+  let lined = "a\\b\"c\n"
+  let ch = 'a'
+  let nl = '\n'
+  let slash = '\\'
+  let quote = '\''
+  let buf = new_buffer()
+  do append(buf, ch)
+  do append(buf, 98)
+  let frozen = freeze(buf)
+  let n = length(frozen)
+  let first = index(frozen, 0)
+  let part = slice(frozen, 0, n)
+  let same = equal(part, frozen)
+  let arr = new_array(int)
+  do add(arr, n)
+  do add(arr, length(s))
+  let got = get(arr, 0)
+  let total = count(arr)
+  return same
+end
+
+func typed():
+  -- type expressions: every form, including nested
+  let a = new_array(bool)
+  let b = new_array(string)
+  let c = new_array(buffer)
+  let d = new_array((int, bool))
+  let e = new_array(array(int))
+  let f = new_array((int, (bool, string)))
+  let g = new_array(array((int, int)))
+  return count(g)
+end
+
+func deep_expr(x):
+  -- deep grouping in arithmetic
+  return ((((x + 1) - 2) + 3) - 4) + ((x - 1) - ((x + 2) - (x + 3)))
+end
+
+func combine(x):
+  -- nested calls as arguments; a multi-argument call
+  let inner = sum_to(classify(sum_to(x)))
+  return depth(sum_to(inner), classify(inner))
+end

@@ -91,11 +91,12 @@ done
 if [[ -d ../../stack ]]; then
     STACK_DIR="$(cd ../../stack && pwd)"
     for prog in "$STACK_DIR"/*.herb; do
-        # lexer_probe.herb is DATA, not a program: its bytes are the input
-        # to the lexer fragment's forcing-function test (run below).
-        if [[ "$(basename "$prog" .herb)" == "lexer_probe" ]]; then
-            continue
-        fi
+        # lexer_probe.herb and parser_probe.herb are DATA, not programs:
+        # their bytes are the input to the corresponding fragment's
+        # forcing-function test (run explicitly below).
+        case "$(basename "$prog" .herb)" in
+            lexer_probe|parser_probe) continue ;;
+        esac
         expected="${prog%.herb}.expected"
         [[ -f "$expected" ]] || continue
         total=$((total + 1))
@@ -119,6 +120,25 @@ if [[ -d ../../stack ]]; then
         total=$((total + 1))
         if run_one "$LEX_DRIVER" "$LEX_PROBE_EXPECTED" \
                 "stack/lexer_probe (driver: lexer_fragment.herb)"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Parser forcing-function test: run the parser fragment, which has
+    # an embedded byte-for-byte copy of parser_probe.herb in its main(),
+    # and diff its canonical S-expression output against the
+    # hand-derived answer key in parser_probe.expected. The expected
+    # file is the canonical-print form (Herbert's "..."-wrapped string)
+    # of the answer key text, so the test pins the fragment byte-for-byte
+    # against an oracle that was never produced by any parser.
+    PARSE_DRIVER="$STACK_DIR/parser_fragment.herb"
+    PARSE_PROBE_EXPECTED="$STACK_DIR/parser_probe.expected"
+    if [[ -f "$PARSE_DRIVER" && -f "$PARSE_PROBE_EXPECTED" ]]; then
+        total=$((total + 1))
+        if run_one "$PARSE_DRIVER" "$PARSE_PROBE_EXPECTED" \
+                "stack/parser_probe (driver: parser_fragment.herb)"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
