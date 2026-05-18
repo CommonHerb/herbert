@@ -255,4 +255,10 @@ bool is_builtin_voidless(const char *name);
 
 Value run_program(Program *prog);
 
+/* Diagnostic: high-water mark of scopes simultaneously allocated during
+ * the most recent run. Tail-recursive iteration must keep this bounded by
+ * a small constant — the bound is enforced by the bounded-memory check
+ * in run_tests.sh via the HERBERT_REPORT_PEAK env var. */
+size_t herbert_peak_live_scopes(void);
+
 #endif /* HERBERT_H */

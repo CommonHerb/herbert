@@ -47,11 +47,41 @@ typedef struct Scope {
     struct Scope  *parent;
 } Scope;
 
+/* Live-scope diagnostics. live_scopes is the number of scopes currently
+ * allocated and not yet freed; peak_live_scopes is the high-water mark.
+ * Used by the bounded-memory regression check: tail-recursive iteration
+ * must keep live_scopes within a small constant, not grow with depth. */
+static size_t live_scopes      = 0;
+static size_t peak_live_scopes = 0;
+
 static Scope *scope_new(Scope *parent) {
     Scope *s = (Scope *)xcalloc(1, sizeof(Scope));
     s->parent = parent;
+    live_scopes++;
+    if (live_scopes > peak_live_scopes) peak_live_scopes = live_scopes;
     return s;
 }
+
+static void scope_free(Scope *s) {
+    for (size_t i = 0; i < s->n; i++) free(s->names[i]);
+    free(s->names);
+    free(s->values);
+    free(s);
+    live_scopes--;
+}
+
+/* Walk parent links from s and free each scope. Caller must guarantee the
+ * chain is unreachable from any other state — see OP_TAIL_CALL for the
+ * argument that this holds after act_reset_to. */
+static void scope_free_chain(Scope *s) {
+    while (s) {
+        Scope *p = s->parent;
+        scope_free(s);
+        s = p;
+    }
+}
+
+size_t herbert_peak_live_scopes(void) { return peak_live_scopes; }
 
 static void scope_let(Scope *s, const char *name, Value v, int line) {
     for (size_t i = 0; i < s->n; i++) {
@@ -713,17 +743,29 @@ static DriveResult drive(Activation *a) {
             case OP_TAIL_CALL: {
                 Function *callee = op.u.fn;
                 size_t     na    = op.n;
-                /* Snapshot args before clearing the activation. */
+                /* Snapshot args before clearing the activation. The args
+                 * were evaluated against the outgoing scope (a->top); their
+                 * Values are self-contained (no scope pointer) and continue
+                 * to be valid after the outgoing chain is freed. */
                 Value *tmp = NULL;
                 if (na) {
                     tmp = (Value *)xmalloc(sizeof(Value) * na);
                     memcpy(tmp, &a->vals[a->val_n - na], sizeof(Value) * na);
                 }
+                /* Save the outgoing chain. After act_reset_to overwrites
+                 * a->top and clears a->ops, the old chain is unreachable
+                 * (Herbert has no closures, no first-class scope handles;
+                 * the cleared op stack drops any OP_POP_SCOPE that held a
+                 * parent reference). We free it AFTER binding the new args
+                 * so the snapshot's lifetime overlaps the outgoing scope
+                 * by the shortest possible window. */
+                Scope *outgoing = a->top;
                 act_reset_to(a, callee);
                 for (size_t i = 0; i < na; i++) {
                     scope_let(a->top, callee->params[i], tmp[i], callee->line);
                 }
                 free(tmp);
+                scope_free_chain(outgoing);
                 break;
             }
 

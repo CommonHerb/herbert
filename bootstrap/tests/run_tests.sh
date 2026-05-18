@@ -4,6 +4,13 @@
 # Also run every stack/*.herb that ships with a matching .expected file,
 # so the Herbert-side artifacts under stack/ are exercised by the same
 # suite. Stops after running all tests and exits non-zero if any failed.
+#
+# Bounded-memory regression check: each run sets HERBERT_REPORT_PEAK=1 so
+# the interpreter emits "peak-live-scopes: N" on stderr. If the .herb's
+# sibling .maxscopes file exists, its single integer is taken as an upper
+# bound on N — the test fails if the bound is exceeded. This guards the
+# tail-call frame-reclamation invariant: tail-recursive iteration must
+# run in scope memory bounded by a small constant independent of depth.
 set -u
 
 cd "$(dirname "$0")"
@@ -25,7 +32,7 @@ run_one() {
     local actual err rc
     actual=$(mktemp)
     err=$(mktemp)
-    "$HERBERT" "$prog" >"$actual" 2>"$err"
+    HERBERT_REPORT_PEAK=1 "$HERBERT" "$prog" >"$actual" 2>"$err"
     rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "FAIL: $label (interpreter exit $rc)"
@@ -42,7 +49,25 @@ run_one() {
         rm -f /tmp/herbert_diff.$$ "$actual" "$err"
         return 1
     fi
-    rm -f /tmp/herbert_diff.$$ "$actual" "$err"
+    rm -f /tmp/herbert_diff.$$ "$actual"
+    local maxfile="${prog%.herb}.maxscopes"
+    if [[ -f "$maxfile" ]]; then
+        local bound peak
+        bound=$(tr -d '[:space:]' < "$maxfile")
+        peak=$(awk '/^peak-live-scopes: [0-9]+$/ {print $2}' "$err")
+        rm -f "$err"
+        if [[ -z "$peak" ]]; then
+            echo "FAIL: $label (no peak-live-scopes reported)"
+            return 1
+        fi
+        if (( peak > bound )); then
+            echo "FAIL: $label (peak-live-scopes $peak > bound $bound)"
+            return 1
+        fi
+        echo "PASS: $label (peak-live-scopes $peak <= $bound)"
+        return 0
+    fi
+    rm -f "$err"
     echo "PASS: $label"
     return 0
 }

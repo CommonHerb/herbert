@@ -70,5 +70,14 @@ int main(int argc, char **argv) {
     v_print_canonical(v, stdout);
     fputc('\n', stdout);
 
+    /* Opt-in diagnostic: report the high-water mark of simultaneously-live
+     * scopes to stderr. The bounded-memory regression check in
+     * run_tests.sh reads this to verify tail-recursive iteration stays in
+     * O(1) scope memory. */
+    if (getenv("HERBERT_REPORT_PEAK")) {
+        fprintf(stderr, "peak-live-scopes: %zu\n",
+                herbert_peak_live_scopes());
+    }
+
     return 0;
 }
