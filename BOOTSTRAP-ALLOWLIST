@@ -28,6 +28,9 @@ bootstrap/tests/test_07_array.expected
 bootstrap/tests/test_08_strings_buffer.expected
 bootstrap/tests/test_09_ref_vs_value.expected
 bootstrap/tests/test_10_tco.expected
+bootstrap/tests/test_11_non_tail_self_recursion.expected
+bootstrap/tests/test_12_non_tail_mutual_recursion.expected
+bootstrap/tests/test_13_cross_function_tail_call.expected
 stack/.gitkeep
 stack/lexer_probe.expected
 tools/scan.c

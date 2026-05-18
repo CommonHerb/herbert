@@ -1,0 +1,35 @@
+-- T3 — cross-function tail-call chain.
+--
+-- a -> b -> c -> a, each call in TAIL position. The existing IMPL-TCO
+-- collapses tail self-calls to a single activation; the rework extends
+-- this to any tail call so an a/b/c chain also runs with a single
+-- activation reused in place. Ten million deep verifies the chain is
+-- truly flat.
+
+func a(n):
+    if n == 0:
+        return 0
+    else:
+        return b(n - 1)
+    end
+end
+
+func b(n):
+    if n == 0:
+        return 0
+    else:
+        return c(n - 1)
+    end
+end
+
+func c(n):
+    if n == 0:
+        return 0
+    else:
+        return a(n - 1)
+    end
+end
+
+func main():
+    return a(10000000)
+end

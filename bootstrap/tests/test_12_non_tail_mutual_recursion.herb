@@ -1,0 +1,28 @@
+-- T2 — non-tail mutual recursion.
+--
+-- ping and pong call each other in NON-tail position: the recursive
+-- call's result is consumed by `+ 1`, so neither call can be rewritten
+-- as a tail call. Each level retains a frame to receive the returned
+-- value, alternating between the two functions. One million deep
+-- exercises cross-function non-tail recursion on the heap-backed
+-- activation stack.
+
+func ping(n):
+    if n == 0:
+        return 0
+    else:
+        return pong(n - 1) + 1
+    end
+end
+
+func pong(n):
+    if n == 0:
+        return 0
+    else:
+        return ping(n - 1) + 1
+    end
+end
+
+func main():
+    return ping(1000000)
+end

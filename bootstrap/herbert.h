@@ -7,9 +7,12 @@
  * registry threaded through all of them.
  *
  * The interpreter is a hand-written C11 program with no third-party
- * dependencies. Function-call dispatch is a wrap-around loop in run_call
- * (see eval.c) so that a self-call in tail position reuses the current
- * frame and runs in flat stack space (IMPL-TCO).
+ * dependencies. Function-call dispatch runs on a heap-allocated activation
+ * stack (see eval.c): every Herbert call is an Activation with its own op
+ * and value stacks, and no Herbert call consumes a C-stack frame. Tail
+ * calls — self OR cross-function — reuse the current activation in place
+ * and reclaim the outgoing scope chain, so iteration via tail recursion
+ * runs in O(1) scope memory.
  */
 
 #ifndef HERBERT_H

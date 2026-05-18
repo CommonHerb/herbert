@@ -1,0 +1,19 @@
+-- T1 — non-tail self-recursion.
+--
+-- f(n) recurses on itself, but the recursive call's result is consumed by
+-- `+ 1`, so the call is NOT in tail position and cannot be rewritten as a
+-- tail call: each level retains a frame to receive the returned value.
+-- Run one million deep — far past any plausible C-stack capacity, but
+-- comfortable on the interpreter-managed heap-backed activation stack.
+
+func f(n):
+    if n == 0:
+        return 0
+    else:
+        return f(n - 1) + 1
+    end
+end
+
+func main():
+    return f(1000000)
+end
