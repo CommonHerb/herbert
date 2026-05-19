@@ -1,0 +1,1513 @@
+-- Herbert parser fragment, written in Herbert. Second real program on
+-- the Herbert stack. Consumes the token stream produced by the lexer
+-- fragment over the same source bytes, runs a genuine recursive-descent
+-- parse of the Herbert grammar, builds a syntax tree, and emits its
+-- canonical S-expression form.
+--
+-- The token stream is obtained by embedding `stack/parser_probe.herb`
+-- byte-for-byte in this file's `main()` and running the lexer over it;
+-- the lexer functions are copied verbatim from `stack/lexer_fragment.herb`
+-- (Herbert has no module system, so reuse is by copy). This mirrors how
+-- the lexer fragment itself embeds its probe and runs the test.
+--
+-- AST representation. Each node is a tuple (tag, atoms, kids) where:
+--   - tag    : string — the S-expression head (e.g. "program", "add",
+--                       "name", "if", "clause", "type-tuple", "dot")
+--   - atoms  : array(string) — verbatim atoms following the tag (names,
+--                       decimal integers for int/char/str payloads,
+--                       "true"/"false", type words)
+--   - kids   : array(int) — indices of child nodes in the shared pool
+-- The pool is an array((string, array(string), array(int))). Children
+-- are referenced by integer index into the pool — Herbert types are
+-- finite (no recursive type aliases), so a node cannot directly contain
+-- an array of nodes; an index-into-the-pool encoding is the standard
+-- arena representation and lets a tuple-and-array AST hold the tree.
+-- Counts (`count(pool)`, indices into arrays) are always non-negative,
+-- so the parser never produces a negative intermediate value.
+--
+-- Parser structure. Each parse routine takes (tokens, pos, pool) and
+-- returns (node_idx, new_pos). For list-collecting helpers (params,
+-- args, statements) the caller passes the destination array and the
+-- helper returns just the new position. Keyword classification is
+-- positional: the lexer never tags keywords — an IDENTIFIER token's
+-- text is inspected by the parser at the point where the grammar
+-- decides whether `let`/`if`/`and`/`int`/... starts a production or
+-- names a value. The full set of decision points is small and local
+-- to each routine.
+--
+-- Serializer. `ser` walks the pool and appends bytes to a shared
+-- buffer (the buffer is mutated by reference; the caller threads its
+-- handle through assignment). One special case: a `dot` node emits
+-- kids before atoms (the spec writes `(dot EXPR N)`); every other
+-- node emits atoms before kids.
+
+-- ====================================================================
+-- LEXER FUNCTIONS (verbatim from stack/lexer_fragment.herb)
+-- ====================================================================
+
+func is_digit(c):
+    return c >= '0' and c <= '9'
+end
+
+func is_lower(c):
+    return c >= 'a' and c <= 'z'
+end
+
+func is_upper(c):
+    return c >= 'A' and c <= 'Z'
+end
+
+func is_alpha(c):
+    return is_lower(c) or is_upper(c)
+end
+
+func is_ident_start(c):
+    return is_alpha(c) or c == '_'
+end
+
+func is_ident_cont(c):
+    return is_ident_start(c) or is_digit(c)
+end
+
+func is_ws(c):
+    return c == ' ' or c == '\n' or c == 9 or c == 13
+end
+
+func is_two_byte_op_start(c):
+    return c == '=' or c == '!' or c == '<' or c == '>'
+end
+
+func is_one_byte_op(c):
+    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>'
+end
+
+func end_of_ident(src, i, n):
+    if i >= n:
+        return i
+    elif is_ident_cont(index(src, i)):
+        return end_of_ident(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+func end_of_int(src, i, n):
+    if i >= n:
+        return i
+    elif is_digit(index(src, i)):
+        return end_of_int(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+func end_of_line(src, i, n):
+    if i >= n:
+        return i
+    elif index(src, i) == '\n':
+        return i
+    else:
+        return end_of_line(src, i + 1, n)
+    end
+end
+
+func end_of_string(src, i, n):
+    let c = index(src, i)
+    if c == '"':
+        return i + 1
+    elif c == '\\':
+        return end_of_string(src, i + 2, n)
+    else:
+        return end_of_string(src, i + 1, n)
+    end
+end
+
+func end_of_char(src, i, n):
+    if index(src, i) == '\\':
+        return i + 3
+    else:
+        return i + 2
+    end
+end
+
+func pour(src, from, to, b):
+    if from >= to:
+        return b
+    else:
+        do append(b, index(src, from))
+        return pour(src, from + 1, to, b)
+    end
+end
+
+func slice_text(src, from, to):
+    return freeze(pour(src, from, to, new_buffer()))
+end
+
+func scan(src, i, n, out):
+    if i >= n:
+        return out
+    end
+    let c = index(src, i)
+    if is_ws(c):
+        return scan(src, i + 1, n, out)
+    elif c == '-' and i + 1 < n and index(src, i + 1) == '-':
+        return scan(src, end_of_line(src, i + 2, n), n, out)
+    elif is_ident_start(c):
+        let j = end_of_ident(src, i + 1, n)
+        do add(out, (0, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif is_digit(c):
+        let j = end_of_int(src, i + 1, n)
+        do add(out, (1, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif c == '"':
+        let j = end_of_string(src, i + 1, n)
+        do add(out, (2, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif c == '\'':
+        let j = end_of_char(src, i + 1, n)
+        do add(out, (3, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2)))
+        return scan(src, i + 2, n, out)
+    elif is_one_byte_op(c):
+        do add(out, (5, slice_text(src, i, i + 1)))
+        return scan(src, i + 1, n, out)
+    else:
+        do add(out, (4, slice_text(src, i, i + 1)))
+        return scan(src, i + 1, n, out)
+    end
+end
+
+func lex_source(src):
+    return scan(src, 0, length(src), new_array((int, string)))
+end
+
+-- ====================================================================
+-- DECIMAL CONVERSION (no */% in Herbert; build div10/mod10 by subtraction)
+-- ====================================================================
+
+func div10_acc(n, q):
+    if n < 10:
+        return q
+    end
+    return div10_acc(n - 10, q + 1)
+end
+
+func div10(n):
+    return div10_acc(n, 0)
+end
+
+func mod10(n):
+    if n < 10:
+        return n
+    end
+    return mod10(n - 10)
+end
+
+-- Append decimal digits of n to buf, high-order first. Recursive on
+-- div10(n); not a true tail call but the interpreter's heap-stack
+-- model has no fixed depth ceiling.
+func emit_decimal(buf, n):
+    if n >= 10:
+        buf = emit_decimal(buf, div10(n))
+    end
+    do append(buf, 48 + mod10(n))
+    return buf
+end
+
+func int_to_str(n):
+    return freeze(emit_decimal(new_buffer(), n))
+end
+
+-- ====================================================================
+-- STRING / BUFFER HELPERS
+-- ====================================================================
+
+func append_str_loop(buf, s, i, n):
+    if i >= n:
+        return buf
+    end
+    do append(buf, index(s, i))
+    return append_str_loop(buf, s, i + 1, n)
+end
+
+func append_str(buf, s):
+    return append_str_loop(buf, s, 0, length(s))
+end
+
+-- ====================================================================
+-- AST NODE POOL
+-- ====================================================================
+
+func pool_new():
+    return new_array((string, array(string), array(int)))
+end
+
+func add_node(pool, tag, atoms, kids):
+    do add(pool, (tag, atoms, kids))
+    return count(pool) - 1
+end
+
+func atoms0():
+    return new_array(string)
+end
+
+func atoms1(s):
+    let a = new_array(string)
+    do add(a, s)
+    return a
+end
+
+func kids0():
+    return new_array(int)
+end
+
+func kids1(i):
+    let a = new_array(int)
+    do add(a, i)
+    return a
+end
+
+func kids2(a, b):
+    let r = new_array(int)
+    do add(r, a)
+    do add(r, b)
+    return r
+end
+
+func make_binop(pool, tag, lidx, ridx):
+    return add_node(pool, tag, atoms0(), kids2(lidx, ridx))
+end
+
+-- ====================================================================
+-- CHAR / STRING LITERAL DECODING
+-- ====================================================================
+
+-- s is the raw lexed CHAR text, e.g. "'a'" or "'\\n'" — three or four
+-- bytes including the surrounding single quotes. Returns the byte value.
+func decode_char(s):
+    let c1 = index(s, 1)
+    if c1 == '\\':
+        let c2 = index(s, 2)
+        if c2 == 'n':
+            return 10
+        end
+        if c2 == '\\':
+            return 92
+        end
+        return 39
+    end
+    return c1
+end
+
+-- s is the raw lexed STRING text including the surrounding double quotes.
+-- Walk s[1 .. length(s)-1) decoding \n \\ \" into a buffer; returns the
+-- frozen byte string.
+func decode_string_loop(s, i, end_i, buf):
+    if i >= end_i:
+        return buf
+    end
+    let c = index(s, i)
+    if c == '\\':
+        let c2 = index(s, i + 1)
+        if c2 == 'n':
+            do append(buf, 10)
+            return decode_string_loop(s, i + 2, end_i, buf)
+        end
+        if c2 == '\\':
+            do append(buf, 92)
+            return decode_string_loop(s, i + 2, end_i, buf)
+        end
+        do append(buf, 34)
+        return decode_string_loop(s, i + 2, end_i, buf)
+    end
+    do append(buf, c)
+    return decode_string_loop(s, i + 1, end_i, buf)
+end
+
+func decode_string(s):
+    return freeze(decode_string_loop(s, 1, length(s) - 1, new_buffer()))
+end
+
+-- Append decimal forms of each byte of `bytes` (a string) as a fresh
+-- entry in the `atoms` array.
+func collect_str_atoms(atoms, bytes, i, n):
+    if i >= n:
+        return atoms
+    end
+    do add(atoms, int_to_str(index(bytes, i)))
+    return collect_str_atoms(atoms, bytes, i + 1, n)
+end
+
+-- ====================================================================
+-- TOKEN INSPECTION
+-- ====================================================================
+
+func tok_is_ident_text(tokens, pos, text):
+    if pos >= count(tokens):
+        return false
+    end
+    let t = get(tokens, pos)
+    return t.0 == 0 and equal(t.1, text)
+end
+
+func tok_is_punct_text(tokens, pos, text):
+    if pos >= count(tokens):
+        return false
+    end
+    let t = get(tokens, pos)
+    return t.0 == 4 and equal(t.1, text)
+end
+
+func tok_is_op_text(tokens, pos, text):
+    if pos >= count(tokens):
+        return false
+    end
+    let t = get(tokens, pos)
+    return t.0 == 5 and equal(t.1, text)
+end
+
+-- ====================================================================
+-- TYPE EXPRESSIONS (only inside new_array(...))
+-- ====================================================================
+
+func parse_type(tokens, pos, pool):
+    let t = get(tokens, pos)
+    if t.0 == 0:
+        if equal(t.1, "array"):
+            -- array ( TYPE )
+            pos = pos + 2
+            let r = parse_type(tokens, pos, pool)
+            pos = r.1 + 1
+            return (add_node(pool, "type-array", atoms0(), kids1(r.0)), pos)
+        end
+        return (add_node(pool, "type", atoms1(t.1), kids0()), pos + 1)
+    end
+    -- LPAREN starts a tuple type
+    pos = pos + 1
+    let kids = new_array(int)
+    let r = parse_type(tokens, pos, pool)
+    do add(kids, r.0)
+    pos = parse_type_tail(tokens, r.1, pool, kids)
+    pos = pos + 1
+    return (add_node(pool, "type-tuple", atoms0(), kids), pos)
+end
+
+func parse_type_tail(tokens, pos, pool, kids):
+    if tok_is_punct_text(tokens, pos, ","):
+        let r = parse_type(tokens, pos + 1, pool)
+        do add(kids, r.0)
+        return parse_type_tail(tokens, r.1, pool, kids)
+    end
+    return pos
+end
+
+-- ====================================================================
+-- EXPRESSIONS
+-- ====================================================================
+
+func parse_expr(tokens, pos, pool):
+    return parse_or(tokens, pos, pool)
+end
+
+func parse_or(tokens, pos, pool):
+    let r = parse_and(tokens, pos, pool)
+    return parse_or_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_or_loop(tokens, pos, pool, lidx):
+    if tok_is_ident_text(tokens, pos, "or"):
+        let r = parse_and(tokens, pos + 1, pool)
+        return parse_or_loop(tokens, r.1, pool, make_binop(pool, "or", lidx, r.0))
+    end
+    return (lidx, pos)
+end
+
+func parse_and(tokens, pos, pool):
+    let r = parse_cmp(tokens, pos, pool)
+    return parse_and_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_and_loop(tokens, pos, pool, lidx):
+    if tok_is_ident_text(tokens, pos, "and"):
+        let r = parse_cmp(tokens, pos + 1, pool)
+        return parse_and_loop(tokens, r.1, pool, make_binop(pool, "and", lidx, r.0))
+    end
+    return (lidx, pos)
+end
+
+func cmp_tag(text):
+    if equal(text, "=="):
+        return "eq"
+    end
+    if equal(text, "!="):
+        return "ne"
+    end
+    if equal(text, "<"):
+        return "lt"
+    end
+    if equal(text, ">"):
+        return "gt"
+    end
+    if equal(text, "<="):
+        return "le"
+    end
+    if equal(text, ">="):
+        return "ge"
+    end
+    return ""
+end
+
+func parse_cmp(tokens, pos, pool):
+    let r = parse_add(tokens, pos, pool)
+    return parse_cmp_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_cmp_loop(tokens, pos, pool, lidx):
+    if pos >= count(tokens):
+        return (lidx, pos)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5:
+        let tag = cmp_tag(t.1)
+        if not equal(tag, ""):
+            let r = parse_add(tokens, pos + 1, pool)
+            return parse_cmp_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0))
+        end
+    end
+    return (lidx, pos)
+end
+
+func add_tag(text):
+    if equal(text, "+"):
+        return "add"
+    end
+    if equal(text, "-"):
+        return "sub"
+    end
+    return ""
+end
+
+func parse_add(tokens, pos, pool):
+    let r = parse_not(tokens, pos, pool)
+    return parse_add_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_add_loop(tokens, pos, pool, lidx):
+    if pos >= count(tokens):
+        return (lidx, pos)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5:
+        let tag = add_tag(t.1)
+        if not equal(tag, ""):
+            let r = parse_not(tokens, pos + 1, pool)
+            return parse_add_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0))
+        end
+    end
+    return (lidx, pos)
+end
+
+func parse_not(tokens, pos, pool):
+    if tok_is_ident_text(tokens, pos, "not"):
+        let r = parse_not(tokens, pos + 1, pool)
+        return (add_node(pool, "not", atoms0(), kids1(r.0)), r.1)
+    end
+    return parse_dot(tokens, pos, pool)
+end
+
+func parse_dot(tokens, pos, pool):
+    let r = parse_atom(tokens, pos, pool)
+    return parse_dot_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_dot_loop(tokens, pos, pool, lidx):
+    if tok_is_punct_text(tokens, pos, "."):
+        let idx_tok = get(tokens, pos + 1)
+        let new_idx = add_node(pool, "dot", atoms1(idx_tok.1), kids1(lidx))
+        return parse_dot_loop(tokens, pos + 2, pool, new_idx)
+    end
+    return (lidx, pos)
+end
+
+func parse_atom(tokens, pos, pool):
+    let t = get(tokens, pos)
+    let k = t.0
+    let s = t.1
+    if k == 1:
+        return (add_node(pool, "int", atoms1(s), kids0()), pos + 1)
+    end
+    if k == 3:
+        return (add_node(pool, "char", atoms1(int_to_str(decode_char(s))), kids0()), pos + 1)
+    end
+    if k == 2:
+        let frozen = decode_string(s)
+        let n = length(frozen)
+        let atoms = atoms1(int_to_str(n))
+        atoms = collect_str_atoms(atoms, frozen, 0, n)
+        return (add_node(pool, "str", atoms, kids0()), pos + 1)
+    end
+    if k == 0:
+        if equal(s, "true"):
+            return (add_node(pool, "bool", atoms1("true"), kids0()), pos + 1)
+        end
+        if equal(s, "false"):
+            return (add_node(pool, "bool", atoms1("false"), kids0()), pos + 1)
+        end
+        if tok_is_punct_text(tokens, pos + 1, "("):
+            return parse_call(tokens, pos, pool)
+        end
+        return (add_node(pool, "name", atoms1(s), kids0()), pos + 1)
+    end
+    -- LPAREN: grouping or tuple
+    return parse_group_or_tuple(tokens, pos + 1, pool)
+end
+
+func parse_call(tokens, pos, pool):
+    let name_tok = get(tokens, pos)
+    let name = name_tok.1
+    pos = pos + 2
+    if equal(name, "new_array"):
+        let r = parse_type(tokens, pos, pool)
+        pos = r.1 + 1
+        return (add_node(pool, "call", atoms1(name), kids1(r.0)), pos)
+    end
+    let kids = new_array(int)
+    if tok_is_punct_text(tokens, pos, ")"):
+        return (add_node(pool, "call", atoms1(name), kids), pos + 1)
+    end
+    pos = parse_args_loop(tokens, pos, pool, kids)
+    pos = pos + 1
+    return (add_node(pool, "call", atoms1(name), kids), pos)
+end
+
+func parse_args_loop(tokens, pos, pool, kids):
+    let r = parse_expr(tokens, pos, pool)
+    do add(kids, r.0)
+    if tok_is_punct_text(tokens, r.1, ","):
+        return parse_args_loop(tokens, r.1 + 1, pool, kids)
+    end
+    return r.1
+end
+
+func parse_group_or_tuple(tokens, pos, pool):
+    let r = parse_expr(tokens, pos, pool)
+    let first_idx = r.0
+    pos = r.1
+    if tok_is_punct_text(tokens, pos, ","):
+        let kids = new_array(int)
+        do add(kids, first_idx)
+        pos = parse_tuple_tail(tokens, pos + 1, pool, kids)
+        pos = pos + 1
+        return (add_node(pool, "tuple", atoms0(), kids), pos)
+    end
+    pos = pos + 1
+    return (first_idx, pos)
+end
+
+func parse_tuple_tail(tokens, pos, pool, kids):
+    let r = parse_expr(tokens, pos, pool)
+    do add(kids, r.0)
+    if tok_is_punct_text(tokens, r.1, ","):
+        return parse_tuple_tail(tokens, r.1 + 1, pool, kids)
+    end
+    return r.1
+end
+
+-- ====================================================================
+-- STATEMENTS
+-- ====================================================================
+
+func is_body_terminator(tokens, pos):
+    if pos >= count(tokens):
+        return true
+    end
+    let t = get(tokens, pos)
+    if t.0 != 0:
+        return false
+    end
+    if equal(t.1, "end"):
+        return true
+    end
+    if equal(t.1, "elif"):
+        return true
+    end
+    if equal(t.1, "else"):
+        return true
+    end
+    return false
+end
+
+func parse_body(tokens, pos, pool):
+    let stmt_kids = new_array(int)
+    pos = parse_body_loop(tokens, pos, pool, stmt_kids)
+    return (add_node(pool, "body", atoms0(), stmt_kids), pos)
+end
+
+func parse_body_loop(tokens, pos, pool, stmt_kids):
+    if is_body_terminator(tokens, pos):
+        return pos
+    end
+    let r = parse_stmt(tokens, pos, pool)
+    do add(stmt_kids, r.0)
+    return parse_body_loop(tokens, r.1, pool, stmt_kids)
+end
+
+func parse_stmt(tokens, pos, pool):
+    let t = get(tokens, pos)
+    -- t is IDENTIFIER per grammar
+    let text = t.1
+    if equal(text, "let"):
+        return parse_let(tokens, pos + 1, pool)
+    end
+    if equal(text, "return"):
+        return parse_return(tokens, pos + 1, pool)
+    end
+    if equal(text, "do"):
+        return parse_do(tokens, pos + 1, pool)
+    end
+    if equal(text, "if"):
+        return parse_if(tokens, pos + 1, pool)
+    end
+    return parse_assign(tokens, pos, pool)
+end
+
+func parse_let(tokens, pos, pool):
+    let name_tok = get(tokens, pos)
+    let name = name_tok.1
+    let r = parse_expr(tokens, pos + 2, pool)
+    return (add_node(pool, "let", atoms1(name), kids1(r.0)), r.1)
+end
+
+func parse_return(tokens, pos, pool):
+    let r = parse_expr(tokens, pos, pool)
+    return (add_node(pool, "return", atoms0(), kids1(r.0)), r.1)
+end
+
+func parse_do(tokens, pos, pool):
+    let r = parse_expr(tokens, pos, pool)
+    return (add_node(pool, "do", atoms0(), kids1(r.0)), r.1)
+end
+
+func parse_assign(tokens, pos, pool):
+    let name_tok = get(tokens, pos)
+    let name = name_tok.1
+    let r = parse_expr(tokens, pos + 2, pool)
+    return (add_node(pool, "assign", atoms1(name), kids1(r.0)), r.1)
+end
+
+func parse_if(tokens, pos, pool):
+    let if_kids = new_array(int)
+    pos = parse_clause_into(tokens, pos, pool, if_kids)
+    pos = parse_elifs(tokens, pos, pool, if_kids)
+    if tok_is_ident_text(tokens, pos, "else"):
+        let r = parse_else_clause(tokens, pos + 1, pool)
+        do add(if_kids, r.0)
+        pos = r.1
+    end
+    -- consume "end"
+    pos = pos + 1
+    return (add_node(pool, "if", atoms0(), if_kids), pos)
+end
+
+func parse_elifs(tokens, pos, pool, if_kids):
+    if tok_is_ident_text(tokens, pos, "elif"):
+        pos = parse_clause_into(tokens, pos + 1, pool, if_kids)
+        return parse_elifs(tokens, pos, pool, if_kids)
+    end
+    return pos
+end
+
+func parse_clause_into(tokens, pos, pool, if_kids):
+    let cr = parse_expr(tokens, pos, pool)
+    pos = cr.1 + 1
+    let br = parse_body(tokens, pos, pool)
+    let cidx = add_node(pool, "clause", atoms0(), kids2(cr.0, br.0))
+    do add(if_kids, cidx)
+    return br.1
+end
+
+func parse_else_clause(tokens, pos, pool):
+    -- pos is just after 'else'; consume ':'
+    pos = pos + 1
+    let br = parse_body(tokens, pos, pool)
+    return (add_node(pool, "else", atoms0(), kids1(br.0)), br.1)
+end
+
+-- ====================================================================
+-- FUNCTIONS / PROGRAM
+-- ====================================================================
+
+func parse_program(tokens, pos, pool):
+    let kids = new_array(int)
+    pos = parse_funcs(tokens, pos, pool, kids)
+    return (add_node(pool, "program", atoms0(), kids), pos)
+end
+
+func parse_funcs(tokens, pos, pool, kids):
+    if pos >= count(tokens):
+        return pos
+    end
+    let r = parse_funcdef(tokens, pos, pool)
+    do add(kids, r.0)
+    return parse_funcs(tokens, r.1, pool, kids)
+end
+
+func parse_funcdef(tokens, pos, pool):
+    -- tokens[pos+0]: "func"; pos+1: name; pos+2: "("
+    let name_tok = get(tokens, pos + 1)
+    let name = name_tok.1
+    pos = pos + 3
+    let pr = parse_param_list(tokens, pos, pool)
+    pos = pr.1 + 2
+    let br = parse_body(tokens, pos, pool)
+    pos = br.1 + 1
+    let kids = kids2(pr.0, br.0)
+    return (add_node(pool, "func", atoms1(name), kids), pos)
+end
+
+func parse_param_list(tokens, pos, pool):
+    let atoms = new_array(string)
+    if tok_is_punct_text(tokens, pos, ")"):
+        return (add_node(pool, "params", atoms, kids0()), pos)
+    end
+    pos = parse_param_loop(tokens, pos, atoms)
+    return (add_node(pool, "params", atoms, kids0()), pos)
+end
+
+func parse_param_loop(tokens, pos, atoms):
+    let t = get(tokens, pos)
+    do add(atoms, t.1)
+    if tok_is_punct_text(tokens, pos + 1, ","):
+        return parse_param_loop(tokens, pos + 2, atoms)
+    end
+    return pos + 1
+end
+
+-- ====================================================================
+-- SERIALIZER
+-- ====================================================================
+
+func ser(buf, pool, idx):
+    let node = get(pool, idx)
+    let tag = node.0
+    let atoms = node.1
+    let kids = node.2
+    do append(buf, '(')
+    buf = append_str(buf, tag)
+    if equal(tag, "dot"):
+        buf = emit_kids(buf, pool, kids, 0, count(kids))
+        buf = emit_atoms(buf, atoms, 0, count(atoms))
+    else:
+        buf = emit_atoms(buf, atoms, 0, count(atoms))
+        buf = emit_kids(buf, pool, kids, 0, count(kids))
+    end
+    do append(buf, ')')
+    return buf
+end
+
+func emit_atoms(buf, atoms, i, n):
+    if i >= n:
+        return buf
+    end
+    do append(buf, ' ')
+    buf = append_str(buf, get(atoms, i))
+    return emit_atoms(buf, atoms, i + 1, n)
+end
+
+func emit_kids(buf, pool, kids, i, n):
+    if i >= n:
+        return buf
+    end
+    do append(buf, ' ')
+    buf = ser(buf, pool, get(kids, i))
+    return emit_kids(buf, pool, kids, i + 1, n)
+end
+
+-- ====================================================================
+-- EVALUATOR
+-- ====================================================================
+
+func fault(msg):
+    let a = new_array((int, int))
+    return get(a, 0)
+end
+
+func tag_int():
+    return 0
+end
+
+func tag_bool():
+    return 1
+end
+
+func tag_string():
+    return 2
+end
+
+func tag_buffer():
+    return 3
+end
+
+func tag_tuple():
+    return 4
+end
+
+func tag_array():
+    return 5
+end
+
+func make_int_value(n):
+    return (tag_int(), n)
+end
+
+func make_bool_value(b):
+    if b:
+        return (tag_bool(), 1)
+    end
+    return (tag_bool(), 0)
+end
+
+func make_string_value(i):
+    return (tag_string(), i)
+end
+
+func make_buffer_value(i):
+    return (tag_buffer(), i)
+end
+
+func make_tuple_value(i):
+    return (tag_tuple(), i)
+end
+
+func make_array_value(i):
+    return (tag_array(), i)
+end
+
+func require_int_payload(v):
+    if v.0 != tag_int():
+        return fault("expected int")
+    end
+    return v.1
+end
+
+func require_bool_test(v):
+    if v.0 != tag_bool():
+        return fault("expected bool")
+    end
+    return v.1 != 0
+end
+
+func times10(n):
+    return n + n + n + n + n + n + n + n + n + n
+end
+
+func parse_decimal_loop(s, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    return parse_decimal_loop(s, i + 1, n, times10(acc) + index(s, i) - '0')
+end
+
+func parse_decimal(s):
+    return parse_decimal_loop(s, 0, length(s), 0)
+end
+
+func frame_empty():
+    return (new_array(string), new_array((int, int)))
+end
+
+func name_in_window(names, name, i, n):
+    if i >= n:
+        return false
+    end
+    if equal(get(names, i), name):
+        return true
+    end
+    return name_in_window(names, name, i + 1, n)
+end
+
+func frame_copy_loop(old_names, old_values, i, n, new_names, new_values):
+    if i >= n:
+        return (new_names, new_values)
+    end
+    do add(new_names, get(old_names, i))
+    do add(new_values, get(old_values, i))
+    return frame_copy_loop(old_names, old_values, i + 1, n, new_names, new_values)
+end
+
+func frame_copy(frame):
+    return frame_copy_loop(frame.0, frame.1, 0, count(frame.0), new_array(string), new_array((int, int)))
+end
+
+func frame_let(frame, name, v, scope_mark):
+    if name_in_window(frame.0, name, scope_mark, count(frame.0)):
+        return fault("let duplicate")
+    end
+    let nf = frame_copy(frame)
+    do add(nf.0, name)
+    do add(nf.1, v)
+    return nf
+end
+
+func find_name_reverse_loop(names, name, n, missing):
+    if n == 0:
+        return missing
+    end
+    let k = n - 1
+    if equal(get(names, k), name):
+        return k
+    end
+    return find_name_reverse_loop(names, name, k, missing)
+end
+
+func find_name_reverse(names, name):
+    return find_name_reverse_loop(names, name, count(names), count(names))
+end
+
+func frame_rebind_copy_loop(frame, k, v, i, n, new_names, new_values):
+    if i >= n:
+        return (new_names, new_values)
+    end
+    do add(new_names, get(frame.0, i))
+    if i == k:
+        do add(new_values, v)
+    else:
+        do add(new_values, get(frame.1, i))
+    end
+    return frame_rebind_copy_loop(frame, k, v, i + 1, n, new_names, new_values)
+end
+
+func frame_assign(frame, name, v):
+    let k = find_name_reverse(frame.0, name)
+    if k >= count(frame.0):
+        return fault("assign undefined")
+    end
+    return frame_rebind_copy_loop(frame, k, v, 0, count(frame.0), new_array(string), new_array((int, int)))
+end
+
+func frame_lookup(frame, name):
+    let k = find_name_reverse(frame.0, name)
+    if k >= count(frame.0):
+        return fault("name undefined")
+    end
+    return get(frame.1, k)
+end
+
+func frame_rebuild_loop(frame, i, n, new_names, new_values):
+    if i >= n:
+        return (new_names, new_values)
+    end
+    do add(new_names, get(frame.0, i))
+    do add(new_values, get(frame.1, i))
+    return frame_rebuild_loop(frame, i + 1, n, new_names, new_values)
+end
+
+func frame_rebuild(frame, keep):
+    return frame_rebuild_loop(frame, 0, keep, new_array(string), new_array((int, int)))
+end
+
+func eval_args_loop(kids, i, n, out, frame, pools, nodes, prog):
+    if i >= n:
+        return out
+    end
+    do add(out, eval_expr(get(kids, i), frame, pools, nodes, prog))
+    return eval_args_loop(kids, i + 1, n, out, frame, pools, nodes, prog)
+end
+
+func eval_args(kids, frame, pools, nodes, prog):
+    return eval_args_loop(kids, 0, count(kids), new_array((int, int)), frame, pools, nodes, prog)
+end
+
+func string_value_from_atoms_loop(atoms, i, n, buf):
+    if i >= n:
+        return buf
+    end
+    do append(buf, parse_decimal(get(atoms, i)))
+    return string_value_from_atoms_loop(atoms, i + 1, n, buf)
+end
+
+func string_value_from_atoms(atoms, pools):
+    let n = parse_decimal(get(atoms, 0))
+    if n + 1 != count(atoms):
+        return fault("bad string node")
+    end
+    let s = freeze(string_value_from_atoms_loop(atoms, 1, count(atoms), new_buffer()))
+    do add(pools.0, s)
+    return make_string_value(count(pools.0) - 1)
+end
+
+func eval_tuple_items(kids, i, n, out, frame, pools, nodes, prog):
+    if i >= n:
+        return out
+    end
+    do add(out, eval_expr(get(kids, i), frame, pools, nodes, prog))
+    return eval_tuple_items(kids, i + 1, n, out, frame, pools, nodes, prog)
+end
+
+func eval_tuple_expr(kids, frame, pools, nodes, prog):
+    let items = eval_tuple_items(kids, 0, count(kids), new_array((int, int)), frame, pools, nodes, prog)
+    do add(pools.2, items)
+    return make_tuple_value(count(pools.2) - 1)
+end
+
+func eval_dot_expr(atoms, kids, frame, pools, nodes, prog):
+    let base = eval_expr(get(kids, 0), frame, pools, nodes, prog)
+    if base.0 != tag_tuple():
+        return fault("dot on non-tuple")
+    end
+    let k = parse_decimal(get(atoms, 0))
+    let items = get(pools.2, base.1)
+    if k >= count(items):
+        return fault("tuple index")
+    end
+    return get(items, k)
+end
+
+func eval_int_binop(tag, kids, frame, pools, nodes, prog):
+    let left = require_int_payload(eval_expr(get(kids, 0), frame, pools, nodes, prog))
+    let right = require_int_payload(eval_expr(get(kids, 1), frame, pools, nodes, prog))
+    if equal(tag, "add"):
+        return make_int_value(left + right)
+    end
+    if equal(tag, "sub"):
+        return make_int_value(left - right)
+    end
+    if equal(tag, "eq"):
+        return make_bool_value(left == right)
+    end
+    if equal(tag, "ne"):
+        return make_bool_value(left != right)
+    end
+    if equal(tag, "lt"):
+        return make_bool_value(left < right)
+    end
+    if equal(tag, "le"):
+        return make_bool_value(left <= right)
+    end
+    if equal(tag, "gt"):
+        return make_bool_value(left > right)
+    end
+    return make_bool_value(left >= right)
+end
+
+func eval_and_expr(kids, frame, pools, nodes, prog):
+    let left = eval_expr(get(kids, 0), frame, pools, nodes, prog)
+    if left.0 != tag_bool():
+        return fault("and left")
+    end
+    if left.1 == 0:
+        return make_bool_value(false)
+    end
+    let right = eval_expr(get(kids, 1), frame, pools, nodes, prog)
+    if right.0 != tag_bool():
+        return fault("and right")
+    end
+    return right
+end
+
+func eval_or_expr(kids, frame, pools, nodes, prog):
+    let left = eval_expr(get(kids, 0), frame, pools, nodes, prog)
+    if left.0 != tag_bool():
+        return fault("or left")
+    end
+    if left.1 != 0:
+        return make_bool_value(true)
+    end
+    let right = eval_expr(get(kids, 1), frame, pools, nodes, prog)
+    if right.0 != tag_bool():
+        return fault("or right")
+    end
+    return right
+end
+
+func builtin_length(args, pools):
+    if count(args) != 1:
+        return fault("length arity")
+    end
+    let v = get(args, 0)
+    if v.0 != tag_string():
+        return fault("length type")
+    end
+    return make_int_value(length(get(pools.0, v.1)))
+end
+
+func builtin_index(args, pools):
+    if count(args) != 2:
+        return fault("index arity")
+    end
+    let sv = get(args, 0)
+    let pos = require_int_payload(get(args, 1))
+    if sv.0 != tag_string():
+        return fault("index type")
+    end
+    let s = get(pools.0, sv.1)
+    if pos >= length(s):
+        return fault("index range")
+    end
+    return make_int_value(index(s, pos))
+end
+
+func builtin_equal(args, pools):
+    if count(args) != 2:
+        return fault("equal arity")
+    end
+    let a = get(args, 0)
+    let b = get(args, 1)
+    if a.0 != tag_string():
+        return fault("equal type")
+    end
+    if b.0 != tag_string():
+        return fault("equal type")
+    end
+    return make_bool_value(equal(get(pools.0, a.1), get(pools.0, b.1)))
+end
+
+func builtin_new_buffer(args, pools):
+    if count(args) != 0:
+        return fault("new_buffer arity")
+    end
+    do add(pools.1, new_buffer())
+    return make_buffer_value(count(pools.1) - 1)
+end
+
+func builtin_freeze(args, pools):
+    if count(args) != 1:
+        return fault("freeze arity")
+    end
+    let v = get(args, 0)
+    if v.0 != tag_buffer():
+        return fault("freeze type")
+    end
+    do add(pools.0, freeze(get(pools.1, v.1)))
+    return make_string_value(count(pools.0) - 1)
+end
+
+func builtin_new_array_from_type(kids, pools):
+    if count(kids) != 1:
+        return fault("new_array arity")
+    end
+    do add(pools.3, new_array((int, int)))
+    return make_array_value(count(pools.3) - 1)
+end
+
+func builtin_get(args, pools):
+    if count(args) != 2:
+        return fault("get arity")
+    end
+    let av = get(args, 0)
+    let pos = require_int_payload(get(args, 1))
+    if av.0 != tag_array():
+        return fault("get type")
+    end
+    let arr = get(pools.3, av.1)
+    if pos >= count(arr):
+        return fault("get range")
+    end
+    return get(arr, pos)
+end
+
+func builtin_count(args, pools):
+    if count(args) != 1:
+        return fault("count arity")
+    end
+    let av = get(args, 0)
+    if av.0 != tag_array():
+        return fault("count type")
+    end
+    return make_int_value(count(get(pools.3, av.1)))
+end
+
+func eval_call_node(atoms, kids, frame, pools, nodes, prog):
+    let name = get(atoms, 0)
+    if equal(name, "append"):
+        return fault("append has no value")
+    end
+    if equal(name, "add"):
+        return fault("add has no value")
+    end
+    if equal(name, "new_array"):
+        return builtin_new_array_from_type(kids, pools)
+    end
+    let args = eval_args(kids, frame, pools, nodes, prog)
+    if equal(name, "length"):
+        return builtin_length(args, pools)
+    end
+    if equal(name, "index"):
+        return builtin_index(args, pools)
+    end
+    if equal(name, "slice"):
+        return fault("slice deferred")
+    end
+    if equal(name, "equal"):
+        return builtin_equal(args, pools)
+    end
+    if equal(name, "new_buffer"):
+        return builtin_new_buffer(args, pools)
+    end
+    if equal(name, "freeze"):
+        return builtin_freeze(args, pools)
+    end
+    if equal(name, "get"):
+        return builtin_get(args, pools)
+    end
+    if equal(name, "count"):
+        return builtin_count(args, pools)
+    end
+    return eval_call(name, args, pools, nodes, prog)
+end
+
+func eval_expr(node_idx, frame, pools, nodes, prog):
+    let node = get(nodes, node_idx)
+    let tag = node.0
+    let atoms = node.1
+    let kids = node.2
+    if equal(tag, "int"):
+        return make_int_value(parse_decimal(get(atoms, 0)))
+    end
+    if equal(tag, "char"):
+        return make_int_value(parse_decimal(get(atoms, 0)))
+    end
+    if equal(tag, "str"):
+        return string_value_from_atoms(atoms, pools)
+    end
+    if equal(tag, "bool"):
+        return make_bool_value(equal(get(atoms, 0), "true"))
+    end
+    if equal(tag, "name"):
+        return frame_lookup(frame, get(atoms, 0))
+    end
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+        return eval_int_binop(tag, kids, frame, pools, nodes, prog)
+    end
+    if equal(tag, "and"):
+        return eval_and_expr(kids, frame, pools, nodes, prog)
+    end
+    if equal(tag, "or"):
+        return eval_or_expr(kids, frame, pools, nodes, prog)
+    end
+    if equal(tag, "not"):
+        return make_bool_value(not require_bool_test(eval_expr(get(kids, 0), frame, pools, nodes, prog)))
+    end
+    if equal(tag, "tuple"):
+        return eval_tuple_expr(kids, frame, pools, nodes, prog)
+    end
+    if equal(tag, "dot"):
+        return eval_dot_expr(atoms, kids, frame, pools, nodes, prog)
+    end
+    if equal(tag, "call"):
+        return eval_call_node(atoms, kids, frame, pools, nodes, prog)
+    end
+    return fault("bad expression")
+end
+
+func eval_do_append(args, pools):
+    if count(args) != 2:
+        return fault("append arity")
+    end
+    let bv = get(args, 0)
+    let byte = require_int_payload(get(args, 1))
+    if bv.0 != tag_buffer():
+        return fault("append type")
+    end
+    if byte > 255:
+        return fault("append byte")
+    end
+    do append(get(pools.1, bv.1), byte)
+    return make_int_value(0)
+end
+
+func eval_do_add(args, pools):
+    if count(args) != 2:
+        return fault("add arity")
+    end
+    let av = get(args, 0)
+    if av.0 != tag_array():
+        return fault("add type")
+    end
+    do add(get(pools.3, av.1), get(args, 1))
+    return make_int_value(0)
+end
+
+func eval_do_call(call_idx, frame, pools, nodes, prog):
+    let node = get(nodes, call_idx)
+    if not equal(node.0, "call"):
+        return fault("do non-call")
+    end
+    let name = get(node.1, 0)
+    if equal(name, "append"):
+        return eval_do_append(eval_args(node.2, frame, pools, nodes, prog), pools)
+    end
+    if equal(name, "add"):
+        return eval_do_add(eval_args(node.2, frame, pools, nodes, prog), pools)
+    end
+    return fault("do requires void builtin")
+end
+
+func eval_arm_body(body_idx, frame, pools, nodes, prog):
+    let scope_mark = count(frame.0)
+    let body_node = get(nodes, body_idx)
+    let r = eval_body(body_node.2, frame, scope_mark, pools, nodes, prog)
+    if r.1 == 1:
+        return r
+    end
+    return (frame_rebuild(r.0, scope_mark), 0, r.2)
+end
+
+func eval_if_loop(kids, i, n, frame, pools, nodes, prog):
+    if i >= n:
+        return (frame, 0, make_int_value(0))
+    end
+    let arm_idx = get(kids, i)
+    let arm = get(nodes, arm_idx)
+    if equal(arm.0, "else"):
+        return eval_arm_body(get(arm.2, 0), frame, pools, nodes, prog)
+    end
+    if not equal(arm.0, "clause"):
+        return fault("bad if child")
+    end
+    let cond = eval_expr(get(arm.2, 0), frame, pools, nodes, prog)
+    if cond.0 != tag_bool():
+        return fault("if condition")
+    end
+    if cond.1 != 0:
+        return eval_arm_body(get(arm.2, 1), frame, pools, nodes, prog)
+    end
+    return eval_if_loop(kids, i + 1, n, frame, pools, nodes, prog)
+end
+
+func eval_stmt(stmt_idx, frame, scope_mark, pools, nodes, prog):
+    let stmt = get(nodes, stmt_idx)
+    let tag = stmt.0
+    let atoms = stmt.1
+    let kids = stmt.2
+    if equal(tag, "let"):
+        let v = eval_expr(get(kids, 0), frame, pools, nodes, prog)
+        return (frame_let(frame, get(atoms, 0), v, scope_mark), 0, make_int_value(0))
+    end
+    if equal(tag, "assign"):
+        let v = eval_expr(get(kids, 0), frame, pools, nodes, prog)
+        return (frame_assign(frame, get(atoms, 0), v), 0, make_int_value(0))
+    end
+    if equal(tag, "return"):
+        let v = eval_expr(get(kids, 0), frame, pools, nodes, prog)
+        return (frame, 1, v)
+    end
+    if equal(tag, "do"):
+        let ignored = eval_do_call(get(kids, 0), frame, pools, nodes, prog)
+        return (frame, 0, ignored)
+    end
+    if equal(tag, "if"):
+        return eval_if_loop(kids, 0, count(kids), frame, pools, nodes, prog)
+    end
+    return fault("bad statement")
+end
+
+func eval_body_loop(stmts, i, n, frame, scope_mark, pools, nodes, prog):
+    if i >= n:
+        return (frame, 0, make_int_value(0))
+    end
+    let r = eval_stmt(get(stmts, i), frame, scope_mark, pools, nodes, prog)
+    if r.1 == 1:
+        return r
+    end
+    return eval_body_loop(stmts, i + 1, n, r.0, scope_mark, pools, nodes, prog)
+end
+
+func eval_body(stmts, frame, scope_mark, pools, nodes, prog):
+    return eval_body_loop(stmts, 0, count(stmts), frame, scope_mark, pools, nodes, prog)
+end
+
+func find_func_loop(funcs, i, n, name, nodes):
+    if i >= n:
+        return fault("unknown function")
+    end
+    let fidx = get(funcs, i)
+    let f = get(nodes, fidx)
+    if equal(get(f.1, 0), name):
+        return fidx
+    end
+    return find_func_loop(funcs, i + 1, n, name, nodes)
+end
+
+func find_func(name, nodes, prog):
+    let p = get(nodes, prog)
+    return find_func_loop(p.2, 0, count(p.2), name, nodes)
+end
+
+func bind_params_loop(params, args, i, n, frame):
+    if i >= n:
+        return frame
+    end
+    let nf = frame_let(frame, get(params, i), get(args, i), 0)
+    return bind_params_loop(params, args, i + 1, n, nf)
+end
+
+func eval_call(name, argvals, pools, nodes, prog):
+    let fidx = find_func(name, nodes, prog)
+    let fn = get(nodes, fidx)
+    let kids = fn.2
+    let params_node = get(nodes, get(kids, 0))
+    let params = params_node.1
+    if count(argvals) != count(params):
+        return fault("call arity")
+    end
+    let frame = bind_params_loop(params, argvals, 0, count(params), frame_empty())
+    let body_node = get(nodes, get(kids, 1))
+    let r = eval_body(body_node.2, frame, 0, pools, nodes, prog)
+    if r.1 == 0:
+        return fault("no return")
+    end
+    return r.2
+end
+
+func serialize_tuple_items(buf, items, i, n, pools):
+    if i >= n:
+        return buf
+    end
+    if i > 0:
+        do append(buf, ' ')
+    end
+    buf = serialize_value_into(buf, get(items, i), pools)
+    return serialize_tuple_items(buf, items, i + 1, n, pools)
+end
+
+func serialize_value_into(buf, v, pools):
+    if v.0 == tag_int():
+        return emit_decimal(buf, v.1)
+    end
+    if v.0 == tag_tuple():
+        do append(buf, '(')
+        let items = get(pools.2, v.1)
+        buf = serialize_tuple_items(buf, items, 0, count(items), pools)
+        do append(buf, ')')
+        return buf
+    end
+    return fault("serialize value")
+end
+
+func serialize_value(v, pools):
+    return freeze(serialize_value_into(new_buffer(), v, pools))
+end
+
+-- ====================================================================
+-- MAIN -- embed the evaluator probe, lex it, parse it, evaluate its
+-- main(), and return the raw oracle line as a string value.
+-- ====================================================================
+
+func main():
+    let probe = "-- ============================================================\n-- MEWTWO -- Herbert evaluator probe\n-- Twelve feature-tests. main() returns a 12-tuple of ints.\n-- Oracle: (42 900 15 2 55 210 227 106 21 234 103 100)\n-- Authored to terminate and to keep total allocation bounded.\n-- ============================================================\n\n-- helper: collapse a Boolean into one of two ints\nfunc bit(cond, v):\n  if cond:\n    return v\n  else:\n    return 0\n  end\nend\n\n-- helper: multi-way branch classifier (test 2)\nfunc classify(n):\n  if n < 0:\n    return 9000          -- unreachable: n is unsigned\n  elif n == 0:\n    return 700\n  elif n < 10:\n    return 150\n  else:\n    return 50\n  end\nend\n\n-- helper: non-tail recursion (test 5)\nfunc sum_to(n):\n  if n == 0:\n    return 0\n  else:\n    return n + sum_to(n - 1)\n  end\nend\n\n-- helper: tail recursion with accumulator (test 6)\nfunc sum_tail(n, acc):\n  if n == 0:\n    return acc\n  else:\n    return sum_tail(n - 1, acc + n)\n  end\nend\n\n-- helper: effectful witness for the short-circuit test (test 4)\nfunc witness(w):\n  do add(w, 1)\n  return true\nend\n\n-- helper: mutate an array through a parameter (test 10)\nfunc grow(a):\n  do add(a, 7)\n  return count(a)\nend\n\n-- test 1: arithmetic and modular wrap\nfunc test_arith():\n  let a = 40 + 5            -- 45\n  let b = a - 3             -- 42\n  let w = 0 - 1             -- wraps to 2^64 - 1\n  let z = w + 1             -- wraps back to 0\n  return b + z              -- 42\nend\n\n-- test 2: comparisons feeding multi-way branching\nfunc test_branch():\n  return classify(0) + classify(5) + classify(99)   -- 700+150+50\nend\n\n-- test 3: all six comparison operators\nfunc test_compare():\n  let r1 = bit(3 == 3, 1)   -- true  -> 1\n  let r2 = bit(5 != 5, 2)   -- false -> 0\n  let r3 = bit(2 < 9, 2)    -- true  -> 2\n  let r4 = bit(4 <= 4, 4)   -- true  -> 4\n  let r5 = bit(1 > 8, 8)    -- false -> 0\n  let r6 = bit(8 >= 8, 8)   -- true  -> 8\n  return r1 + r2 + r3 + r4 + r5 + r6                 -- 15\nend\n\n-- test 4: short-circuit and / or / not\nfunc test_shortcircuit():\n  let w = new_array(int)\n  let a = true or witness(w)     -- short-circuits: witness NOT called\n  let b = false and witness(w)   -- short-circuits: witness NOT called\n  let c = false or witness(w)    -- witness called\n  let d = true and witness(w)    -- witness called\n  let e = not (a and b)          -- not (true and false) = true\n  if e and c and d:\n    return count(w)              -- 2\n  else:\n    return 999\n  end\nend\n\n-- test 5: non-tail recursion (locals, params, return)\nfunc test_recursion():\n  return sum_to(10)              -- 55\nend\n\n-- test 6: tail recursion at modest n (value correctness only)\nfunc test_tail():\n  return sum_tail(20, 0)         -- 210\nend\n\n-- test 7: immutable strings -- literal, length, index, equal\nfunc test_strings():\n  let s = \"herbert\"\n  let n = length(s)                       -- 7\n  let c0 = index(s, 0)                    -- 'h' = 104\n  let c1 = index(s, 1)                    -- 'e' = 101\n  let eq = bit(equal(\"hi\", \"hi\"), 15)     -- true  -> 15\n  let ne = bit(equal(\"a\", \"b\"), 99)       -- false -> 0\n  return n + c0 + c1 + eq + ne            -- 227\nend\n\n-- test 8: growable byte buffer -- append, freeze (write-only pattern)\nfunc test_buffer():\n  let b = new_buffer()\n  do append(b, 'h')             -- 104\n  do append(b, 'i')             -- 105\n  let s = freeze(b)             -- immutable string \"hi\"\n  let n = length(s)             -- 2\n  let c = index(s, 0)           -- 'h' = 104\n  return n + c                  -- 106\nend\n\n-- test 9: nested tuples and positional access\nfunc test_tuples():\n  let t = ((1, 2), (3, 4), (5, 6))\n  let a = t.0.0                 -- 1\n  let b = t.0.1                 -- 2\n  let c = t.1.0                 -- 3\n  let d = t.1.1                 -- 4\n  let e = t.2.0                 -- 5\n  let f = t.2.1                 -- 6\n  return a + b + c + d + e + f  -- 21\nend\n\n-- test 10: growable arrays, array-of-tuples, reference-through-call,\n--          and every new_array type-expression form\nfunc test_arrays():\n  let a = new_array(int)\n  do add(a, 10)\n  do add(a, 20)\n  do add(a, 30)                 -- a = [10,20,30]\n  let n2 = grow(a)              -- grow mutates a -> [10,20,30,7]; n2 = 4\n  let s = get(a, 0) + get(a, 1) + get(a, 2) + get(a, 3)   -- 67\n  let p = new_array((int, int))\n  do add(p, (100, 1))\n  do add(p, (50, 12))\n  let pt0 = get(p, 0)           -- (100,1)\n  let pt1 = get(p, 1)           -- (50,12)\n  let psum = pt0.0 + pt0.1 + pt1.0 + pt1.1                -- 163\n  -- exercise the remaining type-expression forms; each array is\n  -- empty so each count is 0 and type_cov is 0 (oracle unchanged)\n  let type_cov = count(new_array(bool)) + count(new_array(string)) + count(new_array(buffer)) + count(new_array(array(int)))\n  return s + psum + n2 + type_cov          -- 67+163+4+0 = 234\nend\n\n-- test 11: reference semantics -- aliasing, and a shared array\n--          inside a copied tuple\nfunc test_refsem():\n  let a = new_array(int)\n  do add(a, 5)                  -- [5]\n  let b = a                     -- alias\n  do add(b, 7)                  -- [5,7] via the alias\n  let alias_ok = get(a, 1)      -- 7  (mutation through b visible via a)\n  let t = (a, 0)                -- tuple holding the array\n  let u = t                     -- tuple value copied; inner array shared\n  do add(u.0, 93)               -- [5,7,93] via the copied tuple's array\n  let shared_ok = get(a, 2)     -- 93 (mutation through u.0 visible via a)\n  return alias_ok + shared_ok + count(a)                  -- 7+93+3\nend\n\n-- test 12: block scope -- shadowing and outer rebinding\nfunc test_blockscope():\n  let x = 1\n  let y = 0\n  if true:\n    let x = 99                  -- shadows outer x; block-scoped to this arm\n    y = x                       -- rebinds OUTER y to inner x (99)\n  end\n  -- inner x is gone; x is 1 again; y kept its rebind\n  return x + y                  -- 1 + 99\nend\n\n-- entry point: the 12-tuple the evaluator serializes\nfunc main():\n  return (\n    test_arith(),\n    test_branch(),\n    test_compare(),\n    test_shortcircuit(),\n    test_recursion(),\n    test_tail(),\n    test_strings(),\n    test_buffer(),\n    test_tuples(),\n    test_arrays(),\n    test_refsem(),\n    test_blockscope()\n  )\nend\n"
+    let tokens = lex_source(probe)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let string_pool = new_array(string)
+    let buffer_pool = new_array(buffer)
+    let tuple_pool = new_array(array((int, int)))
+    let array_pool = new_array(array((int, int)))
+    let pools = (string_pool, buffer_pool, tuple_pool, array_pool)
+    let argvals = new_array((int, int))
+    let result = eval_call("main", argvals, pools, nodes, parsed.0)
+    return serialize_value(result, pools)
+end

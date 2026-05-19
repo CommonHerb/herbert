@@ -144,6 +144,45 @@ if [[ -d ../../stack ]]; then
             fail=$((fail + 1))
         fi
     fi
+
+    # Evaluator forcing-function test: the evaluator fragment returns the
+    # serialized probe result as a Herbert string value, so the bootstrap
+    # prints that value in canonical quoted form. The oracle is the raw
+    # serialized line; strip the canonical wrapper before diffing.
+    EVAL_DRIVER="$STACK_DIR/evaluator_fragment.herb"
+    EVAL_PROBE_EXPECTED="$STACK_DIR/evaluator_probe.expected"
+    if [[ -f "$EVAL_DRIVER" && -f "$EVAL_PROBE_EXPECTED" ]]; then
+        total=$((total + 1))
+        actual=$(mktemp)
+        raw_actual=$(mktemp)
+        err=$(mktemp)
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$EVAL_DRIVER" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/evaluator_probe (driver: evaluator_fragment.herb) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/evaluator_probe (driver: evaluator_fragment.herb) (expected canonical string output)"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! diff -u "$EVAL_PROBE_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
+            echo "FAIL: stack/evaluator_probe (driver: evaluator_fragment.herb) (output mismatch)"
+            cat /tmp/herbert_diff.$$
+            fail=$((fail + 1))
+            rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
+        else
+            echo "PASS: stack/evaluator_probe (driver: evaluator_fragment.herb)"
+            pass=$((pass + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        fi
+    fi
 fi
 
 echo
