@@ -183,6 +183,45 @@ if [[ -d ../../stack ]]; then
             rm -f "$actual" "$raw_actual" "$err"
         fi
     fi
+
+    # VM forcing-function test: the VM fragment runs the blessed bytecode
+    # for the same evaluator probe and returns the serialized result as a
+    # Herbert string value. Reuse the evaluator oracle and strip the
+    # canonical string wrapper before diffing.
+    VM_DRIVER="$STACK_DIR/vm_fragment.herb"
+    VM_PROBE_EXPECTED="$STACK_DIR/evaluator_probe.expected"
+    if [[ -f "$VM_DRIVER" && -f "$VM_PROBE_EXPECTED" ]]; then
+        total=$((total + 1))
+        actual=$(mktemp)
+        raw_actual=$(mktemp)
+        err=$(mktemp)
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$VM_DRIVER" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/vm (driver: vm_fragment.herb) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/vm (driver: vm_fragment.herb) (expected canonical string output)"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! diff -u "$VM_PROBE_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
+            echo "FAIL: stack/vm (driver: vm_fragment.herb) (output mismatch)"
+            cat /tmp/herbert_diff.$$
+            fail=$((fail + 1))
+            rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
+        else
+            echo "PASS: stack/vm (driver: vm_fragment.herb)"
+            pass=$((pass + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        fi
+    fi
 fi
 
 echo

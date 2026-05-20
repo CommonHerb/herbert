@@ -1,0 +1,1167 @@
+-- Herbert VM fragment. Fourth real program on the Herbert stack.
+-- Executes the blessed evaluator-probe bytecode and serializes the result.
+
+-- ====================================================================
+-- RUNTIME VALUE LAYER (copied from stack/evaluator_fragment.herb)
+-- ====================================================================
+
+func div10_acc(n, q):
+    if n < 10:
+        return q
+    end
+    return div10_acc(n - 10, q + 1)
+end
+
+func div10(n):
+    return div10_acc(n, 0)
+end
+
+func mod10(n):
+    if n < 10:
+        return n
+    end
+    return mod10(n - 10)
+end
+
+func emit_decimal(buf, n):
+    if n >= 10:
+        buf = emit_decimal(buf, div10(n))
+    end
+    do append(buf, 48 + mod10(n))
+    return buf
+end
+
+func int_to_str(n):
+    return freeze(emit_decimal(new_buffer(), n))
+end
+
+func fault(msg):
+    let a = new_array((int, int))
+    return get(a, 0)
+end
+
+func tag_int():
+    return 0
+end
+
+func tag_bool():
+    return 1
+end
+
+func tag_string():
+    return 2
+end
+
+func tag_buffer():
+    return 3
+end
+
+func tag_tuple():
+    return 4
+end
+
+func tag_array():
+    return 5
+end
+
+func make_int_value(n):
+    return (tag_int(), n)
+end
+
+func make_bool_value(b):
+    if b:
+        return (tag_bool(), 1)
+    end
+    return (tag_bool(), 0)
+end
+
+func make_string_value(i):
+    return (tag_string(), i)
+end
+
+func make_buffer_value(i):
+    return (tag_buffer(), i)
+end
+
+func make_tuple_value(i):
+    return (tag_tuple(), i)
+end
+
+func make_array_value(i):
+    return (tag_array(), i)
+end
+
+func require_int_payload(v):
+    if v.0 != tag_int():
+        return fault("expected int")
+    end
+    return v.1
+end
+
+func require_bool_test(v):
+    if v.0 != tag_bool():
+        return fault("expected bool")
+    end
+    return v.1 != 0
+end
+
+func builtin_length(args, pools):
+    if count(args) != 1:
+        return fault("length arity")
+    end
+    let v = get(args, 0)
+    if v.0 != tag_string():
+        return fault("length type")
+    end
+    return make_int_value(length(get(pools.0, v.1)))
+end
+
+func builtin_index(args, pools):
+    if count(args) != 2:
+        return fault("index arity")
+    end
+    let sv = get(args, 0)
+    let pos = require_int_payload(get(args, 1))
+    if sv.0 != tag_string():
+        return fault("index type")
+    end
+    let s = get(pools.0, sv.1)
+    if pos >= length(s):
+        return fault("index range")
+    end
+    return make_int_value(index(s, pos))
+end
+
+func builtin_equal(args, pools):
+    if count(args) != 2:
+        return fault("equal arity")
+    end
+    let a = get(args, 0)
+    let b = get(args, 1)
+    if a.0 != tag_string():
+        return fault("equal type")
+    end
+    if b.0 != tag_string():
+        return fault("equal type")
+    end
+    return make_bool_value(equal(get(pools.0, a.1), get(pools.0, b.1)))
+end
+
+func builtin_new_buffer(args, pools):
+    if count(args) != 0:
+        return fault("new_buffer arity")
+    end
+    do add(pools.1, new_buffer())
+    return make_buffer_value(count(pools.1) - 1)
+end
+
+func builtin_freeze(args, pools):
+    if count(args) != 1:
+        return fault("freeze arity")
+    end
+    let v = get(args, 0)
+    if v.0 != tag_buffer():
+        return fault("freeze type")
+    end
+    do add(pools.0, freeze(get(pools.1, v.1)))
+    return make_string_value(count(pools.0) - 1)
+end
+
+func builtin_get(args, pools):
+    if count(args) != 2:
+        return fault("get arity")
+    end
+    let av = get(args, 0)
+    let pos = require_int_payload(get(args, 1))
+    if av.0 != tag_array():
+        return fault("get type")
+    end
+    let arr = get(pools.3, av.1)
+    if pos >= count(arr):
+        return fault("get range")
+    end
+    return get(arr, pos)
+end
+
+func builtin_count(args, pools):
+    if count(args) != 1:
+        return fault("count arity")
+    end
+    let av = get(args, 0)
+    if av.0 != tag_array():
+        return fault("count type")
+    end
+    return make_int_value(count(get(pools.3, av.1)))
+end
+
+func eval_do_append(args, pools):
+    if count(args) != 2:
+        return fault("append arity")
+    end
+    let bv = get(args, 0)
+    let byte = require_int_payload(get(args, 1))
+    if bv.0 != tag_buffer():
+        return fault("append type")
+    end
+    if byte > 255:
+        return fault("append byte")
+    end
+    do append(get(pools.1, bv.1), byte)
+    return make_int_value(0)
+end
+
+func eval_do_add(args, pools):
+    if count(args) != 2:
+        return fault("add arity")
+    end
+    let av = get(args, 0)
+    if av.0 != tag_array():
+        return fault("add type")
+    end
+    do add(get(pools.3, av.1), get(args, 1))
+    return make_int_value(0)
+end
+
+func serialize_tuple_items(buf, items, i, n, pools):
+    if i >= n:
+        return buf
+    end
+    if i > 0:
+        do append(buf, ' ')
+    end
+    buf = serialize_value_into(buf, get(items, i), pools)
+    return serialize_tuple_items(buf, items, i + 1, n, pools)
+end
+
+func serialize_value_into(buf, v, pools):
+    if v.0 == tag_int():
+        return emit_decimal(buf, v.1)
+    end
+    if v.0 == tag_tuple():
+        do append(buf, '(')
+        let items = get(pools.2, v.1)
+        buf = serialize_tuple_items(buf, items, 0, count(items), pools)
+        do append(buf, ')')
+        return buf
+    end
+    return fault("serialize value")
+end
+
+func serialize_value(v, pools):
+    return freeze(serialize_value_into(new_buffer(), v, pools))
+end
+
+-- ====================================================================
+-- VM STACK / FRAME HELPERS
+-- ====================================================================
+
+func value_array_prefix_loop(src, i, n, out):
+    if i >= n:
+        return out
+    end
+    do add(out, get(src, i))
+    return value_array_prefix_loop(src, i + 1, n, out)
+end
+
+func value_array_prefix(src, n):
+    return value_array_prefix_loop(src, 0, n, new_array((int, int)))
+end
+
+func value_array_slice_loop(src, i, n, out):
+    if i >= n:
+        return out
+    end
+    do add(out, get(src, i))
+    return value_array_slice_loop(src, i + 1, n, out)
+end
+
+func stack_pop(stack):
+    let n = count(stack)
+    let v = get(stack, n - 1)
+    return (value_array_prefix(stack, n - 1), v)
+end
+
+func stack_pop_n(stack, n):
+    let live = count(stack) - n
+    let args = value_array_slice_loop(stack, live, count(stack), new_array((int, int)))
+    return (value_array_prefix(stack, live), args)
+end
+
+func locals_store_loop(old, k, v, i, n, out):
+    if i >= n:
+        return out
+    end
+    if i == k:
+        do add(out, v)
+    else:
+        do add(out, get(old, i))
+    end
+    return locals_store_loop(old, k, v, i + 1, n, out)
+end
+
+func locals_store(old, k, v):
+    return locals_store_loop(old, k, v, 0, count(old), new_array((int, int)))
+end
+
+func zero_locals_loop(i, n, out):
+    if i >= n:
+        return out
+    end
+    do add(out, make_int_value(0))
+    return zero_locals_loop(i + 1, n, out)
+end
+
+func zero_locals(n):
+    return zero_locals_loop(0, n, new_array((int, int)))
+end
+
+func callee_locals_loop(args, i, n_locals, out):
+    if i >= n_locals:
+        return out
+    end
+    if i < count(args):
+        do add(out, get(args, i))
+    else:
+        do add(out, make_int_value(0))
+    end
+    return callee_locals_loop(args, i + 1, n_locals, out)
+end
+
+func callee_locals(args, n_params, n_locals):
+    if count(args) != n_params:
+        return fault("call arity")
+    end
+    return callee_locals_loop(args, 0, n_locals, new_array((int, int)))
+end
+
+func frame_array_prefix_loop(src, i, n, out):
+    if i >= n:
+        return out
+    end
+    do add(out, get(src, i))
+    return frame_array_prefix_loop(src, i + 1, n, out)
+end
+
+func frame_array_prefix(src, n):
+    return frame_array_prefix_loop(src, 0, n, new_array((int, int, array((int, int)), array((int, int)))))
+end
+
+func frame_stack_pop(frames):
+    let n = count(frames)
+    let f = get(frames, n - 1)
+    return (frame_array_prefix(frames, n - 1), f)
+end
+
+func boot_strings_loop(src, i, n, out):
+    if i >= n:
+        return out
+    end
+    do add(out, get(src, i))
+    return boot_strings_loop(src, i + 1, n, out)
+end
+
+func boot_strings(src):
+    return boot_strings_loop(src, 0, count(src), new_array(string))
+end
+
+func args_empty():
+    return new_array((int, int))
+end
+
+func builtin_new_array(pools):
+    do add(pools.3, new_array((int, int)))
+    return make_array_value(count(pools.3) - 1)
+end
+
+-- ====================================================================
+-- VM EXECUTION
+-- ====================================================================
+
+func int_binop(op, lhs_v, rhs_v):
+    let lhs = require_int_payload(lhs_v)
+    let rhs = require_int_payload(rhs_v)
+    if op == 5:
+        return make_int_value(lhs + rhs)
+    end
+    if op == 6:
+        return make_int_value(lhs - rhs)
+    end
+    if op == 7:
+        return make_bool_value(lhs < rhs)
+    end
+    if op == 8:
+        return make_bool_value(lhs <= rhs)
+    end
+    if op == 9:
+        return make_bool_value(lhs > rhs)
+    end
+    if op == 10:
+        return make_bool_value(lhs >= rhs)
+    end
+    if op == 11:
+        return make_bool_value(lhs == rhs)
+    end
+    return make_bool_value(lhs != rhs)
+end
+
+func vm_push_result(frame, frames, pools, prog, v):
+    do add(frame.3, v)
+    return vm_loop((frame.0, frame.1 + 1, frame.2, frame.3), frames, pools, prog)
+end
+
+func vm_unary_builtin(frame, frames, pools, prog, builtin_id):
+    let popped = stack_pop(frame.3)
+    let args = new_array((int, int))
+    do add(args, popped.1)
+    if builtin_id == 22:
+        do add(popped.0, builtin_length(args, pools))
+    elif builtin_id == 27:
+        do add(popped.0, builtin_freeze(args, pools))
+    else:
+        do add(popped.0, builtin_count(args, pools))
+    end
+    return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+end
+
+func vm_binary_builtin(frame, frames, pools, prog, builtin_id):
+    let popped = stack_pop_n(frame.3, 2)
+    if builtin_id == 23:
+        do add(popped.0, builtin_index(popped.1, pools))
+    elif builtin_id == 25:
+        do add(popped.0, builtin_equal(popped.1, pools))
+    else:
+        do add(popped.0, builtin_get(popped.1, pools))
+    end
+    return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+end
+
+func vm_loop(frame, frames, pools, prog):
+    let fn_info = get(prog.0, frame.0)
+    let instr = get(prog.1, fn_info.0 + frame.1)
+    let op = instr.0
+    let a = instr.1
+    let b = instr.2
+
+    if op == 0:
+        return vm_push_result(frame, frames, pools, prog, make_int_value(a))
+    end
+    if op == 1:
+        return vm_push_result(frame, frames, pools, prog, make_bool_value(a != 0))
+    end
+    if op == 2:
+        return vm_push_result(frame, frames, pools, prog, make_string_value(a))
+    end
+    if op == 3:
+        return vm_push_result(frame, frames, pools, prog, get(frame.2, a))
+    end
+    if op == 4:
+        let popped = stack_pop(frame.3)
+        let locals = locals_store(frame.2, a, popped.1)
+        return vm_loop((frame.0, frame.1 + 1, locals, popped.0), frames, pools, prog)
+    end
+    if op >= 5 and op <= 12:
+        let rhs_popped = stack_pop(frame.3)
+        let lhs_popped = stack_pop(rhs_popped.0)
+        do add(lhs_popped.0, int_binop(op, lhs_popped.1, rhs_popped.1))
+        return vm_loop((frame.0, frame.1 + 1, frame.2, lhs_popped.0), frames, pools, prog)
+    end
+    if op == 13:
+        let popped = stack_pop(frame.3)
+        do add(popped.0, make_bool_value(not require_bool_test(popped.1)))
+        return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+    end
+    if op == 14:
+        let popped = stack_pop_n(frame.3, a)
+        do add(pools.2, popped.1)
+        do add(popped.0, make_tuple_value(count(pools.2) - 1))
+        return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+    end
+    if op == 15:
+        let popped = stack_pop(frame.3)
+        let tv = popped.1
+        if tv.0 != tag_tuple():
+            return fault("tuple get type")
+        end
+        let items = get(pools.2, tv.1)
+        if a >= count(items):
+            return fault("tuple get range")
+        end
+        do add(popped.0, get(items, a))
+        return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+    end
+    if op == 16:
+        return vm_loop((frame.0, a, frame.2, frame.3), frames, pools, prog)
+    end
+    if op == 17:
+        let popped = stack_pop(frame.3)
+        if require_bool_test(popped.1):
+            return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+        end
+        return vm_loop((frame.0, a, frame.2, popped.0), frames, pools, prog)
+    end
+    if op == 18:
+        let top = get(frame.3, count(frame.3) - 1)
+        if not require_bool_test(top):
+            return vm_loop((frame.0, a, frame.2, frame.3), frames, pools, prog)
+        end
+        let popped = stack_pop(frame.3)
+        return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+    end
+    if op == 19:
+        let top = get(frame.3, count(frame.3) - 1)
+        if require_bool_test(top):
+            return vm_loop((frame.0, a, frame.2, frame.3), frames, pools, prog)
+        end
+        let popped = stack_pop(frame.3)
+        return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+    end
+    if op == 20:
+        let popped = stack_pop_n(frame.3, b)
+        let callee_info = get(prog.0, a)
+        let locals = callee_locals(popped.1, callee_info.1, callee_info.2)
+        do add(frames, (frame.0, frame.1 + 1, frame.2, popped.0))
+        return vm_loop((a, 0, locals, new_array((int, int))), frames, pools, prog)
+    end
+    if op == 21:
+        let popped = stack_pop(frame.3)
+        if count(frames) == 0:
+            return popped.1
+        end
+        let fp = frame_stack_pop(frames)
+        let caller = fp.1
+        do add(caller.3, popped.1)
+        return vm_loop((caller.0, caller.1, caller.2, caller.3), fp.0, pools, prog)
+    end
+    if op == 22:
+        return vm_unary_builtin(frame, frames, pools, prog, 22)
+    end
+    if op == 23:
+        return vm_binary_builtin(frame, frames, pools, prog, 23)
+    end
+    if op == 24:
+        return fault("slice deferred")
+    end
+    if op == 25:
+        return vm_binary_builtin(frame, frames, pools, prog, 25)
+    end
+    if op == 26:
+        return vm_push_result(frame, frames, pools, prog, builtin_new_buffer(args_empty(), pools))
+    end
+    if op == 27:
+        return vm_unary_builtin(frame, frames, pools, prog, 27)
+    end
+    if op == 28:
+        return vm_push_result(frame, frames, pools, prog, builtin_new_array(pools))
+    end
+    if op == 29:
+        return vm_binary_builtin(frame, frames, pools, prog, 29)
+    end
+    if op == 30:
+        return vm_unary_builtin(frame, frames, pools, prog, 30)
+    end
+    if op == 31:
+        let popped = stack_pop_n(frame.3, 2)
+        let ignored = eval_do_append(popped.1, pools)
+        return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+    end
+    if op == 32:
+        let popped = stack_pop_n(frame.3, 2)
+        let ignored = eval_do_add(popped.1, pools)
+        return vm_loop((frame.0, frame.1 + 1, frame.2, popped.0), frames, pools, prog)
+    end
+    return fault("bad opcode")
+end
+
+-- ====================================================================
+-- BLESSED BYTECODE BUILDERS (435 instructions, 19 functions)
+-- ====================================================================
+
+func build_fn_00(instrs):
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (17, 4, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (21, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_01(instrs):
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (7, 0, 0))
+    do add(instrs, (17, 6, 0))
+    do add(instrs, (0, 9000, 0))
+    do add(instrs, (21, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (11, 0, 0))
+    do add(instrs, (17, 12, 0))
+    do add(instrs, (0, 700, 0))
+    do add(instrs, (21, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 10, 0))
+    do add(instrs, (7, 0, 0))
+    do add(instrs, (17, 18, 0))
+    do add(instrs, (0, 150, 0))
+    do add(instrs, (21, 0, 0))
+    do add(instrs, (0, 50, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_02(instrs):
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (11, 0, 0))
+    do add(instrs, (17, 6, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (21, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (6, 0, 0))
+    do add(instrs, (20, 2, 1))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_03(instrs):
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (11, 0, 0))
+    do add(instrs, (17, 6, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (21, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (6, 0, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (20, 3, 2))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_04(instrs):
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (1, 1, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_05(instrs):
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 7, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (30, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_06(instrs):
+    do add(instrs, (0, 40, 0))
+    do add(instrs, (0, 5, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 3, 0))
+    do add(instrs, (6, 0, 0))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (6, 0, 0))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (4, 3, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_07(instrs):
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (20, 1, 1))
+    do add(instrs, (0, 5, 0))
+    do add(instrs, (20, 1, 1))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (0, 99, 0))
+    do add(instrs, (20, 1, 1))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_08(instrs):
+    do add(instrs, (0, 3, 0))
+    do add(instrs, (0, 3, 0))
+    do add(instrs, (11, 0, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (20, 0, 2))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (0, 5, 0))
+    do add(instrs, (0, 5, 0))
+    do add(instrs, (12, 0, 0))
+    do add(instrs, (0, 2, 0))
+    do add(instrs, (20, 0, 2))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (0, 2, 0))
+    do add(instrs, (0, 9, 0))
+    do add(instrs, (7, 0, 0))
+    do add(instrs, (0, 2, 0))
+    do add(instrs, (20, 0, 2))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (0, 4, 0))
+    do add(instrs, (0, 4, 0))
+    do add(instrs, (8, 0, 0))
+    do add(instrs, (0, 4, 0))
+    do add(instrs, (20, 0, 2))
+    do add(instrs, (4, 3, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (0, 8, 0))
+    do add(instrs, (9, 0, 0))
+    do add(instrs, (0, 8, 0))
+    do add(instrs, (20, 0, 2))
+    do add(instrs, (4, 4, 0))
+    do add(instrs, (0, 8, 0))
+    do add(instrs, (0, 8, 0))
+    do add(instrs, (10, 0, 0))
+    do add(instrs, (0, 8, 0))
+    do add(instrs, (20, 0, 2))
+    do add(instrs, (4, 5, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 4, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 5, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_09(instrs):
+    do add(instrs, (28, 0, 0))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (1, 1, 0))
+    do add(instrs, (19, 6, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (20, 4, 1))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (1, 0, 0))
+    do add(instrs, (18, 11, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (20, 4, 1))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (1, 0, 0))
+    do add(instrs, (19, 16, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (20, 4, 1))
+    do add(instrs, (4, 3, 0))
+    do add(instrs, (1, 1, 0))
+    do add(instrs, (18, 21, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (20, 4, 1))
+    do add(instrs, (4, 4, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (18, 25, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (13, 0, 0))
+    do add(instrs, (4, 5, 0))
+    do add(instrs, (3, 5, 0))
+    do add(instrs, (18, 30, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (18, 32, 0))
+    do add(instrs, (3, 4, 0))
+    do add(instrs, (17, 36, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (30, 0, 0))
+    do add(instrs, (21, 0, 0))
+    do add(instrs, (0, 999, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_10(instrs):
+    do add(instrs, (0, 10, 0))
+    do add(instrs, (20, 2, 1))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_11(instrs):
+    do add(instrs, (0, 20, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (20, 3, 2))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_12(instrs):
+    do add(instrs, (2, 0, 0))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (22, 0, 0))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (23, 0, 0))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (23, 0, 0))
+    do add(instrs, (4, 3, 0))
+    do add(instrs, (2, 1, 0))
+    do add(instrs, (2, 1, 0))
+    do add(instrs, (25, 0, 0))
+    do add(instrs, (0, 15, 0))
+    do add(instrs, (20, 0, 2))
+    do add(instrs, (4, 4, 0))
+    do add(instrs, (2, 2, 0))
+    do add(instrs, (2, 3, 0))
+    do add(instrs, (25, 0, 0))
+    do add(instrs, (0, 99, 0))
+    do add(instrs, (20, 0, 2))
+    do add(instrs, (4, 5, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 4, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 5, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_13(instrs):
+    do add(instrs, (26, 0, 0))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 104, 0))
+    do add(instrs, (31, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 105, 0))
+    do add(instrs, (31, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (27, 0, 0))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (22, 0, 0))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (23, 0, 0))
+    do add(instrs, (4, 3, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_14(instrs):
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (0, 2, 0))
+    do add(instrs, (14, 2, 0))
+    do add(instrs, (0, 3, 0))
+    do add(instrs, (0, 4, 0))
+    do add(instrs, (14, 2, 0))
+    do add(instrs, (0, 5, 0))
+    do add(instrs, (0, 6, 0))
+    do add(instrs, (14, 2, 0))
+    do add(instrs, (14, 3, 0))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (15, 0, 0))
+    do add(instrs, (15, 0, 0))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (15, 0, 0))
+    do add(instrs, (15, 1, 0))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (15, 1, 0))
+    do add(instrs, (15, 0, 0))
+    do add(instrs, (4, 3, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (15, 1, 0))
+    do add(instrs, (15, 1, 0))
+    do add(instrs, (4, 4, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (15, 2, 0))
+    do add(instrs, (15, 0, 0))
+    do add(instrs, (4, 5, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (15, 2, 0))
+    do add(instrs, (15, 1, 0))
+    do add(instrs, (4, 6, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 4, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 5, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 6, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_15(instrs):
+    do add(instrs, (28, 0, 0))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 10, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 20, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 30, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (20, 5, 1))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (29, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (29, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 2, 0))
+    do add(instrs, (29, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 3, 0))
+    do add(instrs, (29, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (28, 0, 0))
+    do add(instrs, (4, 3, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (0, 100, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (14, 2, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (0, 50, 0))
+    do add(instrs, (0, 12, 0))
+    do add(instrs, (14, 2, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (29, 0, 0))
+    do add(instrs, (4, 4, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (29, 0, 0))
+    do add(instrs, (4, 5, 0))
+    do add(instrs, (3, 4, 0))
+    do add(instrs, (15, 0, 0))
+    do add(instrs, (3, 4, 0))
+    do add(instrs, (15, 1, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 5, 0))
+    do add(instrs, (15, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 5, 0))
+    do add(instrs, (15, 1, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (4, 6, 0))
+    do add(instrs, (28, 0, 0))
+    do add(instrs, (30, 0, 0))
+    do add(instrs, (28, 0, 0))
+    do add(instrs, (30, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (28, 0, 0))
+    do add(instrs, (30, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (28, 0, 0))
+    do add(instrs, (30, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (4, 7, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (3, 6, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 7, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_16(instrs):
+    do add(instrs, (28, 0, 0))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 5, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (0, 7, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (29, 0, 0))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (14, 2, 0))
+    do add(instrs, (4, 3, 0))
+    do add(instrs, (3, 3, 0))
+    do add(instrs, (4, 4, 0))
+    do add(instrs, (3, 4, 0))
+    do add(instrs, (15, 0, 0))
+    do add(instrs, (0, 93, 0))
+    do add(instrs, (32, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (0, 2, 0))
+    do add(instrs, (29, 0, 0))
+    do add(instrs, (4, 5, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (3, 5, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (30, 0, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_17(instrs):
+    do add(instrs, (0, 1, 0))
+    do add(instrs, (4, 0, 0))
+    do add(instrs, (0, 0, 0))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (1, 1, 0))
+    do add(instrs, (17, 10, 0))
+    do add(instrs, (0, 99, 0))
+    do add(instrs, (4, 2, 0))
+    do add(instrs, (3, 2, 0))
+    do add(instrs, (4, 1, 0))
+    do add(instrs, (3, 0, 0))
+    do add(instrs, (3, 1, 0))
+    do add(instrs, (5, 0, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_fn_18(instrs):
+    do add(instrs, (20, 6, 0))
+    do add(instrs, (20, 7, 0))
+    do add(instrs, (20, 8, 0))
+    do add(instrs, (20, 9, 0))
+    do add(instrs, (20, 10, 0))
+    do add(instrs, (20, 11, 0))
+    do add(instrs, (20, 12, 0))
+    do add(instrs, (20, 13, 0))
+    do add(instrs, (20, 14, 0))
+    do add(instrs, (20, 15, 0))
+    do add(instrs, (20, 16, 0))
+    do add(instrs, (20, 17, 0))
+    do add(instrs, (14, 12, 0))
+    do add(instrs, (21, 0, 0))
+    return instrs
+end
+
+func build_instructions():
+    let instrs = new_array((int, int, int))
+    instrs = build_fn_00(instrs)
+    instrs = build_fn_01(instrs)
+    instrs = build_fn_02(instrs)
+    instrs = build_fn_03(instrs)
+    instrs = build_fn_04(instrs)
+    instrs = build_fn_05(instrs)
+    instrs = build_fn_06(instrs)
+    instrs = build_fn_07(instrs)
+    instrs = build_fn_08(instrs)
+    instrs = build_fn_09(instrs)
+    instrs = build_fn_10(instrs)
+    instrs = build_fn_11(instrs)
+    instrs = build_fn_12(instrs)
+    instrs = build_fn_13(instrs)
+    instrs = build_fn_14(instrs)
+    instrs = build_fn_15(instrs)
+    instrs = build_fn_16(instrs)
+    instrs = build_fn_17(instrs)
+    instrs = build_fn_18(instrs)
+    return instrs
+end
+
+func build_function_table():
+    let funcs = new_array((int, int, int))
+    do add(funcs, (0, 2, 2))
+    do add(funcs, (6, 1, 1))
+    do add(funcs, (26, 1, 1))
+    do add(funcs, (39, 2, 2))
+    do add(funcs, (53, 1, 1))
+    do add(funcs, (58, 1, 1))
+    do add(funcs, (64, 0, 4))
+    do add(funcs, (84, 0, 0))
+    do add(funcs, (93, 0, 6))
+    do add(funcs, (141, 0, 6))
+    do add(funcs, (179, 0, 0))
+    do add(funcs, (182, 0, 0))
+    do add(funcs, (186, 0, 6))
+    do add(funcs, (221, 0, 4))
+    do add(funcs, (243, 0, 7))
+    do add(funcs, (290, 0, 8))
+    do add(funcs, (372, 0, 6))
+    do add(funcs, (407, 0, 3))
+    do add(funcs, (421, 0, 0))
+    return funcs
+end
+
+func build_bytecode_strings():
+    let strings = new_array(string)
+    do add(strings, "herbert")
+    do add(strings, "hi")
+    do add(strings, "a")
+    do add(strings, "b")
+    return strings
+end
+
+func build_program():
+    return (build_function_table(), build_instructions(), build_bytecode_strings(), 18)
+end
+
+-- ====================================================================
+-- MAIN
+-- ====================================================================
+
+func main():
+    let prog = build_program()
+    let string_pool = boot_strings(prog.2)
+    let buffer_pool = new_array(buffer)
+    let tuple_pool = new_array(array((int, int)))
+    let array_pool = new_array(array((int, int)))
+    let pools = (string_pool, buffer_pool, tuple_pool, array_pool)
+    let entry_info = get(prog.0, prog.3)
+    let frame = (prog.3, 0, zero_locals(entry_info.2), new_array((int, int)))
+    let frames = new_array((int, int, array((int, int)), array((int, int))))
+    let result = vm_loop(frame, frames, pools, prog)
+    return serialize_value(result, pools)
+end
