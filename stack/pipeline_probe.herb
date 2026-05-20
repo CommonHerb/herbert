@@ -1,0 +1,81 @@
+-- Pipeline probe: not the evaluator probe.
+-- Bounded, terminating, well-formed, and designed to exercise the
+-- emitter-to-VM seam on a program whose main is not last.
+
+func prefix(n):
+    if n == 0:
+        return 1
+    else:
+        return n + prefix(n - 1)
+    end
+end
+
+func main():
+    let s = "link"
+    let b = new_buffer()
+    do append(b, index(s, 0))
+    do append(b, '!')
+    let frozen = freeze(b)
+
+    let arr = new_array(int)
+    do add(arr, length(s))
+    do add(arr, index(frozen, 1))
+    let grown = grow(arr)
+    let pair = (get(arr, 0), get(arr, 2))
+
+    let pairs = new_array((int, int))
+    do add(pairs, pair)
+    let stored = get(pairs, 0)
+
+    let skip = true or dangerous(arr)
+    let cond = skip and equal(frozen, "l!") and not equal(s, "no")
+    let branch = choose(cond, stored.0 + stored.1, 999)
+    let changed = mutate(arr)
+    let classed = classify(branch)
+
+    return (prefix(4), branch, grown, changed, count(arr), checksum(frozen), classed, down(3, 0))
+end
+
+func grow(a):
+    do add(a, 17)
+    return count(a)
+end
+
+func dangerous(a):
+    return get(a, 99)
+end
+
+func choose(flag, yes, no):
+    if flag:
+        return yes
+    else:
+        return no
+    end
+end
+
+func mutate(a):
+    do add(a, 5)
+    return get(a, 3)
+end
+
+func checksum(s):
+    return length(s) + index(s, 0) + index(s, 1)
+end
+
+func classify(n):
+    if n < 10:
+        return 10
+    elif n == 21:
+        return 44
+    else:
+        return 99
+    end
+end
+
+func down(n, acc):
+    if n == 0:
+        return acc
+    else:
+        return down(n - 1, acc + 2)
+    end
+end

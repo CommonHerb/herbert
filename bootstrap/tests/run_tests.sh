@@ -235,6 +235,63 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    # Pipeline forcing-function test: run the novel probe directly under
+    # the bootstrap to derive the oracle, then run the Herbert-authored
+    # lexer->parser->emitter->adapter->VM pipeline and compare its
+    # serialized result. The bootstrap's tuple printer includes commas;
+    # the VM serializer's tuple format does not, so strip commas from
+    # the dynamic tuple-of-ints oracle before diffing.
+    PIPELINE_DRIVER="$STACK_DIR/pipeline_fragment.herb"
+    PIPELINE_PROBE="$STACK_DIR/pipeline_probe.herb"
+    if [[ -f "$PIPELINE_DRIVER" && -f "$PIPELINE_PROBE" ]]; then
+        total=$((total + 1))
+        oracle_display=$(mktemp)
+        oracle=$(mktemp)
+        actual=$(mktemp)
+        raw_actual=$(mktemp)
+        oracle_err=$(mktemp)
+        err=$(mktemp)
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$PIPELINE_PROBE" >"$oracle_display" 2>"$oracle_err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/pipeline_probe (driver: pipeline_fragment.herb) (oracle exit $rc)"
+            echo "--- oracle stderr"
+            cat "$oracle_err"
+            echo "--- oracle stdout"
+            cat "$oracle_display"
+            fail=$((fail + 1))
+            rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        else
+            tr -d ',' <"$oracle_display" >"$oracle"
+            HERBERT_REPORT_PEAK=1 "$HERBERT" "$PIPELINE_DRIVER" >"$actual" 2>"$err"
+            rc=$?
+            if [[ $rc -ne 0 ]]; then
+                echo "FAIL: stack/pipeline_probe (driver: pipeline_fragment.herb) (interpreter exit $rc)"
+                echo "--- stderr"
+                cat "$err"
+                echo "--- stdout"
+                cat "$actual"
+                fail=$((fail + 1))
+                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+            elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+                echo "FAIL: stack/pipeline_probe (driver: pipeline_fragment.herb) (expected canonical string output)"
+                echo "--- stdout"
+                cat "$actual"
+                fail=$((fail + 1))
+                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+            elif ! diff -u "$oracle" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
+                echo "FAIL: stack/pipeline_probe (driver: pipeline_fragment.herb) (output mismatch)"
+                cat /tmp/herbert_diff.$$
+                fail=$((fail + 1))
+                rm -f /tmp/herbert_diff.$$ "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+            else
+                echo "PASS: stack/pipeline_probe (driver: pipeline_fragment.herb)"
+                pass=$((pass + 1))
+                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+            fi
+        fi
+    fi
+
     # Emitter forcing-function test: the emitter fragment returns the
     # full bytecode listing as a Herbert string value. Decode the
     # bootstrap's canonical string display before diffing against the
