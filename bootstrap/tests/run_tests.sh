@@ -72,6 +72,18 @@ run_one() {
     return 0
 }
 
+decode_canonical_string() {
+    local input="$1"
+    perl -0777 -ne '
+        my $s = $_;
+        $s =~ s/\n\z//;
+        exit 1 unless $s =~ /\A"(.*)"\z/s;
+        $s = $1;
+        $s =~ s/\\([n\\"])/$1 eq "n" ? "\n" : $1/ge;
+        print $s;
+    ' "$input"
+}
+
 shopt -s nullglob
 for prog in test_*.herb; do
     total=$((total + 1))
@@ -218,6 +230,45 @@ if [[ -d ../../stack ]]; then
             rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
         else
             echo "PASS: stack/vm (driver: vm_fragment.herb)"
+            pass=$((pass + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        fi
+    fi
+
+    # Emitter forcing-function test: the emitter fragment returns the
+    # full bytecode listing as a Herbert string value. Decode the
+    # bootstrap's canonical string display before diffing against the
+    # raw blessed listing oracle.
+    EMIT_DRIVER="$STACK_DIR/emitter_fragment.herb"
+    EMIT_PROBE_EXPECTED="$STACK_DIR/emitter_probe.expected"
+    if [[ -f "$EMIT_DRIVER" && -f "$EMIT_PROBE_EXPECTED" ]]; then
+        total=$((total + 1))
+        actual=$(mktemp)
+        raw_actual=$(mktemp)
+        err=$(mktemp)
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$EMIT_DRIVER" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/emitter_probe (driver: emitter_fragment.herb) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! decode_canonical_string "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/emitter_probe (driver: emitter_fragment.herb) (expected canonical string output)"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! diff -u "$EMIT_PROBE_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
+            echo "FAIL: stack/emitter_probe (driver: emitter_fragment.herb) (output mismatch)"
+            cat /tmp/herbert_diff.$$
+            fail=$((fail + 1))
+            rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
+        else
+            echo "PASS: stack/emitter_probe (driver: emitter_fragment.herb)"
             pass=$((pass + 1))
             rm -f "$actual" "$raw_actual" "$err"
         fi
