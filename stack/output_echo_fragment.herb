@@ -1,0 +1,4 @@
+func main():
+    do flogger(clogger())
+    return 0
+end

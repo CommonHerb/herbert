@@ -382,6 +382,101 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    # Output primitive forcing-function tests: flogger writes raw bytes to
+    # stdout, while main() still prints the fixed 0 sentinel after return.
+    OUTPUT_ECHO_DRIVER="$STACK_DIR/output_echo_fragment.herb"
+    if [[ -f "$OUTPUT_ECHO_DRIVER" ]]; then
+        total=$((total + 1))
+        payload=$(mktemp)
+        expected=$(mktemp)
+        actual=$(mktemp)
+        err=$(mktemp)
+        printf 'ordinary text\nsecond line\n' >"$payload"
+        cp "$payload" "$expected"
+        printf '0\n' >>"$expected"
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$OUTPUT_ECHO_DRIVER" <"$payload" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/output_echo_fragment.herb (ordinary payload) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$payload" "$expected" "$actual" "$err"
+        elif ! cmp -s "$expected" "$actual"; then
+            echo "FAIL: stack/output_echo_fragment.herb (ordinary payload) (output mismatch)"
+            cmp -l "$expected" "$actual" || true
+            fail=$((fail + 1))
+            rm -f "$payload" "$expected" "$actual" "$err"
+        else
+            echo "PASS: stack/output_echo_fragment.herb (ordinary payload)"
+            pass=$((pass + 1))
+            rm -f "$payload" "$expected" "$actual" "$err"
+        fi
+
+        total=$((total + 1))
+        payload=$(mktemp)
+        expected=$(mktemp)
+        actual=$(mktemp)
+        err=$(mktemp)
+        printf 'binary\000quote"slash\\\nhi\200end' >"$payload"
+        cp "$payload" "$expected"
+        printf '0\n' >>"$expected"
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$OUTPUT_ECHO_DRIVER" <"$payload" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/output_echo_fragment.herb (binary payload) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$payload" "$expected" "$actual" "$err"
+        elif ! cmp -s "$expected" "$actual"; then
+            echo "FAIL: stack/output_echo_fragment.herb (binary payload) (output mismatch)"
+            cmp -l "$expected" "$actual" || true
+            fail=$((fail + 1))
+            rm -f "$payload" "$expected" "$actual" "$err"
+        else
+            echo "PASS: stack/output_echo_fragment.herb (binary payload)"
+            pass=$((pass + 1))
+            rm -f "$payload" "$expected" "$actual" "$err"
+        fi
+    fi
+
+    OUTPUT_DRIVER="$STACK_DIR/output_fragment.herb"
+    OUTPUT_EVAL_PROBE="$STACK_DIR/evaluator_probe.herb"
+    OUTPUT_EVAL_EXPECTED="$STACK_DIR/evaluator_probe.expected"
+    if [[ -f "$OUTPUT_DRIVER" && -f "$OUTPUT_EVAL_PROBE" && -f "$OUTPUT_EVAL_EXPECTED" ]]; then
+        total=$((total + 1))
+        expected=$(mktemp)
+        actual=$(mktemp)
+        err=$(mktemp)
+        cp "$OUTPUT_EVAL_EXPECTED" "$expected"
+        printf '0\n' >>"$expected"
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$OUTPUT_DRIVER" <"$OUTPUT_EVAL_PROBE" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/evaluator_probe (driver: output_fragment.herb, stdin) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$expected" "$actual" "$err"
+        elif ! cmp -s "$expected" "$actual"; then
+            echo "FAIL: stack/evaluator_probe (driver: output_fragment.herb, stdin) (output mismatch)"
+            cmp -l "$expected" "$actual" || true
+            fail=$((fail + 1))
+            rm -f "$expected" "$actual" "$err"
+        else
+            echo "PASS: stack/evaluator_probe (driver: output_fragment.herb, stdin)"
+            pass=$((pass + 1))
+            rm -f "$expected" "$actual" "$err"
+        fi
+    fi
+
     # Error-handling malformed-probe battery: the C bootstrap must reject
     # every probe, and the Herbert error fragment must classify it with
     # the manifest's exact ERR code.

@@ -138,11 +138,11 @@ static const char *BUILTIN_NAMES[] = {
     "length", "index", "slice", "equal",
     "new_buffer", "freeze", "clogger",
     "new_array", "get", "count",
-    "append", "add",
+    "append", "add", "flogger",
     NULL
 };
 
-static const char *VOIDLESS_NAMES[] = { "append", "add", NULL };
+static const char *VOIDLESS_NAMES[] = { "append", "add", "flogger", NULL };
 
 bool is_builtin_name(const char *name) {
     for (int i = 0; BUILTIN_NAMES[i]; i++) {
@@ -454,6 +454,14 @@ static void bi_add(int line, Value *args, size_t n) {
     array_add(a.u.arr, x);
 }
 
+static void bi_flogger(int line, Value *args, size_t n) {
+    check_arity_n(line, "flogger", 1, n);
+    if (args[0].kind != V_STR) {
+        herr(line, "flogger: expected string, got %s", v_kind_name(args[0].kind));
+    }
+    fwrite(args[0].u.s->data, 1, args[0].u.s->len, stdout);
+}
+
 static Value dispatch_builtin_value(const char *name, int line, Value *args, size_t n) {
     if (strcmp(name, "length")     == 0) return bi_length    (line, args, n);
     if (strcmp(name, "index")      == 0) return bi_index     (line, args, n);
@@ -473,6 +481,7 @@ static Value dispatch_builtin_value(const char *name, int line, Value *args, siz
 static void dispatch_builtin_void(const char *name, int line, Value *args, size_t n) {
     if (strcmp(name, "append") == 0) { bi_append(line, args, n); return; }
     if (strcmp(name, "add")    == 0) { bi_add   (line, args, n); return; }
+    if (strcmp(name, "flogger") == 0) { bi_flogger(line, args, n); return; }
     herr(line, "internal: builtin '%s' has no voidless form", name);
 }
 
@@ -850,9 +859,7 @@ static DriveResult drive(Activation *a) {
                     case S_DO: {
                         Expr *e = s->e;
                         if (!is_builtin_voidless(e->name)) {
-                            herr(e->line,
-                                 "'do' requires a value-less call (append or add); got '%s'",
-                                 e->name);
+                            herr(e->line, "'do' requires a value-less call; got '%s'", e->name);
                         }
                         Op af = {0};
                         af.kind   = OP_DO_BUILTIN_CALL;
