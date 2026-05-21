@@ -1,0 +1,4 @@
+func main():
+    do length(x)
+    return 0
+end

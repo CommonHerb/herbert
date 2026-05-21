@@ -35,6 +35,7 @@ bootstrap/tests/test_13_cross_function_tail_call.expected
 bootstrap/tests/test_13_cross_function_tail_call.maxscopes
 stack/.gitkeep
 stack/emitter_probe.expected
+stack/error_probes.expected
 stack/evaluator_probe.expected
 stack/lexer_probe.expected
 stack/parser_probe.expected
