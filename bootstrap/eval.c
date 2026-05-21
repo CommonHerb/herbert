@@ -136,7 +136,7 @@ static void scope_assign(Scope *s, const char *name, Value v, int line) {
 
 static const char *BUILTIN_NAMES[] = {
     "length", "index", "slice", "equal",
-    "new_buffer", "freeze",
+    "new_buffer", "freeze", "clogger",
     "new_array", "get", "count",
     "append", "add",
     NULL
@@ -367,6 +367,31 @@ static Value bi_new_buffer(int line, Value *args, size_t n) {
     return v_buffer_new();
 }
 
+static Value bi_clogger(int line, Value *args, size_t n) {
+    (void)args;
+    check_arity_n(line, "clogger", 0, n);
+
+    uint8_t *data = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+
+    int ch;
+    while ((ch = fgetc(stdin)) != EOF) {
+        if (len == cap) {
+            cap = cap ? cap * 2 : 4096;
+            data = (uint8_t *)xrealloc(data, cap);
+        }
+        data[len++] = (uint8_t)ch;
+    }
+    if (ferror(stdin)) {
+        herr(line, "clogger: error reading stdin");
+    }
+    if (!data) {
+        data = (uint8_t *)xmalloc(1);
+    }
+    return v_string_take(data, len);
+}
+
 static Value bi_freeze(int line, Value *args, size_t n) {
     check_arity_n(line, "freeze", 1, n);
     Value v = args[0];
@@ -437,6 +462,7 @@ static Value dispatch_builtin_value(const char *name, int line, Value *args, siz
     }
     if (strcmp(name, "equal")      == 0) return bi_equal     (line, args, n);
     if (strcmp(name, "new_buffer") == 0) return bi_new_buffer(line, args, n);
+    if (strcmp(name, "clogger")    == 0) return bi_clogger   (line, args, n);
     if (strcmp(name, "freeze")     == 0) return bi_freeze    (line, args, n);
     if (strcmp(name, "get")        == 0) return bi_get       (line, args, n);
     if (strcmp(name, "count")      == 0) return bi_count     (line, args, n);

@@ -1,0 +1,208 @@
+-- ============================================================
+-- MEWTWO -- Herbert evaluator probe
+-- Twelve feature-tests. main() returns a 12-tuple of ints.
+-- Oracle: (42 900 15 2 55 210 227 106 21 234 103 100)
+-- Authored to terminate and to keep total allocation bounded.
+-- ============================================================
+
+-- helper: collapse a Boolean into one of two ints
+func bit(cond, v):
+  if cond:
+    return v
+  else:
+    return 0
+  end
+end
+
+-- helper: multi-way branch classifier (test 2)
+func classify(n):
+  if n < 0:
+    return 9000          -- unreachable: n is unsigned
+  elif n == 0:
+    return 700
+  elif n < 10:
+    return 150
+  else:
+    return 50
+  end
+end
+
+-- helper: non-tail recursion (test 5)
+func sum_to(n):
+  if n == 0:
+    return 0
+  else:
+    return n + sum_to(n - 1)
+  end
+end
+
+-- helper: tail recursion with accumulator (test 6)
+func sum_tail(n, acc):
+  if n == 0:
+    return acc
+  else:
+    return sum_tail(n - 1, acc + n)
+  end
+end
+
+-- helper: effectful witness for the short-circuit test (test 4)
+func witness(w):
+  do add(w, 1)
+  return true
+end
+
+-- helper: mutate an array through a parameter (test 10)
+func grow(a):
+  do add(a, 7)
+  return count(a)
+end
+
+-- test 1: arithmetic and modular wrap
+func test_arith():
+  let a = 40 + 5            -- 45
+  let b = a - 3             -- 42
+  let w = 0 - 1             -- wraps to 2^64 - 1
+  let z = w + 1             -- wraps back to 0
+  return b + z              -- 42
+end
+
+-- test 2: comparisons feeding multi-way branching
+func test_branch():
+  return classify(0) + classify(5) + classify(99)   -- 700+150+50
+end
+
+-- test 3: all six comparison operators
+func test_compare():
+  let r1 = bit(3 == 3, 1)   -- true  -> 1
+  let r2 = bit(5 != 5, 2)   -- false -> 0
+  let r3 = bit(2 < 9, 2)    -- true  -> 2
+  let r4 = bit(4 <= 4, 4)   -- true  -> 4
+  let r5 = bit(1 > 8, 8)    -- false -> 0
+  let r6 = bit(8 >= 8, 8)   -- true  -> 8
+  return r1 + r2 + r3 + r4 + r5 + r6                 -- 15
+end
+
+-- test 4: short-circuit and / or / not
+func test_shortcircuit():
+  let w = new_array(int)
+  let a = true or witness(w)     -- short-circuits: witness NOT called
+  let b = false and witness(w)   -- short-circuits: witness NOT called
+  let c = false or witness(w)    -- witness called
+  let d = true and witness(w)    -- witness called
+  let e = not (a and b)          -- not (true and false) = true
+  if e and c and d:
+    return count(w)              -- 2
+  else:
+    return 999
+  end
+end
+
+-- test 5: non-tail recursion (locals, params, return)
+func test_recursion():
+  return sum_to(10)              -- 55
+end
+
+-- test 6: tail recursion at modest n (value correctness only)
+func test_tail():
+  return sum_tail(20, 0)         -- 210
+end
+
+-- test 7: immutable strings -- literal, length, index, equal
+func test_strings():
+  let s = "herbert"
+  let n = length(s)                       -- 7
+  let c0 = index(s, 0)                    -- 'h' = 104
+  let c1 = index(s, 1)                    -- 'e' = 101
+  let eq = bit(equal("hi", "hi"), 15)     -- true  -> 15
+  let ne = bit(equal("a", "b"), 99)       -- false -> 0
+  return n + c0 + c1 + eq + ne            -- 227
+end
+
+-- test 8: growable byte buffer -- append, freeze (write-only pattern)
+func test_buffer():
+  let b = new_buffer()
+  do append(b, 'h')             -- 104
+  do append(b, 'i')             -- 105
+  let s = freeze(b)             -- immutable string "hi"
+  let n = length(s)             -- 2
+  let c = index(s, 0)           -- 'h' = 104
+  return n + c                  -- 106
+end
+
+-- test 9: nested tuples and positional access
+func test_tuples():
+  let t = ((1, 2), (3, 4), (5, 6))
+  let a = t.0.0                 -- 1
+  let b = t.0.1                 -- 2
+  let c = t.1.0                 -- 3
+  let d = t.1.1                 -- 4
+  let e = t.2.0                 -- 5
+  let f = t.2.1                 -- 6
+  return a + b + c + d + e + f  -- 21
+end
+
+-- test 10: growable arrays, array-of-tuples, reference-through-call,
+--          and every new_array type-expression form
+func test_arrays():
+  let a = new_array(int)
+  do add(a, 10)
+  do add(a, 20)
+  do add(a, 30)                 -- a = [10,20,30]
+  let n2 = grow(a)              -- grow mutates a -> [10,20,30,7]; n2 = 4
+  let s = get(a, 0) + get(a, 1) + get(a, 2) + get(a, 3)   -- 67
+  let p = new_array((int, int))
+  do add(p, (100, 1))
+  do add(p, (50, 12))
+  let pt0 = get(p, 0)           -- (100,1)
+  let pt1 = get(p, 1)           -- (50,12)
+  let psum = pt0.0 + pt0.1 + pt1.0 + pt1.1                -- 163
+  -- exercise the remaining type-expression forms; each array is
+  -- empty so each count is 0 and type_cov is 0 (oracle unchanged)
+  let type_cov = count(new_array(bool)) + count(new_array(string)) + count(new_array(buffer)) + count(new_array(array(int)))
+  return s + psum + n2 + type_cov          -- 67+163+4+0 = 234
+end
+
+-- test 11: reference semantics -- aliasing, and a shared array
+--          inside a copied tuple
+func test_refsem():
+  let a = new_array(int)
+  do add(a, 5)                  -- [5]
+  let b = a                     -- alias
+  do add(b, 7)                  -- [5,7] via the alias
+  let alias_ok = get(a, 1)      -- 7  (mutation through b visible via a)
+  let t = (a, 0)                -- tuple holding the array
+  let u = t                     -- tuple value copied; inner array shared
+  do add(u.0, 93)               -- [5,7,93] via the copied tuple's array
+  let shared_ok = get(a, 2)     -- 93 (mutation through u.0 visible via a)
+  return alias_ok + shared_ok + count(a)                  -- 7+93+3
+end
+
+-- test 12: block scope -- shadowing and outer rebinding
+func test_blockscope():
+  let x = 1
+  let y = 0
+  if true:
+    let x = 99                  -- shadows outer x; block-scoped to this arm
+    y = x                       -- rebinds OUTER y to inner x (99)
+  end
+  -- inner x is gone; x is 1 again; y kept its rebind
+  return x + y                  -- 1 + 99
+end
+
+-- entry point: the 12-tuple the evaluator serializes
+func main():
+  return (
+    test_arith(),
+    test_branch(),
+    test_compare(),
+    test_shortcircuit(),
+    test_recursion(),
+    test_tail(),
+    test_strings(),
+    test_buffer(),
+    test_tuples(),
+    test_arrays(),
+    test_refsem(),
+    test_blockscope()
+  )
+end
