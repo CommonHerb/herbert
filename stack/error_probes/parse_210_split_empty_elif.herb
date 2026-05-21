@@ -1,0 +1,6 @@
+func main():
+    if false:
+        return 0
+    elif true:
+    end
+end

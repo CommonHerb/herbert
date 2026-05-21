@@ -1,0 +1,4 @@
+func main():
+    return
+        length("a", "b")
+end

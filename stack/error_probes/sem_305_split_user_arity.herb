@@ -1,0 +1,8 @@
+func f(x):
+    return x
+end
+
+func main():
+    return
+        f()
+end

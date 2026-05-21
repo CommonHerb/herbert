@@ -84,6 +84,89 @@ decode_canonical_string() {
     ' "$input"
 }
 
+diagnostic_message() {
+    local code="$1"
+    local payload="${2:-}"
+    case "$code" in
+        101) printf 'unexpected character' ;;
+        102) printf 'expected digit' ;;
+        103) printf 'integer literal does not fit in 64 bits' ;;
+        104) printf 'unknown escape sequence' ;;
+        105) printf 'unterminated escape' ;;
+        106) printf 'newline in string literal' ;;
+        107) printf 'unterminated string literal' ;;
+        108) printf 'empty character literal' ;;
+        109) printf 'character literal not closed' ;;
+        110) printf 'newline in character literal' ;;
+        201) printf "expected 'func' at top level" ;;
+        202) printf 'invalid function header' ;;
+        203) printf 'expected end' ;;
+        204) printf 'expected expression' ;;
+        205) printf "'do' must be followed by a call" ;;
+        206) printf "expected integer after '.'" ;;
+        207) printf "expected ')'" ;;
+        208) printf 'new_array requires a type argument' ;;
+        209) printf 'function body must contain at least one statement' ;;
+        210) printf 'if/elif/else arm must contain at least one statement' ;;
+        211) printf 'invalid type expression' ;;
+        212) printf 'invalid assignment or name' ;;
+        301) printf "duplicate let '%s' in this scope" "$payload" ;;
+        302) printf "undefined name '%s'" "$payload" ;;
+        303) printf "assignment to undefined name '%s'" "$payload" ;;
+        304) printf "unknown function '%s'" "$payload" ;;
+        305) printf "wrong number of arguments to '%s'" "$payload" ;;
+        306) printf "wrong number of arguments to '%s'" "$payload" ;;
+        307) printf "wrong number of arguments to '%s'" "$payload" ;;
+        308) printf "builtin '%s' has no value" "$payload" ;;
+        310) printf "'do' requires a value-less call, got '%s'" "$payload" ;;
+        311) printf "duplicate parameter '%s'" "$payload" ;;
+        312) printf "duplicate function '%s'" "$payload" ;;
+        313) printf "function reuses built-in name '%s'" "$payload" ;;
+        314) printf 'no main function defined' ;;
+        315) printf "function '%s' must take zero parameters" "$payload" ;;
+        316) printf "function '%s' may complete without returning" "$payload" ;;
+        *) printf 'unknown error' ;;
+    esac
+}
+
+bootstrap_line() {
+    local err_file="$1"
+    perl -ne 'if (/^herbert: line ([0-9]+):/) { print $1; exit }' "$err_file"
+}
+
+bootstrap_payload() {
+    local code="$1"
+    local err_file="$2"
+    case "$code" in
+        301|302|303|304|305|308|311|312|313|315|316)
+            perl -ne 'if (/'\''([^'\'']*)'\''/) { print $1; exit }' "$err_file"
+            ;;
+        310)
+            perl -ne 'while (/'\''([^'\'']*)'\''/g) { $last = $1 } END { print $last if defined $last }' "$err_file"
+            ;;
+        306|307)
+            perl -ne 'if (/^herbert: line [0-9]+: ([^:]+):/) { print $1; exit }' "$err_file"
+            ;;
+        *)
+            printf ''
+            ;;
+    esac
+}
+
+write_expected_diagnostic() {
+    local code="$1"
+    local line="$2"
+    local payload="$3"
+    local out="$4"
+    local message
+    message="$(diagnostic_message "$code" "$payload")"
+    if [[ -n "$line" ]]; then
+        printf 'line %s: %s (ERR %s)\n0\n' "$line" "$message" "$code" >"$out"
+    else
+        printf 'program: %s (ERR %s)\n0\n' "$message" "$code" >"$out"
+    fi
+}
+
 shopt -s nullglob
 for prog in test_*.herb; do
     total=$((total + 1))
@@ -477,10 +560,10 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
-    # Error-handling malformed-probe battery: the C bootstrap must reject
-    # every probe, and the Herbert error fragment must classify it with
-    # the manifest's exact ERR code.
-    ERROR_DRIVER="$STACK_DIR/error_fragment.herb"
+    # Diagnostics malformed-probe battery: the C bootstrap must reject
+    # every probe, and the Herbert diagnostics fragment must match its
+    # source line plus the manifest's exact ERR code.
+    ERROR_DRIVER="$STACK_DIR/diagnostics_fragment.herb"
     ERROR_MANIFEST="$STACK_DIR/error_probes.expected"
     ERROR_PROBE_DIR="$STACK_DIR/error_probes"
     if [[ -f "$ERROR_DRIVER" && -f "$ERROR_MANIFEST" && -d "$ERROR_PROBE_DIR" ]]; then
@@ -492,13 +575,11 @@ if [[ -d ../../stack ]]; then
             c_actual=$(mktemp)
             c_err=$(mktemp)
             actual=$(mktemp)
-            raw_actual=$(mktemp)
             err=$(mktemp)
-            printf '%s %s\n' "$err_word" "$err_code" >"$expected"
             if [[ ! -f "$probe" ]]; then
                 echo "FAIL: stack/error_probes/$probe_name (missing probe file)"
                 fail=$((fail + 1))
-                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$raw_actual" "$err"
+                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
                 continue
             fi
             HERBERT_REPORT_PEAK=1 "$HERBERT" "$probe" >"$c_actual" 2>"$c_err"
@@ -508,39 +589,52 @@ if [[ -d ../../stack ]]; then
                 echo "--- bootstrap stdout"
                 cat "$c_actual"
                 fail=$((fail + 1))
-                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$raw_actual" "$err"
+                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
                 continue
             fi
+            line="$(bootstrap_line "$c_err")"
+            payload="$(bootstrap_payload "$err_code" "$c_err")"
+            if [[ "$err_code" != "314" && -z "$line" ]]; then
+                echo "FAIL: stack/error_probes/$probe_name (bootstrap diagnostic had no line)"
+                echo "--- bootstrap stderr"
+                cat "$c_err"
+                fail=$((fail + 1))
+                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
+                continue
+            fi
+            if [[ "$err_code" == "314" && -n "$line" ]]; then
+                echo "FAIL: stack/error_probes/$probe_name (bootstrap no-main unexpectedly had a line)"
+                echo "--- bootstrap stderr"
+                cat "$c_err"
+                fail=$((fail + 1))
+                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
+                continue
+            fi
+            write_expected_diagnostic "$err_code" "$line" "$payload" "$expected"
             HERBERT_REPORT_PEAK=1 "$HERBERT" "$ERROR_DRIVER" <"$probe" >"$actual" 2>"$err"
             rc=$?
             if [[ $rc -ne 0 ]]; then
-                echo "FAIL: stack/error_probes/$probe_name (driver: error_fragment.herb, stdin) (interpreter exit $rc)"
+                echo "FAIL: stack/error_probes/$probe_name (driver: diagnostics_fragment.herb, stdin) (interpreter exit $rc)"
                 echo "--- stderr"
                 cat "$err"
                 echo "--- stdout"
                 cat "$actual"
                 fail=$((fail + 1))
-                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$raw_actual" "$err"
-            elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-                echo "FAIL: stack/error_probes/$probe_name (driver: error_fragment.herb, stdin) (expected canonical string output)"
-                echo "--- stdout"
-                cat "$actual"
+                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
+            elif ! cmp -s "$expected" "$actual"; then
+                echo "FAIL: stack/error_probes/$probe_name (driver: diagnostics_fragment.herb, stdin) (output mismatch)"
+                diff -u "$expected" "$actual" || true
                 fail=$((fail + 1))
-                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$raw_actual" "$err"
-            elif ! diff -u "$expected" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
-                echo "FAIL: stack/error_probes/$probe_name (driver: error_fragment.herb, stdin) (output mismatch)"
-                cat /tmp/herbert_diff.$$
-                fail=$((fail + 1))
-                rm -f /tmp/herbert_diff.$$ "$expected" "$c_actual" "$c_err" "$actual" "$raw_actual" "$err"
+                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
             else
-                echo "PASS: stack/error_probes/$probe_name (driver: error_fragment.herb, stdin)"
+                echo "PASS: stack/error_probes/$probe_name (driver: diagnostics_fragment.herb, stdin)"
                 pass=$((pass + 1))
-                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$raw_actual" "$err"
+                rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
             fi
         done < "$ERROR_MANIFEST"
     fi
 
-    # Well-formed controls through the error fragment. These mirror the
+    # Well-formed controls through the diagnostics fragment. These mirror the
     # input-fragment stdin checks and guard against over-rejection.
     if [[ -f "$ERROR_DRIVER" && -f "$INPUT_EVAL_PROBE" && -f "$INPUT_EVAL_EXPECTED" ]]; then
         total=$((total + 1))
@@ -550,7 +644,7 @@ if [[ -d ../../stack ]]; then
         HERBERT_REPORT_PEAK=1 "$HERBERT" "$ERROR_DRIVER" <"$INPUT_EVAL_PROBE" >"$actual" 2>"$err"
         rc=$?
         if [[ $rc -ne 0 ]]; then
-            echo "FAIL: stack/evaluator_probe (driver: error_fragment.herb, stdin) (interpreter exit $rc)"
+            echo "FAIL: stack/evaluator_probe (driver: diagnostics_fragment.herb, stdin) (interpreter exit $rc)"
             echo "--- stderr"
             cat "$err"
             echo "--- stdout"
@@ -558,18 +652,18 @@ if [[ -d ../../stack ]]; then
             fail=$((fail + 1))
             rm -f "$actual" "$raw_actual" "$err"
         elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-            echo "FAIL: stack/evaluator_probe (driver: error_fragment.herb, stdin) (expected canonical string output)"
+            echo "FAIL: stack/evaluator_probe (driver: diagnostics_fragment.herb, stdin) (expected canonical string output)"
             echo "--- stdout"
             cat "$actual"
             fail=$((fail + 1))
             rm -f "$actual" "$raw_actual" "$err"
         elif ! diff -u "$INPUT_EVAL_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
-            echo "FAIL: stack/evaluator_probe (driver: error_fragment.herb, stdin) (output mismatch)"
+            echo "FAIL: stack/evaluator_probe (driver: diagnostics_fragment.herb, stdin) (output mismatch)"
             cat /tmp/herbert_diff.$$
             fail=$((fail + 1))
             rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
         else
-            echo "PASS: stack/evaluator_probe (driver: error_fragment.herb, stdin)"
+            echo "PASS: stack/evaluator_probe (driver: diagnostics_fragment.herb, stdin)"
             pass=$((pass + 1))
             rm -f "$actual" "$raw_actual" "$err"
         fi
@@ -586,7 +680,7 @@ if [[ -d ../../stack ]]; then
         HERBERT_REPORT_PEAK=1 "$HERBERT" "$INPUT_PIPELINE_PROBE" >"$oracle_display" 2>"$oracle_err"
         rc=$?
         if [[ $rc -ne 0 ]]; then
-            echo "FAIL: stack/pipeline_probe (driver: error_fragment.herb, stdin) (oracle exit $rc)"
+            echo "FAIL: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin) (oracle exit $rc)"
             echo "--- oracle stderr"
             cat "$oracle_err"
             echo "--- oracle stdout"
@@ -598,7 +692,7 @@ if [[ -d ../../stack ]]; then
             HERBERT_REPORT_PEAK=1 "$HERBERT" "$ERROR_DRIVER" <"$INPUT_PIPELINE_PROBE" >"$actual" 2>"$err"
             rc=$?
             if [[ $rc -ne 0 ]]; then
-                echo "FAIL: stack/pipeline_probe (driver: error_fragment.herb, stdin) (interpreter exit $rc)"
+                echo "FAIL: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin) (interpreter exit $rc)"
                 echo "--- stderr"
                 cat "$err"
                 echo "--- stdout"
@@ -606,18 +700,18 @@ if [[ -d ../../stack ]]; then
                 fail=$((fail + 1))
                 rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
             elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-                echo "FAIL: stack/pipeline_probe (driver: error_fragment.herb, stdin) (expected canonical string output)"
+                echo "FAIL: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin) (expected canonical string output)"
                 echo "--- stdout"
                 cat "$actual"
                 fail=$((fail + 1))
                 rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
             elif ! diff -u "$oracle" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
-                echo "FAIL: stack/pipeline_probe (driver: error_fragment.herb, stdin) (output mismatch)"
+                echo "FAIL: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin) (output mismatch)"
                 cat /tmp/herbert_diff.$$
                 fail=$((fail + 1))
                 rm -f /tmp/herbert_diff.$$ "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
             else
-                echo "PASS: stack/pipeline_probe (driver: error_fragment.herb, stdin)"
+                echo "PASS: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin)"
                 pass=$((pass + 1))
                 rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
             fi

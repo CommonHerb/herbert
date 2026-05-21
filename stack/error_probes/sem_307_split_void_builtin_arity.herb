@@ -1,0 +1,6 @@
+func main():
+    let b = new_buffer()
+    do
+        append(b)
+    return 0
+end
