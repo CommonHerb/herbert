@@ -1,0 +1,19 @@
+func main():
+    let s = clogger()
+    let b = new_buffer()
+    if length(s) > 0:
+        do append(b, index(s, length(s) - 1))
+        do append(b, ':')
+        do append(b, index(s, 0))
+    else:
+        do append(b, 'E')
+    end
+    let derived = freeze(b)
+    let second = clogger()
+    do flogger(derived)
+    do flogger("|")
+    do flogger(s)
+    do flogger("|")
+    do flogger(second)
+    return 0
+end

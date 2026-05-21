@@ -167,6 +167,57 @@ write_expected_diagnostic() {
     fi
 }
 
+run_suke_diff() {
+    local label="$1"
+    local probe="$2"
+    local driver="$3"
+    local payload="$4"
+    local oracle actual oracle_err err rc
+    total=$((total + 1))
+    oracle=$(mktemp)
+    actual=$(mktemp)
+    oracle_err=$(mktemp)
+    err=$(mktemp)
+
+    HERBERT_REPORT_PEAK=1 "$HERBERT" "$probe" <"$payload" >"$oracle" 2>"$oracle_err"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "FAIL: $label (oracle exit $rc)"
+        echo "--- oracle stderr"
+        cat "$oracle_err"
+        echo "--- oracle stdout"
+        cat "$oracle"
+        fail=$((fail + 1))
+        rm -f "$oracle" "$actual" "$oracle_err" "$err"
+        return
+    fi
+
+    HERBERT_REPORT_PEAK=1 "$HERBERT" "$driver" <"$payload" >"$actual" 2>"$err"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "FAIL: $label (interpreter exit $rc)"
+        echo "--- stderr"
+        cat "$err"
+        echo "--- stdout"
+        cat "$actual"
+        fail=$((fail + 1))
+        rm -f "$oracle" "$actual" "$oracle_err" "$err"
+        return
+    fi
+
+    if ! cmp -s "$oracle" "$actual"; then
+        echo "FAIL: $label (output mismatch)"
+        cmp -l "$oracle" "$actual" || true
+        fail=$((fail + 1))
+        rm -f "$oracle" "$actual" "$oracle_err" "$err"
+        return
+    fi
+
+    echo "PASS: $label"
+    pass=$((pass + 1))
+    rm -f "$oracle" "$actual" "$oracle_err" "$err"
+}
+
 shopt -s nullglob
 for prog in test_*.herb; do
     total=$((total + 1))
@@ -558,6 +609,45 @@ if [[ -d ../../stack ]]; then
             pass=$((pass + 1))
             rm -f "$expected" "$actual" "$err"
         fi
+    fi
+
+    # Suke codegen forcing-function tests: the C bootstrap runs each probe
+    # directly as the oracle, then the Herbert pipeline fragment compiles the
+    # same embedded source and executes it on the VM with the same stdin.
+    SUKE_ECHO_PROBE="$STACK_DIR/suke_echo_probe.herb"
+    SUKE_ECHO_DRIVER="$STACK_DIR/suke_echo_fragment.herb"
+    SUKE_COMPUTE_PROBE="$STACK_DIR/suke_compute_probe.herb"
+    SUKE_COMPUTE_DRIVER="$STACK_DIR/suke_compute_fragment.herb"
+    if [[ -f "$SUKE_ECHO_PROBE" && -f "$SUKE_ECHO_DRIVER" && -f "$SUKE_COMPUTE_PROBE" && -f "$SUKE_COMPUTE_DRIVER" ]]; then
+        payload=$(mktemp)
+        printf 'ordinary text\nsecond line\n' >"$payload"
+        run_suke_diff "stack/suke_echo_probe (driver: suke_echo_fragment.herb, ordinary payload)" "$SUKE_ECHO_PROBE" "$SUKE_ECHO_DRIVER" "$payload"
+        rm -f "$payload"
+
+        payload=$(mktemp)
+        printf 'binary\000quote"slash\\\nhi\200end' >"$payload"
+        run_suke_diff "stack/suke_echo_probe (driver: suke_echo_fragment.herb, binary payload)" "$SUKE_ECHO_PROBE" "$SUKE_ECHO_DRIVER" "$payload"
+        rm -f "$payload"
+
+        payload=$(mktemp)
+        : >"$payload"
+        run_suke_diff "stack/suke_echo_probe (driver: suke_echo_fragment.herb, empty payload)" "$SUKE_ECHO_PROBE" "$SUKE_ECHO_DRIVER" "$payload"
+        rm -f "$payload"
+
+        payload=$(mktemp)
+        printf 'ordinary text\nsecond line\n' >"$payload"
+        run_suke_diff "stack/suke_compute_probe (driver: suke_compute_fragment.herb, ordinary payload)" "$SUKE_COMPUTE_PROBE" "$SUKE_COMPUTE_DRIVER" "$payload"
+        rm -f "$payload"
+
+        payload=$(mktemp)
+        printf 'binary\000quote"slash\\\nhi\200end' >"$payload"
+        run_suke_diff "stack/suke_compute_probe (driver: suke_compute_fragment.herb, binary payload)" "$SUKE_COMPUTE_PROBE" "$SUKE_COMPUTE_DRIVER" "$payload"
+        rm -f "$payload"
+
+        payload=$(mktemp)
+        : >"$payload"
+        run_suke_diff "stack/suke_compute_probe (driver: suke_compute_fragment.herb, empty payload)" "$SUKE_COMPUTE_PROBE" "$SUKE_COMPUTE_DRIVER" "$payload"
+        rm -f "$payload"
     fi
 
     # Diagnostics malformed-probe battery: the C bootstrap must reject
