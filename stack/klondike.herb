@@ -867,6 +867,102 @@ func parse_decimal(s):
     return parse_decimal_loop(s, 0, length(s), 0)
 end
 
+-- ====================================================================
+-- BUNDLE DEMUX (virtual-stdin source channel)
+-- A bundle on stdin is, positionally:
+--   0x00 'H' 'E' 'R' 'B' '1'  <ASCII decimal D>  0x0A  <D source bytes>  <runtime_input to EOF>
+--   \________ 6-byte MAGIC ________/  \ len(src) /  \LF/
+-- The leading NUL makes the 6-byte magic collision-proof (NUL never
+-- appears in valid Herbert source). The split is positional: once D is
+-- parsed, source = stdin[src_start, src_start+D), runtime_input =
+-- stdin[src_start+D, EOF). Bodies are never scanned. No magic, or any
+-- malformed header, falls back to (stdin, "") = today's behavior.
+-- ====================================================================
+
+func bundle_has_magic(s):
+    if length(s) < 6:
+        return false
+    end
+    if index(s, 0) != 0:
+        return false
+    end
+    if index(s, 1) != 'H':
+        return false
+    end
+    if index(s, 2) != 'E':
+        return false
+    end
+    if index(s, 3) != 'R':
+        return false
+    end
+    if index(s, 4) != 'B':
+        return false
+    end
+    if index(s, 5) != '1':
+        return false
+    end
+    return true
+end
+
+-- Scan the decimal length field starting at offset 6. Walk forward over
+-- ASCII digits; the field ends at the first 0x0A. Returns the index of
+-- that 0x0A, or n if a non-digit non-LF byte appears or EOF is reached
+-- first (malformed header).
+func bundle_scan_lf(s, i, n):
+    if i >= n:
+        return n
+    end
+    let c = index(s, i)
+    if c == '\n':
+        return i
+    end
+    if is_digit(c):
+        return bundle_scan_lf(s, i + 1, n)
+    end
+    return n
+end
+
+func bundle_parse_decimal_loop(s, i, n, acc, limit):
+    if i >= n:
+        return acc
+    end
+    if acc > limit:
+        return limit + 1
+    end
+    let next = times10(acc) + index(s, i) - '0'
+    if next > limit:
+        return limit + 1
+    end
+    return bundle_parse_decimal_loop(s, i + 1, n, next, limit)
+end
+
+func bundle_parse_decimal(s, from, to, limit):
+    return bundle_parse_decimal_loop(s, from, to, 0, limit)
+end
+
+func demux_bundle(stdin):
+    if not bundle_has_magic(stdin):
+        return (stdin, slice_text(stdin, 0, 0))
+    end
+    let n = length(stdin)
+    let lf = bundle_scan_lf(stdin, 6, n)
+    if lf >= n:
+        return (stdin, slice_text(stdin, 0, 0))
+    end
+    if lf == 6:
+        return (stdin, slice_text(stdin, 0, 0))
+    end
+    let d = bundle_parse_decimal(stdin, 6, lf, n)
+    let src_start = lf + 1
+    let src_end = src_start + d
+    if src_end > n:
+        return (stdin, slice_text(stdin, 0, 0))
+    end
+    let source = slice_text(stdin, src_start, src_end)
+    let runtime_input = slice_text(stdin, src_end, n)
+    return (source, runtime_input)
+end
+
 func op_push_int():
     return 0
 end
@@ -3171,8 +3267,13 @@ func builtin_freeze(args, pools):
 end
 
 func builtin_clogger(pools):
-    do add(pools.0, clogger())
-    return make_string_value(count(pools.0) - 1)
+    let cell = pools.4
+    if count(cell) >= 2:
+        do add(pools.0, slice_text("", 0, 0))
+        return make_string_value(count(pools.0) - 1)
+    end
+    do add(cell, 1)
+    return make_string_value(get(cell, 0))
 end
 
 func builtin_get(args, pools):
@@ -3263,6 +3364,9 @@ func serialize_value_into(buf, v, pools):
         buf = serialize_tuple_items(buf, items, 0, count(items), pools)
         do append(buf, ')')
         return buf
+    end
+    if v.0 == tag_string():
+        return append_str(buf, get(pools.0, v.1))
     end
     return fault("serialize value")
 end
@@ -3645,7 +3749,9 @@ end
 -- ====================================================================
 
 func main():
-    let source = clogger()
+    let demuxed = demux_bundle(clogger())
+    let source = demuxed.0
+    let runtime_input = demuxed.1
     let lexed = err_lex_source(source)
     if lexed.0 == err_err_tag():
         do flogger(serialize_diagnostic(lexed.1))
@@ -3673,7 +3779,10 @@ func main():
     let buffer_pool = new_array(buffer)
     let tuple_pool = new_array(array((int, int)))
     let array_pool = new_array(array((int, int)))
-    let pools = (string_pool, buffer_pool, tuple_pool, array_pool)
+    do add(string_pool, runtime_input)
+    let input_cell = new_array(int)
+    do add(input_cell, count(string_pool) - 1)
+    let pools = (string_pool, buffer_pool, tuple_pool, array_pool, input_cell)
     let entry_info = get(prog.0, prog.3)
     let frame = (prog.3, 0, zero_locals(entry_info.2), new_array((int, int)))
     let frames = new_array((int, int, array((int, int)), array((int, int))))

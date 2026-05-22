@@ -183,6 +183,132 @@ write_expected_diagnostic() {
     fi
 }
 
+write_herbert_bundle() {
+    local src="$1"
+    local input="$2"
+    local out="$3"
+    python3 - "$src" "$input" "$out" <<'PY'
+import sys
+
+src = open(sys.argv[1], "rb").read()
+inp = open(sys.argv[2], "rb").read()
+with open(sys.argv[3], "wb") as out:
+    out.write(b"\x00HERB1" + str(len(src)).encode() + b"\n" + src + inp)
+PY
+}
+
+normalize_klondike_driver_output() {
+    local input="$1"
+    local output="$2"
+    local prefix quoted decoded
+    prefix=$(mktemp)
+    quoted=$(mktemp)
+    decoded=$(mktemp)
+
+    sed '$d' "$input" >"$prefix"
+    tail -n 1 "$input" >"$quoted"
+    if ! decode_canonical_string "$quoted" >"$decoded"; then
+        rm -f "$prefix" "$quoted" "$decoded"
+        return 1
+    fi
+    cat "$prefix" "$decoded" >"$output"
+    printf '\n' >>"$output"
+    rm -f "$prefix" "$quoted" "$decoded"
+    return 0
+}
+
+run_klondike_bundle_diff() {
+    local label="$1"
+    local probe="$2"
+    local payload="$3"
+    local mode="$4"
+    local driver="$5"
+    local inner outer driver_input oracle_display oracle actual raw_actual oracle_err err rc peak
+    total=$((total + 1))
+    inner=$(mktemp)
+    outer=$(mktemp)
+    oracle_display=$(mktemp)
+    oracle=$(mktemp)
+    actual=$(mktemp)
+    raw_actual=$(mktemp)
+    oracle_err=$(mktemp)
+    err=$(mktemp)
+
+    if ! write_herbert_bundle "$probe" "$payload" "$inner"; then
+        echo "FAIL: $label (bundle build failed)"
+        fail=$((fail + 1))
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return
+    fi
+    driver_input="$inner"
+    if [[ "$mode" == "nested" ]]; then
+        if ! write_herbert_bundle "$driver" "$inner" "$outer"; then
+            echo "FAIL: $label (outer bundle build failed)"
+            fail=$((fail + 1))
+            rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+            return
+        fi
+        driver_input="$outer"
+    fi
+
+    HERBERT_REPORT_PEAK=1 "$HERBERT" "$probe" <"$payload" >"$oracle_display" 2>"$oracle_err"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "FAIL: $label (oracle exit $rc)"
+        echo "--- oracle stderr"
+        cat "$oracle_err"
+        echo "--- oracle stdout"
+        cat "$oracle_display"
+        fail=$((fail + 1))
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return
+    fi
+    tr -d ',' <"$oracle_display" >"$oracle"
+
+    HERBERT_REPORT_PEAK=1 "$HERBERT" "$driver" <"$driver_input" >"$actual" 2>"$err"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "FAIL: $label (interpreter exit $rc)"
+        echo "--- stderr"
+        cat "$err"
+        echo "--- stdout"
+        cat "$actual"
+        fail=$((fail + 1))
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return
+    fi
+
+    if ! normalize_klondike_driver_output "$actual" "$raw_actual"; then
+        echo "FAIL: $label (expected canonical string result)"
+        echo "--- stdout"
+        cat "$actual"
+        fail=$((fail + 1))
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return
+    fi
+
+    if ! cmp -s "$oracle" "$raw_actual"; then
+        echo "FAIL: $label (output mismatch)"
+        diff -u "$oracle" "$raw_actual" || true
+        fail=$((fail + 1))
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return
+    fi
+
+    if [[ "$mode" == "nested" ]]; then
+        peak=$(awk '/^peak-live-scopes: [0-9]+$/ {print $2}' "$err")
+        if [[ -n "$peak" ]]; then
+            echo "PASS: $label (peak-live-scopes $peak)"
+        else
+            echo "PASS: $label"
+        fi
+    else
+        echo "PASS: $label"
+    fi
+    pass=$((pass + 1))
+    rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+}
+
 run_suke_diff() {
     local label="$1"
     local probe="$2"
@@ -393,6 +519,7 @@ if [[ -d ../../stack ]]; then
     KLONDIKE_EVAL_EXPECTED="$STACK_DIR/evaluator_probe.expected"
     KLONDIKE_PIPELINE_PROBE="$STACK_DIR/pipeline_probe.herb"
     KLONDIKE_IO_PROBE="$STACK_DIR/klondike_io_probe.herb"
+    KLONDIKE_COMPUTE_PROBE="$STACK_DIR/metacircular_compute_probe.herb"
 
     if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_EVAL_PROBE" && -f "$KLONDIKE_EVAL_EXPECTED" ]]; then
         total=$((total + 1))
@@ -516,6 +643,30 @@ if [[ -d ../../stack ]]; then
                 rm -f "$oracle" "$expected" "$actual" "$oracle_err" "$err"
             fi
         fi
+    fi
+
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_IO_PROBE" ]]; then
+        payload=$(mktemp)
+        printf 'hello' >"$payload"
+        run_klondike_bundle_diff \
+            "stack/klondike_io_probe (driver: klondike.herb, bundled preflight)" \
+            "$KLONDIKE_IO_PROBE" "$payload" "preflight" "$KLONDIKE_DRIVER"
+        run_klondike_bundle_diff \
+            "stack/klondike_io_probe (driver: klondike.herb, nested beta-small)" \
+            "$KLONDIKE_IO_PROBE" "$payload" "nested" "$KLONDIKE_DRIVER"
+        rm -f "$payload"
+    fi
+
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_COMPUTE_PROBE" ]]; then
+        payload=$(mktemp)
+        printf '5' >"$payload"
+        run_klondike_bundle_diff \
+            "stack/metacircular_compute_probe (driver: klondike.herb, bundled preflight)" \
+            "$KLONDIKE_COMPUTE_PROBE" "$payload" "preflight" "$KLONDIKE_DRIVER"
+        run_klondike_bundle_diff \
+            "stack/metacircular_compute_probe (driver: klondike.herb, nested beta-small)" \
+            "$KLONDIKE_COMPUTE_PROBE" "$payload" "nested" "$KLONDIKE_DRIVER"
+        rm -f "$payload"
     fi
 
     # Output primitive forcing-function tests: flogger writes raw bytes to

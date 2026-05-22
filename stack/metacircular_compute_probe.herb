@@ -1,0 +1,54 @@
+-- metacircular β-small compute probe: reads one ASCII digit via clogger;
+-- returns a tuple-of-ints computed from it (arith, multi-way branch,
+-- non-tail + tail recursion, growable array, tuple). Second clogger read
+-- must be "" (single-drain EOF). Uses only executable ops (no slice()).
+
+func tri(n):
+    if n == 0:
+        return 0
+    else:
+        return n + tri(n - 1)
+    end
+end
+
+func sum_tail(n, acc):
+    if n == 0:
+        return acc
+    else:
+        return sum_tail(n - 1, acc + n)
+    end
+end
+
+func band(n):
+    if n < 3:
+        return 100
+    elif n < 7:
+        return 200
+    else:
+        return 300
+    end
+end
+
+func first_digit(s):
+    if length(s) == 0:
+        return 0
+    end
+    let c = index(s, 0)
+    if c < '0' or c > '9':
+        return 0
+    end
+    return c - '0'
+end
+
+func main():
+    let incoming = clogger()
+    let second = clogger()
+    let n = first_digit(incoming)
+    let a = new_array(int)
+    do add(a, n)
+    do add(a, n + 1)
+    do add(a, n + 2)
+    let asum = get(a, 0) + get(a, 1) + get(a, 2)
+    do flogger("P2-OK\n")
+    return (n, tri(n), sum_tail(n, 0), band(n), asum, length(second))
+end
