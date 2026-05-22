@@ -19,7 +19,7 @@ HERBERT_SRCS := \
     bootstrap/main.c
 HERBERT_HDR  := bootstrap/herbert.h
 
-.PHONY: all check test clean
+.PHONY: all check test beta-full clean
 
 all: $(HERBERT)
 
@@ -29,6 +29,9 @@ check: $(SCANNER)
 
 test: $(HERBERT)
 	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_tests.sh
+
+beta-full: $(HERBERT)
+	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_beta_full.sh
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

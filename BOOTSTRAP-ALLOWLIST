@@ -17,6 +17,7 @@
 .gitignore
 BOOTSTRAP-ALLOWLIST
 Makefile
+bootstrap/tests/run_beta_full.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/test_01_arith.expected
 bootstrap/tests/test_02_short_circuit.expected

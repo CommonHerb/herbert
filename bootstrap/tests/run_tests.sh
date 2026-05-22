@@ -255,9 +255,10 @@ run_klondike_bundle_diff() {
     local payload="$3"
     local mode="$4"
     local driver="$5"
-    local inner outer driver_input oracle_display oracle actual raw_actual oracle_err err rc peak
+    local inner middle outer driver_input oracle_display oracle actual raw_actual oracle_err err rc peak heap detail
     total=$((total + 1))
     inner=$(mktemp)
+    middle=$(mktemp)
     outer=$(mktemp)
     oracle_display=$(mktemp)
     oracle=$(mktemp)
@@ -269,21 +270,47 @@ run_klondike_bundle_diff() {
     if ! write_herbert_bundle "$probe" "$payload" "$inner"; then
         echo "FAIL: $label (bundle build failed)"
         fail=$((fail + 1))
-        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
         return
     fi
-    driver_input="$inner"
-    if [[ "$mode" == "nested" ]]; then
-        if ! write_herbert_bundle "$driver" "$inner" "$outer"; then
-            echo "FAIL: $label (outer bundle build failed)"
-            fail=$((fail + 1))
-            rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            return
-        fi
-        driver_input="$outer"
-    fi
 
-    HERBERT_REPORT_PEAK=1 "$HERBERT" "$probe" <"$payload" >"$oracle_display" 2>"$oracle_err"
+    case "$mode" in
+        preflight)
+            driver_input="$inner"
+            ;;
+        nested)
+            if ! write_herbert_bundle "$driver" "$inner" "$outer"; then
+                echo "FAIL: $label (outer bundle build failed)"
+                fail=$((fail + 1))
+                rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+                return
+            fi
+            driver_input="$outer"
+            ;;
+        triple)
+            if ! write_herbert_bundle "$driver" "$inner" "$middle"; then
+                echo "FAIL: $label (middle bundle build failed)"
+                fail=$((fail + 1))
+                rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+                return
+            fi
+            if ! write_herbert_bundle "$driver" "$middle" "$outer"; then
+                echo "FAIL: $label (outer bundle build failed)"
+                fail=$((fail + 1))
+                rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+                return
+            fi
+            driver_input="$outer"
+            ;;
+        *)
+            echo "FAIL: $label (unknown bundle mode $mode)"
+            fail=$((fail + 1))
+            rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+            return
+            ;;
+    esac
+
+    HERBERT_REPORT_PEAK=1 HERBERT_REPORT_HEAP=1 "$HERBERT" "$probe" <"$payload" >"$oracle_display" 2>"$oracle_err"
     rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "FAIL: $label (oracle exit $rc)"
@@ -292,12 +319,12 @@ run_klondike_bundle_diff() {
         echo "--- oracle stdout"
         cat "$oracle_display"
         fail=$((fail + 1))
-        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
         return
     fi
     tr -d ',' <"$oracle_display" >"$oracle"
 
-    HERBERT_REPORT_PEAK=1 "$HERBERT" "$driver" <"$driver_input" >"$actual" 2>"$err"
+    HERBERT_REPORT_PEAK=1 HERBERT_REPORT_HEAP=1 "$HERBERT" "$driver" <"$driver_input" >"$actual" 2>"$err"
     rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "FAIL: $label (interpreter exit $rc)"
@@ -306,7 +333,7 @@ run_klondike_bundle_diff() {
         echo "--- stdout"
         cat "$actual"
         fail=$((fail + 1))
-        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
         return
     fi
 
@@ -315,7 +342,7 @@ run_klondike_bundle_diff() {
         echo "--- stdout"
         cat "$actual"
         fail=$((fail + 1))
-        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
         return
     fi
 
@@ -323,14 +350,18 @@ run_klondike_bundle_diff() {
         echo "FAIL: $label (output mismatch)"
         diff -u "$oracle" "$raw_actual" || true
         fail=$((fail + 1))
-        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
         return
     fi
 
-    if [[ "$mode" == "nested" ]]; then
-        peak=$(awk '/^peak-live-scopes: [0-9]+$/ {print $2}' "$err")
-        if [[ -n "$peak" ]]; then
-            echo "PASS: $label (peak-live-scopes $peak)"
+    if [[ "$mode" == "nested" || "$mode" == "triple" ]]; then
+        peak=$(awk '/^peak-live-scopes: [0-9]+$/ {v=$2} END {print v}' "$err")
+        heap=$(awk '/^peak-heap-bytes: [0-9]+$/ {v=$2} END {print v}' "$err")
+        detail=
+        [[ -n "$peak" ]] && detail="peak-live-scopes $peak"
+        [[ -n "$heap" ]] && detail="${detail}${detail:+; }peak-heap-bytes $heap"
+        if [[ -n "$detail" ]]; then
+            echo "PASS: $label ($detail)"
         else
             echo "PASS: $label"
         fi
@@ -338,7 +369,152 @@ run_klondike_bundle_diff() {
         echo "PASS: $label"
     fi
     pass=$((pass + 1))
+    rm -f "$inner" "$middle" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+}
+
+run_klondike_medium_case() {
+    local label="$1"
+    local probe="$2"
+    local payload="$3"
+    local driver="$4"
+    local timeout_s="$5"
+    local inner outer oracle_display oracle actual raw_actual oracle_err err rc start_s end_s
+    KLONDIKE_MEDIUM_HEAP=
+    KLONDIKE_MEDIUM_SCOPES=
+    KLONDIKE_MEDIUM_WALL=
+    inner=$(mktemp)
+    outer=$(mktemp)
+    oracle_display=$(mktemp)
+    oracle=$(mktemp)
+    actual=$(mktemp)
+    raw_actual=$(mktemp)
+    oracle_err=$(mktemp)
+    err=$(mktemp)
+
+    if ! write_herbert_bundle "$probe" "$payload" "$inner"; then
+        echo "FAIL: $label (bundle build failed)"
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return 1
+    fi
+    if ! write_herbert_bundle "$driver" "$inner" "$outer"; then
+        echo "FAIL: $label (outer bundle build failed)"
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return 1
+    fi
+
+    timeout "$timeout_s" env HERBERT_REPORT_PEAK=1 HERBERT_REPORT_HEAP=1 "$HERBERT" "$probe" <"$payload" >"$oracle_display" 2>"$oracle_err"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "FAIL: $label (oracle exit $rc)"
+        echo "--- oracle stderr"
+        cat "$oracle_err"
+        echo "--- oracle stdout"
+        cat "$oracle_display"
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return 1
+    fi
+    tr -d ',' <"$oracle_display" >"$oracle"
+
+    start_s=$(date +%s)
+    timeout "$timeout_s" env HERBERT_REPORT_PEAK=1 HERBERT_REPORT_HEAP=1 "$HERBERT" "$driver" <"$outer" >"$actual" 2>"$err"
+    rc=$?
+    end_s=$(date +%s)
+    KLONDIKE_MEDIUM_WALL=$((end_s - start_s))
+    if [[ $rc -ne 0 ]]; then
+        echo "FAIL: $label (interpreter exit $rc)"
+        echo "--- stderr"
+        cat "$err"
+        echo "--- stdout"
+        cat "$actual"
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return 1
+    fi
+    if ! normalize_klondike_driver_output "$actual" "$raw_actual"; then
+        echo "FAIL: $label (expected canonical string result)"
+        echo "--- stdout"
+        cat "$actual"
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return 1
+    fi
+    if ! cmp -s "$oracle" "$raw_actual"; then
+        echo "FAIL: $label (output mismatch)"
+        diff -u "$oracle" "$raw_actual" || true
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return 1
+    fi
+
+    KLONDIKE_MEDIUM_SCOPES=$(awk '/^peak-live-scopes: [0-9]+$/ {v=$2} END {print v}' "$err")
+    KLONDIKE_MEDIUM_HEAP=$(awk '/^peak-heap-bytes: [0-9]+$/ {v=$2} END {print v}' "$err")
+    if [[ -z "$KLONDIKE_MEDIUM_SCOPES" ]]; then
+        echo "FAIL: $label (no peak-live-scopes reported)"
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return 1
+    fi
+    if [[ -z "$KLONDIKE_MEDIUM_HEAP" ]]; then
+        echo "FAIL: $label (no peak-heap-bytes reported)"
+        rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+        return 1
+    fi
+
     rm -f "$inner" "$outer" "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+    return 0
+}
+
+run_klondike_medium_guard() {
+    local driver="$1"
+    local large_probe="$2"
+    local small_probe="$3"
+    local label="stack/beta-full medium guard (driver: klondike.herb, nested)"
+    local timeout_s="${BETA_MEDIUM_TIMEOUT:-240s}"
+    local scope_cap=64
+    local heap_cap=45000000
+    local slope_num=2
+    local slope_den=1
+    local large_payload small_payload large_heap large_scopes large_wall small_heap small_scopes small_wall
+    total=$((total + 1))
+    large_payload=$(mktemp)
+    small_payload=$(mktemp)
+    : >"$large_payload"
+    printf '5' >"$small_payload"
+
+    if ! run_klondike_medium_case "$label/evaluator_probe" "$large_probe" "$large_payload" "$driver" "$timeout_s"; then
+        fail=$((fail + 1))
+        rm -f "$large_payload" "$small_payload"
+        return
+    fi
+    large_heap="$KLONDIKE_MEDIUM_HEAP"
+    large_scopes="$KLONDIKE_MEDIUM_SCOPES"
+    large_wall="$KLONDIKE_MEDIUM_WALL"
+
+    if ! run_klondike_medium_case "$label/metacircular_compute_probe" "$small_probe" "$small_payload" "$driver" "$timeout_s"; then
+        fail=$((fail + 1))
+        rm -f "$large_payload" "$small_payload"
+        return
+    fi
+    small_heap="$KLONDIKE_MEDIUM_HEAP"
+    small_scopes="$KLONDIKE_MEDIUM_SCOPES"
+    small_wall="$KLONDIKE_MEDIUM_WALL"
+    rm -f "$large_payload" "$small_payload"
+
+    if (( large_scopes > scope_cap )); then
+        echo "FAIL: $label (evaluator peak-live-scopes $large_scopes > $scope_cap)"
+        fail=$((fail + 1))
+    elif (( small_scopes > scope_cap )); then
+        echo "FAIL: $label (compute peak-live-scopes $small_scopes > $scope_cap)"
+        fail=$((fail + 1))
+    elif (( large_heap > heap_cap )); then
+        echo "FAIL: $label (evaluator peak-heap-bytes $large_heap > $heap_cap)"
+        fail=$((fail + 1))
+    elif (( small_heap > heap_cap )); then
+        echo "FAIL: $label (compute peak-heap-bytes $small_heap > $heap_cap)"
+        fail=$((fail + 1))
+    elif (( large_heap * slope_den > small_heap * slope_num )); then
+        echo "FAIL: $label (heap slope $large_heap > 2.0 * $small_heap)"
+        fail=$((fail + 1))
+    else
+        echo "PASS: $label (evaluator heap $large_heap, scopes $large_scopes, wall ${large_wall}s; compute heap $small_heap, scopes $small_scopes, wall ${small_wall}s; slope <= 2.0)"
+        pass=$((pass + 1))
+    fi
 }
 
 run_suke_diff() {
@@ -819,6 +995,10 @@ if [[ -d ../../stack ]]; then
             "stack/metacircular_compute_probe (driver: klondike.herb, nested beta-small)" \
             "$KLONDIKE_COMPUTE_PROBE" "$payload" "nested" "$KLONDIKE_DRIVER"
         rm -f "$payload"
+    fi
+
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_EVAL_PROBE" && -f "$KLONDIKE_COMPUTE_PROBE" ]]; then
+        run_klondike_medium_guard "$KLONDIKE_DRIVER" "$KLONDIKE_EVAL_PROBE" "$KLONDIKE_COMPUTE_PROBE"
     fi
 
     # Output primitive forcing-function tests: flogger writes raw bytes to
