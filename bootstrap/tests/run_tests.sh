@@ -84,6 +84,22 @@ decode_canonical_string() {
     ' "$input"
 }
 
+write_klondike_emitter_driver() {
+    local source="$1"
+    local out="$2"
+    awk '/^func main\(\):$/ { exit } { print }' "$source" >"$out"
+    cat >>"$out" <<'HERBERT_KLONDIKE_EMITTER_MAIN'
+func main():
+    let probe = clogger()
+    let tokens = lex_source(probe)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let prog = lower_program(nodes, parsed.0)
+    return serialize_bytecode(prog)
+end
+HERBERT_KLONDIKE_EMITTER_MAIN
+}
+
 diagnostic_message() {
     local code="$1"
     local payload="${2:-}"
@@ -369,105 +385,49 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
-    # Pipeline forcing-function test: run the novel probe directly under
-    # the bootstrap to derive the oracle, then run the Herbert-authored
-    # lexer->parser->emitter->adapter->VM pipeline and compare its
-    # serialized result. The bootstrap's tuple printer includes commas;
-    # the VM serializer's tuple format does not, so strip commas from
-    # the dynamic tuple-of-ints oracle before diffing.
-    PIPELINE_DRIVER="$STACK_DIR/pipeline_fragment.herb"
-    PIPELINE_PROBE="$STACK_DIR/pipeline_probe.herb"
-    if [[ -f "$PIPELINE_DRIVER" && -f "$PIPELINE_PROBE" ]]; then
-        total=$((total + 1))
-        oracle_display=$(mktemp)
-        oracle=$(mktemp)
-        actual=$(mktemp)
-        raw_actual=$(mktemp)
-        oracle_err=$(mktemp)
-        err=$(mktemp)
-        HERBERT_REPORT_PEAK=1 "$HERBERT" "$PIPELINE_PROBE" >"$oracle_display" 2>"$oracle_err"
-        rc=$?
-        if [[ $rc -ne 0 ]]; then
-            echo "FAIL: stack/pipeline_probe (driver: pipeline_fragment.herb) (oracle exit $rc)"
-            echo "--- oracle stderr"
-            cat "$oracle_err"
-            echo "--- oracle stdout"
-            cat "$oracle_display"
-            fail=$((fail + 1))
-            rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-        else
-            tr -d ',' <"$oracle_display" >"$oracle"
-            HERBERT_REPORT_PEAK=1 "$HERBERT" "$PIPELINE_DRIVER" >"$actual" 2>"$err"
-            rc=$?
-            if [[ $rc -ne 0 ]]; then
-                echo "FAIL: stack/pipeline_probe (driver: pipeline_fragment.herb) (interpreter exit $rc)"
-                echo "--- stderr"
-                cat "$err"
-                echo "--- stdout"
-                cat "$actual"
-                fail=$((fail + 1))
-                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-                echo "FAIL: stack/pipeline_probe (driver: pipeline_fragment.herb) (expected canonical string output)"
-                echo "--- stdout"
-                cat "$actual"
-                fail=$((fail + 1))
-                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            elif ! diff -u "$oracle" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
-                echo "FAIL: stack/pipeline_probe (driver: pipeline_fragment.herb) (output mismatch)"
-                cat /tmp/herbert_diff.$$
-                fail=$((fail + 1))
-                rm -f /tmp/herbert_diff.$$ "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            else
-                echo "PASS: stack/pipeline_probe (driver: pipeline_fragment.herb)"
-                pass=$((pass + 1))
-                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            fi
-        fi
-    fi
+    # Klondike canonical integration forcing functions. The canonical driver
+    # reads source through clogger(), checks the diagnostics front end, lowers
+    # to bytecode, adapts, and executes through the VM.
+    KLONDIKE_DRIVER="$STACK_DIR/klondike.herb"
+    KLONDIKE_EVAL_PROBE="$STACK_DIR/evaluator_probe.herb"
+    KLONDIKE_EVAL_EXPECTED="$STACK_DIR/evaluator_probe.expected"
+    KLONDIKE_PIPELINE_PROBE="$STACK_DIR/pipeline_probe.herb"
+    KLONDIKE_IO_PROBE="$STACK_DIR/klondike_io_probe.herb"
 
-    # Input forcing-function tests: run the same stdin-reading fragment twice
-    # with distinct well-formed source payloads. The fragment obtains source
-    # only through clogger(), then follows the same lexer->parser->emitter->
-    # adapter->VM path as pipeline_fragment.herb.
-    INPUT_DRIVER="$STACK_DIR/input_fragment.herb"
-    INPUT_EVAL_PROBE="$STACK_DIR/evaluator_probe.herb"
-    INPUT_EVAL_EXPECTED="$STACK_DIR/evaluator_probe.expected"
-    INPUT_PIPELINE_PROBE="$STACK_DIR/pipeline_probe.herb"
-    if [[ -f "$INPUT_DRIVER" && -f "$INPUT_EVAL_PROBE" && -f "$INPUT_EVAL_EXPECTED" ]]; then
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_EVAL_PROBE" && -f "$KLONDIKE_EVAL_EXPECTED" ]]; then
         total=$((total + 1))
         actual=$(mktemp)
         raw_actual=$(mktemp)
         err=$(mktemp)
-        HERBERT_REPORT_PEAK=1 "$HERBERT" "$INPUT_DRIVER" <"$INPUT_EVAL_PROBE" >"$actual" 2>"$err"
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$KLONDIKE_DRIVER" <"$KLONDIKE_EVAL_PROBE" >"$actual" 2>"$err"
         rc=$?
         if [[ $rc -ne 0 ]]; then
-            echo "FAIL: stack/evaluator_probe (driver: input_fragment.herb, stdin) (interpreter exit $rc)"
+            echo "FAIL: stack/evaluator_probe (driver: klondike.herb, stdin) (interpreter exit $rc)"
             echo "--- stderr"
             cat "$err"
             echo "--- stdout"
             cat "$actual"
             fail=$((fail + 1))
             rm -f "$actual" "$raw_actual" "$err"
-        elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-            echo "FAIL: stack/evaluator_probe (driver: input_fragment.herb, stdin) (expected canonical string output)"
+        elif ! { decode_canonical_string "$actual" >"$raw_actual" && printf '\n' >>"$raw_actual"; } || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/evaluator_probe (driver: klondike.herb, stdin) (expected canonical string output)"
             echo "--- stdout"
             cat "$actual"
             fail=$((fail + 1))
             rm -f "$actual" "$raw_actual" "$err"
-        elif ! diff -u "$INPUT_EVAL_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
-            echo "FAIL: stack/evaluator_probe (driver: input_fragment.herb, stdin) (output mismatch)"
+        elif ! diff -u "$KLONDIKE_EVAL_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
+            echo "FAIL: stack/evaluator_probe (driver: klondike.herb, stdin) (output mismatch)"
             cat /tmp/herbert_diff.$$
             fail=$((fail + 1))
             rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
         else
-            echo "PASS: stack/evaluator_probe (driver: input_fragment.herb, stdin)"
+            echo "PASS: stack/evaluator_probe (driver: klondike.herb, stdin)"
             pass=$((pass + 1))
             rm -f "$actual" "$raw_actual" "$err"
         fi
     fi
 
-    if [[ -f "$INPUT_DRIVER" && -f "$INPUT_PIPELINE_PROBE" ]]; then
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_PIPELINE_PROBE" ]]; then
         total=$((total + 1))
         oracle_display=$(mktemp)
         oracle=$(mktemp)
@@ -475,10 +435,10 @@ if [[ -d ../../stack ]]; then
         raw_actual=$(mktemp)
         oracle_err=$(mktemp)
         err=$(mktemp)
-        HERBERT_REPORT_PEAK=1 "$HERBERT" "$INPUT_PIPELINE_PROBE" >"$oracle_display" 2>"$oracle_err"
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$KLONDIKE_PIPELINE_PROBE" >"$oracle_display" 2>"$oracle_err"
         rc=$?
         if [[ $rc -ne 0 ]]; then
-            echo "FAIL: stack/pipeline_probe (driver: input_fragment.herb, stdin) (oracle exit $rc)"
+            echo "FAIL: stack/pipeline_probe (driver: klondike.herb, stdin) (oracle exit $rc)"
             echo "--- oracle stderr"
             cat "$oracle_err"
             echo "--- oracle stdout"
@@ -487,31 +447,73 @@ if [[ -d ../../stack ]]; then
             rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
         else
             tr -d ',' <"$oracle_display" >"$oracle"
-            HERBERT_REPORT_PEAK=1 "$HERBERT" "$INPUT_DRIVER" <"$INPUT_PIPELINE_PROBE" >"$actual" 2>"$err"
+            HERBERT_REPORT_PEAK=1 "$HERBERT" "$KLONDIKE_DRIVER" <"$KLONDIKE_PIPELINE_PROBE" >"$actual" 2>"$err"
             rc=$?
             if [[ $rc -ne 0 ]]; then
-                echo "FAIL: stack/pipeline_probe (driver: input_fragment.herb, stdin) (interpreter exit $rc)"
+                echo "FAIL: stack/pipeline_probe (driver: klondike.herb, stdin) (interpreter exit $rc)"
                 echo "--- stderr"
                 cat "$err"
                 echo "--- stdout"
                 cat "$actual"
                 fail=$((fail + 1))
                 rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-                echo "FAIL: stack/pipeline_probe (driver: input_fragment.herb, stdin) (expected canonical string output)"
+            elif ! { decode_canonical_string "$actual" >"$raw_actual" && printf '\n' >>"$raw_actual"; } || [[ ! -s "$raw_actual" ]]; then
+                echo "FAIL: stack/pipeline_probe (driver: klondike.herb, stdin) (expected canonical string output)"
                 echo "--- stdout"
                 cat "$actual"
                 fail=$((fail + 1))
                 rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
             elif ! diff -u "$oracle" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
-                echo "FAIL: stack/pipeline_probe (driver: input_fragment.herb, stdin) (output mismatch)"
+                echo "FAIL: stack/pipeline_probe (driver: klondike.herb, stdin) (output mismatch)"
                 cat /tmp/herbert_diff.$$
                 fail=$((fail + 1))
                 rm -f /tmp/herbert_diff.$$ "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
             else
-                echo "PASS: stack/pipeline_probe (driver: input_fragment.herb, stdin)"
+                echo "PASS: stack/pipeline_probe (driver: klondike.herb, stdin)"
                 pass=$((pass + 1))
                 rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
+            fi
+        fi
+    fi
+
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_IO_PROBE" ]]; then
+        total=$((total + 1))
+        oracle=$(mktemp)
+        expected=$(mktemp)
+        actual=$(mktemp)
+        oracle_err=$(mktemp)
+        err=$(mktemp)
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$KLONDIKE_IO_PROBE" </dev/null >"$oracle" 2>"$oracle_err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/klondike_io_probe (driver: klondike.herb, stdin) (oracle exit $rc)"
+            echo "--- oracle stderr"
+            cat "$oracle_err"
+            echo "--- oracle stdout"
+            cat "$oracle"
+            fail=$((fail + 1))
+            rm -f "$oracle" "$expected" "$actual" "$oracle_err" "$err"
+        else
+            perl -0777 -pe 's/([^\n]*)\n\z/"$1"\n/s' "$oracle" >"$expected"
+            HERBERT_REPORT_PEAK=1 "$HERBERT" "$KLONDIKE_DRIVER" <"$KLONDIKE_IO_PROBE" >"$actual" 2>"$err"
+            rc=$?
+            if [[ $rc -ne 0 ]]; then
+                echo "FAIL: stack/klondike_io_probe (driver: klondike.herb, stdin) (interpreter exit $rc)"
+                echo "--- stderr"
+                cat "$err"
+                echo "--- stdout"
+                cat "$actual"
+                fail=$((fail + 1))
+                rm -f "$oracle" "$expected" "$actual" "$oracle_err" "$err"
+            elif ! cmp -s "$expected" "$actual"; then
+                echo "FAIL: stack/klondike_io_probe (driver: klondike.herb, stdin) (output mismatch)"
+                diff -u "$expected" "$actual" || true
+                fail=$((fail + 1))
+                rm -f "$oracle" "$expected" "$actual" "$oracle_err" "$err"
+            else
+                echo "PASS: stack/klondike_io_probe (driver: klondike.herb, stdin)"
+                pass=$((pass + 1))
+                rm -f "$oracle" "$expected" "$actual" "$oracle_err" "$err"
             fi
         fi
     fi
@@ -579,38 +581,6 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
-    OUTPUT_DRIVER="$STACK_DIR/output_fragment.herb"
-    OUTPUT_EVAL_PROBE="$STACK_DIR/evaluator_probe.herb"
-    OUTPUT_EVAL_EXPECTED="$STACK_DIR/evaluator_probe.expected"
-    if [[ -f "$OUTPUT_DRIVER" && -f "$OUTPUT_EVAL_PROBE" && -f "$OUTPUT_EVAL_EXPECTED" ]]; then
-        total=$((total + 1))
-        expected=$(mktemp)
-        actual=$(mktemp)
-        err=$(mktemp)
-        cp "$OUTPUT_EVAL_EXPECTED" "$expected"
-        printf '0\n' >>"$expected"
-        HERBERT_REPORT_PEAK=1 "$HERBERT" "$OUTPUT_DRIVER" <"$OUTPUT_EVAL_PROBE" >"$actual" 2>"$err"
-        rc=$?
-        if [[ $rc -ne 0 ]]; then
-            echo "FAIL: stack/evaluator_probe (driver: output_fragment.herb, stdin) (interpreter exit $rc)"
-            echo "--- stderr"
-            cat "$err"
-            echo "--- stdout"
-            cat "$actual"
-            fail=$((fail + 1))
-            rm -f "$expected" "$actual" "$err"
-        elif ! cmp -s "$expected" "$actual"; then
-            echo "FAIL: stack/evaluator_probe (driver: output_fragment.herb, stdin) (output mismatch)"
-            cmp -l "$expected" "$actual" || true
-            fail=$((fail + 1))
-            rm -f "$expected" "$actual" "$err"
-        else
-            echo "PASS: stack/evaluator_probe (driver: output_fragment.herb, stdin)"
-            pass=$((pass + 1))
-            rm -f "$expected" "$actual" "$err"
-        fi
-    fi
-
     # Suke codegen forcing-function tests: the C bootstrap runs each probe
     # directly as the oracle, then the Herbert pipeline fragment compiles the
     # same embedded source and executes it on the VM with the same stdin.
@@ -650,13 +620,12 @@ if [[ -d ../../stack ]]; then
         rm -f "$payload"
     fi
 
-    # Diagnostics malformed-probe battery: the C bootstrap must reject
-    # every probe, and the Herbert diagnostics fragment must match its
-    # source line plus the manifest's exact ERR code.
-    ERROR_DRIVER="$STACK_DIR/diagnostics_fragment.herb"
+    # Klondike malformed-probe battery: the C bootstrap must reject every
+    # probe, and the canonical Herbert driver must match its source line plus
+    # the manifest's exact ERR code.
     ERROR_MANIFEST="$STACK_DIR/error_probes.expected"
     ERROR_PROBE_DIR="$STACK_DIR/error_probes"
-    if [[ -f "$ERROR_DRIVER" && -f "$ERROR_MANIFEST" && -d "$ERROR_PROBE_DIR" ]]; then
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$ERROR_MANIFEST" && -d "$ERROR_PROBE_DIR" ]]; then
         while read -r probe_name err_word err_code; do
             [[ -n "$probe_name" ]] || continue
             total=$((total + 1))
@@ -701,10 +670,10 @@ if [[ -d ../../stack ]]; then
                 continue
             fi
             write_expected_diagnostic "$err_code" "$line" "$payload" "$expected"
-            HERBERT_REPORT_PEAK=1 "$HERBERT" "$ERROR_DRIVER" <"$probe" >"$actual" 2>"$err"
+            HERBERT_REPORT_PEAK=1 "$HERBERT" "$KLONDIKE_DRIVER" <"$probe" >"$actual" 2>"$err"
             rc=$?
             if [[ $rc -ne 0 ]]; then
-                echo "FAIL: stack/error_probes/$probe_name (driver: diagnostics_fragment.herb, stdin) (interpreter exit $rc)"
+                echo "FAIL: stack/error_probes/$probe_name (driver: klondike.herb, stdin) (interpreter exit $rc)"
                 echo "--- stderr"
                 cat "$err"
                 echo "--- stdout"
@@ -712,100 +681,16 @@ if [[ -d ../../stack ]]; then
                 fail=$((fail + 1))
                 rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
             elif ! cmp -s "$expected" "$actual"; then
-                echo "FAIL: stack/error_probes/$probe_name (driver: diagnostics_fragment.herb, stdin) (output mismatch)"
+                echo "FAIL: stack/error_probes/$probe_name (driver: klondike.herb, stdin) (output mismatch)"
                 diff -u "$expected" "$actual" || true
                 fail=$((fail + 1))
                 rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
             else
-                echo "PASS: stack/error_probes/$probe_name (driver: diagnostics_fragment.herb, stdin)"
+                echo "PASS: stack/error_probes/$probe_name (driver: klondike.herb, stdin)"
                 pass=$((pass + 1))
                 rm -f "$expected" "$c_actual" "$c_err" "$actual" "$err"
             fi
         done < "$ERROR_MANIFEST"
-    fi
-
-    # Well-formed controls through the diagnostics fragment. These mirror the
-    # input-fragment stdin checks and guard against over-rejection.
-    if [[ -f "$ERROR_DRIVER" && -f "$INPUT_EVAL_PROBE" && -f "$INPUT_EVAL_EXPECTED" ]]; then
-        total=$((total + 1))
-        actual=$(mktemp)
-        raw_actual=$(mktemp)
-        err=$(mktemp)
-        HERBERT_REPORT_PEAK=1 "$HERBERT" "$ERROR_DRIVER" <"$INPUT_EVAL_PROBE" >"$actual" 2>"$err"
-        rc=$?
-        if [[ $rc -ne 0 ]]; then
-            echo "FAIL: stack/evaluator_probe (driver: diagnostics_fragment.herb, stdin) (interpreter exit $rc)"
-            echo "--- stderr"
-            cat "$err"
-            echo "--- stdout"
-            cat "$actual"
-            fail=$((fail + 1))
-            rm -f "$actual" "$raw_actual" "$err"
-        elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-            echo "FAIL: stack/evaluator_probe (driver: diagnostics_fragment.herb, stdin) (expected canonical string output)"
-            echo "--- stdout"
-            cat "$actual"
-            fail=$((fail + 1))
-            rm -f "$actual" "$raw_actual" "$err"
-        elif ! diff -u "$INPUT_EVAL_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
-            echo "FAIL: stack/evaluator_probe (driver: diagnostics_fragment.herb, stdin) (output mismatch)"
-            cat /tmp/herbert_diff.$$
-            fail=$((fail + 1))
-            rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
-        else
-            echo "PASS: stack/evaluator_probe (driver: diagnostics_fragment.herb, stdin)"
-            pass=$((pass + 1))
-            rm -f "$actual" "$raw_actual" "$err"
-        fi
-    fi
-
-    if [[ -f "$ERROR_DRIVER" && -f "$INPUT_PIPELINE_PROBE" ]]; then
-        total=$((total + 1))
-        oracle_display=$(mktemp)
-        oracle=$(mktemp)
-        actual=$(mktemp)
-        raw_actual=$(mktemp)
-        oracle_err=$(mktemp)
-        err=$(mktemp)
-        HERBERT_REPORT_PEAK=1 "$HERBERT" "$INPUT_PIPELINE_PROBE" >"$oracle_display" 2>"$oracle_err"
-        rc=$?
-        if [[ $rc -ne 0 ]]; then
-            echo "FAIL: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin) (oracle exit $rc)"
-            echo "--- oracle stderr"
-            cat "$oracle_err"
-            echo "--- oracle stdout"
-            cat "$oracle_display"
-            fail=$((fail + 1))
-            rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-        else
-            tr -d ',' <"$oracle_display" >"$oracle"
-            HERBERT_REPORT_PEAK=1 "$HERBERT" "$ERROR_DRIVER" <"$INPUT_PIPELINE_PROBE" >"$actual" 2>"$err"
-            rc=$?
-            if [[ $rc -ne 0 ]]; then
-                echo "FAIL: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin) (interpreter exit $rc)"
-                echo "--- stderr"
-                cat "$err"
-                echo "--- stdout"
-                cat "$actual"
-                fail=$((fail + 1))
-                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-                echo "FAIL: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin) (expected canonical string output)"
-                echo "--- stdout"
-                cat "$actual"
-                fail=$((fail + 1))
-                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            elif ! diff -u "$oracle" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
-                echo "FAIL: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin) (output mismatch)"
-                cat /tmp/herbert_diff.$$
-                fail=$((fail + 1))
-                rm -f /tmp/herbert_diff.$$ "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            else
-                echo "PASS: stack/pipeline_probe (driver: diagnostics_fragment.herb, stdin)"
-                pass=$((pass + 1))
-                rm -f "$oracle_display" "$oracle" "$actual" "$raw_actual" "$oracle_err" "$err"
-            fi
-        fi
     fi
 
     # Emitter forcing-function test: the emitter fragment returns the
@@ -844,6 +729,44 @@ if [[ -d ../../stack ]]; then
             echo "PASS: stack/emitter_probe (driver: emitter_fragment.herb)"
             pass=$((pass + 1))
             rm -f "$actual" "$raw_actual" "$err"
+        fi
+    fi
+
+    # Klondike bytecode-equivalence check: generate a temporary driver with
+    # klondike's emitter and a bytecode-listing main, then diff the evaluator
+    # probe bytecode against the blessed emitter oracle.
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_EVAL_PROBE" && -f "$EMIT_PROBE_EXPECTED" ]]; then
+        total=$((total + 1))
+        emit_driver=$(mktemp "${TMPDIR:-/tmp}/klondike-emitter.XXXXXX.herb")
+        actual=$(mktemp)
+        raw_actual=$(mktemp)
+        err=$(mktemp)
+        write_klondike_emitter_driver "$KLONDIKE_DRIVER" "$emit_driver"
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$emit_driver" <"$KLONDIKE_EVAL_PROBE" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/emitter_probe (driver: klondike.herb emitter) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$emit_driver" "$actual" "$raw_actual" "$err"
+        elif ! decode_canonical_string "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/emitter_probe (driver: klondike.herb emitter) (expected canonical string output)"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$emit_driver" "$actual" "$raw_actual" "$err"
+        elif ! diff -u "$EMIT_PROBE_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
+            echo "FAIL: stack/emitter_probe (driver: klondike.herb emitter) (output mismatch)"
+            cat /tmp/herbert_diff.$$
+            fail=$((fail + 1))
+            rm -f /tmp/herbert_diff.$$ "$emit_driver" "$actual" "$raw_actual" "$err"
+        else
+            echo "PASS: stack/emitter_probe (driver: klondike.herb emitter)"
+            pass=$((pass + 1))
+            rm -f "$emit_driver" "$actual" "$raw_actual" "$err"
         fi
     fi
 fi
