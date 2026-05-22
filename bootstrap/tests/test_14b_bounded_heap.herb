@@ -1,0 +1,25 @@
+func payload(seed):
+    let buf = new_buffer()
+    do append(buf, 65)
+    do append(buf, 66)
+    do append(buf, 67)
+    do append(buf, 68)
+    let s = freeze(buf)
+    let arr = new_array(string)
+    do add(arr, s)
+    do add(arr, "fixed-literal-payload")
+    let t = (s, count(arr), seed)
+    return length(s) + t.1
+end
+
+func loop(i, n, acc):
+    if i >= n:
+        return acc
+    end
+    let r = payload(i)
+    return loop(i + 1, n, acc + r)
+end
+
+func main():
+    return loop(0, 100000, 0)
+end

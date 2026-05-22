@@ -14,6 +14,7 @@ HERBERT_SRCS := \
     bootstrap/lex.c \
     bootstrap/parse.c \
     bootstrap/value.c \
+    bootstrap/reclaim.c \
     bootstrap/eval.c \
     bootstrap/main.c
 HERBERT_HDR  := bootstrap/herbert.h

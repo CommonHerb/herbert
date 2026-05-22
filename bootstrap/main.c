@@ -78,6 +78,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "peak-live-scopes: %zu\n",
                 herbert_peak_live_scopes());
     }
+    if (getenv("HERBERT_REPORT_HEAP")) {
+        fprintf(stderr, "peak-heap-bytes: %zu\n",
+                herbert_peak_heap_bytes());
+    }
 
     return 0;
 }

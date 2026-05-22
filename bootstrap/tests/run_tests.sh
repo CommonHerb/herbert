@@ -24,6 +24,10 @@ fi
 fail=0
 pass=0
 total=0
+SLOPE_TOL_NUM=3
+SLOPE_TOL_DEN=2
+test_14a_heap=
+test_14b_heap=
 
 run_one() {
     local prog="$1"
@@ -32,7 +36,7 @@ run_one() {
     local actual err rc
     actual=$(mktemp)
     err=$(mktemp)
-    HERBERT_REPORT_PEAK=1 "$HERBERT" "$prog" >"$actual" 2>"$err"
+    HERBERT_REPORT_PEAK=1 HERBERT_REPORT_HEAP=1 "$HERBERT" "$prog" >"$actual" 2>"$err"
     rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "FAIL: $label (interpreter exit $rc)"
@@ -51,24 +55,52 @@ run_one() {
     fi
     rm -f /tmp/herbert_diff.$$ "$actual"
     local maxfile="${prog%.herb}.maxscopes"
+    local maxheapfile="${prog%.herb}.maxheap"
+    local peak heap detail base
+    peak=$(awk '/^peak-live-scopes: [0-9]+$/ {print $2}' "$err")
+    heap=$(awk '/^peak-heap-bytes: [0-9]+$/ {print $2}' "$err")
+    base="$(basename "$prog")"
+    case "$base" in
+        test_14a_bounded_heap.herb) test_14a_heap="$heap" ;;
+        test_14b_bounded_heap.herb) test_14b_heap="$heap" ;;
+    esac
+    detail=
     if [[ -f "$maxfile" ]]; then
-        local bound peak
+        local bound
         bound=$(tr -d '[:space:]' < "$maxfile")
-        peak=$(awk '/^peak-live-scopes: [0-9]+$/ {print $2}' "$err")
-        rm -f "$err"
         if [[ -z "$peak" ]]; then
             echo "FAIL: $label (no peak-live-scopes reported)"
+            rm -f "$err"
             return 1
         fi
         if (( peak > bound )); then
             echo "FAIL: $label (peak-live-scopes $peak > bound $bound)"
+            rm -f "$err"
             return 1
         fi
-        echo "PASS: $label (peak-live-scopes $peak <= $bound)"
-        return 0
+        detail="peak-live-scopes $peak <= $bound"
+    fi
+    if [[ -f "$maxheapfile" ]]; then
+        local heap_bound
+        heap_bound=$(tr -d '[:space:]' < "$maxheapfile")
+        if [[ -z "$heap" ]]; then
+            echo "FAIL: $label (no peak-heap-bytes reported)"
+            rm -f "$err"
+            return 1
+        fi
+        if (( heap > heap_bound )); then
+            echo "FAIL: $label (peak-heap-bytes $heap > bound $heap_bound)"
+            rm -f "$err"
+            return 1
+        fi
+        detail="${detail}${detail:+; }peak-heap-bytes $heap <= $heap_bound"
     fi
     rm -f "$err"
-    echo "PASS: $label"
+    if [[ -n "$detail" ]]; then
+        echo "PASS: $label ($detail)"
+    else
+        echo "PASS: $label"
+    fi
     return 0
 }
 
@@ -375,6 +407,20 @@ for prog in test_*.herb; do
         fail=$((fail + 1))
     fi
 done
+
+if [[ -n "$test_14a_heap" || -n "$test_14b_heap" ]]; then
+    total=$((total + 1))
+    if [[ -z "$test_14a_heap" || -z "$test_14b_heap" ]]; then
+        echo "FAIL: test_14 heap slope (missing heap measurement)"
+        fail=$((fail + 1))
+    elif (( test_14b_heap * SLOPE_TOL_DEN > test_14a_heap * SLOPE_TOL_NUM )); then
+        echo "FAIL: test_14 heap slope ($test_14b_heap > 1.5 * $test_14a_heap)"
+        fail=$((fail + 1))
+    else
+        echo "PASS: test_14 heap slope ($test_14b_heap <= 1.5 * $test_14a_heap)"
+        pass=$((pass + 1))
+    fi
+fi
 
 if [[ -d ../../stack ]]; then
     STACK_DIR="$(cd ../../stack && pwd)"

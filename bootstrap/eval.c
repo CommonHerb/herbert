@@ -221,6 +221,32 @@ typedef struct {
 
 static ActStack g_act;
 
+static void mark_scope_chain(Scope *s) {
+    for (Scope *p = s; p; p = p->parent) {
+        for (size_t i = 0; i < p->n; i++) {
+            gc_mark_value(p->values[i]);
+        }
+    }
+}
+
+void eval_gc_mark_roots(void) {
+    for (size_t i = 0; i < g_act.n; i++) {
+        Activation *a = g_act.items[i];
+        mark_scope_chain(a->top);
+        for (size_t j = 0; j < a->val_n; j++) {
+            gc_mark_value(a->vals[j]);
+        }
+        if (a->done) {
+            gc_mark_value(a->ret_val);
+        }
+        for (size_t j = 0; j < a->op_n; j++) {
+            if (a->ops[j].kind == OP_POP_SCOPE) {
+                mark_scope_chain(a->ops[j].u.scope);
+            }
+        }
+    }
+}
+
 /* ---------------------------------------------------------------------- *
  * Activation / op / value stack management                               *
  * ---------------------------------------------------------------------- */
@@ -291,6 +317,7 @@ static void act_reset_to(Activation *a, Function *fn) {
 }
 
 static void act_free(Activation *a) {
+    scope_free_chain(a->top);
     free(a->ops);
     free(a->vals);
     free(a);
@@ -386,9 +413,7 @@ static Value bi_clogger(int line, Value *args, size_t n) {
     if (ferror(stdin)) {
         herr(line, "clogger: error reading stdin");
     }
-    if (!data) {
-        data = (uint8_t *)xmalloc(1);
-    }
+    data = (uint8_t *)xrealloc(data, len ? len : 1);
     return v_string_take(data, len);
 }
 
@@ -732,6 +757,7 @@ static DriveResult drive(Activation *a) {
             }
 
             case OP_BUILD_TUPLE: {
+                gc_maybe_collect();
                 size_t n = op.n;
                 Value *items = NULL;
                 if (n) {
@@ -739,7 +765,11 @@ static DriveResult drive(Activation *a) {
                     memcpy(items, &a->vals[a->val_n - n], sizeof(Value) * n);
                     a->val_n -= n;
                 }
-                act_push_val(a, v_tuple(items, n));
+                size_t mark = gc_root_mark();
+                gc_protect_span(items, n);
+                Value tuple = v_tuple(items, n);
+                act_push_val(a, tuple);
+                gc_unprotect_to(mark);
                 break;
             }
 
@@ -783,9 +813,11 @@ static DriveResult drive(Activation *a) {
                  * Values are self-contained (no scope pointer) and continue
                  * to be valid after the outgoing chain is freed. */
                 Value *tmp = NULL;
+                size_t tmp_mark = gc_root_mark();
                 if (na) {
                     tmp = (Value *)xmalloc(sizeof(Value) * na);
                     memcpy(tmp, &a->vals[a->val_n - na], sizeof(Value) * na);
+                    gc_protect_span(tmp, na);
                 }
                 /* Save the outgoing chain. After act_reset_to overwrites
                  * a->top and clears a->ops, the old chain is unreachable
@@ -800,6 +832,7 @@ static DriveResult drive(Activation *a) {
                     scope_let(a->top, callee->params[i], tmp[i], callee->line);
                 }
                 free(tmp);
+                gc_unprotect_to(tmp_mark);
                 scope_free_chain(outgoing);
                 break;
             }
@@ -939,7 +972,9 @@ static DriveResult drive(Activation *a) {
             }
 
             case OP_POP_SCOPE: {
+                Scope *child = a->top;
                 a->top = op.u.scope;
+                scope_free(child);
                 break;
             }
         }
@@ -965,6 +1000,8 @@ Value run_program(Program *prog) {
     act_push(root);
 
     Value last_result = v_int(0);
+    size_t last_result_mark = gc_root_mark();
+    gc_protect(&last_result);
     bool  have_result = false;
 
     while (g_act.n > 0) {
@@ -983,5 +1020,6 @@ Value run_program(Program *prog) {
         /* DR_PUSHED_CALLEE: new top on g_act, loop. */
     }
 
+    gc_unprotect_to(last_result_mark);
     return last_result;
 }

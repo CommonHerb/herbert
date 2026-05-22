@@ -192,24 +192,35 @@ Function *program_lookup(Program *p, const char *name);
 typedef enum { V_INT, V_BOOL, V_STR, V_BUF, V_TUPLE, V_ARRAY } VKind;
 
 typedef struct Value Value;
+typedef struct GCObj GCObj;
+
+struct GCObj {
+    VKind  kind;
+    GCObj *next;
+    bool   marked;
+};
 
 typedef struct {
+    GCObj   gc;
     size_t   len;
     uint8_t *data;
 } StringObj;
 
 typedef struct {
+    GCObj   gc;
     size_t   len;
     size_t   cap;
     uint8_t *data;
 } BufferObj;
 
 typedef struct {
+    GCObj  gc;
     size_t  n;
     Value  *items;
 } TupleObj;
 
 typedef struct {
+    GCObj    gc;
     TypeExpr *elem_type;
     size_t    n;
     size_t    cap;
@@ -242,6 +253,17 @@ void array_add    (ArrayObj  *a, Value v);
 const char *v_kind_name(VKind k);
 void        v_print_canonical(Value v, FILE *fp);
 
+/* Host-internal memory reclamation. */
+void   gc_register(GCObj *o, VKind kind, size_t bytes);
+void   gc_account_delta(ptrdiff_t delta);
+void   gc_mark_value(Value v);
+void   gc_maybe_collect(void);
+void   gc_protect(Value *slot);
+void   gc_protect_span(Value *slots, size_t n);
+size_t gc_root_mark(void);
+void   gc_unprotect_to(size_t mark);
+void   eval_gc_mark_roots(void);
+
 /* ---------------------------------------------------------------------- *
  * Built-in dispatch                                                      *
  * ---------------------------------------------------------------------- */
@@ -260,5 +282,6 @@ Value run_program(Program *prog);
  * a small constant — the bound is enforced by the bounded-memory check
  * in run_tests.sh via the HERBERT_REPORT_PEAK env var. */
 size_t herbert_peak_live_scopes(void);
+size_t herbert_peak_heap_bytes(void);
 
 #endif /* HERBERT_H */
