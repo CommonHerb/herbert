@@ -1,0 +1,9 @@
+func loop(i, n, acc):
+    if i >= n:
+        return acc
+    end
+    return loop(i + 1, n, acc + i)
+end
+func main():
+    return loop(0, 2000, 0)
+end

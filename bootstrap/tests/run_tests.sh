@@ -600,6 +600,112 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    # Flat-VM tail-position dispatch forcing function. Two zero-allocation
+    # tail-recursive loops (bounds N and 10N) are compiled and run *through*
+    # klondike.herb (the loop is the guest source on stdin). Pre-change the VM
+    # pushed a caller frame on every CALL, so the guest `frames` array — a
+    # Herbert array on the C heap — grew linearly with the iteration count and
+    # is captured by peak-heap-bytes. Post-change a tail CALL elides the caller
+    # frame, so the heap stays flat as the bound grows 10x. We assert three
+    # things, mirroring test_14's heap-slope discipline but with klondike as the
+    # driver: (1) value correctness — each loop returns the closed-form sum
+    # sum(0..BOUND-1) = BOUND*(BOUND-1)/2; (2) slope — heap_b <= 1.5 * heap_a;
+    # (3) an absolute cap — heap_b <= TAIL_MAXHEAP, a flat constant just above
+    # the post-change flat heap and far below the pre-change linear value, so it
+    # independently catches linear growth. Measured with peak-heap-bytes only:
+    # peak-live-scopes is a flat ~24 here (the C bootstrap already TCOs
+    # klondike's own vm_loop recursion), so it does not see the guest defect.
+    TAIL_PROBE_A="$STACK_DIR/tail_dispatch_probe_a.herb"
+    TAIL_PROBE_B="$STACK_DIR/tail_dispatch_probe_b.herb"
+    # Closed-form sums for BOUND=2000 (probe a) and BOUND=20000 (probe b):
+    # sum(0..1999)=1999000, sum(0..19999)=199990000.
+    TAIL_SUM_A=1999000
+    TAIL_SUM_B=199990000
+    TAIL_SLOPE_NUM=3
+    TAIL_SLOPE_DEN=2
+    # Post-change flat heap measures ~1.0486 MB at both bounds; cap at 1.5 MB,
+    # which is below even the pre-change a-bound (~2.06 MB) and far below the
+    # pre-change b-bound (~11 MB).
+    TAIL_MAXHEAP=1500000
+    if [[ -f "$KLONDIKE_DRIVER" && -f "$TAIL_PROBE_A" && -f "$TAIL_PROBE_B" ]]; then
+        total=$((total + 1))
+        tail_label="stack/tail_dispatch_probe (driver: klondike.herb, stdin, bounded heap)"
+        tail_ok=1
+        tail_detail=
+        tail_heap_a=
+        tail_heap_b=
+        for tail_case in "a:$TAIL_PROBE_A:$TAIL_SUM_A" "b:$TAIL_PROBE_B:$TAIL_SUM_B"; do
+            tail_which="${tail_case%%:*}"
+            tail_rest="${tail_case#*:}"
+            tail_probe="${tail_rest%%:*}"
+            tail_sum="${tail_rest##*:}"
+            actual=$(mktemp)
+            raw_actual=$(mktemp)
+            err=$(mktemp)
+            HERBERT_REPORT_PEAK=1 HERBERT_REPORT_HEAP=1 "$HERBERT" "$KLONDIKE_DRIVER" <"$tail_probe" >"$actual" 2>"$err"
+            rc=$?
+            if [[ $rc -ne 0 ]]; then
+                echo "FAIL: $tail_label (probe $tail_which interpreter exit $rc)"
+                echo "--- stderr"
+                cat "$err"
+                echo "--- stdout"
+                cat "$actual"
+                tail_ok=0
+                rm -f "$actual" "$raw_actual" "$err"
+                break
+            fi
+            # klondike serializes the int result as a canonical quoted string
+            # (e.g. "1999000"); strip the wrapper to recover the integer.
+            if ! decode_canonical_string "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+                echo "FAIL: $tail_label (probe $tail_which expected canonical string result)"
+                echo "--- stdout"
+                cat "$actual"
+                tail_ok=0
+                rm -f "$actual" "$raw_actual" "$err"
+                break
+            fi
+            tail_result=$(tr -d '[:space:]' < "$raw_actual")
+            if [[ "$tail_result" != "$tail_sum" ]]; then
+                echo "FAIL: $tail_label (probe $tail_which value $tail_result != closed-form sum $tail_sum)"
+                tail_ok=0
+                rm -f "$actual" "$raw_actual" "$err"
+                break
+            fi
+            tail_heap=$(awk '/^peak-heap-bytes: [0-9]+$/ {print $2}' "$err")
+            if [[ -z "$tail_heap" ]]; then
+                echo "FAIL: $tail_label (probe $tail_which no peak-heap-bytes reported)"
+                tail_ok=0
+                rm -f "$actual" "$raw_actual" "$err"
+                break
+            fi
+            if [[ "$tail_which" == "a" ]]; then
+                tail_heap_a="$tail_heap"
+            else
+                tail_heap_b="$tail_heap"
+            fi
+            rm -f "$actual" "$raw_actual" "$err"
+        done
+        if (( tail_ok == 1 )); then
+            # Absolute cap on the larger bound: catches linear growth on its own.
+            if (( tail_heap_b > TAIL_MAXHEAP )); then
+                echo "FAIL: $tail_label (peak-heap-bytes $tail_heap_b > cap $TAIL_MAXHEAP)"
+                tail_ok=0
+            # Slope: heap_b must not exceed 1.5 * heap_a (integer-ratio form).
+            elif (( tail_heap_b * TAIL_SLOPE_DEN > tail_heap_a * TAIL_SLOPE_NUM )); then
+                echo "FAIL: $tail_label (heap slope $tail_heap_b > 1.5 * $tail_heap_a)"
+                tail_ok=0
+            else
+                tail_detail="values ok; peak-heap-bytes $tail_heap_b <= 1.5 * $tail_heap_a and <= $TAIL_MAXHEAP"
+            fi
+        fi
+        if (( tail_ok == 1 )); then
+            echo "PASS: $tail_label ($tail_detail)"
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
     if [[ -f "$KLONDIKE_DRIVER" && -f "$KLONDIKE_PIPELINE_PROBE" ]]; then
         total=$((total + 1))
         oracle_display=$(mktemp)

@@ -3643,7 +3643,15 @@ func vm_loop(frame, frames, pools, prog):
         let popped = stack_pop_n(frame.3, b)
         let callee_info = get(prog.0, a)
         let locals = callee_locals(popped.1, callee_info.1, callee_info.2)
-        do add(frames, (frame.0, frame.1 + 1, frame.2, popped.0))
+        -- Tail-position dispatch: if the instruction after this CALL is RET
+        -- (op 21), the caller would only forward our result one level up, so
+        -- elide its frame and let the callee RET straight to the grandcaller.
+        -- Precondition: every function's terminal instruction is RET (enforced
+        -- by ERR 316), so a CALL is never a function's last instruction and this
+        -- peek never crosses a function boundary.
+        if get(prog.1, fn_info.0 + frame.1 + 1).0 != 21:
+            do add(frames, (frame.0, frame.1 + 1, frame.2, popped.0))
+        end
         return vm_loop((a, 0, locals, new_array((int, int))), frames, pools, prog)
     end
     if op == 21:
