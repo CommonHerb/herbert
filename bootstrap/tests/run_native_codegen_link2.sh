@@ -340,16 +340,6 @@ func main():
     return 0
 end
 HERB
-cat > "$tmp/rj09.herb" << 'HERB'
-func main():
-    let input = clogger()
-    if index(input, 0) > 0:
-        return 1
-    else:
-        return 0
-    end
-end
-HERB
 # rj10: two clogger() calls (double-clogger -- new rejection ERR 411)
 cat > "$tmp/rj10.herb" << 'HERB'
 func main():
@@ -379,11 +369,6 @@ func main():
     return 0
 end
 HERB
-cat > "$tmp/rj14.herb" << 'HERB'
-func main():
-    return true
-end
-HERB
 # rj15: inline index(clogger(),0) -- clogger() in expression, not alias
 cat > "$tmp/rj15.herb" << 'HERB'
 func main():
@@ -399,12 +384,10 @@ check_reject "tuple"            "$tmp/rj05.herb"
 check_reject "array"            "$tmp/rj06.herb"
 check_reject "buffer"           "$tmp/rj07.herb"
 check_reject "flogger"          "$tmp/rj08.herb"
-check_reject "if_stmt"          "$tmp/rj09.herb"
 check_reject "double_clogger"   "$tmp/rj10.herb"
 check_reject "user_call"        "$tmp/rj11.herb"
 check_reject "params"           "$tmp/rj12.herb"
 check_reject "multi_func"       "$tmp/rj13.herb"
-check_reject "bool_literal"     "$tmp/rj14.herb"
 check_reject "inline_clogger"   "$tmp/rj15.herb"
 
 # ====================================================================
@@ -474,5 +457,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link2 sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs C bootstrap oracle; disassembly gate; 15-probe rejection battery incl. double-clogger + inline-clogger + 3 anti-over-rejection)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs C bootstrap oracle; disassembly gate; 13-probe rejection battery incl. double-clogger + inline-clogger + 3 anti-over-rejection)"
 exit 0
