@@ -234,18 +234,6 @@ func main():
     return x
 end
 HERB
-cat >"$tmp/r_array.herb" <<'HERB'
-func main():
-    let a = new_array(int)
-    return 0
-end
-HERB
-cat >"$tmp/r_buffer.herb" <<'HERB'
-func main():
-    let b = new_buffer()
-    return 0
-end
-HERB
 cat >"$tmp/r_flogger.herb" <<'HERB'
 func main():
     do flogger("x")
@@ -287,8 +275,7 @@ for item in \
     "if_int r_if_int" "elif_int r_elif_int" "not_int r_not_int" \
     "and_int r_and_int" "or_int r_or_int" "add_bool r_add_bool" \
     "sub_bool r_sub_bool" "lt_bool r_lt_bool" "eq_bool r_eq_bool" \
-    "join r_join" "array r_array" \
-    "buffer r_buffer" "flogger r_flogger" "user_call r_user_call" \
+    "join r_join" "flogger r_flogger" "user_call r_user_call" \
     "params r_params" "handle_escape r_handle_escape" \
     "handle_reassign r_handle_reassign" "double_clogger r_double_clogger"; do
     set -- $item

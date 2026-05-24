@@ -23,6 +23,7 @@ bootstrap/tests/run_native_codegen_link2.sh
 bootstrap/tests/run_native_codegen_link3.sh
 bootstrap/tests/run_native_codegen_link4.sh
 bootstrap/tests/run_native_codegen_link5.sh
+bootstrap/tests/run_native_codegen_link6.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/test_01_arith.expected
 bootstrap/tests/test_02_short_circuit.expected

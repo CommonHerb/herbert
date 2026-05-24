@@ -297,18 +297,6 @@ func main():
     return s
 end
 HERB
-cat > "$tmp/rj06.herb" << 'HERB'
-func main():
-    let a = new_array(int)
-    return 0
-end
-HERB
-cat > "$tmp/rj07.herb" << 'HERB'
-func main():
-    let b = new_buffer()
-    return 0
-end
-HERB
 cat > "$tmp/rj08.herb" << 'HERB'
 func main():
     let input = clogger()
@@ -331,8 +319,6 @@ end
 HERB
 
 check_reject "handle_escape"    "$tmp/rj02.herb"
-check_reject "array"            "$tmp/rj06.herb"
-check_reject "buffer"           "$tmp/rj07.herb"
 check_reject "flogger"          "$tmp/rj08.herb"
 check_reject "double_clogger"   "$tmp/rj10.herb"
 check_reject "params"           "$tmp/rj12.herb"

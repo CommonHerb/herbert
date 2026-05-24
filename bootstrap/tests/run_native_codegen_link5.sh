@@ -201,45 +201,6 @@ func main():
     return slice("abc", 0, 1)
 end
 HERB
-cat >"$tmp/r_buffer.herb" <<'HERB'
-func main():
-    return new_buffer()
-end
-HERB
-cat >"$tmp/r_freeze.herb" <<'HERB'
-func main():
-    return freeze(new_buffer())
-end
-HERB
-cat >"$tmp/r_array.herb" <<'HERB'
-func main():
-    return new_array(int)
-end
-HERB
-cat >"$tmp/r_get.herb" <<'HERB'
-func main():
-    return get(new_array(int), 0)
-end
-HERB
-cat >"$tmp/r_count.herb" <<'HERB'
-func main():
-    return count(new_array(int))
-end
-HERB
-cat >"$tmp/r_append.herb" <<'HERB'
-func main():
-    let b = new_buffer()
-    do append(b, 1)
-    return 0
-end
-HERB
-cat >"$tmp/r_add.herb" <<'HERB'
-func main():
-    let a = new_array(int)
-    do add(a, 1)
-    return 0
-end
-HERB
 cat >"$tmp/r_flogger.herb" <<'HERB'
 func main():
     do flogger("x")
@@ -325,9 +286,7 @@ end
 HERB
 
 for item in \
-    "slice 404 r_slice" "new_buffer 404 r_buffer" "freeze 404 r_freeze" \
-    "new_array 404 r_array" "get 404 r_get" "count 404 r_count" \
-    "append 404 r_append" "add 404 r_add" "flogger 404 r_flogger" \
+    "slice 438 r_slice" "flogger 438 r_flogger" \
     "multi_clogger 411 r_multi_clogger" "helper_clogger 404 r_helper_clogger" \
     "length_int 430 r_length_int" "index_key 430 r_index_key" "index_int 430 r_index_int" \
     "equal_mixed 430 r_equal_mixed" "equal_tuple 430 r_equal_tuple" \
