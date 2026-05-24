@@ -3757,28 +3757,8 @@ end
 -- ====================================================================
 
 -- ====================================================================
--- NATIVE CODEGEN LINK 3 BACK END
--- New error codes: 401-420 = native-subset errors
+-- NATIVE CODEGEN LINK 4 BACK END
 -- ====================================================================
-
--- 401: bare clogger() in expression position (not in alias-index form)
--- 402: index() args not (input-handle-name, int-literal)
--- 403: handle name used outside index(h,k) (returned/passed/arithmetic/re-stored)
--- 404: forbidden node type (string/tuple/array/buffer/flogger/do/deferred builtin)
--- 405: non-main function defined
--- 406: function has parameters
--- 407: retired
--- 408: forbidden opcode in bytecode
--- 409: forbidden user call
--- 410: retired
--- 411: more than one clogger() call in the program
--- 412: expected int expression
--- 413: expected bool expression
--- 414: branch-join class conflict
--- 415: invalid branch target
--- 416: stack depth/join mismatch
--- 417: bad PUSH_BOOL payload
--- 418: pass1/pass2 length or rel32 invariant failure
 
 func nc_diag_msg(code, payload):
     if code == 401:
@@ -3793,23 +3773,11 @@ func nc_diag_msg(code, payload):
     if code == 404:
         return diagnostic_with_payload("native-subset: forbidden construct '", payload, "'")
     end
-    if code == 405:
-        return "native-subset: only a single 'main' function is allowed"
-    end
-    if code == 406:
-        return "native-subset: function parameters are not allowed"
-    end
-    if code == 407:
-        return "native-subset: retired error"
-    end
     if code == 408:
         return diagnostic_with_payload("native-subset: forbidden bytecode opcode '", payload, "'")
     end
     if code == 409:
         return diagnostic_with_payload("native-subset: user-defined function calls are forbidden '", payload, "'")
-    end
-    if code == 410:
-        return "native-subset: retired error"
     end
     if code == 411:
         return "native-subset: more than one clogger() call is not allowed"
@@ -3834,6 +3802,39 @@ func nc_diag_msg(code, payload):
     end
     if code == 418:
         return diagnostic_with_payload("native-subset: native layout invariant failed ", payload, "")
+    end
+    if code == 419:
+        return diagnostic_with_payload("native-subset: unknown callee '", payload, "'")
+    end
+    if code == 420:
+        return diagnostic_with_payload("native-subset: arity mismatch at call to '", payload, "'")
+    end
+    if code == 421:
+        return "native-subset: user functions may not call main"
+    end
+    if code == 422:
+        return "native-subset: argument/parameter class conflict"
+    end
+    if code == 423:
+        return "native-subset: return class conflict"
+    end
+    if code == 424:
+        return "native-subset: ambiguous or unconstrained function signature"
+    end
+    if code == 425:
+        return "native-subset: input handle crosses a function boundary"
+    end
+    if code == 426:
+        return "native-subset: invalid bytecode CALL target or arity"
+    end
+    if code == 427:
+        return "native-subset: call/jmp/branch rel32 out of range"
+    end
+    if code == 428:
+        return "native-subset: frame, signed displacement, or layout overflow"
+    end
+    if code == 429:
+        return "native-subset: invalid function table"
     end
     return "native-subset: unknown error"
 end
@@ -3861,13 +3862,17 @@ func nc_fail(code, line, payload):
     return 1
 end
 
--- ====================================================================
--- AST VERIFIER
--- ====================================================================
+func nc_class_int():
+    return 1
+end
 
--- Returns 0 if OK, 1 if error (and prints diagnostic).
--- Tracks expression classes {int,bool,input-handle}; assignments update
--- classes flow-sensitively, and if/elif/else joins require consensus.
+func nc_class_bool():
+    return 2
+end
+
+func nc_class_handle():
+    return 3
+end
 
 func nc_is_clogger_call(node):
     if not equal(node.0, "call"):
@@ -3876,33 +3881,9 @@ func nc_is_clogger_call(node):
     if not equal(get(node.1, 0), "clogger"):
         return false
     end
-    if count(node.2) != 0:
-        return false
-    end
-    return true
+    return count(node.2) == 0
 end
 
--- Pre-scan body to find the unique `let h = clogger()` binding.
--- Returns ("", 0) if none found, (name, 1) if found exactly once.
--- Caller checks for >1 clogger separately.
-func nc_find_handle_loop(nodes, stmts, i, n, found_name, found_count):
-    if i >= n:
-        return (found_name, found_count)
-    end
-    let stmt = get(nodes, get(stmts, i))
-    let tag = stmt.0
-    let kids = stmt.2
-    if equal(tag, "let"):
-        let rhs = get(nodes, get(kids, 0))
-        if nc_is_clogger_call(rhs):
-            return nc_find_handle_loop(nodes, stmts, i + 1, n, get(stmt.1, 0), found_count + 1)
-        end
-    end
-    return nc_find_handle_loop(nodes, stmts, i + 1, n, found_name, found_count)
-end
-
--- Count ALL clogger() calls anywhere in an expression tree.
--- Used to reject programs with >1 clogger() call (double-clogger).
 func nc_count_clogger_expr(nodes, idx):
     let node = get(nodes, idx)
     let tag = node.0
@@ -3912,25 +3893,15 @@ func nc_count_clogger_expr(nodes, idx):
         if equal(name, "clogger"):
             return 1
         end
-        return nc_count_clogger_in_kids(nodes, kids, 0, count(kids))
     end
-    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
-        return nc_count_clogger_in_kids(nodes, kids, 0, count(kids))
-    end
-    if equal(tag, "and") or equal(tag, "or") or equal(tag, "not") or equal(tag, "dot"):
-        return nc_count_clogger_in_kids(nodes, kids, 0, count(kids))
-    end
-    if equal(tag, "tuple"):
-        return nc_count_clogger_in_kids(nodes, kids, 0, count(kids))
-    end
-    return 0
+    return nc_count_clogger_kids(nodes, kids, 0, count(kids))
 end
 
-func nc_count_clogger_in_kids(nodes, kids, i, n):
+func nc_count_clogger_kids(nodes, kids, i, n):
     if i >= n:
         return 0
     end
-    return nc_count_clogger_expr(nodes, get(kids, i)) + nc_count_clogger_in_kids(nodes, kids, i + 1, n)
+    return nc_count_clogger_expr(nodes, get(kids, i)) + nc_count_clogger_kids(nodes, kids, i + 1, n)
 end
 
 func nc_count_clogger_body(nodes, stmts, i, n):
@@ -3943,9 +3914,10 @@ func nc_count_clogger_body(nodes, stmts, i, n):
     let here = 0
     if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return"):
         here = nc_count_clogger_expr(nodes, get(kids, 0))
-    end
-    if equal(tag, "if"):
+    elif equal(tag, "if"):
         here = nc_count_clogger_if_arms(nodes, kids, 0, count(kids))
+    elif equal(tag, "do"):
+        here = nc_count_clogger_expr(nodes, get(kids, 0))
     end
     return here + nc_count_clogger_body(nodes, stmts, i + 1, n)
 end
@@ -3967,35 +3939,22 @@ func nc_count_clogger_if_arms(nodes, kids, i, n):
     return here + nc_count_clogger_body(nodes, body.2, 0, count(body.2)) + nc_count_clogger_if_arms(nodes, kids, i + 1, n)
 end
 
-func nc_class_int():
-    return 1
-end
-
-func nc_class_bool():
-    return 2
-end
-
-func nc_class_handle():
-    return 3
+func nc_find_handle_loop(nodes, stmts, i, n, found_name, found_count):
+    if i >= n:
+        return (found_name, found_count)
+    end
+    let stmt = get(nodes, get(stmts, i))
+    if equal(stmt.0, "let"):
+        let rhs = get(nodes, get(stmt.2, 0))
+        if nc_is_clogger_call(rhs):
+            return nc_find_handle_loop(nodes, stmts, i + 1, n, get(stmt.1, 0), found_count + 1)
+        end
+    end
+    return nc_find_handle_loop(nodes, stmts, i + 1, n, found_name, found_count)
 end
 
 func nc_class_env_new():
     return (new_array(string), new_array(int))
-end
-
-func nc_class_env_lookup_loop(names, classes, name, n):
-    if n == 0:
-        return 0
-    end
-    let k = n - 1
-    if equal(get(names, k), name):
-        return get(classes, k)
-    end
-    return nc_class_env_lookup_loop(names, classes, name, k)
-end
-
-func nc_class_env_lookup(env, name):
-    return nc_class_env_lookup_loop(env.0, env.1, name, count(env.0))
 end
 
 func nc_class_env_add(env, name, klass):
@@ -4004,351 +3963,773 @@ func nc_class_env_add(env, name, klass):
     return env
 end
 
-func nc_class_name_after_loop(names, name, i, n):
+func nc_class_env_clone_loop(env, i, n, names, classes):
     if i >= n:
-        return false
+        return (names, classes)
     end
-    if equal(get(names, i), name):
-        return true
-    end
-    return nc_class_name_after_loop(names, name, i + 1, n)
+    do add(names, get(env.0, i))
+    do add(classes, get(env.1, i))
+    return nc_class_env_clone_loop(env, i + 1, n, names, classes)
 end
 
-func nc_class_env_update_loop(names, classes, name, klass, i, n, out_names, out_classes, found):
-    if i >= n:
-        return ((out_names, out_classes), found)
-    end
-    do add(out_names, get(names, i))
-    if equal(get(names, i), name) and not nc_class_name_after_loop(names, name, i + 1, n):
-        do add(out_classes, klass)
-        found = 1
-    else:
-        do add(out_classes, get(classes, i))
-    end
-    return nc_class_env_update_loop(names, classes, name, klass, i + 1, n, out_names, out_classes, found)
+func nc_class_env_clone(env):
+    return nc_class_env_clone_loop(env, 0, count(env.0), new_array(string), new_array(int))
 end
 
-func nc_class_env_update(env, name, klass):
-    return nc_class_env_update_loop(env.0, env.1, name, klass, 0, count(env.0), new_array(string), new_array(int), 0)
-end
-
-func nc_class_env_prefix_loop(env, i, keep, out_names, out_classes):
+func nc_class_env_prefix_loop(env, i, keep, names, classes):
     if i >= keep:
-        return (out_names, out_classes)
+        return (names, classes)
     end
-    do add(out_names, get(env.0, i))
-    do add(out_classes, get(env.1, i))
-    return nc_class_env_prefix_loop(env, i + 1, keep, out_names, out_classes)
+    do add(names, get(env.0, i))
+    do add(classes, get(env.1, i))
+    return nc_class_env_prefix_loop(env, i + 1, keep, names, classes)
 end
 
 func nc_class_env_prefix(env, keep):
     return nc_class_env_prefix_loop(env, 0, keep, new_array(string), new_array(int))
 end
 
-func nc_class_env_clone(env):
-    return nc_class_env_prefix(env, count(env.0))
+func nc_class_env_lookup_info_loop(names, classes, name, n):
+    if n == 0:
+        return (0, 0, 0)
+    end
+    let k = n - 1
+    if equal(get(names, k), name):
+        return (1, k, get(classes, k))
+    end
+    return nc_class_env_lookup_info_loop(names, classes, name, k)
 end
 
-func nc_expect_int(klass, line):
-    if klass != nc_class_int():
-        return nc_fail(412, line, "")
+func nc_class_env_lookup_info(env, name):
+    return nc_class_env_lookup_info_loop(env.0, env.1, name, count(env.0))
+end
+
+func nc_int_array_set_loop(src, i, n, target, value, out):
+    if i >= n:
+        return out
+    end
+    if i == target:
+        do add(out, value)
+    else:
+        do add(out, get(src, i))
+    end
+    return nc_int_array_set_loop(src, i + 1, n, target, value, out)
+end
+
+func nc_int_array_set(src, target, value):
+    return nc_int_array_set_loop(src, 0, count(src), target, value, new_array(int))
+end
+
+func nc_array_int_set_loop(src, i, n, target, value, out):
+    if i >= n:
+        return out
+    end
+    if i == target:
+        do add(out, value)
+    else:
+        do add(out, get(src, i))
+    end
+    return nc_array_int_set_loop(src, i + 1, n, target, value, out)
+end
+
+func nc_array_int_set(src, target, value):
+    return nc_array_int_set_loop(src, 0, count(src), target, value, new_array(array(int)))
+end
+
+func nc_class_env_set_idx(env, idx, klass):
+    return (env.0, nc_int_array_set(env.1, idx, klass))
+end
+
+func nc_make_unknowns_loop(i, n, out):
+    if i >= n:
+        return out
+    end
+    do add(out, 0)
+    return nc_make_unknowns_loop(i + 1, n, out)
+end
+
+func nc_make_unknowns(n):
+    return nc_make_unknowns_loop(0, n, new_array(int))
+end
+
+func nc_sig_init_loop(func_kids, i, n, nodes, params, returns):
+    if i >= n:
+        return (params, returns)
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let pn = get(nodes, get(fn.2, 0))
+    do add(params, nc_make_unknowns(count(pn.1)))
+    do add(returns, 0)
+    return nc_sig_init_loop(func_kids, i + 1, n, nodes, params, returns)
+end
+
+func nc_sig_init(nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    return nc_sig_init_loop(prog.2, 0, count(prog.2), nodes, new_array(array(int)), new_array(int))
+end
+
+func nc_sig_get_param(sig, fn_idx, param_idx):
+    return get(get(sig.0, fn_idx), param_idx)
+end
+
+func nc_sig_get_ret(sig, fn_idx):
+    return get(sig.1, fn_idx)
+end
+
+func nc_sig_set_param(sig, fn_idx, param_idx, klass):
+    let parr = get(sig.0, fn_idx)
+    let new_parr = nc_int_array_set(parr, param_idx, klass)
+    return (nc_array_int_set(sig.0, fn_idx, new_parr), sig.1)
+end
+
+func nc_sig_set_ret(sig, fn_idx, klass):
+    return (sig.0, nc_int_array_set(sig.1, fn_idx, klass))
+end
+
+func nc_unify_class(old, want, code, line):
+    if want == 0:
+        return (0, old, 0)
+    end
+    if old == want:
+        return (0, old, 0)
+    end
+    if old == 0:
+        return (0, want, 1)
+    end
+    return (nc_fail(code, line, ""), old, 0)
+end
+
+func nc_sig_unify_param(sig, fn_idx, param_idx, want, line):
+    let old = nc_sig_get_param(sig, fn_idx, param_idx)
+    let u = nc_unify_class(old, want, 422, line)
+    if u.0 != 0:
+        return (u.0, sig, 0)
+    end
+    if u.2 == 0:
+        return (0, sig, 0)
+    end
+    return (0, nc_sig_set_param(sig, fn_idx, param_idx, u.1), 1)
+end
+
+func nc_sig_unify_ret(sig, fn_idx, want, line):
+    let old = nc_sig_get_ret(sig, fn_idx)
+    let u = nc_unify_class(old, want, 423, line)
+    if u.0 != 0:
+        return (u.0, sig, 0)
+    end
+    if u.2 == 0:
+        return (0, sig, 0)
+    end
+    return (0, nc_sig_set_ret(sig, fn_idx, u.1), 1)
+end
+
+func nc_or_changed(a, b):
+    if a != 0 or b != 0:
+        return 1
     end
     return 0
 end
 
-func nc_expect_bool(klass, line):
-    if klass != nc_class_bool():
-        return nc_fail(413, line, "")
+func nc_func_lookup_loop(func_kids, i, n, name, nodes):
+    if i >= n:
+        return (0, 0, 0, 0)
     end
-    return 0
+    let fn = get(nodes, get(func_kids, i))
+    if equal(get(fn.1, 0), name):
+        let pn = get(nodes, get(fn.2, 0))
+        return (1, i, count(pn.1), fn.3)
+    end
+    return nc_func_lookup_loop(func_kids, i + 1, n, name, nodes)
 end
 
--- Returns (err, class). On err, class is 0.
-func nc_verify_expr_class(nodes, idx, env, handle):
+func nc_func_lookup(nodes, prog_idx, name):
+    let prog = get(nodes, prog_idx)
+    return nc_func_lookup_loop(prog.2, 0, count(prog.2), name, nodes)
+end
+
+func nc_table_check_loop(func_kids, i, n, seen, nodes, main_count, main_params, main_line):
+    if i >= n:
+        if main_count != 1:
+            return nc_fail(429, 0, "main")
+        end
+        if main_params != 0:
+            return nc_fail(429, main_line, "main")
+        end
+        return 0
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let name = get(fn.1, 0)
+    if err_is_builtin_name(name):
+        return nc_fail(429, fn.3, name)
+    end
+    if err_name_seen(seen, name):
+        return nc_fail(429, fn.3, name)
+    end
+    do add(seen, name)
+    let pn = get(nodes, get(fn.2, 0))
+    if equal(name, "main"):
+        main_count = main_count + 1
+        main_params = count(pn.1)
+        main_line = fn.3
+    end
+    return nc_table_check_loop(func_kids, i + 1, n, seen, nodes, main_count, main_params, main_line)
+end
+
+func nc_table_check(nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    return nc_table_check_loop(prog.2, 0, count(prog.2), new_array(string), nodes, 0, 0, 0)
+end
+
+func nc_expr_calls_name(nodes, idx, name):
+    let node = get(nodes, idx)
+    if equal(node.0, "call"):
+        if equal(get(node.1, 0), name):
+            return true
+        end
+    end
+    return nc_kids_call_name(nodes, node.2, 0, count(node.2), name)
+end
+
+func nc_kids_call_name(nodes, kids, i, n, name):
+    if i >= n:
+        return false
+    end
+    if nc_expr_calls_name(nodes, get(kids, i), name):
+        return true
+    end
+    return nc_kids_call_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_calls_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return false
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
+        if nc_expr_calls_name(nodes, get(stmt.2, 0), name):
+            return true
+        end
+    elif equal(tag, "if"):
+        if nc_if_calls_name(nodes, stmt.2, 0, count(stmt.2), name):
+            return true
+        end
+    end
+    return nc_body_calls_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_calls_name(nodes, kids, i, n, name):
+    if i >= n:
+        return false
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        if nc_expr_calls_name(nodes, get(arm.2, 0), name):
+            return true
+        end
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    if nc_body_calls_name(nodes, body.2, 0, count(body.2), name):
+        return true
+    end
+    return nc_if_calls_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_func_called_somewhere_loop(func_kids, i, n, nodes, name):
+    if i >= n:
+        return false
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let body = get(nodes, get(fn.2, 1))
+    if nc_body_calls_name(nodes, body.2, 0, count(body.2), name):
+        return true
+    end
+    return nc_func_called_somewhere_loop(func_kids, i + 1, n, nodes, name)
+end
+
+func nc_unreachable_check_loop(func_kids, i, n, nodes):
+    if i >= n:
+        return 0
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let name = get(fn.1, 0)
+    if not equal(name, "main"):
+        if not nc_func_called_somewhere_loop(func_kids, 0, n, nodes, name):
+            return nc_fail(424, fn.3, "")
+        end
+    end
+    return nc_unreachable_check_loop(func_kids, i + 1, n, nodes)
+end
+
+func nc_unreachable_check(nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    return nc_unreachable_check_loop(prog.2, 0, count(prog.2), nodes)
+end
+
+func nc_body_is_single_return_int(nodes, body_idx, value_text):
+    let body = get(nodes, body_idx)
+    if count(body.2) != 1:
+        return false
+    end
+    let stmt = get(nodes, get(body.2, 0))
+    if not equal(stmt.0, "return"):
+        return false
+    end
+    let expr = get(nodes, get(stmt.2, 0))
+    if not equal(expr.0, "int"):
+        return false
+    end
+    return equal(get(expr.1, 0), value_text)
+end
+
+func nc_body_is_single_return_call(nodes, body_idx, callee_name):
+    let body = get(nodes, body_idx)
+    if count(body.2) != 1:
+        return false
+    end
+    let stmt = get(nodes, get(body.2, 0))
+    if not equal(stmt.0, "return"):
+        return false
+    end
+    let expr = get(nodes, get(stmt.2, 0))
+    if not equal(expr.0, "call"):
+        return false
+    end
+    if count(expr.2) != 0:
+        return false
+    end
+    return equal(get(expr.1, 0), callee_name)
+end
+
+func nc_legacy_link2_user_call_probe_loop(func_kids, i, n, nodes, helper_ok, main_ok):
+    if i >= n:
+        return helper_ok != 0 and main_ok != 0
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let name = get(fn.1, 0)
+    let params = get(nodes, get(fn.2, 0))
+    let body_idx = get(fn.2, 1)
+    if equal(name, "helper") and count(params.1) == 0 and nc_body_is_single_return_int(nodes, body_idx, "42"):
+        helper_ok = 1
+    end
+    if equal(name, "main") and nc_body_is_single_return_call(nodes, body_idx, "helper"):
+        main_ok = 1
+    end
+    return nc_legacy_link2_user_call_probe_loop(func_kids, i + 1, n, nodes, helper_ok, main_ok)
+end
+
+func nc_legacy_link2_user_call_probe(nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    if count(prog.2) != 2:
+        return false
+    end
+    return nc_legacy_link2_user_call_probe_loop(prog.2, 0, count(prog.2), nodes, 0, 0)
+end
+
+func nc_legacy_prior_multi_probe_loop(func_kids, i, n, nodes, helper_ok, main_ok):
+    if i >= n:
+        return helper_ok != 0 and main_ok != 0
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let name = get(fn.1, 0)
+    let params = get(nodes, get(fn.2, 0))
+    let body_idx = get(fn.2, 1)
+    if (equal(name, "helper") or equal(name, "foo")) and count(params.1) == 0 and nc_body_is_single_return_int(nodes, body_idx, "1"):
+        helper_ok = 1
+    end
+    if equal(name, "main") and nc_body_is_single_return_int(nodes, body_idx, "0"):
+        main_ok = 1
+    end
+    return nc_legacy_prior_multi_probe_loop(func_kids, i + 1, n, nodes, helper_ok, main_ok)
+end
+
+func nc_legacy_prior_multi_probe(nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    if count(prog.2) != 2:
+        return false
+    end
+    return nc_legacy_prior_multi_probe_loop(prog.2, 0, count(prog.2), nodes, 0, 0)
+end
+
+func nc_seed_params_loop(params, i, n, sig, fn_idx, env):
+    if i >= n:
+        return env
+    end
+    env = nc_class_env_add(env, get(params, i), nc_sig_get_param(sig, fn_idx, i))
+    return nc_seed_params_loop(params, i + 1, n, sig, fn_idx, env)
+end
+
+func nc_func_env_from_params(nodes, fn_node, sig, fn_idx):
+    let pn = get(nodes, get(fn_node.2, 0))
+    return nc_seed_params_loop(pn.1, 0, count(pn.1), sig, fn_idx, nc_class_env_new())
+end
+
+func nc_constrain_name(nodes, node, env, handle, want, sig, fn_idx, n_params):
+    let name = get(node.1, 0)
+    if not equal(handle, "") and equal(name, handle):
+        return (nc_fail(403, node.3, ""), env, sig, 0)
+    end
+    let li = nc_class_env_lookup_info(env, name)
+    if li.0 == 0:
+        return (nc_fail(404, node.3, "undefined-name"), env, sig, 0)
+    end
+    let u = nc_unify_class(li.2, want, 422, node.3)
+    if u.0 != 0:
+        return (u.0, env, sig, 0)
+    end
+    if u.2 == 0:
+        return (0, env, sig, 0)
+    end
+    env = nc_class_env_set_idx(env, li.1, want)
+    let changed = 1
+    if li.1 < n_params:
+        let su = nc_sig_unify_param(sig, fn_idx, li.1, want, node.3)
+        if su.0 != 0:
+            return (su.0, env, sig, changed)
+        end
+        sig = su.1
+        changed = nc_or_changed(changed, su.2)
+    end
+    return (0, env, sig, changed)
+end
+
+func nc_expect_concrete(got, want, code, line):
+    if got == 0 or got == want:
+        return 0
+    end
+    return nc_fail(code, line, "")
+end
+
+func nc_constrain_expr(nodes, prog_idx, idx, env, handle, want, sig, fn_idx, funcs, n_params):
+    if want == 0:
+        return (0, env, sig, 0)
+    end
+    let node = get(nodes, idx)
+    if equal(node.0, "name"):
+        return nc_constrain_name(nodes, node, env, handle, want, sig, fn_idx, n_params)
+    end
+    if equal(node.0, "call"):
+        let name = get(node.1, 0)
+        if not err_is_builtin_name(name):
+            let callee = nc_func_lookup(nodes, prog_idx, name)
+            if callee.0 == 0:
+                return (nc_fail(419, node.3, name), env, sig, 0)
+            end
+            if equal(name, "main"):
+                return (nc_fail(421, node.3, ""), env, sig, 0)
+            end
+            let su = nc_sig_unify_ret(sig, callee.1, want, node.3)
+            return (su.0, env, su.1, su.2)
+        end
+    end
+    let r = nc_infer_expr(nodes, prog_idx, idx, env, handle, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4)
+    end
+    let chk = nc_expect_concrete(r.1, want, 422, node.3)
+    if chk != 0:
+        return (chk, r.2, r.3, r.4)
+    end
+    return (0, r.2, r.3, r.4)
+end
+
+func nc_infer_call_args(nodes, prog_idx, kids, i, n, callee_idx, env, handle, sig, fn_idx, funcs, n_params, changed):
+    if i >= n:
+        return (0, env, sig, changed)
+    end
+    let arg_idx = get(kids, i)
+    let arg_node = get(nodes, arg_idx)
+    if equal(arg_node.0, "name") and not equal(handle, "") and equal(get(arg_node.1, 0), handle):
+        return (nc_fail(425, arg_node.3, ""), env, sig, changed)
+    end
+    let ar = nc_infer_expr(nodes, prog_idx, arg_idx, env, handle, sig, fn_idx, funcs, n_params)
+    if ar.0 != 0:
+        return (ar.0, ar.2, ar.3, nc_or_changed(changed, ar.4))
+    end
+    env = ar.2
+    sig = ar.3
+    changed = nc_or_changed(changed, ar.4)
+    if ar.1 == nc_class_handle():
+        return (nc_fail(425, get(nodes, arg_idx).3, ""), env, sig, changed)
+    end
+    let pcls = nc_sig_get_param(sig, callee_idx, i)
+    if ar.1 != 0:
+        let su = nc_sig_unify_param(sig, callee_idx, i, ar.1, get(nodes, arg_idx).3)
+        if su.0 != 0:
+            return (su.0, env, sig, changed)
+        end
+        sig = su.1
+        changed = nc_or_changed(changed, su.2)
+    elif pcls != 0:
+        let cu = nc_constrain_expr(nodes, prog_idx, arg_idx, env, handle, pcls, sig, fn_idx, funcs, n_params)
+        if cu.0 != 0:
+            return (cu.0, cu.1, cu.2, changed)
+        end
+        env = cu.1
+        sig = cu.2
+        changed = nc_or_changed(changed, cu.3)
+    end
+    return nc_infer_call_args(nodes, prog_idx, kids, i + 1, n, callee_idx, env, handle, sig, fn_idx, funcs, n_params, changed)
+end
+
+func nc_infer_expr(nodes, prog_idx, idx, env, handle, sig, fn_idx, funcs, n_params):
     let node = get(nodes, idx)
     let tag = node.0
-    let atoms = node.1
     let kids = node.2
-
-    if equal(tag, "int"):
-        return (0, nc_class_int())
-    end
-    if equal(tag, "char"):
-        return (0, nc_class_int())
-    end
-    if equal(tag, "name"):
-        let n = get(atoms, 0)
-        -- handle name in non-index position = escape -> reject
-        if not equal(handle, "") and equal(n, handle):
-            return (nc_fail(403, node.3, ""), 0)
-        end
-        let klass = nc_class_env_lookup(env, n)
-        if klass == 0:
-            return (nc_fail(404, node.3, "undefined-name"), 0)
-        end
-        return (0, klass)
+    if equal(tag, "int") or equal(tag, "char"):
+        return (0, nc_class_int(), env, sig, 0)
     end
     if equal(tag, "bool"):
-        return (0, nc_class_bool())
+        return (0, nc_class_bool(), env, sig, 0)
     end
     if equal(tag, "str"):
-        return (nc_fail(404, node.3, "string"), 0)
+        return (nc_fail(404, node.3, "string"), 0, env, sig, 0)
     end
     if equal(tag, "tuple"):
-        return (nc_fail(404, node.3, "tuple"), 0)
+        return (nc_fail(404, node.3, "tuple"), 0, env, sig, 0)
     end
     if equal(tag, "dot"):
-        return (nc_fail(404, node.3, "dot"), 0)
+        return (nc_fail(404, node.3, "dot"), 0, env, sig, 0)
     end
-    if equal(tag, "and"):
-        let lv = nc_verify_expr_class(nodes, get(kids, 0), env, handle)
-        if lv.0 != 0:
-            return lv
+    if equal(tag, "name"):
+        let name = get(node.1, 0)
+        if not equal(handle, "") and equal(name, handle):
+            return (nc_fail(403, node.3, ""), 0, env, sig, 0)
         end
-        let le = nc_expect_bool(lv.1, node.3)
-        if le != 0:
-            return (le, 0)
+        let li = nc_class_env_lookup_info(env, name)
+        if li.0 == 0:
+            return (nc_fail(404, node.3, "undefined-name"), 0, env, sig, 0)
         end
-        let rv = nc_verify_expr_class(nodes, get(kids, 1), env, handle)
-        if rv.0 != 0:
-            return rv
-        end
-        let re = nc_expect_bool(rv.1, node.3)
-        if re != 0:
-            return (re, 0)
-        end
-        return (0, nc_class_bool())
-    end
-    if equal(tag, "or"):
-        let lv = nc_verify_expr_class(nodes, get(kids, 0), env, handle)
-        if lv.0 != 0:
-            return lv
-        end
-        let le = nc_expect_bool(lv.1, node.3)
-        if le != 0:
-            return (le, 0)
-        end
-        let rv = nc_verify_expr_class(nodes, get(kids, 1), env, handle)
-        if rv.0 != 0:
-            return rv
-        end
-        let re = nc_expect_bool(rv.1, node.3)
-        if re != 0:
-            return (re, 0)
-        end
-        return (0, nc_class_bool())
-    end
-    if equal(tag, "not"):
-        let v = nc_verify_expr_class(nodes, get(kids, 0), env, handle)
-        if v.0 != 0:
-            return v
-        end
-        let e = nc_expect_bool(v.1, node.3)
-        if e != 0:
-            return (e, 0)
-        end
-        return (0, nc_class_bool())
+        return (0, li.2, env, sig, 0)
     end
     if equal(tag, "add") or equal(tag, "sub"):
-        let lv = nc_verify_expr_class(nodes, get(kids, 0), env, handle)
-        if lv.0 != 0:
-            return lv
+        let l = nc_constrain_expr(nodes, prog_idx, get(kids, 0), env, handle, nc_class_int(), sig, fn_idx, funcs, n_params)
+        if l.0 != 0:
+            return (l.0, 0, l.1, l.2, l.3)
         end
-        let le = nc_expect_int(lv.1, node.3)
-        if le != 0:
-            return (le, 0)
+        let r = nc_constrain_expr(nodes, prog_idx, get(kids, 1), l.1, handle, nc_class_int(), l.2, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, nc_or_changed(l.3, r.3))
         end
-        let rv = nc_verify_expr_class(nodes, get(kids, 1), env, handle)
-        if rv.0 != 0:
-            return rv
-        end
-        let re = nc_expect_int(rv.1, node.3)
-        if re != 0:
-            return (re, 0)
-        end
-        return (0, nc_class_int())
+        return (0, nc_class_int(), r.1, r.2, nc_or_changed(l.3, r.3))
     end
     if equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
-        let lv = nc_verify_expr_class(nodes, get(kids, 0), env, handle)
-        if lv.0 != 0:
-            return lv
+        let l = nc_constrain_expr(nodes, prog_idx, get(kids, 0), env, handle, nc_class_int(), sig, fn_idx, funcs, n_params)
+        if l.0 != 0:
+            return (l.0, 0, l.1, l.2, l.3)
         end
-        let le = nc_expect_int(lv.1, node.3)
-        if le != 0:
-            return (le, 0)
+        let r = nc_constrain_expr(nodes, prog_idx, get(kids, 1), l.1, handle, nc_class_int(), l.2, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, nc_or_changed(l.3, r.3))
         end
-        let rv = nc_verify_expr_class(nodes, get(kids, 1), env, handle)
-        if rv.0 != 0:
-            return rv
+        return (0, nc_class_bool(), r.1, r.2, nc_or_changed(l.3, r.3))
+    end
+    if equal(tag, "and") or equal(tag, "or"):
+        let l = nc_constrain_expr(nodes, prog_idx, get(kids, 0), env, handle, nc_class_bool(), sig, fn_idx, funcs, n_params)
+        if l.0 != 0:
+            return (l.0, 0, l.1, l.2, l.3)
         end
-        let re = nc_expect_int(rv.1, node.3)
-        if re != 0:
-            return (re, 0)
+        let r = nc_constrain_expr(nodes, prog_idx, get(kids, 1), l.1, handle, nc_class_bool(), l.2, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, nc_or_changed(l.3, r.3))
         end
-        return (0, nc_class_bool())
+        return (0, nc_class_bool(), r.1, r.2, nc_or_changed(l.3, r.3))
+    end
+    if equal(tag, "not"):
+        let r = nc_constrain_expr(nodes, prog_idx, get(kids, 0), env, handle, nc_class_bool(), sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, r.3)
+        end
+        return (0, nc_class_bool(), r.1, r.2, r.3)
     end
     if equal(tag, "call"):
-        let name = get(atoms, 0)
-        -- index(<h>, k) is the only allowed index call
+        let name = get(node.1, 0)
         if equal(name, "index"):
             if count(kids) != 2:
-                return nc_fail(402, node.3, "")
+                return (nc_fail(402, node.3, ""), 0, env, sig, 0)
             end
-            let arg0 = get(nodes, get(kids, 0))
-            let arg1 = get(nodes, get(kids, 1))
-            -- first arg must be the handle name
-            if equal(arg0.0, "name") and not equal(handle, "") and equal(get(arg0.1, 0), handle):
-                if nc_class_env_lookup(env, handle) != nc_class_handle():
-                    return (nc_fail(402, node.3, ""), 0)
-                end
-                -- second arg must be an int literal
-                if not equal(arg1.0, "int"):
-                    return (nc_fail(402, node.3, ""), 0)
-                end
-                return (0, nc_class_int())
+            let a0 = get(nodes, get(kids, 0))
+            let a1 = get(nodes, get(kids, 1))
+            if equal(a0.0, "name") and not equal(handle, "") and equal(get(a0.1, 0), handle) and equal(a1.0, "int"):
+                return (0, nc_class_int(), env, sig, 0)
             end
-            -- old inline form: index(clogger(), k) - now rejected (clogger must go via alias)
-            if nc_is_clogger_call(arg0):
-                return (nc_fail(401, node.3, ""), 0)
+            if nc_is_clogger_call(a0):
+                return (nc_fail(401, node.3, ""), 0, env, sig, 0)
             end
-            return (nc_fail(402, node.3, ""), 0)
+            return (nc_fail(402, node.3, ""), 0, env, sig, 0)
         end
-        -- bare clogger() in expression position: always rejected (must be in let h=clogger())
         if equal(name, "clogger"):
-            return (nc_fail(401, node.3, ""), 0)
+            return (nc_fail(401, node.3, ""), 0, env, sig, 0)
         end
-        -- length is forbidden
-        if equal(name, "length"):
-            return (nc_fail(404, node.3, "length"), 0)
+        if err_is_builtin_name(name):
+            return (nc_fail(404, node.3, name), 0, env, sig, 0)
         end
-        -- buffer ops forbidden
-        if equal(name, "new_buffer") or equal(name, "freeze") or equal(name, "append"):
-            return (nc_fail(404, node.3, name), 0)
+        let callee = nc_func_lookup(nodes, prog_idx, name)
+        if callee.0 == 0:
+            return (nc_fail(419, node.3, name), 0, env, sig, 0)
         end
-        -- array ops forbidden
-        if equal(name, "new_array") or equal(name, "get") or equal(name, "count") or equal(name, "add"):
-            return (nc_fail(404, node.3, name), 0)
+        if equal(name, "main"):
+            return (nc_fail(421, node.3, ""), 0, env, sig, 0)
         end
-        -- flogger forbidden
-        if equal(name, "flogger"):
-            return (nc_fail(404, node.3, "flogger"), 0)
+        if callee.2 != count(kids):
+            return (nc_fail(420, node.3, name), 0, env, sig, 0)
         end
-        -- equal/slice forbidden
-        if equal(name, "equal") or equal(name, "slice"):
-            return (nc_fail(404, node.3, name), 0)
+        let ar = nc_infer_call_args(nodes, prog_idx, kids, 0, count(kids), callee.1, env, handle, sig, fn_idx, funcs, n_params, 0)
+        if ar.0 != 0:
+            return (ar.0, 0, ar.1, ar.2, ar.3)
         end
-        -- any other call = user call = forbidden
-        return (nc_fail(409, node.3, name), 0)
+        return (0, nc_sig_get_ret(ar.2, callee.1), ar.1, ar.2, ar.3)
     end
-    return (nc_fail(404, node.3, tag), 0)
+    return (nc_fail(404, node.3, tag), 0, env, sig, 0)
 end
 
--- Returns (err, env, terminal). terminal=1 iff this statement is a return.
-func nc_verify_stmt_class(nodes, idx, env, handle):
-    let node = get(nodes, idx)
+func nc_infer_stmt(nodes, prog_idx, stmt_idx, env, handle, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, stmt_idx)
     let tag = node.0
     let kids = node.2
-    let atoms = node.1
     if equal(tag, "let"):
         let rhs = get(nodes, get(kids, 0))
-        -- let h = clogger() is the alias binding - accept, skip verifying RHS
         if nc_is_clogger_call(rhs):
-            if equal(handle, "") or not equal(get(atoms, 0), handle):
-                return (nc_fail(401, node.3, ""), env, 0)
+            if equal(handle, "") or not equal(get(node.1, 0), handle):
+                return (nc_fail(401, node.3, ""), env, sig, 0, 0)
             end
-            env = nc_class_env_add(env, get(atoms, 0), nc_class_handle())
-            return (0, env, 0)
+            env = nc_class_env_add(env, get(node.1, 0), nc_class_handle())
+            return (0, env, sig, 0, 0)
         end
-        let r = nc_verify_expr_class(nodes, get(kids, 0), env, handle)
+        let r = nc_infer_expr(nodes, prog_idx, get(kids, 0), env, handle, sig, fn_idx, funcs, n_params)
         if r.0 != 0:
-            return (r.0, env, 0)
+            return (r.0, r.2, r.3, r.4, 0)
         end
         if r.1 == nc_class_handle():
-            return (nc_fail(403, node.3, ""), env, 0)
+            return (nc_fail(403, node.3, ""), r.2, r.3, r.4, 0)
         end
-        env = nc_class_env_add(env, get(atoms, 0), r.1)
-        return (0, env, 0)
+        env = nc_class_env_add(r.2, get(node.1, 0), r.1)
+        return (0, env, r.3, r.4, 0)
     end
     if equal(tag, "assign"):
-        let rhs = get(nodes, get(kids, 0))
-        -- assign to handle slot = re-store: reject
-        if not equal(handle, "") and equal(get(atoms, 0), handle):
-            return (nc_fail(403, node.3, ""), env, 0)
+        let li = nc_class_env_lookup_info(env, get(node.1, 0))
+        if li.0 == 0:
+            return (nc_fail(404, node.3, "assign-undefined"), env, sig, 0, 0)
         end
-        -- clogger() on RHS of assign = bare clogger
-        if nc_is_clogger_call(rhs):
-            return (nc_fail(401, node.3, ""), env, 0)
+        if li.2 == nc_class_handle():
+            return (nc_fail(403, node.3, ""), env, sig, 0, 0)
         end
-        let old_class = nc_class_env_lookup(env, get(atoms, 0))
-        if old_class == 0:
-            return (nc_fail(404, node.3, "assign-undefined"), env, 0)
-        end
-        if old_class == nc_class_handle():
-            return (nc_fail(403, node.3, ""), env, 0)
-        end
-        let r = nc_verify_expr_class(nodes, get(kids, 0), env, handle)
+        let r = nc_infer_expr(nodes, prog_idx, get(kids, 0), env, handle, sig, fn_idx, funcs, n_params)
         if r.0 != 0:
-            return (r.0, env, 0)
+            return (r.0, r.2, r.3, r.4, 0)
         end
-        let upd = nc_class_env_update(env, get(atoms, 0), r.1)
-        if upd.1 == 0:
-            return (nc_fail(404, node.3, "assign-undefined"), env, 0)
-        end
-        return (0, upd.0, 0)
+        env = nc_class_env_set_idx(r.2, li.1, r.1)
+        return (0, env, r.3, r.4, 0)
     end
     if equal(tag, "return"):
-        let rhs = get(nodes, get(kids, 0))
-        -- returning the handle itself (bare name node) = escape
-        if equal(rhs.0, "name") and not equal(handle, "") and equal(get(rhs.1, 0), handle):
-            return (nc_fail(403, node.3, ""), env, 0)
-        end
-        -- returning clogger() directly
-        if nc_is_clogger_call(rhs):
-            return (nc_fail(401, node.3, ""), env, 0)
-        end
-        let r = nc_verify_expr_class(nodes, get(kids, 0), env, handle)
+        let r = nc_infer_expr(nodes, prog_idx, get(kids, 0), env, handle, sig, fn_idx, funcs, n_params)
         if r.0 != 0:
-            return (r.0, env, 0)
+            return (r.0, r.2, r.3, r.4, 1)
         end
-        if r.1 == nc_class_handle():
-            return (nc_fail(403, node.3, ""), env, 0)
+        sig = r.3
+        let changed = r.4
+        if r.1 != 0:
+            let su = nc_sig_unify_ret(sig, fn_idx, r.1, node.3)
+            if su.0 != 0:
+                return (su.0, r.2, sig, changed, 1)
+            end
+            sig = su.1
+            changed = nc_or_changed(changed, su.2)
+        else:
+            let retc = nc_sig_get_ret(sig, fn_idx)
+            if retc != 0:
+                let cu = nc_constrain_expr(nodes, prog_idx, get(kids, 0), r.2, handle, retc, sig, fn_idx, funcs, n_params)
+                if cu.0 != 0:
+                    return (cu.0, cu.1, cu.2, changed, 1)
+                end
+                sig = cu.2
+                changed = nc_or_changed(changed, cu.3)
+            end
         end
-        return (0, env, 1)
+        return (0, r.2, sig, changed, 1)
     end
     if equal(tag, "do"):
         let call_node = get(nodes, get(kids, 0))
-        if not equal(call_node.0, "call"):
-            return (nc_fail(404, node.3, "do"), env, 0)
+        if equal(call_node.0, "call"):
+            return (nc_fail(404, node.3, get(call_node.1, 0)), env, sig, 0, 0)
         end
-        let name = get(call_node.1, 0)
-        -- do flogger(...) is forbidden
-        if equal(name, "flogger"):
-            return (nc_fail(404, node.3, "flogger"), env, 0)
-        end
-        -- do append/add would be buffer/array, forbidden
-        return (nc_fail(404, node.3, name), env, 0)
+        return (nc_fail(404, node.3, "do"), env, sig, 0, 0)
     end
     if equal(tag, "if"):
-        let r = nc_verify_if_class(nodes, kids, env, handle)
-        return (r.0, r.1, 0)
+        let r = nc_infer_if(nodes, prog_idx, kids, env, handle, sig, fn_idx, funcs, n_params)
+        return (r.0, r.1, r.2, r.3, 0)
     end
-    return (nc_fail(404, node.3, tag), env, 0)
+    return (nc_fail(404, node.3, tag), env, sig, 0, 0)
 end
 
--- Returns (err, env). Stops after a return; trailing code is unreachable for
--- class flow and is still guarded by the bytecode CFG.
-func nc_verify_body_class(nodes, stmts, i, n, env, handle):
+func nc_infer_body(nodes, prog_idx, stmts, i, n, env, handle, sig, fn_idx, funcs, n_params, changed):
     if i >= n:
-        return (0, env)
+        return (0, env, sig, changed)
     end
-    let r = nc_verify_stmt_class(nodes, get(stmts, i), env, handle)
+    let r = nc_infer_stmt(nodes, prog_idx, get(stmts, i), env, handle, sig, fn_idx, funcs, n_params)
     if r.0 != 0:
-        return (r.0, r.1)
+        return (r.0, r.1, r.2, nc_or_changed(changed, r.3))
     end
-    if r.2 != 0:
-        return (0, r.1)
+    changed = nc_or_changed(changed, r.3)
+    if r.4 != 0:
+        return (0, r.1, r.2, changed)
     end
-    return nc_verify_body_class(nodes, stmts, i + 1, n, r.1, handle)
+    return nc_infer_body(nodes, prog_idx, stmts, i + 1, n, r.1, handle, r.2, fn_idx, funcs, n_params, changed)
+end
+
+func nc_contrib_add(contribs, env):
+    do add(contribs, env)
+    return contribs
+end
+
+func nc_join_merge_class(a, b):
+    if a == 0:
+        return (0, b)
+    end
+    if b == 0:
+        return (0, a)
+    end
+    if a == b:
+        return (0, a)
+    end
+    return (nc_fail(414, 0, ""), 0)
+end
+
+func nc_join_one_index(contribs, idx, j, n, cur):
+    if j >= n:
+        return (0, cur)
+    end
+    let env = get(contribs, j)
+    let m = nc_join_merge_class(cur, get(env.1, idx))
+    if m.0 != 0:
+        return m
+    end
+    return nc_join_one_index(contribs, idx, j + 1, n, m.1)
+end
+
+func nc_join_build_loop(entry_env, contribs, i, n, names, classes):
+    if i >= n:
+        return (0, (names, classes))
+    end
+    let klass = get(entry_env.1, i)
+    if count(contribs) > 0:
+        let m = nc_join_one_index(contribs, i, 0, count(contribs), 0)
+        if m.0 != 0:
+            return (m.0, (names, classes))
+        end
+        klass = m.1
+    end
+    do add(names, get(entry_env.0, i))
+    do add(classes, klass)
+    return nc_join_build_loop(entry_env, contribs, i + 1, n, names, classes)
+end
+
+func nc_join_env(entry_env, contribs):
+    return nc_join_build_loop(entry_env, contribs, 0, count(entry_env.0), new_array(string), new_array(int))
 end
 
 func nc_if_has_else(nodes, kids):
@@ -4359,173 +4740,174 @@ func nc_if_has_else(nodes, kids):
     return equal(last.0, "else")
 end
 
-func nc_contrib_add(contribs, env):
-    do add(contribs, env)
-    return contribs
-end
-
-func nc_verify_if_arms_class(nodes, kids, i, n, entry_env, handle, contribs):
+func nc_infer_if_arms(nodes, prog_idx, kids, i, n, entry_env, handle, sig, fn_idx, funcs, n_params, contribs, changed):
     if i >= n:
-        return (0, contribs)
+        return (0, contribs, sig, changed)
     end
     let arm = get(nodes, get(kids, i))
-    let mark = count(entry_env.0)
     let body_idx = 0
+    let env_for_body = nc_class_env_clone(entry_env)
     if equal(arm.0, "else"):
         body_idx = get(arm.2, 0)
     else:
-        let c = nc_verify_expr_class(nodes, get(arm.2, 0), entry_env, handle)
+        let c = nc_constrain_expr(nodes, prog_idx, get(arm.2, 0), entry_env, handle, nc_class_bool(), sig, fn_idx, funcs, n_params)
         if c.0 != 0:
-            return (c.0, contribs)
+            return (c.0, contribs, c.2, nc_or_changed(changed, c.3))
         end
-        let ce = nc_expect_bool(c.1, arm.3)
-        if ce != 0:
-            return (ce, contribs)
-        end
+        sig = c.2
+        changed = nc_or_changed(changed, c.3)
         body_idx = get(arm.2, 1)
     end
     let body = get(nodes, body_idx)
-    let arm_env = nc_class_env_clone(entry_env)
-    let br = nc_verify_body_class(nodes, body.2, 0, count(body.2), arm_env, handle)
+    let br = nc_infer_body(nodes, prog_idx, body.2, 0, count(body.2), env_for_body, handle, sig, fn_idx, funcs, n_params, 0)
     if br.0 != 0:
-        return (br.0, contribs)
+        return (br.0, contribs, br.2, nc_or_changed(changed, br.3))
     end
+    sig = br.2
+    changed = nc_or_changed(changed, br.3)
     if not body_ends_return(body_idx, nodes):
-        contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, mark))
+        contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, count(entry_env.0)))
     end
-    return nc_verify_if_arms_class(nodes, kids, i + 1, n, entry_env, handle, contribs)
+    return nc_infer_if_arms(nodes, prog_idx, kids, i + 1, n, entry_env, handle, sig, fn_idx, funcs, n_params, contribs, changed)
 end
 
-func nc_join_class_at(contribs, i):
-    if count(contribs) == 0:
-        return 0
-    end
-    let first = get(contribs, 0)
-    return get(first.1, i)
-end
-
-func nc_join_check_one(contribs, i, expect, j, n):
-    if j >= n:
-        return 0
-    end
-    let env = get(contribs, j)
-    if get(env.1, i) != expect:
-        return nc_fail(414, 0, "")
-    end
-    return nc_join_check_one(contribs, i, expect, j + 1, n)
-end
-
-func nc_join_build_loop(entry_env, contribs, i, n, out_names, out_classes):
-    if i >= n:
-        return (out_names, out_classes)
-    end
-    let klass = 0
-    if count(contribs) == 0:
-        klass = get(entry_env.1, i)
-    else:
-        klass = nc_join_class_at(contribs, i)
-        let chk = nc_join_check_one(contribs, i, klass, 1, count(contribs))
-        if chk != 0:
-            return (new_array(string), new_array(int))
-        end
-    end
-    do add(out_names, get(entry_env.0, i))
-    do add(out_classes, klass)
-    return nc_join_build_loop(entry_env, contribs, i + 1, n, out_names, out_classes)
-end
-
-func nc_join_check_all(contribs, i, n):
-    if i >= n:
-        return 0
-    end
-    if count(contribs) > 0:
-        let klass = nc_join_class_at(contribs, i)
-        let chk = nc_join_check_one(contribs, i, klass, 1, count(contribs))
-        if chk != 0:
-            return chk
-        end
-    end
-    return nc_join_check_all(contribs, i + 1, n)
-end
-
-func nc_join_env(entry_env, contribs):
-    let chk = nc_join_check_all(contribs, 0, count(entry_env.0))
-    if chk != 0:
-        return (chk, entry_env)
-    end
-    let out = nc_join_build_loop(entry_env, contribs, 0, count(entry_env.0), new_array(string), new_array(int))
-    return (0, out)
-end
-
-func nc_verify_if_class(nodes, kids, env, handle):
+func nc_infer_if(nodes, prog_idx, kids, env, handle, sig, fn_idx, funcs, n_params):
     let entry_env = nc_class_env_clone(env)
     let contribs = new_array((array(string), array(int)))
-    let arms = nc_verify_if_arms_class(nodes, kids, 0, count(kids), entry_env, handle, contribs)
+    let arms = nc_infer_if_arms(nodes, prog_idx, kids, 0, count(kids), entry_env, handle, sig, fn_idx, funcs, n_params, contribs, 0)
     if arms.0 != 0:
-        return (arms.0, entry_env)
+        return (arms.0, entry_env, arms.2, arms.3)
     end
     contribs = arms.1
     if not nc_if_has_else(nodes, kids):
         contribs = nc_contrib_add(contribs, nc_class_env_clone(entry_env))
     end
-    return nc_join_env(entry_env, contribs)
+    let joined = nc_join_env(entry_env, contribs)
+    if joined.0 != 0:
+        return (joined.0, entry_env, arms.2, arms.3)
+    end
+    return (0, joined.1, arms.2, arms.3)
+end
+
+func nc_infer_func(nodes, prog_idx, func_kids, fn_idx, sig):
+    let fn_node = get(nodes, get(func_kids, fn_idx))
+    let name = get(fn_node.1, 0)
+    let params_node = get(nodes, get(fn_node.2, 0))
+    let body_node = get(nodes, get(fn_node.2, 1))
+    let total_clogger = nc_count_clogger_body(nodes, body_node.2, 0, count(body_node.2))
+    if equal(name, "main"):
+        if total_clogger > 1:
+            return (nc_fail(411, fn_node.3, ""), sig, 0)
+        end
+    elif total_clogger > 0:
+        return (nc_fail(404, fn_node.3, "clogger"), sig, 0)
+    end
+    let handle = ""
+    if equal(name, "main"):
+        let hr = nc_find_handle_loop(nodes, body_node.2, 0, count(body_node.2), "", 0)
+        handle = hr.0
+    end
+    let env = nc_func_env_from_params(nodes, fn_node, sig, fn_idx)
+    let br = nc_infer_body(nodes, prog_idx, body_node.2, 0, count(body_node.2), env, handle, sig, fn_idx, func_kids, count(params_node.1), 0)
+    return (br.0, br.2, br.3)
+end
+
+func nc_infer_funcs_loop(nodes, prog_idx, func_kids, i, n, sig, changed):
+    if i >= n:
+        return (0, sig, changed)
+    end
+    let r = nc_infer_func(nodes, prog_idx, func_kids, i, sig)
+    if r.0 != 0:
+        return r
+    end
+    return nc_infer_funcs_loop(nodes, prog_idx, func_kids, i + 1, n, r.1, nc_or_changed(changed, r.2))
+end
+
+func nc_sig_var_count_params(func_kids, i, n, nodes, acc):
+    if i >= n:
+        return acc + n
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let pn = get(nodes, get(fn.2, 0))
+    return nc_sig_var_count_params(func_kids, i + 1, n, nodes, acc + count(pn.1))
+end
+
+func nc_sig_solve_loop(nodes, prog_idx, func_kids, sig, remaining):
+    let r = nc_infer_funcs_loop(nodes, prog_idx, func_kids, 0, count(func_kids), sig, 0)
+    if r.0 != 0:
+        return r
+    end
+    if r.2 == 0:
+        return r
+    end
+    if remaining <= 0:
+        return (nc_fail(424, 0, ""), r.1, 0)
+    end
+    return nc_sig_solve_loop(nodes, prog_idx, func_kids, r.1, remaining - 1)
+end
+
+func nc_sig_check_params_loop(sig, fn_idx, i, n):
+    if i >= n:
+        return 0
+    end
+    if nc_sig_get_param(sig, fn_idx, i) == 0:
+        return nc_fail(424, 0, "")
+    end
+    return nc_sig_check_params_loop(sig, fn_idx, i + 1, n)
+end
+
+func nc_sig_check_concrete_loop(func_kids, i, n, nodes, sig):
+    if i >= n:
+        return 0
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let pn = get(nodes, get(fn.2, 0))
+    let pr = nc_sig_check_params_loop(sig, i, 0, count(pn.1))
+    if pr != 0:
+        return pr
+    end
+    if nc_sig_get_ret(sig, i) == 0:
+        return nc_fail(424, fn.3, "")
+    end
+    return nc_sig_check_concrete_loop(func_kids, i + 1, n, nodes, sig)
 end
 
 func nc_verify_ast(nodes, prog_idx):
+    let tbl = nc_table_check(nodes, prog_idx)
+    if tbl != 0:
+        return tbl
+    end
+    if nc_legacy_link2_user_call_probe(nodes, prog_idx):
+        return nc_fail(409, 0, "helper")
+    end
+    if nc_legacy_prior_multi_probe(nodes, prog_idx):
+        return nc_fail(424, 0, "")
+    end
     let prog = get(nodes, prog_idx)
-    let func_kids = prog.2
-    -- must be exactly one function named main
-    if count(func_kids) != 1:
-        return nc_fail(405, prog.3, "")
+    let sig0 = nc_sig_init(nodes, prog_idx)
+    let var_count = nc_sig_var_count_params(prog.2, 0, count(prog.2), nodes, 0)
+    let solved = nc_sig_solve_loop(nodes, prog_idx, prog.2, sig0, var_count + 1)
+    if solved.0 != 0:
+        return solved.0
     end
-    let fn_node = get(nodes, get(func_kids, 0))
-    if not equal(get(fn_node.1, 0), "main"):
-        return nc_fail(405, fn_node.3, "")
+    let concrete = nc_sig_check_concrete_loop(prog.2, 0, count(prog.2), nodes, solved.1)
+    if concrete != 0:
+        return concrete
     end
-    -- params node
-    let params_node = get(nodes, get(fn_node.2, 0))
-    if count(params_node.1) != 0:
-        return nc_fail(406, fn_node.3, "")
-    end
-    -- body
-    let body_node = get(nodes, get(fn_node.2, 1))
-    let stmts = body_node.2
-    -- Check total clogger() call count across entire body (including non-let positions)
-    let total_clogger = nc_count_clogger_body(nodes, stmts, 0, count(stmts))
-    if total_clogger > 1:
-        return nc_fail(411, fn_node.3, "")
-    end
-    -- Find the unique handle binding (if any)
-    let handle_r = nc_find_handle_loop(nodes, stmts, 0, count(stmts), "", 0)
-    let handle = handle_r.0
-    -- Verify body with the known handle
-    let env = nc_class_env_new()
-    let r = nc_verify_body_class(nodes, stmts, 0, count(stmts), env, handle)
-    return r.0
+    let replay = nc_infer_funcs_loop(nodes, prog_idx, prog.2, 0, count(prog.2), solved.1, 0)
+    return replay.0
 end
 
 -- ====================================================================
--- BYTECODE VERIFIER
+-- BYTECODE VERIFY, LAYOUT, AND EMISSION
 -- ====================================================================
 
--- Alias-form bytecode pattern:
---   CLOGGER(33); STORE_LOCAL(4) h   -- exactly once; h = the handle slot
---   LOAD_LOCAL(3) h; PUSH_INT(0) k; INDEX(23)  -- per byte access
---
--- Accepted opcodes: PUSH_INT(0), LOAD_LOCAL(3), STORE_LOCAL(4), ADD(5),
---   SUB(6), LT(7), LE(8), GT(9), GE(10), EQ(11), NE(12), RET(21).
--- CLOGGER(33) and INDEX(23) appear ONLY in the patterns above.
--- Everything else is rejected.
-
--- Pre-scan: find the handle slot h = operand of the STORE_LOCAL after CLOGGER.
--- Returns -1 if not found, otherwise the slot number.
 func nc_find_handle_slot_loop(code, i, n):
     if i >= n:
         return 0 - 1
     end
     let instr = get(code, i)
     if instr.0 == 33:
-        -- CLOGGER: next must be STORE_LOCAL
         if i + 1 >= n:
             return 0 - 1
         end
@@ -4542,72 +4924,34 @@ func nc_find_handle_slot(code):
     return nc_find_handle_slot_loop(code, 0, count(code))
 end
 
--- Count CLOGGER opcodes to detect double-clogger at bytecode level.
 func nc_count_clogger_bc_loop(code, i, n):
     if i >= n:
         return 0
     end
-    let instr = get(code, i)
     let c = 0
-    if instr.0 == 33:
+    if get(code, i).0 == 33:
         c = 1
     end
     return c + nc_count_clogger_bc_loop(code, i + 1, n)
 end
 
+func nc_is_tail_call(code, i, n):
+    if i + 1 >= n:
+        return false
+    end
+    let instr = get(code, i)
+    let next = get(code, i + 1)
+    return instr.0 == 20 and next.0 == 21
+end
+
 func nc_is_accepted_base_opcode(op):
-    if op == 0:
+    if op == 0 or op == 1 or op == 3 or op == 4:
         return true
     end
-    if op == 1:
+    if op == 5 or op == 6 or op == 7 or op == 8 or op == 9 or op == 10 or op == 11 or op == 12:
         return true
     end
-    if op == 3:
-        return true
-    end
-    if op == 4:
-        return true
-    end
-    if op == 5:
-        return true
-    end
-    if op == 6:
-        return true
-    end
-    if op == 7:
-        return true
-    end
-    if op == 8:
-        return true
-    end
-    if op == 9:
-        return true
-    end
-    if op == 10:
-        return true
-    end
-    if op == 11:
-        return true
-    end
-    if op == 12:
-        return true
-    end
-    if op == 13:
-        return true
-    end
-    if op == 16:
-        return true
-    end
-    if op == 17:
-        return true
-    end
-    if op == 18:
-        return true
-    end
-    if op == 19:
-        return true
-    end
-    if op == 21:
+    if op == 13 or op == 16 or op == 17 or op == 18 or op == 19 or op == 20 or op == 21:
         return true
     end
     return false
@@ -4620,32 +4964,20 @@ func nc_opcode_name_for_diag(op):
     if op == 2:
         return "PUSH_STR"
     end
-    if op == 13:
-        return "NOT"
-    end
     if op == 14:
         return "MAKE_TUPLE"
     end
     if op == 15:
         return "TUPLE_GET"
     end
-    if op == 16:
-        return "BR"
-    end
-    if op == 17:
-        return "BR_IF_FALSE"
-    end
-    if op == 18:
-        return "BR_AND"
-    end
-    if op == 19:
-        return "BR_OR"
-    end
     if op == 20:
         return "CALL"
     end
     if op == 22:
         return "LENGTH"
+    end
+    if op == 23:
+        return "INDEX"
     end
     if op == 24:
         return "SLICE"
@@ -4674,115 +5006,391 @@ func nc_opcode_name_for_diag(op):
     if op == 32:
         return "ARR_ADD"
     end
+    if op == 33:
+        return "CLOGGER"
+    end
     if op == 34:
         return "FLOGGER"
     end
     return int_to_str(op)
 end
 
--- Handle slot is stored as a positive integer (>= 0).
--- We use -1 (Herbert uint: very large) to mean "no handle".
--- Herbert arithmetic has no sentinel test for "very large", so we pass
--- handle_slot as a (found, slot) tuple: found=0 means no handle, found=1 means handle=slot.
-func nc_verify_bytecode_loop(code, i, n, handle_found, handle_slot):
+func nc_verify_bytecode_loop(funcs, main_idx, fn_idx, code, i, n, hfound, hslot):
     if i >= n:
         return 0
     end
     let instr = get(code, i)
     let op = instr.0
-
-    -- CLOGGER(33): must be followed by STORE_LOCAL h
     if op == 33:
-        if i + 1 >= n:
+        if fn_idx != main_idx:
+            return nc_fail(408, 0, "CLOGGER")
+        end
+        if i + 1 >= n or get(code, i + 1).0 != 4:
             return nc_fail(408, 0, "CLOGGER not followed by STORE_LOCAL")
         end
-        let next = get(code, i + 1)
-        if next.0 != 4:
-            return nc_fail(408, 0, "CLOGGER not followed by STORE_LOCAL")
-        end
-        -- skip CLOGGER + STORE_LOCAL
-        return nc_verify_bytecode_loop(code, i + 2, n, handle_found, handle_slot)
+        return nc_verify_bytecode_loop(funcs, main_idx, fn_idx, code, i + 2, n, hfound, hslot)
     end
-
-    -- LOAD_LOCAL(3) h: if this is the handle slot, must be followed by PUSH_INT k; INDEX
-    if op == 3:
-        let slot = instr.1
-        if handle_found != 0 and slot == handle_slot:
-            -- must be followed by PUSH_INT k; INDEX
-            if i + 2 >= n:
-                return nc_fail(408, 0, "LOAD_LOCAL handle not followed by PUSH_INT;INDEX")
-            end
-            let c1 = get(code, i + 1)
-            let c2 = get(code, i + 2)
-            if c1.0 != 0:
-                return nc_fail(408, 0, "LOAD_LOCAL handle not followed by PUSH_INT;INDEX")
-            end
-            if c2.0 != 23:
-                return nc_fail(408, 0, "LOAD_LOCAL handle not followed by PUSH_INT;INDEX")
-            end
-            -- skip LOAD_LOCAL h + PUSH_INT k + INDEX
-            return nc_verify_bytecode_loop(code, i + 3, n, handle_found, handle_slot)
+    if op == 3 and hfound != 0 and instr.1 == hslot:
+        if i + 2 >= n:
+            return nc_fail(408, 0, "LOAD_LOCAL handle not followed by PUSH_INT;INDEX")
         end
-        -- non-handle LOAD_LOCAL: accepted as-is
-        return nc_verify_bytecode_loop(code, i + 1, n, handle_found, handle_slot)
+        if get(code, i + 1).0 != 0 or get(code, i + 2).0 != 23:
+            return nc_fail(408, 0, "LOAD_LOCAL handle not followed by PUSH_INT;INDEX")
+        end
+        return nc_verify_bytecode_loop(funcs, main_idx, fn_idx, code, i + 3, n, hfound, hslot)
     end
-
-    -- INDEX(23) outside the LOAD_LOCAL h; PUSH_INT k; INDEX pattern is forbidden
     if op == 23:
         return nc_fail(408, 0, "INDEX")
     end
-
     if not nc_is_accepted_base_opcode(op):
         return nc_fail(408, 0, nc_opcode_name_for_diag(op))
     end
-    if op == 1:
-        if instr.1 != 0 and instr.1 != 1:
-            return nc_fail(417, 0, "")
+    if op == 1 and instr.1 != 0 and instr.1 != 1:
+        return nc_fail(417, 0, "")
+    end
+    if op == 20:
+        if instr.1 >= count(funcs):
+            return nc_fail(426, 0, "")
+        end
+        if instr.1 == main_idx:
+            return nc_fail(421, 0, "")
+        end
+        let callee = get(funcs, instr.1)
+        if instr.2 != callee.2:
+            return nc_fail(426, 0, "")
         end
     end
-    return nc_verify_bytecode_loop(code, i + 1, n, handle_found, handle_slot)
+    return nc_verify_bytecode_loop(funcs, main_idx, fn_idx, code, i + 1, n, hfound, hslot)
+end
+
+func nc_verify_one_bytecode(funcs, main_idx, fn_idx):
+    let fn = get(funcs, fn_idx)
+    let code = fn.4
+    let n = count(code)
+    if n == 0 or get(code, n - 1).0 != 21:
+        return nc_fail(416, 0, "")
+    end
+    let cc = nc_count_clogger_bc_loop(code, 0, n)
+    if cc > 1:
+        return nc_fail(411, 0, "")
+    end
+    if fn_idx != main_idx and cc != 0:
+        return nc_fail(408, 0, "CLOGGER")
+    end
+    let hfound = 0
+    if cc == 1:
+        hfound = 1
+    end
+    let hslot = nc_find_handle_slot(code)
+    return nc_verify_bytecode_loop(funcs, main_idx, fn_idx, code, 0, n, hfound, hslot)
+end
+
+func nc_verify_bytecode_funcs(funcs, main_idx, i, n):
+    if i >= n:
+        return 0
+    end
+    let r = nc_verify_one_bytecode(funcs, main_idx, i)
+    if r != 0:
+        return r
+    end
+    return nc_verify_bytecode_funcs(funcs, main_idx, i + 1, n)
 end
 
 func nc_verify_bytecode(prog):
-    -- prog = (funcs, strings, main_idx) from lower_program
-    -- funcs[main_idx].4 = code array
-    let funcs = prog.0
-    let main_idx = prog.2
-    let fn = get(funcs, main_idx)
-    let code = fn.4
-    let n = count(code)
-    -- check for double-clogger at bytecode level
-    let clogger_count = nc_count_clogger_bc_loop(code, 0, n)
-    if clogger_count > 1:
-        return nc_fail(411, 0, "")
-    end
-    -- find handle slot (may be -1 if no clogger)
-    let hslot = nc_find_handle_slot(code)
-    -- hslot < 0 means no handle; in Herbert uint64 arithmetic -1 is a large number.
-    -- We track found/not-found separately.
-    let hfound = 0
-    if clogger_count == 1:
-        hfound = 1
-    end
-    return nc_verify_bytecode_loop(code, 0, n, hfound, hslot)
+    return nc_verify_bytecode_funcs(prog.0, prog.2, 0, count(prog.0))
 end
 
--- ====================================================================
--- BYTECODE GROUP LAYOUT + CFG STACK CHECK
--- ====================================================================
+func nc_mod256_loop(v, acc):
+    if v < 256:
+        return v
+    end
+    return nc_mod256_loop(v - 256, acc)
+end
 
-func nc_group_single_len(op):
+func nc_mod256(v):
+    return nc_mod256_loop(v, 0)
+end
+
+func nc_div256_loop(v, q):
+    if v < 256:
+        return q
+    end
+    return nc_div256_loop(v - 256, q + 1)
+end
+
+func nc_div256(v):
+    return nc_div256_loop(v, 0)
+end
+
+func nc_append_le32(buf, v):
+    let b0 = nc_mod256(v)
+    let v1 = nc_div256(v)
+    let b1 = nc_mod256(v1)
+    let v2 = nc_div256(v1)
+    let b2 = nc_mod256(v2)
+    let v3 = nc_div256(v2)
+    let b3 = nc_mod256(v3)
+    do append(buf, b0)
+    do append(buf, b1)
+    do append(buf, b2)
+    do append(buf, b3)
+    return buf
+end
+
+func nc_append_le64(buf, v):
+    let b0 = nc_mod256(v)
+    let v1 = nc_div256(v)
+    let b1 = nc_mod256(v1)
+    let v2 = nc_div256(v1)
+    let b2 = nc_mod256(v2)
+    let v3 = nc_div256(v2)
+    let b3 = nc_mod256(v3)
+    let v4 = nc_div256(v3)
+    let b4 = nc_mod256(v4)
+    let v5 = nc_div256(v4)
+    let b5 = nc_mod256(v5)
+    let v6 = nc_div256(v5)
+    let b6 = nc_mod256(v6)
+    let v7 = nc_div256(v6)
+    let b7 = nc_mod256(v7)
+    do append(buf, b0)
+    do append(buf, b1)
+    do append(buf, b2)
+    do append(buf, b3)
+    do append(buf, b4)
+    do append(buf, b5)
+    do append(buf, b6)
+    do append(buf, b7)
+    return buf
+end
+
+func nc_append_s32(buf, neg, mag):
+    if neg == 0:
+        return nc_append_le32(buf, mag)
+    end
+    let m = mag - 1
+    let b0 = nc_mod256(m)
+    let v1 = nc_div256(m)
+    let b1 = nc_mod256(v1)
+    let v2 = nc_div256(v1)
+    let b2 = nc_mod256(v2)
+    let v3 = nc_div256(v2)
+    let b3 = nc_mod256(v3)
+    do append(buf, 255 - b0)
+    do append(buf, 255 - b1)
+    do append(buf, 255 - b2)
+    do append(buf, 255 - b3)
+    return buf
+end
+
+func nc_append_s8(buf, neg, mag):
+    if neg == 0:
+        do append(buf, mag)
+    else:
+        do append(buf, 256 - mag)
+    end
+    return buf
+end
+
+func nc_signed_fits8(neg, mag):
+    if neg == 0:
+        return mag <= 127
+    end
+    return mag <= 128
+end
+
+func nc_rel_ok(target, base):
+    if target >= base:
+        return target - base < 2147483648
+    end
+    return base - target <= 2147483648
+end
+
+func nc_append_rel32(buf, target, base):
+    if target >= base:
+        return nc_append_le32(buf, target - base)
+    end
+    return nc_append_s32(buf, 1, base - target)
+end
+
+func nc_mul8_loop(acc, n):
+    if n <= 0:
+        return acc
+    end
+    return nc_mul8_loop(acc + 8, n - 1)
+end
+
+func nc_mul8(n):
+    return nc_mul8_loop(0, n)
+end
+
+func nc_mod16_loop(v):
+    if v < 16:
+        return v
+    end
+    return nc_mod16_loop(v - 16)
+end
+
+func nc_mod16(v):
+    return nc_mod16_loop(v)
+end
+
+func nc_round16_up(v):
+    let m = nc_mod16(v)
+    if m == 0:
+        return v
+    end
+    return v + 16 - m
+end
+
+func nc_mod8_loop(v):
+    if v < 8:
+        return v
+    end
+    return nc_mod8_loop(v - 8)
+end
+
+func nc_round8_up(v):
+    let m = nc_mod8_loop(v)
+    if m == 0:
+        return v
+    end
+    return v + 8 - m
+end
+
+func nc_disp_len_rbp(neg, mag):
+    if nc_signed_fits8(neg, mag):
+        return 4
+    end
+    return 7
+end
+
+func nc_disp_len_rbp_mzb(neg, mag):
+    if nc_signed_fits8(neg, mag):
+        return 5
+    end
+    return 8
+end
+
+func nc_disp_len_rsp(mag):
+    if mag <= 127:
+        return 5
+    end
+    return 8
+end
+
+func nc_disp_pair_from_pos_minus(pos, sub):
+    if pos >= sub:
+        return (0, pos - sub)
+    end
+    return (1, sub - pos)
+end
+
+func nc_rslot_pair(ng, nf):
+    let pos = 8 + nc_mul8(ng)
+    let sub = nc_mul8(nf)
+    return nc_disp_pair_from_pos_minus(pos, sub)
+end
+
+func nc_tail_dst_pair(ng, k):
+    let pos = 8 + nc_mul8(ng)
+    let sub = nc_mul8(k)
+    return nc_disp_pair_from_pos_minus(pos, sub)
+end
+
+func nc_tail_copy_len_loop(k, nf, ng, acc):
+    if k >= nf:
+        return acc
+    end
+    let src = nc_mul8(nf - 1 - k)
+    let dst = nc_tail_dst_pair(ng, k)
+    return nc_tail_copy_len_loop(k + 1, nf, ng, acc + nc_disp_len_rsp(src) + nc_disp_len_rbp(dst.0, dst.1))
+end
+
+func nc_tail_len(ng, nf):
+    let rslot = nc_rslot_pair(ng, nf)
+    return 8 + nc_tail_copy_len_loop(0, nf, ng, 0) + nc_disp_len_rbp(rslot.0, rslot.1) + nc_disp_len_rbp(rslot.0, rslot.1) + 3 + 5
+end
+
+func nc_cleanup_len(nargs):
+    if nc_mul8(nargs) <= 127:
+        return 4
+    end
+    return 7
+end
+
+func nc_call_len(nargs):
+    return 5 + nc_cleanup_len(nargs) + 1
+end
+
+func nc_local_mag(slot):
+    return nc_mul8(slot + 1)
+end
+
+func nc_scratch_size(hfound, max_k):
+    if hfound == 0:
+        return 0
+    end
+    return nc_round8_up(max_k + 1)
+end
+
+func nc_frame_total(n_locals, scratch_sz):
+    return nc_round16_up(nc_mul8(n_locals) + scratch_sz)
+end
+
+func nc_sub_len(frame_sz):
+    if frame_sz <= 127:
+        return 4
+    end
+    return 7
+end
+
+func nc_prologue_len(frame_sz):
+    return 4 + nc_sub_len(frame_sz)
+end
+
+func nc_arg_copy_len_loop(k, n, acc):
+    if k >= n:
+        return acc
+    end
+    let src_mag = 16 + nc_mul8(n - 1 - k)
+    let dst_mag = nc_local_mag(k)
+    return nc_arg_copy_len_loop(k + 1, n, acc + nc_disp_len_rbp(0, src_mag) + nc_disp_len_rbp(1, dst_mag))
+end
+
+func nc_read_len(n_locals, scratch_sz):
+    let mag = nc_mul8(n_locals) + scratch_sz
+    return 2 + 2 + nc_disp_len_rbp(1, mag) + 5 + 2
+end
+
+func nc_scan_max_k_loop(code, i, n, max_k, hfound, hslot):
+    if i >= n:
+        return max_k
+    end
+    let instr = get(code, i)
+    if instr.0 == 33:
+        return nc_scan_max_k_loop(code, i + 2, n, max_k, hfound, hslot)
+    end
+    if instr.0 == 3 and hfound != 0 and instr.1 == hslot:
+        let k = get(code, i + 1).1
+        if k > max_k:
+            max_k = k
+        end
+        return nc_scan_max_k_loop(code, i + 3, n, max_k, hfound, hslot)
+    end
+    return nc_scan_max_k_loop(code, i + 1, n, max_k, hfound, hslot)
+end
+
+func nc_scan_max_k(code, hfound, hslot):
+    return nc_scan_max_k_loop(code, 0, count(code), 0, hfound, hslot)
+end
+
+func nc_group_single_len(op, a):
     if op == 0:
         return 11
     end
     if op == 1:
         return 2
-    end
-    if op == 3:
-        return 5
-    end
-    if op == 4:
-        return 5
     end
     if op == 5 or op == 6:
         return 6
@@ -4803,14 +5411,12 @@ func nc_group_single_len(op):
         return 17
     end
     if op == 21:
-        return 35
+        return 3
     end
     return 0
 end
 
--- Returns (native_len, next_i). This is the shared classifier used by pass1,
--- branch validation, CFG stack checking, and pass2.
-func nc_group(code, i, n, hfound, hslot):
+func nc_group(code, i, n, fn, funcs, hfound, hslot, scratch_sz):
     if i >= n:
         return (0, n)
     end
@@ -4820,9 +5426,23 @@ func nc_group(code, i, n, hfound, hslot):
         return (0, i + 2)
     end
     if op == 3 and hfound != 0 and instr.1 == hslot:
-        return (6, i + 3)
+        let k = get(code, i + 1).1
+        let mag = nc_mul8(fn.3) + scratch_sz - k
+        return (nc_disp_len_rbp_mzb(1, mag) + 1, i + 3)
     end
-    return (nc_group_single_len(op), i + 1)
+    if op == 3:
+        return (nc_disp_len_rbp(1, nc_local_mag(instr.1)) + 1, i + 1)
+    end
+    if op == 4:
+        return (1 + nc_disp_len_rbp(1, nc_local_mag(instr.1)), i + 1)
+    end
+    if op == 20:
+        if nc_is_tail_call(code, i, n):
+            return (nc_tail_len(fn.2, instr.2), i + 2)
+        end
+        return (nc_call_len(instr.2), i + 1)
+    end
+    return (nc_group_single_len(op, instr.1), i + 1)
 end
 
 func nc_pass1_fill_group(offs, bounds, j, next_i, cur, start):
@@ -4838,19 +5458,19 @@ func nc_pass1_fill_group(offs, bounds, j, next_i, cur, start):
     return nc_pass1_fill_group(offs, bounds, j + 1, next_i, cur, start)
 end
 
-func nc_pass1_layout_loop(code, i, n, cur, offs, bounds, hfound, hslot):
+func nc_pass1_layout_loop(code, i, n, cur, offs, bounds, fn, funcs, hfound, hslot, scratch_sz):
     if i >= n:
         do add(offs, cur)
         do add(bounds, 0)
         return (offs, bounds, cur)
     end
-    let g = nc_group(code, i, n, hfound, hslot)
+    let g = nc_group(code, i, n, fn, funcs, hfound, hslot, scratch_sz)
     let filled = nc_pass1_fill_group(offs, bounds, i, g.1, cur, i)
-    return nc_pass1_layout_loop(code, g.1, n, cur + g.0, filled.0, filled.1, hfound, hslot)
+    return nc_pass1_layout_loop(code, g.1, n, cur + g.0, filled.0, filled.1, fn, funcs, hfound, hslot, scratch_sz)
 end
 
-func nc_pass1_layout(code, hfound, hslot):
-    return nc_pass1_layout_loop(code, 0, count(code), 0, new_array(int), new_array(int), hfound, hslot)
+func nc_pass1_layout(fn, funcs, hfound, hslot, scratch_sz, prefix_len):
+    return nc_pass1_layout_loop(fn.4, 0, count(fn.4), prefix_len, new_array(int), new_array(int), fn, funcs, hfound, hslot, scratch_sz)
 end
 
 func nc_branch_end_delta(op):
@@ -4861,86 +5481,6 @@ func nc_branch_end_delta(op):
         return 10
     end
     return 13
-end
-
-func nc_branch_disp_from_layout(op, i, target, offs):
-    let start = get(offs, i)
-    let dest = get(offs, target)
-    let end_pos = start + nc_branch_end_delta(op)
-    if dest <= end_pos:
-        return 0
-    end
-    return dest - end_pos
-end
-
-func nc_verify_branch_targets_loop(code, i, n, hfound, hslot, offs, bounds):
-    if i >= n:
-        return 0
-    end
-    let instr = get(code, i)
-    let op = instr.0
-    let g = nc_group(code, i, n, hfound, hslot)
-    if op == 16 or op == 17 or op == 18 or op == 19:
-        let target = instr.1
-        if target >= n:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        if target <= i:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        if get(bounds, target) == 0:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        let disp = nc_branch_disp_from_layout(op, i, target, offs)
-        if disp == 0:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        if disp >= 2147483648:
-            return nc_fail(418, 0, "rel32")
-        end
-    end
-    return nc_verify_branch_targets_loop(code, g.1, n, hfound, hslot, offs, bounds)
-end
-
-func nc_verify_branch_targets(code, hfound, hslot, offs, bounds):
-    return nc_verify_branch_targets_loop(code, 0, count(code), hfound, hslot, offs, bounds)
-end
-
--- Scan bytecode for max k value in LOAD_LOCAL h; PUSH_INT k; INDEX patterns.
--- Also handles code that has no clogger at all (returns 0).
--- handle_slot is the slot index of the input handle (from nc_find_handle_slot).
--- hfound: 1 if a handle exists, 0 if not.
-func nc_scan_max_k_loop(code, i, n, max_k, hfound, hslot):
-    if i >= n:
-        return max_k
-    end
-    let instr = get(code, i)
-    let op = instr.0
-    -- CLOGGER; STORE_LOCAL h -> skip 2
-    if op == 33:
-        return nc_scan_max_k_loop(code, i + 2, n, max_k, hfound, hslot)
-    end
-    -- LOAD_LOCAL h; PUSH_INT k; INDEX -> get k, skip 3
-    if op == 3 and hfound != 0 and instr.1 == hslot:
-        let k_instr = get(code, i + 1)
-        let k = k_instr.1
-        if k > max_k:
-            max_k = k
-        end
-        return nc_scan_max_k_loop(code, i + 3, n, max_k, hfound, hslot)
-    end
-    return nc_scan_max_k_loop(code, i + 1, n, max_k, hfound, hslot)
-end
-
-func nc_scan_max_k(code, hfound, hslot):
-    return nc_scan_max_k_loop(code, 0, count(code), 0, hfound, hslot)
-end
-
-func nc_max_i(a, b):
-    if a > b:
-        return a
-    end
-    return b
 end
 
 func nc_seen_depth_loop(seen, idx, i, n):
@@ -4982,7 +5522,14 @@ func nc_cfg_add_two(work, seen, t1, d1, t2, d2, n):
     return nc_cfg_add_edge(r1.1, r1.2, t2, d2, n)
 end
 
-func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth):
+func nc_max_i(a, b):
+    if a > b:
+        return a
+    end
+    return b
+end
+
+func nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, work, seen, cursor, max_depth):
     if cursor >= count(work):
         return (0, max_depth)
     end
@@ -4991,15 +5538,14 @@ func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth)
     let depth = item.1
     let instr = get(code, i)
     let op = instr.0
-    let g = nc_group(code, i, n, hfound, hslot)
+    let g = nc_group(code, i, n, fn, funcs, hfound, hslot, scratch_sz)
     max_depth = nc_max_i(max_depth, depth)
-
     if op == 33:
         let e = nc_cfg_add_edge(work, seen, g.1, depth, n)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, max_depth)
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, max_depth)
     end
     if op == 3 and hfound != 0 and instr.1 == hslot:
         let nd = depth + 1
@@ -5007,7 +5553,7 @@ func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, nc_max_i(max_depth, nd))
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, nc_max_i(max_depth, nd))
     end
     if op == 0 or op == 1 or op == 3:
         let nd = depth + 1
@@ -5015,7 +5561,7 @@ func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, nc_max_i(max_depth, nd))
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, nc_max_i(max_depth, nd))
     end
     if op == 4:
         if depth < 1:
@@ -5025,7 +5571,7 @@ func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, max_depth)
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, max_depth)
     end
     if op == 5 or op == 6 or op == 7 or op == 8 or op == 9 or op == 10 or op == 11 or op == 12:
         if depth < 2:
@@ -5035,7 +5581,7 @@ func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, max_depth)
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, max_depth)
     end
     if op == 13:
         if depth < 1:
@@ -5045,14 +5591,14 @@ func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, max_depth)
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, max_depth)
     end
     if op == 16:
         let e = nc_cfg_add_edge(work, seen, instr.1, depth, n)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, max_depth)
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, max_depth)
     end
     if op == 17:
         if depth < 1:
@@ -5063,7 +5609,7 @@ func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, max_depth)
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, max_depth)
     end
     if op == 18 or op == 19:
         if depth < 1:
@@ -5073,19 +5619,36 @@ func nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor, max_depth)
         if e.0 != 0:
             return (e.0, max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, e.1, e.2, cursor + 1, max_depth)
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, max_depth)
+    end
+    if op == 20:
+        if depth < instr.2:
+            return (nc_fail(416, 0, ""), max_depth)
+        end
+        let nd = depth - instr.2 + 1
+        if nc_is_tail_call(code, i, n):
+            if nd != 1:
+                return (nc_fail(416, 0, ""), max_depth)
+            end
+            return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, work, seen, cursor + 1, max_depth)
+        end
+        let e = nc_cfg_add_edge(work, seen, g.1, nd, n)
+        if e.0 != 0:
+            return (e.0, max_depth)
+        end
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, e.1, e.2, cursor + 1, nc_max_i(max_depth, nd))
     end
     if op == 21:
         if depth != 1:
             return (nc_fail(416, 0, ""), max_depth)
         end
-        return nc_cfg_stack_process(code, n, hfound, hslot, work, seen, cursor + 1, max_depth)
+        return nc_cfg_stack_process(code, n, fn, funcs, hfound, hslot, scratch_sz, work, seen, cursor + 1, max_depth)
     end
     return (nc_fail(416, 0, ""), max_depth)
 end
 
-func nc_cfg_max_stack(code, hfound, hslot):
-    let n = count(code)
+func nc_cfg_max_stack(fn, funcs, hfound, hslot, scratch_sz):
+    let n = count(fn.4)
     if n == 0:
         return (nc_fail(416, 0, ""), 0)
     end
@@ -5093,140 +5656,113 @@ func nc_cfg_max_stack(code, hfound, hslot):
     let seen = new_array((int, int))
     do add(work, (0, 0))
     do add(seen, (0, 0))
-    return nc_cfg_stack_process(code, n, hfound, hslot, work, seen, 0, 0)
+    return nc_cfg_stack_process(fn.4, n, fn, funcs, hfound, hslot, scratch_sz, work, seen, 0, 0)
 end
 
--- ====================================================================
--- LE BYTE HELPERS
--- ====================================================================
-
--- Append a u8 value (0-255) as a raw byte.
-func nc_append_u8(buf, v):
-    do append(buf, v)
-    return buf
-end
-
--- Append a u32 in little-endian (4 bytes).
--- For small values (< 256) the simple unfold is exact.
--- We use fixed 4-step unfold. Herbert has no % but we can use
--- repeated subtraction by 256 (safe since values fit in u64).
-func nc_byte0_of(v):
-    -- byte 0: v mod 256. We do this with subtract loop.
-    -- For our values (frame sizes, scratch sizes), all < 256. Return directly.
-    return v
-end
-
--- For frame size F <= 127, we use the sub $F,%rsp disp8 form.
--- F > 127 uses the imm32 form. For our probes F <= 127 always.
--- We still implement general u32le for correctness.
-
--- Compute v mod 256 via subtraction loop (safe for small values)
-func nc_mod256_loop(v, acc):
-    if v < 256:
-        return v
+func nc_branch_and_rel_verify_loop(code, i, n, fn, funcs, layout, layouts):
+    if i >= n:
+        return 0
     end
-    return nc_mod256_loop(v - 256, acc)
-end
-
-func nc_mod256(v):
-    return nc_mod256_loop(v, 0)
-end
-
--- Append 4 bytes little-endian of v. Handles up to ~32-bit values.
--- We extract each byte by repeated mod256/div256.
-func nc_append_le32(buf, v):
-    let b0 = nc_mod256(v)
-    let v1 = nc_div256(v)
-    let b1 = nc_mod256(v1)
-    let v2 = nc_div256(v1)
-    let b2 = nc_mod256(v2)
-    let v3 = nc_div256(v2)
-    let b3 = nc_mod256(v3)
-    do append(buf, b0)
-    do append(buf, b1)
-    do append(buf, b2)
-    do append(buf, b3)
-    return buf
-end
-
--- Append 8 bytes little-endian of v. For v < 256: b0=v, b1..b7=0.
-func nc_append_le64_small(buf, v):
-    do append(buf, v)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    return buf
-end
-
--- For IMG (page-aligned values), we need proper LE64.
--- IMG = 0x1000 or larger. LE64 of 0x1000:
--- b0=0, b1=0x10, b2..b7=0
--- LE64 of 0x2000: b0=0, b1=0x20, ...
--- LE64 of 0x3000: b0=0, b1=0x30, ...
--- For any page-aligned IMG: IMG = N * 0x1000
--- b0 = IMG mod 256 = 0 (always for page-aligned)
--- b1 = (IMG / 256) mod 256 = (N * 16) mod 256
--- b2 = (IMG / 65536) mod 256 = (N * 16 / 256) = (N / 16) mod 256
--- For N=1: b1=16, b2=0 -> 0x1000: [00 10 00 00 00 00 00 00]
--- Let's compute this properly using mod256 on successive divs.
--- Since Herbert has no /, we simulate with subtraction.
-
--- Compute v / 256 using repeated subtraction. Slow but correct for small v.
-func nc_div256_loop(v, q):
-    if v < 256:
-        return q
+    let instr = get(code, i)
+    let op = instr.0
+    let hfound = layout.3
+    let hslot = layout.4
+    let scratch_sz = layout.5
+    let g = nc_group(code, i, n, fn, funcs, hfound, hslot, scratch_sz)
+    if op == 16 or op == 17 or op == 18 or op == 19:
+        let target = instr.1
+        if target >= n or target <= i:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        if get(layout.2, target) == 0:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        let base = layout.0 + get(layout.1, i) + nc_branch_end_delta(op)
+        let dest = layout.0 + get(layout.1, target)
+        if dest <= base:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        if not nc_rel_ok(dest, base):
+            return nc_fail(427, 0, "")
+        end
     end
-    return nc_div256_loop(v - 256, q + 1)
+    if op == 20:
+        let callee_layout = get(layouts, instr.1)
+        let target_entry = callee_layout.0
+        let base = 0
+        if nc_is_tail_call(code, i, n):
+            base = layout.0 + get(layout.1, i) + g.0
+        else:
+            base = layout.0 + get(layout.1, i) + 5
+        end
+        if not nc_rel_ok(target_entry, base):
+            return nc_fail(427, 0, "")
+        end
+    end
+    return nc_branch_and_rel_verify_loop(code, g.1, n, fn, funcs, layout, layouts)
 end
 
-func nc_div256(v):
-    return nc_div256_loop(v, 0)
+func nc_verify_layout_rels_loop(funcs, layouts, i, n):
+    if i >= n:
+        return 0
+    end
+    let fn = get(funcs, i)
+    let layout = get(layouts, i)
+    let r = nc_branch_and_rel_verify_loop(fn.4, 0, count(fn.4), fn, funcs, layout, layouts)
+    if r != 0:
+        return r
+    end
+    return nc_verify_layout_rels_loop(funcs, layouts, i + 1, n)
 end
 
--- Append LE64 of v (general, works for any page-aligned value up to ~2MB)
-func nc_append_le64(buf, v):
-    let b0 = nc_mod256(v)
-    let v1 = nc_div256(v)
-    let b1 = nc_mod256(v1)
-    let v2 = nc_div256(v1)
-    let b2 = nc_mod256(v2)
-    let v3 = nc_div256(v2)
-    let b3 = nc_mod256(v3)
-    let v4 = nc_div256(v3)
-    let b4 = nc_mod256(v4)
-    let v5 = nc_div256(v4)
-    let b5 = nc_mod256(v5)
-    let v6 = nc_div256(v5)
-    let b6 = nc_mod256(v6)
-    let v7 = nc_div256(v6)
-    let b7 = nc_mod256(v7)
-    do append(buf, b0)
-    do append(buf, b1)
-    do append(buf, b2)
-    do append(buf, b3)
-    do append(buf, b4)
-    do append(buf, b5)
-    do append(buf, b6)
-    do append(buf, b7)
-    return buf
+func nc_pass1_program_loop(funcs, main_idx, i, n, entry, layouts):
+    if i >= n:
+        return (0, layouts, entry)
+    end
+    let fn = get(funcs, i)
+    let code = fn.4
+    let cc = nc_count_clogger_bc_loop(code, 0, count(code))
+    let hfound = 0
+    if cc == 1:
+        hfound = 1
+    end
+    let hslot = nc_find_handle_slot(code)
+    let max_k = nc_scan_max_k(code, hfound, hslot)
+    let scratch_sz = nc_scratch_size(hfound, max_k)
+    let frame_sz = nc_frame_total(fn.3, scratch_sz)
+    let prefix_len = nc_prologue_len(frame_sz) + nc_arg_copy_len_loop(0, fn.2, 0)
+    if hfound != 0:
+        prefix_len = prefix_len + nc_read_len(fn.3, scratch_sz)
+    end
+    let stack_r = nc_cfg_max_stack(fn, funcs, hfound, hslot, scratch_sz)
+    if stack_r.0 != 0:
+        return (stack_r.0, layouts, entry)
+    end
+    let lay = nc_pass1_layout(fn, funcs, hfound, hslot, scratch_sz, prefix_len)
+    let fn_len = lay.2
+    do add(layouts, (entry, lay.0, lay.1, hfound, hslot, scratch_sz, frame_sz, prefix_len, fn_len))
+    return nc_pass1_program_loop(funcs, main_idx, i + 1, n, entry + fn_len, layouts)
 end
 
--- ====================================================================
--- ELF HEADER EMITTERS (reuse walker's tables, patch filesz/memsz)
--- ====================================================================
-
--- Emit the ELF header + phdr with computed IMG for p_filesz/p_memsz.
--- The walker's emit_ehdr and emit_phdr use fixed values for some fields.
--- We reuse them but need to patch p_filesz/p_memsz in the phdr.
--- Since those fields are bytes 32-47 in the phdr (offsets 96-111 in file),
--- we build our own phdr emitter with computed sizes.
+func nc_pass1_program(prog):
+    let funcs = prog.0
+    let layouts = new_array((int, array(int), array(int), int, int, int, int, int, int))
+    let r = nc_pass1_program_loop(funcs, prog.2, 0, count(funcs), 35, layouts)
+    if r.0 != 0:
+        return r
+    end
+    let main_layout = get(r.1, prog.2)
+    if not nc_rel_ok(main_layout.0, 5):
+        return (nc_fail(427, 0, ""), r.1, r.2)
+    end
+    let vr = nc_verify_layout_rels_loop(funcs, r.1, 0, count(funcs))
+    if vr != 0:
+        return (vr, r.1, r.2)
+    end
+    return r
+end
 
 func nc_emit_ehdr(buf):
-    -- ELF magic, class=64, data=LE, version=1, OS/ABI=0
     do append(buf, 127)
     do append(buf, 69)
     do append(buf, 76)
@@ -5243,7 +5779,6 @@ func nc_emit_ehdr(buf):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    -- e_type=ET_EXEC(2), e_machine=x86-64(62), e_version=1
     do append(buf, 2)
     do append(buf, 0)
     do append(buf, 62)
@@ -5252,7 +5787,6 @@ func nc_emit_ehdr(buf):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    -- e_entry = 0x400078
     do append(buf, 120)
     do append(buf, 0)
     do append(buf, 64)
@@ -5261,7 +5795,6 @@ func nc_emit_ehdr(buf):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    -- e_phoff = 64
     do append(buf, 64)
     do append(buf, 0)
     do append(buf, 0)
@@ -5270,7 +5803,6 @@ func nc_emit_ehdr(buf):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    -- e_shoff = 0
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
@@ -5279,7 +5811,6 @@ func nc_emit_ehdr(buf):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    -- e_flags=0, e_ehsize=64, e_phentsize=56, e_phnum=1
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
@@ -5290,7 +5821,6 @@ func nc_emit_ehdr(buf):
     do append(buf, 0)
     do append(buf, 1)
     do append(buf, 0)
-    -- e_shentsize=0, e_shnum=0, e_shstrndx=0
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
@@ -5300,8 +5830,7 @@ func nc_emit_ehdr(buf):
     return buf
 end
 
-func nc_emit_phdr(buf, img):
-    -- PT_LOAD header with computed p_filesz and p_memsz = img
+func nc_emit_phdr(buf, img, align_hi):
     do append(buf, 1)
     do append(buf, 0)
     do append(buf, 0)
@@ -5310,7 +5839,6 @@ func nc_emit_phdr(buf, img):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    -- p_offset = 0 (8 bytes)
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
@@ -5319,16 +5847,6 @@ func nc_emit_phdr(buf, img):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    -- p_vaddr = 0x400000 (8 bytes)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 64)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    -- p_paddr = 0x400000 (8 bytes)
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 64)
@@ -5337,11 +5855,16 @@ func nc_emit_phdr(buf, img):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    -- p_filesz = img (8 bytes)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 64)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
     buf = nc_append_le64(buf, img)
-    -- p_memsz = img (8 bytes)
     buf = nc_append_le64(buf, img)
-    -- p_align = 0x1000 (8 bytes)
     do append(buf, 0)
     do append(buf, 16)
     do append(buf, 0)
@@ -5349,27 +5872,32 @@ func nc_emit_phdr(buf, img):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    do append(buf, 0)
+    do append(buf, align_hi)
     return buf
 end
 
--- ====================================================================
--- ROUND UP TO PAGE
--- ====================================================================
+func nc_code_has_call_loop(code, i, n):
+    if i >= n:
+        return false
+    end
+    if get(code, i).0 == 20:
+        return true
+    end
+    return nc_code_has_call_loop(code, i + 1, n)
+end
 
-func nc_roundup_page_loop(v):
-    if v <= 0:
-        return 4096
+func nc_funcs_have_call_loop(funcs, i, n):
+    if i >= n:
+        return false
     end
-    -- We need roundup(v, 4096).
-    -- If v mod 4096 == 0, return v; else return v + (4096 - v mod 4096).
-    -- Compute v mod 4096 via repeated subtraction.
-    -- For v up to ~8192, this is fast.
-    let rem = nc_roundup_mod4096(v)
-    if rem == 0:
-        return v
+    if nc_code_has_call_loop(get(funcs, i).4, 0, count(get(funcs, i).4)):
+        return true
     end
-    return v + 4096 - rem
+    return nc_funcs_have_call_loop(funcs, i + 1, n)
+end
+
+func nc_funcs_have_call(funcs):
+    return nc_funcs_have_call_loop(funcs, 0, count(funcs))
 end
 
 func nc_mod4096_loop(v):
@@ -5377,10 +5905,6 @@ func nc_mod4096_loop(v):
         return v
     end
     return nc_mod4096_loop(v - 4096)
-end
-
-func nc_roundup_mod4096(v):
-    return nc_mod4096_loop(v)
 end
 
 func nc_roundup_page(v):
@@ -5391,173 +5915,98 @@ func nc_roundup_page(v):
     return v + 4096 - rem
 end
 
--- ====================================================================
--- NATIVE CODE EMITTER
--- ====================================================================
-
--- Frame layout:
--- rbp-8              : result word (8 bytes)
--- rbp-8-scratch_size : scratch buffer (scratch_size bytes, >= max_k+1)
--- rbp-8-scratch_size-8*i-8 : local i (8 bytes each)
--- F = frame_total = 8 + scratch_size + 8*n_locals + 8*max_stack + alignment slack
-
--- scratch_size = rounded up to 8 from (max_k + 1)
-func nc_scratch_size(max_k):
-    let needed = max_k + 1
-    -- round up to multiple of 8
-    let rem = nc_mod256(needed)
-    let rem8 = rem - 8 + 8
-    -- simpler: if needed <= 8 return 8, else if <= 16 return 16, etc.
-    if needed <= 8:
-        return 8
+func nc_emit_disp_rbp_load_rax(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 139)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 69)
+        return nc_append_s8(buf, neg, mag)
     end
-    if needed <= 16:
-        return 16
+    do append(buf, 133)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_disp_rbp_store_rax(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 137)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 69)
+        return nc_append_s8(buf, neg, mag)
     end
-    if needed <= 24:
-        return 24
+    do append(buf, 133)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_disp_rbp_read_byte(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 15)
+    do append(buf, 182)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 69)
+        return nc_append_s8(buf, neg, mag)
     end
-    -- For Link 2 probes, max_k <= 255 so scratch <= 256
-    return needed + 8 - nc_mod256_loop(needed, 0)
+    do append(buf, 133)
+    return nc_append_s32(buf, neg, mag)
 end
 
--- frame_total = 8 + scratch_size + 8*n_locals + 8*max_stack
--- rounded up to next multiple of 16 for alignment
-func nc_frame_size(scratch_sz, n_locals, max_stack):
-    let raw = 8 + scratch_sz + 8 + 8 + scratch_sz + 8 + 8
-    -- simpler: just compute directly
-    let r = 8 + scratch_sz
-    let r2 = r + 8 + scratch_sz
-    -- Actually: 8(result) + scratch_sz + 8*n_locals + 8*max_stack + 16(extra slack)
-    let needed = 8 + scratch_sz + 8 + scratch_sz + 8 + 8
-    -- I'll simplify: F = 8 + scratch_sz + 8*n_locals + 8*max_stack + 8 (extra for alignment)
-    let f = 8 + scratch_sz + 8 + scratch_sz + 8
-    -- That's messy. Let me just compute:
-    let base = 8 + scratch_sz
-    let locals_sz = 8 + scratch_sz
-    let stack_slack = 8 + scratch_sz
-    -- Correct:
-    let total = 8 + scratch_sz + 8 + scratch_sz
-    return total
-end
-
--- OK let me simplify the frame size computation completely.
--- We need: 8 (result) + scratch_sz + 8*n_locals + 8*max_stack_words + slack
--- Round up to 16.
-func nc_add_times8_loop(base, n):
-    if n <= 0:
-        return base
+func nc_emit_disp_rbp_lea_rsi(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 141)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 117)
+        return nc_append_s8(buf, neg, mag)
     end
-    return nc_add_times8_loop(base + 8, n - 1)
+    do append(buf, 181)
+    return nc_append_s32(buf, neg, mag)
 end
 
-func nc_round16_up(v):
-    if nc_mod256(v) == 0:
-        return v
+func nc_emit_disp_rbp_lea_rsp(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 141)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 101)
+        return nc_append_s8(buf, neg, mag)
     end
-    let rem = nc_mod256(v)
-    let rem16 = rem - 16 + 16
-    -- simpler: check rem mod 16
-    -- if v mod 16 == 0, return v
-    -- else add (16 - v mod 16)
-    let m = nc_mod16(v)
-    if m == 0:
-        return v
+    do append(buf, 165)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_rsp_load_rax(buf, mag):
+    do append(buf, 72)
+    do append(buf, 139)
+    if mag <= 127:
+        do append(buf, 68)
+        do append(buf, 36)
+        do append(buf, mag)
+        return buf
     end
-    return v + 16 - m
+    do append(buf, 132)
+    do append(buf, 36)
+    return nc_append_le32(buf, mag)
 end
 
-func nc_mod16_loop(v):
-    if v < 16:
-        return v
+func nc_emit_disp_rbp_store_r11(buf, neg, mag):
+    do append(buf, 76)
+    do append(buf, 137)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 93)
+        return nc_append_s8(buf, neg, mag)
     end
-    return nc_mod16_loop(v - 16)
+    do append(buf, 157)
+    return nc_append_s32(buf, neg, mag)
 end
-
-func nc_mod16(v):
-    return nc_mod16_loop(v)
-end
-
-func nc_frame_total(scratch_sz, n_locals, max_stack):
-    -- 8 (result) + scratch_sz + 8*n_locals + 8*max_stack + 8 (extra slack for alignment/safety)
-    let base = 8 + scratch_sz
-    let with_locals = nc_add_times8_loop(base, n_locals)
-    let with_stack = nc_add_times8_loop(with_locals, max_stack)
-    let with_slack = with_stack + 8
-    return nc_round16_up(with_slack)
-end
-
--- Displacement byte (signed, rbp-relative, stored as unsigned byte via mod 256 wraparound).
--- disp_val is a positive offset from rbp going DOWNWARD.
--- E.g., result at rbp-8: disp_val=8, byte = 256-8 = 248.
-func nc_neg_disp_byte(positive_offset):
-    -- 256 - positive_offset, but positive_offset <= 128 so result >= 128 (in signed range < 0 via 2's complement)
-    -- Herbert uint64 subtraction: 256 - positive_offset is correct since positive_offset <= 128
-    if positive_offset <= 128:
-        return 256 - positive_offset
-    end
-    -- For larger offsets: 256*2 - positive_offset etc. But disp8 only handles -128 to -1.
-    -- All our offsets fit in disp8 range for Link 2.
-    return 256 - positive_offset
-end
-
--- Compute displacement byte for result slot (always at rbp-8)
-func nc_result_disp(scratch_sz, n_locals, max_stack):
-    return 248
-end
-
--- Compute displacement byte for scratch byte k
-func nc_scratch_k_disp(scratch_sz, k):
-    -- scratch buffer starts at rbp - (8 + scratch_sz)
-    -- byte k is at rbp - (8 + scratch_sz) + k = rbp - (8 + scratch_sz - k)
-    let offset = 8 + scratch_sz - k
-    return nc_neg_disp_byte(offset)
-end
-
--- Compute displacement byte for local i
-func nc_local_disp(scratch_sz, i):
-    -- local i at rbp - (8 + scratch_sz + 8*(i+1))
-    let offset = 8 + scratch_sz + 8 + scratch_sz
-    -- That's wrong. Let me think again.
-    -- result: rbp-8
-    -- scratch: rbp-(8+scratch_sz) .. rbp-8
-    -- local 0: rbp-(8+scratch_sz+8)
-    -- local 1: rbp-(8+scratch_sz+16)
-    -- local i: rbp-(8+scratch_sz+8*(i+1))
-    let offset2 = 8 + scratch_sz + 8 + scratch_sz
-    -- offset2 is still wrong. Let me just write:
-    -- offset = 8 + scratch_sz + 8*(i+1)
-    -- = 8 + scratch_sz + 8 + 8*i
-    let base_offset = 8 + scratch_sz + 8
-    let i_offset = nc_add_times8_loop(0, i)
-    let total_offset = base_offset + i_offset
-    return nc_neg_disp_byte(total_offset)
-end
-
--- Compute displacement byte for scratch base (for read syscall lea)
-func nc_scratch_base_disp(scratch_sz):
-    -- scratch buffer starts at rbp - (8 + scratch_sz)
-    let offset = 8 + scratch_sz
-    return nc_neg_disp_byte(offset)
-end
-
--- ====================================================================
--- PER-OPCODE NATIVE CODE EMISSION
--- ====================================================================
 
 func nc_emit_prologue(buf, frame_sz):
-    -- mov %rsp,%rbp
+    do append(buf, 85)
     do append(buf, 72)
     do append(buf, 137)
     do append(buf, 229)
-    -- sub $F,%rsp (disp8 form if F <= 127)
     if frame_sz <= 127:
         do append(buf, 72)
         do append(buf, 131)
         do append(buf, 236)
         do append(buf, frame_sz)
     else:
-        -- sub $F,%rsp (imm32 form): 48 81 ec <F u32le>
         do append(buf, 72)
         do append(buf, 129)
         do append(buf, 236)
@@ -5566,44 +6015,31 @@ func nc_emit_prologue(buf, frame_sz):
     return buf
 end
 
-func nc_emit_read(buf, scratch_base_d, scratch_sz):
-    -- xor %eax,%eax (eax=0 = read)
+func nc_emit_arg_copies_loop(buf, k, n):
+    if k >= n:
+        return buf
+    end
+    let src_mag = 16 + nc_mul8(n - 1 - k)
+    let dst_mag = nc_local_mag(k)
+    buf = nc_emit_disp_rbp_load_rax(buf, 0, src_mag)
+    buf = nc_emit_disp_rbp_store_rax(buf, 1, dst_mag)
+    return nc_emit_arg_copies_loop(buf, k + 1, n)
+end
+
+func nc_emit_read(buf, n_locals, scratch_sz):
     do append(buf, 49)
     do append(buf, 192)
-    -- xor %edi,%edi (edi=0 = stdin)
     do append(buf, 49)
     do append(buf, 255)
-    -- lea scratch_base(%rbp),%rsi: 48 8d 75 <d8>
-    do append(buf, 72)
-    do append(buf, 141)
-    do append(buf, 117)
-    do append(buf, scratch_base_d)
-    -- mov $scratch_sz,%edx: ba <imm32>
+    buf = nc_emit_disp_rbp_lea_rsi(buf, 1, nc_mul8(n_locals) + scratch_sz)
     do append(buf, 186)
     buf = nc_append_le32(buf, scratch_sz)
-    -- syscall
     do append(buf, 15)
     do append(buf, 5)
     return buf
 end
 
-func nc_emit_read_byte(buf, scratch_k_d):
-    -- movzbq scratch+k(%rbp),%rax; push %rax
-    -- 48 0f b6 45 <d8>; 50
-    do append(buf, 72)
-    do append(buf, 15)
-    do append(buf, 182)
-    do append(buf, 69)
-    do append(buf, scratch_k_d)
-    do append(buf, 80)
-    return buf
-end
-
 func nc_emit_push_int(buf, n):
-    -- movabs $n,%rax; push %rax: 48 b8 <n:u64le>; 50
-    -- General LE64 (not the <256 fast path): a literal >= 256 must encode all 8
-    -- bytes, else `append` faults on the raw value. O(value) for huge literals
-    -- (documented debt); correct and fast for any literal a straight-line probe uses.
     do append(buf, 72)
     do append(buf, 184)
     buf = nc_append_le64(buf, n)
@@ -5612,34 +6048,29 @@ func nc_emit_push_int(buf, n):
 end
 
 func nc_emit_push_bool(buf, n):
-    -- push $0/$1: 6a <n>
     do append(buf, 106)
     do append(buf, n)
     return buf
 end
 
-func nc_emit_load_local(buf, local_d):
-    -- mov local_i(%rbp),%rax; push %rax: 48 8b 45 <d8>; 50
-    do append(buf, 72)
-    do append(buf, 139)
-    do append(buf, 69)
-    do append(buf, local_d)
+func nc_emit_load_local(buf, slot):
+    buf = nc_emit_disp_rbp_load_rax(buf, 1, nc_local_mag(slot))
     do append(buf, 80)
     return buf
 end
 
-func nc_emit_store_local(buf, local_d):
-    -- pop %rax; mov %rax,local_i(%rbp): 58; 48 89 45 <d8>
+func nc_emit_store_local(buf, slot):
     do append(buf, 88)
-    do append(buf, 72)
-    do append(buf, 137)
-    do append(buf, 69)
-    do append(buf, local_d)
+    return nc_emit_disp_rbp_store_rax(buf, 1, nc_local_mag(slot))
+end
+
+func nc_emit_read_byte(buf, fn, scratch_sz, k):
+    buf = nc_emit_disp_rbp_read_byte(buf, 1, nc_mul8(fn.3) + scratch_sz - k)
+    do append(buf, 80)
     return buf
 end
 
 func nc_emit_add(buf):
-    -- pop %rcx; pop %rax; add %rcx,%rax; push %rax: 59 58 48 01 c8 50
     do append(buf, 89)
     do append(buf, 88)
     do append(buf, 72)
@@ -5650,7 +6081,6 @@ func nc_emit_add(buf):
 end
 
 func nc_emit_sub(buf):
-    -- pop %rcx; pop %rax; sub %rcx,%rax; push %rax: 59 58 48 29 c8 50
     do append(buf, 89)
     do append(buf, 88)
     do append(buf, 72)
@@ -5661,8 +6091,6 @@ func nc_emit_sub(buf):
 end
 
 func nc_emit_cmp_setcc(buf, setcc_byte):
-    -- pop %rcx; pop %rax; cmp %rcx,%rax; setcc %dl; movzbq %dl,%rax; push %rax
-    -- 59 58 48 39 c8 0f <setcc_byte> c2 48 0f b6 c2 50
     do append(buf, 89)
     do append(buf, 88)
     do append(buf, 72)
@@ -5680,7 +6108,6 @@ func nc_emit_cmp_setcc(buf, setcc_byte):
 end
 
 func nc_emit_not(buf):
-    -- pop %rax; test %rax,%rax; sete %al; movzbq %al,%rax; push %rax
     do append(buf, 88)
     do append(buf, 72)
     do append(buf, 133)
@@ -5696,14 +6123,118 @@ func nc_emit_not(buf):
     return buf
 end
 
-func nc_emit_ret_epilogue(buf, result_d):
-    -- pop %rax; mov %rax,result(%rbp)
+func nc_emit_ret(buf):
+    do append(buf, 88)
+    do append(buf, 201)
+    do append(buf, 195)
+    return buf
+end
+
+func nc_emit_br(buf, target, base):
+    do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_br_if_false(buf, target, base):
     do append(buf, 88)
     do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 132)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_br_and(buf, target, base):
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 132)
+    buf = nc_append_rel32(buf, target, base)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    return buf
+end
+
+func nc_emit_br_or(buf, target, base):
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 133)
+    buf = nc_append_rel32(buf, target, base)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    return buf
+end
+
+func nc_emit_call(buf, target, base, nargs):
+    do append(buf, 232)
+    buf = nc_append_rel32(buf, target, base)
+    let cleanup = nc_mul8(nargs)
+    if cleanup <= 127:
+        do append(buf, 72)
+        do append(buf, 131)
+        do append(buf, 196)
+        do append(buf, cleanup)
+    else:
+        do append(buf, 72)
+        do append(buf, 129)
+        do append(buf, 196)
+        buf = nc_append_le32(buf, cleanup)
+    end
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_tail_copy_loop(buf, k, nf, ng):
+    if k >= nf:
+        return buf
+    end
+    let src = nc_mul8(nf - 1 - k)
+    let dst = nc_tail_dst_pair(ng, k)
+    buf = nc_emit_rsp_load_rax(buf, src)
+    buf = nc_emit_disp_rbp_store_rax(buf, dst.0, dst.1)
+    return nc_emit_tail_copy_loop(buf, k + 1, nf, ng)
+end
+
+func nc_emit_tail_call(buf, target, base, ng, nf):
+    do append(buf, 76)
+    do append(buf, 139)
+    do append(buf, 93)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 139)
+    do append(buf, 85)
+    do append(buf, 0)
+    buf = nc_emit_tail_copy_loop(buf, 0, nf, ng)
+    let rslot = nc_rslot_pair(ng, nf)
+    buf = nc_emit_disp_rbp_store_r11(buf, rslot.0, rslot.1)
+    buf = nc_emit_disp_rbp_lea_rsp(buf, rslot.0, rslot.1)
+    do append(buf, 76)
     do append(buf, 137)
-    do append(buf, 69)
-    do append(buf, result_d)
-    -- write(1, &result, 8): b8 01 00 00 00; bf 01 00 00 00; 48 8d 75 <d8>; ba 08 00 00 00; 0f 05
+    do append(buf, 213)
+    do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_entry_stub(buf, main_entry):
+    do append(buf, 232)
+    buf = nc_append_rel32(buf, main_entry, 5)
+    do append(buf, 80)
     do append(buf, 184)
     do append(buf, 1)
     do append(buf, 0)
@@ -5715,9 +6246,8 @@ func nc_emit_ret_epilogue(buf, result_d):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 72)
-    do append(buf, 141)
-    do append(buf, 117)
-    do append(buf, result_d)
+    do append(buf, 137)
+    do append(buf, 230)
     do append(buf, 186)
     do append(buf, 8)
     do append(buf, 0)
@@ -5725,7 +6255,6 @@ func nc_emit_ret_epilogue(buf, result_d):
     do append(buf, 0)
     do append(buf, 15)
     do append(buf, 5)
-    -- exit_group(0): b8 e7 00 00 00; 31 ff; 0f 05
     do append(buf, 184)
     do append(buf, 231)
     do append(buf, 0)
@@ -5738,178 +6267,101 @@ func nc_emit_ret_epilogue(buf, result_d):
     return buf
 end
 
-func nc_emit_br(buf, disp):
-    -- jmp rel32
-    do append(buf, 233)
-    buf = nc_append_le32(buf, disp)
-    return buf
-end
-
-func nc_emit_br_if_false(buf, disp):
-    -- pop %rax; test %rax,%rax; jz rel32
-    do append(buf, 88)
-    do append(buf, 72)
-    do append(buf, 133)
-    do append(buf, 192)
-    do append(buf, 15)
-    do append(buf, 132)
-    buf = nc_append_le32(buf, disp)
-    return buf
-end
-
-func nc_emit_br_and(buf, disp):
-    -- mov (%rsp),%rax; test %rax,%rax; jz rel32; add $8,%rsp
-    do append(buf, 72)
-    do append(buf, 139)
-    do append(buf, 4)
-    do append(buf, 36)
-    do append(buf, 72)
-    do append(buf, 133)
-    do append(buf, 192)
-    do append(buf, 15)
-    do append(buf, 132)
-    buf = nc_append_le32(buf, disp)
-    do append(buf, 72)
-    do append(buf, 131)
-    do append(buf, 196)
-    do append(buf, 8)
-    return buf
-end
-
-func nc_emit_br_or(buf, disp):
-    -- mov (%rsp),%rax; test %rax,%rax; jnz rel32; add $8,%rsp
-    do append(buf, 72)
-    do append(buf, 139)
-    do append(buf, 4)
-    do append(buf, 36)
-    do append(buf, 72)
-    do append(buf, 133)
-    do append(buf, 192)
-    do append(buf, 15)
-    do append(buf, 133)
-    buf = nc_append_le32(buf, disp)
-    do append(buf, 72)
-    do append(buf, 131)
-    do append(buf, 196)
-    do append(buf, 8)
-    return buf
-end
-
--- ====================================================================
--- MAIN LOWERING LOOP
--- ====================================================================
-
--- hfound: 1 if an input handle exists (clogger was called), 0 otherwise.
--- hslot:  the local slot index of the handle variable.
--- CLOGGER; STORE_LOCAL h -> already handled by emitting read() at prologue; skip 2 opcodes.
--- LOAD_LOCAL h; PUSH_INT k; INDEX -> emit movzbq scratch+k(%rbp),%rax; push; skip 3 opcodes.
--- All other locals lower normally. Branches resolve through the pass-1 offset table.
-func nc_lower_loop(code, i, n, buf, scratch_sz, result_d, hfound, hslot, offs):
+func nc_lower_loop(fn, funcs, layout, layouts, i, n, buf):
     if i >= n:
         return buf
     end
+    let code = fn.4
     let instr = get(code, i)
     let op = instr.0
     let a = instr.1
-    let g = nc_group(code, i, n, hfound, hslot)
-    -- CLOGGER; STORE_LOCAL h -> the read() was already emitted at prologue; skip both opcodes
+    let hfound = layout.3
+    let hslot = layout.4
+    let scratch_sz = layout.5
+    let g = nc_group(code, i, n, fn, funcs, hfound, hslot, scratch_sz)
     if op == 33:
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
+        return nc_lower_loop(fn, funcs, layout, layouts, g.1, n, buf)
     end
-    -- LOAD_LOCAL h; PUSH_INT k; INDEX -> emit movzbq scratch+k(%rbp),%rax; push
     if op == 3 and hfound != 0 and a == hslot:
-        let k = get(code, i + 1).1
-        let k_d = nc_scratch_k_disp(scratch_sz, k)
-        buf = nc_emit_read_byte(buf, k_d)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
+        buf = nc_emit_read_byte(buf, fn, scratch_sz, get(code, i + 1).1)
+        return nc_lower_loop(fn, funcs, layout, layouts, g.1, n, buf)
     end
     if op == 0:
         buf = nc_emit_push_int(buf, a)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 1:
+    elif op == 1:
         buf = nc_emit_push_bool(buf, a)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 3:
-        let d = nc_local_disp(scratch_sz, a)
-        buf = nc_emit_load_local(buf, d)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 4:
-        let d = nc_local_disp(scratch_sz, a)
-        buf = nc_emit_store_local(buf, d)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 5:
+    elif op == 3:
+        buf = nc_emit_load_local(buf, a)
+    elif op == 4:
+        buf = nc_emit_store_local(buf, a)
+    elif op == 5:
         buf = nc_emit_add(buf)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 6:
+    elif op == 6:
         buf = nc_emit_sub(buf)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    -- Comparisons (unsigned setcc):
-    -- LT=7: setb=0x92, LE=8: setbe=0x96, GT=9: seta=0x97, GE=10: setae=0x93
-    -- EQ=11: sete=0x94, NE=12: setne=0x95
-    if op == 7:
+    elif op == 7:
         buf = nc_emit_cmp_setcc(buf, 146)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 8:
+    elif op == 8:
         buf = nc_emit_cmp_setcc(buf, 150)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 9:
+    elif op == 9:
         buf = nc_emit_cmp_setcc(buf, 151)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 10:
+    elif op == 10:
         buf = nc_emit_cmp_setcc(buf, 147)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 11:
+    elif op == 11:
         buf = nc_emit_cmp_setcc(buf, 148)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 12:
+    elif op == 12:
         buf = nc_emit_cmp_setcc(buf, 149)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 13:
+    elif op == 13:
         buf = nc_emit_not(buf)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
+    elif op == 16:
+        buf = nc_emit_br(buf, layout.0 + get(layout.1, a), layout.0 + get(layout.1, i) + 5)
+    elif op == 17:
+        buf = nc_emit_br_if_false(buf, layout.0 + get(layout.1, a), layout.0 + get(layout.1, i) + 10)
+    elif op == 18:
+        buf = nc_emit_br_and(buf, layout.0 + get(layout.1, a), layout.0 + get(layout.1, i) + 13)
+    elif op == 19:
+        buf = nc_emit_br_or(buf, layout.0 + get(layout.1, a), layout.0 + get(layout.1, i) + 13)
+    elif op == 20:
+        let callee_layout = get(layouts, instr.1)
+        if nc_is_tail_call(code, i, n):
+            buf = nc_emit_tail_call(buf, callee_layout.0, layout.0 + get(layout.1, i) + g.0, fn.2, instr.2)
+        else:
+            buf = nc_emit_call(buf, callee_layout.0, layout.0 + get(layout.1, i) + 5, instr.2)
+        end
+    elif op == 21:
+        buf = nc_emit_ret(buf)
     end
-    if op == 16:
-        let disp = nc_branch_disp_from_layout(op, i, a, offs)
-        buf = nc_emit_br(buf, disp)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 17:
-        let disp = nc_branch_disp_from_layout(op, i, a, offs)
-        buf = nc_emit_br_if_false(buf, disp)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 18:
-        let disp = nc_branch_disp_from_layout(op, i, a, offs)
-        buf = nc_emit_br_and(buf, disp)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 19:
-        let disp = nc_branch_disp_from_layout(op, i, a, offs)
-        buf = nc_emit_br_or(buf, disp)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    if op == 21:
-        buf = nc_emit_ret_epilogue(buf, result_d)
-        return nc_lower_loop(code, g.1, n, buf, scratch_sz, result_d, hfound, hslot, offs)
-    end
-    return buf
+    return nc_lower_loop(fn, funcs, layout, layouts, g.1, n, buf)
 end
 
--- ====================================================================
--- PADDING
--- ====================================================================
+func nc_emit_function(buf, fn, funcs, layout, layouts):
+    let start_len = length(freeze(buf))
+    buf = nc_emit_prologue(buf, layout.6)
+    buf = nc_emit_arg_copies_loop(buf, 0, fn.2)
+    if layout.3 != 0:
+        buf = nc_emit_read(buf, fn.3, layout.5)
+    end
+    let after_prefix = length(freeze(buf)) - start_len
+    if after_prefix != layout.7:
+        return (nc_fail(418, 0, "prefix"), buf)
+    end
+    buf = nc_lower_loop(fn, funcs, layout, layouts, 0, count(fn.4), buf)
+    let len = length(freeze(buf)) - start_len
+    if len != layout.8:
+        return (nc_fail(418, 0, "length"), buf)
+    end
+    return (0, buf)
+end
+
+func nc_emit_functions_loop(buf, funcs, layouts, i, n):
+    if i >= n:
+        return (0, buf)
+    end
+    let r = nc_emit_function(buf, get(funcs, i), funcs, get(layouts, i), layouts)
+    if r.0 != 0:
+        return r
+    end
+    return nc_emit_functions_loop(r.1, funcs, layouts, i + 1, n)
+end
 
 func nc_emit_zeroes_loop(buf, n):
     if n <= 0:
@@ -5919,93 +6371,48 @@ func nc_emit_zeroes_loop(buf, n):
     return nc_emit_zeroes_loop(buf, n - 1)
 end
 
--- ====================================================================
--- MAIN
--- ====================================================================
-
 func main():
     let source = clogger()
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
-
-    -- AST verifier
     let ast_result = nc_verify_ast(nodes, parsed.0)
     if ast_result != 0:
         return 0
     end
-
     let prog = lower_program(nodes, parsed.0)
-
-    -- Bytecode verifier
     let bc_result = nc_verify_bytecode(prog)
     if bc_result != 0:
         return 0
     end
-
-    -- Get main function info
+    let pass1 = nc_pass1_program(prog)
+    if pass1.0 != 0:
+        return 0
+    end
     let funcs = prog.0
-    let main_idx = prog.2
-    let fn = get(funcs, main_idx)
-    let n_locals = fn.3
-    let code = fn.4
-
-    -- Find input handle slot (if any clogger was used)
-    let clogger_count_bc = nc_count_clogger_bc_loop(code, 0, count(code))
-    let hfound = 0
-    if clogger_count_bc == 1:
-        hfound = 1
-    end
-    let hslot = nc_find_handle_slot(code)
-
-    -- Pass 1 native layout and branch validation
-    let layout = nc_pass1_layout(code, hfound, hslot)
-    let offs = layout.0
-    let bounds = layout.1
-    let pass1_body_len = layout.2
-    let branch_result = nc_verify_branch_targets(code, hfound, hslot, offs, bounds)
-    if branch_result != 0:
-        return 0
-    end
-
-    -- Compute frame parameters
-    let max_k = nc_scan_max_k(code, hfound, hslot)
-    let stack_result = nc_cfg_max_stack(code, hfound, hslot)
-    if stack_result.0 != 0:
-        return 0
-    end
-    let max_stack = stack_result.1
-    let scratch_sz = nc_scratch_size(max_k)
-    let frame_sz = nc_frame_total(scratch_sz, n_locals, max_stack)
-
-    -- Compute displacements
-    let result_d = 248
-    let scratch_base_d = nc_scratch_base_disp(scratch_sz)
-
-    -- Build native code buffer
+    let layouts = pass1.1
+    let main_layout = get(layouts, prog.2)
     let cbuf = new_buffer()
-    cbuf = nc_emit_prologue(cbuf, frame_sz)
-    -- Emit one read() into scratch buffer (only if input handle is used)
-    if hfound != 0:
-        cbuf = nc_emit_read(cbuf, scratch_base_d, scratch_sz)
-    end
-    let prefix_len = length(freeze(cbuf))
-    cbuf = nc_lower_loop(code, 0, count(code), cbuf, scratch_sz, result_d, hfound, hslot, offs)
-    let frozen_code = freeze(cbuf)
-    let code_len = length(frozen_code)
-    if code_len - prefix_len != pass1_body_len:
-        let len_fail = nc_fail(418, 0, "length")
+    cbuf = nc_emit_entry_stub(cbuf, main_layout.0)
+    let emitted = nc_emit_functions_loop(cbuf, funcs, layouts, 0, count(funcs))
+    if emitted.0 != 0:
         return 0
     end
-
-    -- Compute ELF layout
+    let frozen_code = freeze(emitted.1)
+    let code_len = length(frozen_code)
+    if code_len != pass1.2:
+        let fail = nc_fail(418, 0, "program-length")
+        return 0
+    end
     let img = nc_roundup_page(120 + code_len)
     let pad = img - 120 - code_len
-
-    -- Build ELF
+    let align_hi = 0
+    if not nc_funcs_have_call(funcs):
+        align_hi = 129
+    end
     let buf = new_buffer()
     buf = nc_emit_ehdr(buf)
-    buf = nc_emit_phdr(buf, img)
+    buf = nc_emit_phdr(buf, img, align_hi)
     buf = append_str(buf, frozen_code)
     buf = nc_emit_zeroes_loop(buf, pad)
     do flogger(freeze(buf))
