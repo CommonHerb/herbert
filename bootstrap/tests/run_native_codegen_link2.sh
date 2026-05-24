@@ -290,35 +290,11 @@ check_reject() {
 }
 
 # Create rejection probes
-cat > "$tmp/rj01.herb" << 'HERB'
-func main():
-    return length("hello")
-end
-HERB
 # rj02: handle used outside index() -- returned bare
 cat > "$tmp/rj02.herb" << 'HERB'
 func main():
     let s = clogger()
     return s
-end
-HERB
-cat > "$tmp/rj03.herb" << 'HERB'
-func main():
-    let k = 0
-    let input = clogger()
-    return index(input, k)
-end
-HERB
-cat > "$tmp/rj04.herb" << 'HERB'
-func main():
-    let input = clogger()
-    return length(input)
-end
-HERB
-cat > "$tmp/rj05.herb" << 'HERB'
-func main():
-    let t = (1, 2)
-    return t.0
 end
 HERB
 cat > "$tmp/rj06.herb" << 'HERB'
@@ -353,24 +329,13 @@ func main(x):
     return x
 end
 HERB
-# rj15: inline index(clogger(),0) -- clogger() in expression, not alias
-cat > "$tmp/rj15.herb" << 'HERB'
-func main():
-    return index(clogger(),0)
-end
-HERB
 
-check_reject "string_literal"   "$tmp/rj01.herb"
 check_reject "handle_escape"    "$tmp/rj02.herb"
-check_reject "nonlit_index"     "$tmp/rj03.herb"
-check_reject "length_builtin"   "$tmp/rj04.herb"
-check_reject "tuple"            "$tmp/rj05.herb"
 check_reject "array"            "$tmp/rj06.herb"
 check_reject "buffer"           "$tmp/rj07.herb"
 check_reject "flogger"          "$tmp/rj08.herb"
 check_reject "double_clogger"   "$tmp/rj10.herb"
 check_reject "params"           "$tmp/rj12.herb"
-check_reject "inline_clogger"   "$tmp/rj15.herb"
 
 # ====================================================================
 # Anti-over-rejection: accepted probes compile and run
@@ -439,5 +404,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link2 sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs C bootstrap oracle; disassembly gate; 11-probe rejection battery incl. double-clogger + inline-clogger + 3 anti-over-rejection)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs C bootstrap oracle; disassembly gate; 6-probe rejection battery incl. double-clogger + 3 anti-over-rejection; string/tuple/length/nonlit-index/inline-clogger rejects retired -- now in-subset at mercer Link 5)"
 exit 0

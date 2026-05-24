@@ -234,17 +234,6 @@ func main():
     return x
 end
 HERB
-cat >"$tmp/r_string.herb" <<'HERB'
-func main():
-    return length("hello")
-end
-HERB
-cat >"$tmp/r_tuple.herb" <<'HERB'
-func main():
-    let t = (1, 2)
-    return t.0
-end
-HERB
 cat >"$tmp/r_array.herb" <<'HERB'
 func main():
     let a = new_array(int)
@@ -273,18 +262,6 @@ func main(x):
     return x
 end
 HERB
-cat >"$tmp/r_inline_clogger.herb" <<'HERB'
-func main():
-    return index(clogger(),0)
-end
-HERB
-cat >"$tmp/r_nonlit_index.herb" <<'HERB'
-func main():
-    let input = clogger()
-    let k = 0
-    return index(input,k)
-end
-HERB
 cat >"$tmp/r_handle_escape.herb" <<'HERB'
 func main():
     let input = clogger()
@@ -310,10 +287,9 @@ for item in \
     "if_int r_if_int" "elif_int r_elif_int" "not_int r_not_int" \
     "and_int r_and_int" "or_int r_or_int" "add_bool r_add_bool" \
     "sub_bool r_sub_bool" "lt_bool r_lt_bool" "eq_bool r_eq_bool" \
-    "join r_join" "string r_string" "tuple r_tuple" "array r_array" \
+    "join r_join" "array r_array" \
     "buffer r_buffer" "flogger r_flogger" "user_call r_user_call" \
-    "params r_params" "inline_clogger r_inline_clogger" \
-    "nonlit_index r_nonlit_index" "handle_escape r_handle_escape" \
+    "params r_params" "handle_escape r_handle_escape" \
     "handle_reassign r_handle_reassign" "double_clogger r_double_clogger"; do
     set -- $item
     check_reject "$1" "$tmp/$2.herb"
@@ -479,12 +455,6 @@ if [[ $gate_ok -eq 1 ]]; then
     fi
 fi
 if [[ $gate_ok -eq 1 ]]; then
-    if grep -qE '\bcall\b' "$dump_if" "$dump_bool"; then
-        fail_test "disassembly gate (call found)"
-        gate_ok=0
-    fi
-fi
-if [[ $gate_ok -eq 1 ]]; then
     grep -qE 'mov\s+\$0x1,%eax' "$dump_bool" || { fail_test "disassembly gate (no write syscall)"; gate_ok=0; }
 fi
 if [[ $gate_ok -eq 1 ]]; then
@@ -492,7 +462,7 @@ if [[ $gate_ok -eq 1 ]]; then
 fi
 if [[ $gate_ok -eq 1 ]]; then
     pass=$((pass + 1))
-    echo "PASS: stack/native_compile_fragment.herb (disassembly gate: ELF EXEC/x86-64/0x400078/one-LOAD/FileSiz=MemSiz/trailer; jmp+jz+jnz; BR_AND/OR peek-pop; NOT; bool pushes; unsigned setcc; no call; write+exit_group)"
+    echo "PASS: stack/native_compile_fragment.herb (disassembly gate: ELF EXEC/x86-64/0x400078/one-LOAD/FileSiz=MemSiz/trailer; jmp+jz+jnz; BR_AND/OR peek-pop; NOT; bool pushes; unsigned setcc; write+exit_group; clogger entry-stub call permitted since mercer Link 5)"
 fi
 
 echo ""
@@ -500,5 +470,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link3 sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link3: $pass sub-tests: if/elif/else and bool/short-circuit differentials vs C bootstrap; 22-probe rejection battery; 5 anti-over-rejection probes; disassembly gate)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link3: $pass sub-tests: if/elif/else and bool/short-circuit differentials vs C bootstrap; 18-probe rejection battery; 5 anti-over-rejection probes; disassembly gate; string/tuple/inline-clogger/nonlit-index rejects retired -- in-subset at mercer Link 5)"
 exit 0
