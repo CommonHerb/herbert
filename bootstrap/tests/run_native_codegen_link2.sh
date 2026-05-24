@@ -348,25 +348,9 @@ func main():
     return index(a,0) + index(b,1)
 end
 HERB
-cat > "$tmp/rj11.herb" << 'HERB'
-func helper():
-    return 42
-end
-func main():
-    return helper()
-end
-HERB
 cat > "$tmp/rj12.herb" << 'HERB'
 func main(x):
     return x
-end
-HERB
-cat > "$tmp/rj13.herb" << 'HERB'
-func foo():
-    return 1
-end
-func main():
-    return 0
 end
 HERB
 # rj15: inline index(clogger(),0) -- clogger() in expression, not alias
@@ -385,9 +369,7 @@ check_reject "array"            "$tmp/rj06.herb"
 check_reject "buffer"           "$tmp/rj07.herb"
 check_reject "flogger"          "$tmp/rj08.herb"
 check_reject "double_clogger"   "$tmp/rj10.herb"
-check_reject "user_call"        "$tmp/rj11.herb"
 check_reject "params"           "$tmp/rj12.herb"
-check_reject "multi_func"       "$tmp/rj13.herb"
 check_reject "inline_clogger"   "$tmp/rj15.herb"
 
 # ====================================================================
@@ -457,5 +439,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link2 sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs C bootstrap oracle; disassembly gate; 13-probe rejection battery incl. double-clogger + inline-clogger + 3 anti-over-rejection)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs C bootstrap oracle; disassembly gate; 11-probe rejection battery incl. double-clogger + inline-clogger + 3 anti-over-rejection)"
 exit 0

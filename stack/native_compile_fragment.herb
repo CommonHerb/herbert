@@ -4270,91 +4270,6 @@ func nc_unreachable_check(nodes, prog_idx):
     return nc_unreachable_check_loop(prog.2, 0, count(prog.2), nodes)
 end
 
-func nc_body_is_single_return_int(nodes, body_idx, value_text):
-    let body = get(nodes, body_idx)
-    if count(body.2) != 1:
-        return false
-    end
-    let stmt = get(nodes, get(body.2, 0))
-    if not equal(stmt.0, "return"):
-        return false
-    end
-    let expr = get(nodes, get(stmt.2, 0))
-    if not equal(expr.0, "int"):
-        return false
-    end
-    return equal(get(expr.1, 0), value_text)
-end
-
-func nc_body_is_single_return_call(nodes, body_idx, callee_name):
-    let body = get(nodes, body_idx)
-    if count(body.2) != 1:
-        return false
-    end
-    let stmt = get(nodes, get(body.2, 0))
-    if not equal(stmt.0, "return"):
-        return false
-    end
-    let expr = get(nodes, get(stmt.2, 0))
-    if not equal(expr.0, "call"):
-        return false
-    end
-    if count(expr.2) != 0:
-        return false
-    end
-    return equal(get(expr.1, 0), callee_name)
-end
-
-func nc_legacy_link2_user_call_probe_loop(func_kids, i, n, nodes, helper_ok, main_ok):
-    if i >= n:
-        return helper_ok != 0 and main_ok != 0
-    end
-    let fn = get(nodes, get(func_kids, i))
-    let name = get(fn.1, 0)
-    let params = get(nodes, get(fn.2, 0))
-    let body_idx = get(fn.2, 1)
-    if equal(name, "helper") and count(params.1) == 0 and nc_body_is_single_return_int(nodes, body_idx, "42"):
-        helper_ok = 1
-    end
-    if equal(name, "main") and nc_body_is_single_return_call(nodes, body_idx, "helper"):
-        main_ok = 1
-    end
-    return nc_legacy_link2_user_call_probe_loop(func_kids, i + 1, n, nodes, helper_ok, main_ok)
-end
-
-func nc_legacy_link2_user_call_probe(nodes, prog_idx):
-    let prog = get(nodes, prog_idx)
-    if count(prog.2) != 2:
-        return false
-    end
-    return nc_legacy_link2_user_call_probe_loop(prog.2, 0, count(prog.2), nodes, 0, 0)
-end
-
-func nc_legacy_prior_multi_probe_loop(func_kids, i, n, nodes, helper_ok, main_ok):
-    if i >= n:
-        return helper_ok != 0 and main_ok != 0
-    end
-    let fn = get(nodes, get(func_kids, i))
-    let name = get(fn.1, 0)
-    let params = get(nodes, get(fn.2, 0))
-    let body_idx = get(fn.2, 1)
-    if (equal(name, "helper") or equal(name, "foo")) and count(params.1) == 0 and nc_body_is_single_return_int(nodes, body_idx, "1"):
-        helper_ok = 1
-    end
-    if equal(name, "main") and nc_body_is_single_return_int(nodes, body_idx, "0"):
-        main_ok = 1
-    end
-    return nc_legacy_prior_multi_probe_loop(func_kids, i + 1, n, nodes, helper_ok, main_ok)
-end
-
-func nc_legacy_prior_multi_probe(nodes, prog_idx):
-    let prog = get(nodes, prog_idx)
-    if count(prog.2) != 2:
-        return false
-    end
-    return nc_legacy_prior_multi_probe_loop(prog.2, 0, count(prog.2), nodes, 0, 0)
-end
-
 func nc_seed_params_loop(params, i, n, sig, fn_idx, env):
     if i >= n:
         return env
@@ -4876,12 +4791,6 @@ func nc_verify_ast(nodes, prog_idx):
     let tbl = nc_table_check(nodes, prog_idx)
     if tbl != 0:
         return tbl
-    end
-    if nc_legacy_link2_user_call_probe(nodes, prog_idx):
-        return nc_fail(409, 0, "helper")
-    end
-    if nc_legacy_prior_multi_probe(nodes, prog_idx):
-        return nc_fail(424, 0, "")
     end
     let prog = get(nodes, prog_idx)
     let sig0 = nc_sig_init(nodes, prog_idx)
