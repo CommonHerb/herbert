@@ -6046,6 +6046,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             return (nc_fail(411, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         has_clogger = 1
+        has_heap = 1
         stack = nc_stack_push(stack, nc_type_string())
     elif op == 34:
         let p = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
@@ -6522,7 +6523,7 @@ func nc_group_single_len(op):
         return 135
     end
     if op == 33:
-        return 79
+        return 91
     end
     if op == 34:
         return 44
@@ -6766,9 +6767,6 @@ func nc_entry_stub_len(has_clogger, has_heap):
     if has_heap != 0:
         heap_len = 70
     end
-    if has_clogger != 0:
-        return heap_len + 55
-    end
     return heap_len + 35
 end
 
@@ -6796,9 +6794,6 @@ func nc_pass1_program(prog, metas, has_clogger, has_heap):
     end
     let main_layout = get(r.1, prog.2)
     let call_base = 5
-    if has_clogger != 0:
-        call_base = 18
-    end
     if has_heap != 0:
         call_base = call_base + 70
     end
@@ -7621,15 +7616,26 @@ func nc_emit_aggregate_ret_stores(buf, k):
 end
 
 func nc_emit_clogger(buf):
-    do append(buf, 73)
-    do append(buf, 129)
-    do append(buf, 253)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 1)
-    do append(buf, 0)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 244)
+    do append(buf, 77)
+    do append(buf, 49)
+    do append(buf, 237)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 250)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 226)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 234)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
     do append(buf, 116)
-    do append(buf, 31)
+    do append(buf, 22)
     do append(buf, 49)
     do append(buf, 192)
     do append(buf, 49)
@@ -7640,37 +7646,29 @@ func nc_emit_clogger(buf):
     do append(buf, 76)
     do append(buf, 1)
     do append(buf, 238)
-    do append(buf, 186)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 1)
-    do append(buf, 0)
-    do append(buf, 76)
-    do append(buf, 41)
-    do append(buf, 234)
     do append(buf, 15)
     do append(buf, 5)
     do append(buf, 72)
-    do append(buf, 131)
-    do append(buf, 248)
-    do append(buf, 0)
+    do append(buf, 133)
+    do append(buf, 192)
     do append(buf, 126)
-    do append(buf, 40)
+    do append(buf, 44)
     do append(buf, 73)
     do append(buf, 1)
     do append(buf, 197)
     do append(buf, 235)
-    do append(buf, 216)
+    do append(buf, 220)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
     do append(buf, 49)
     do append(buf, 192)
     do append(buf, 49)
     do append(buf, 255)
-    do append(buf, 76)
+    do append(buf, 72)
     do append(buf, 137)
     do append(buf, 230)
-    do append(buf, 76)
-    do append(buf, 1)
-    do append(buf, 238)
     do append(buf, 186)
     do append(buf, 1)
     do append(buf, 0)
@@ -7680,8 +7678,11 @@ func nc_emit_clogger(buf):
     do append(buf, 5)
     do append(buf, 72)
     do append(buf, 131)
-    do append(buf, 248)
-    do append(buf, 0)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
     do append(buf, 116)
     do append(buf, 12)
     do append(buf, 184)
@@ -7696,6 +7697,12 @@ func nc_emit_clogger(buf):
     do append(buf, 0)
     do append(buf, 15)
     do append(buf, 5)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 77)
+    do append(buf, 1)
+    do append(buf, 238)
     do append(buf, 65)
     do append(buf, 84)
     do append(buf, 65)
@@ -8178,27 +8185,8 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap):
         buf = nc_emit_heap_stub(buf)
         call_shift = 70
     end
-    if has_clogger != 0:
-        do append(buf, 72)
-        do append(buf, 129)
-        do append(buf, 236)
-        buf = nc_append_le32(buf, 65552)
-        do append(buf, 73)
-        do append(buf, 137)
-        do append(buf, 228)
-        do append(buf, 69)
-        do append(buf, 49)
-        do append(buf, 237)
-        do append(buf, 232)
-        buf = nc_append_rel32(buf, main_entry, call_shift + 18)
-        do append(buf, 72)
-        do append(buf, 129)
-        do append(buf, 196)
-        buf = nc_append_le32(buf, 65552)
-    else:
-        do append(buf, 232)
-        buf = nc_append_rel32(buf, main_entry, call_shift + 5)
-    end
+    do append(buf, 232)
+    buf = nc_append_rel32(buf, main_entry, call_shift + 5)
     do append(buf, 80)
     do append(buf, 184)
     do append(buf, 1)

@@ -86,22 +86,39 @@ compile_probe() {
 check_runtime_frontier_cap() {
     local label="$1"
     local probe="$2"
-    total=$((total + 1))
     local elf="$tmp/${label}.elf"
-    local rt="$tmp/${label}.rt"
-    local out="$tmp/${label}.out"
     compile_probe "$label" "$probe" "$elf" || return
-    python3 - <<'PY' >"$rt"
-import sys
-sys.stdout.buffer.write(b"x" * 65537)
-PY
-    "$elf" <"$rt" >"$out" 2>/dev/null
-    local rc=$?
-    if [[ $rc -eq 0 || -s "$out" ]]; then
-        fail_test "frontier $label: expected native nonzero with no stdout, rc=$rc stdout=$(xxd -p "$out" | tr -d '\n')"
-        return
-    fi
-    pass=$((pass + 1))
+    # beaver lifted the 64 KiB stack-arena cap: native clogger now reads into the
+    # 16 MiB heap. (a) the old 64 KiB frontier now SUCCEEDS == C (obsolete-proof);
+    # (b) the exact 16 MiB heap cap succeeds == C; (c) the new frontier (> 16 MiB)
+    # faults native (nonzero, empty stdout) while C, which has no fixed cap, succeeds.
+    local sizes=(65537 16777216 16777217)
+    local kinds=(obsolete_64k exact_16M over_16M)
+    local i=0
+    while [[ $i -lt 3 ]]; do
+        total=$((total + 1))
+        local sz="${sizes[$i]}" kind="${kinds[$i]}"
+        python3 -c "import sys;sys.stdout.buffer.write(b'x'*${sz})" >"$tmp/${label}.${kind}.in"
+        "$elf" <"$tmp/${label}.${kind}.in" >"$tmp/${label}.${kind}.n" 2>/dev/null
+        local nrc=$?
+        "$HERBERT" "$probe" <"$tmp/${label}.${kind}.in" >"$tmp/${label}.${kind}.c" 2>/dev/null
+        local crc=$?
+        if [[ "$kind" == "over_16M" ]]; then
+            if [[ $nrc -ne 0 && ! -s "$tmp/${label}.${kind}.n" && $crc -eq 0 ]]; then
+                pass=$((pass + 1))
+            else
+                fail_test "frontier $label $kind: ${sz} B must fault native (rc=$nrc) while C succeeds (rc=$crc)"
+            fi
+        else
+            python3 -c "import sys;sys.stdout.buffer.write(int((open('$tmp/${label}.${kind}.c').read().strip() or '0')).to_bytes(8,'little'))" >"$tmp/${label}.${kind}.cle" 2>/dev/null
+            if [[ $nrc -eq 0 ]] && cmp -s "$tmp/${label}.${kind}.n" "$tmp/${label}.${kind}.cle"; then
+                pass=$((pass + 1))
+            else
+                fail_test "frontier $label $kind: ${sz} B must succeed == C (native rc=$nrc)"
+            fi
+        fi
+        i=$((i + 1))
+    done
 }
 
 # Stable / permanently-out source rejects.

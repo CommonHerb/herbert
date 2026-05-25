@@ -188,13 +188,10 @@ func main():
     return index("a", 1)
 end
 HERB
-python3 - <<'PY' >"$tmp/overcap.rt"
-import sys
-sys.stdout.buffer.write(b"x" * 65537)
-PY
 run_runtime_fault empty_input_oob "$tmp/oob_input.herb" "$tmp/empty.rt" yes
 run_runtime_fault literal_oob "$tmp/oob_lit.herb" "$tmp/empty.rt" yes
-run_runtime_fault overcap "$tmp/oob_input.herb" "$tmp/overcap.rt" no
+# (overcap 64 KiB native-fault retired at beaver: clogger now reads into the
+#  16 MiB heap. The capacity frontier moved to run_native_codegen_rejects.sh.)
 
 cat >"$tmp/r_slice.herb" <<'HERB'
 func main():
