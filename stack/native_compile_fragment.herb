@@ -3892,6 +3892,9 @@ func nc_diag_msg(code, payload):
     if code == 439:
         return "native-subset: missing NEW_ARRAY metadata"
     end
+    if code == 440:
+        return "native-subset: value-less builtin used as a value"
+    end
     return "native-subset: unknown error"
 end
 
@@ -4738,6 +4741,21 @@ func nc_constrain_string_value(pool, nodes, prog_idx, idx, env, sig, fn_idx, fun
     return (0, r.2, r.3, r.4)
 end
 
+func nc_constrain_flogger_string_value(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params, line):
+    let r = nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4)
+    end
+    if r.1 == nc_type_unknown():
+        return nc_constrain_expr(pool, nodes, prog_idx, idx, r.2, nc_type_string(), r.3, fn_idx, funcs, n_params)
+    end
+    let chk = nc_expect_concrete(pool, r.1, nc_type_string(), line)
+    if chk != 0:
+        return (chk, r.2, r.3, r.4)
+    end
+    return (0, r.2, r.3, r.4)
+end
+
 func nc_constrain_buffer_value(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params, line):
     let r = nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
     if r.0 != 0:
@@ -5053,6 +5071,9 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
             end
             return (0, nc_type_int(), a.2, a.3, a.4)
         end
+        if err_is_void_builtin(name):
+            return (nc_fail(440, node.3, name), 0, env, sig, 0)
+        end
         if err_is_builtin_name(name):
             return (nc_fail(438, node.3, name), 0, env, sig, 0)
         end
@@ -5201,7 +5222,11 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
                 return (0, env, sig, changed, 0)
             end
             if equal(name, "flogger"):
-                return (nc_fail(438, call_node.3, ""), env, sig, 0, 0)
+                if count(ckids) != 1:
+                    return (nc_fail(420, call_node.3, "flogger"), env, sig, 0, 0)
+                end
+                let s = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
+                return (s.0, s.1, s.2, s.3, 0)
             end
             return (nc_fail(404, node.3, name), env, sig, 0, 0)
         end
@@ -6023,7 +6048,11 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         has_clogger = 1
         stack = nc_stack_push(stack, nc_type_string())
     elif op == 34:
-        return (nc_fail(438, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        let p = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
+        if p.0 != 0:
+            return (p.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        stack = p.1
     else:
         return (nc_fail(408, 0, nc_opcode_name_for_diag(op)), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
     end
@@ -6494,6 +6523,9 @@ func nc_group_single_len(op):
     end
     if op == 33:
         return 79
+    end
+    if op == 34:
+        return 44
     end
     return 0
 end
@@ -7671,6 +7703,54 @@ func nc_emit_clogger(buf):
     return buf
 end
 
+func nc_emit_flogger(buf):
+    do append(buf, 90)
+    do append(buf, 94)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 116)
+    do append(buf, 37)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 235)
+    do append(buf, 226)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    return buf
+end
+
 func nc_emit_new_heap_header(buf, backing_size):
     do append(buf, 191)
     do append(buf, 24)
@@ -8238,6 +8318,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, i
         buf = nc_emit_arr_add(buf, get(meta.14, i).1)
     elif op == 33:
         buf = nc_emit_clogger(buf)
+    elif op == 34:
+        buf = nc_emit_flogger(buf)
     end
     return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, g.1, n, buf)
 end

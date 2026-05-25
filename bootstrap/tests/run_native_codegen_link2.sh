@@ -289,6 +289,21 @@ check_reject() {
     fi
 }
 
+check_reject_code() {
+    local label="$1"
+    local code="$2"
+    local probe_file="$3"
+    total=$((total + 1))
+    local out_file="$tmp/reject_${label}.elf"
+    local err_file="$tmp/reject_${label}.err"
+    "$HERBERT" "$backend" < "$probe_file" > "$out_file" 2>"$err_file"
+    if grep -q "ERR $code" "$out_file"; then
+        pass=$((pass + 1))
+    else
+        fail_test "reject $label: expected ERR $code, stdout: $(head -1 "$out_file"), stderr: $(head -1 "$err_file")"
+    fi
+}
+
 # Create rejection probes
 # rj02: handle used outside index() -- returned bare
 cat > "$tmp/rj02.herb" << 'HERB'
@@ -297,6 +312,7 @@ func main():
     return s
 end
 HERB
+# rj08: flogger-of-int remains illegal after flogger string output support.
 cat > "$tmp/rj08.herb" << 'HERB'
 func main():
     let input = clogger()
@@ -319,7 +335,7 @@ end
 HERB
 
 check_reject "handle_escape"    "$tmp/rj02.herb"
-check_reject "flogger"          "$tmp/rj08.herb"
+check_reject_code "flogger_int" 430 "$tmp/rj08.herb"
 check_reject "double_clogger"   "$tmp/rj10.herb"
 check_reject "params"           "$tmp/rj12.herb"
 

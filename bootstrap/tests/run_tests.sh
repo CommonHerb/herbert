@@ -1124,6 +1124,26 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    NATIVE_CODEGEN_LINK7="$PWD/run_native_codegen_link7.sh"
+    if [[ -f "$NATIVE_CODEGEN_LINK7" ]]; then
+        total=$((total + 1))
+        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK7"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    NATIVE_CODEGEN_REJECTS="$PWD/run_native_codegen_rejects.sh"
+    if [[ -f "$NATIVE_CODEGEN_REJECTS" ]]; then
+        total=$((total + 1))
+        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_REJECTS"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
     # Suke codegen forcing-function tests: the C bootstrap runs each probe
     # directly as the oracle, then the Herbert pipeline fragment compiles the
     # same embedded source and executes it on the VM with the same stdin.

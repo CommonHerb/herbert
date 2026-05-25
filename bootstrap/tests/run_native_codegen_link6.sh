@@ -363,12 +363,6 @@ func main():
     return slice("abc", 0, 1)
 end
 HERB
-cat >"$tmp/r_flogger.herb" <<'HERB'
-func main():
-    do flogger("x")
-    return 0
-end
-HERB
 cat >"$tmp/r_main_string.herb" <<'HERB'
 func main():
     return "x"
@@ -394,7 +388,6 @@ check_reject_code len_buffer 438 "$tmp/r_len_buffer.herb"
 check_reject_code index_buffer 438 "$tmp/r_index_buffer.herb"
 check_reject_code equal_buffer 438 "$tmp/r_equal_buffer.herb"
 check_reject_code slice 438 "$tmp/r_slice.herb"
-check_reject_code flogger 438 "$tmp/r_flogger.herb"
 check_reject_code main_string 432 "$tmp/r_main_string.herb"
 check_reject_code main_tuple 432 "$tmp/r_main_tuple.herb"
 

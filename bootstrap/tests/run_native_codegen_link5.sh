@@ -201,12 +201,6 @@ func main():
     return slice("abc", 0, 1)
 end
 HERB
-cat >"$tmp/r_flogger.herb" <<'HERB'
-func main():
-    do flogger("x")
-    return 0
-end
-HERB
 cat >"$tmp/r_multi_clogger.herb" <<'HERB'
 func main():
     let a = clogger()
@@ -286,7 +280,7 @@ end
 HERB
 
 for item in \
-    "slice 438 r_slice" "flogger 438 r_flogger" \
+    "slice 438 r_slice" \
     "multi_clogger 411 r_multi_clogger" "helper_clogger 404 r_helper_clogger" \
     "length_int 430 r_length_int" "index_key 430 r_index_key" "index_int 430 r_index_int" \
     "equal_mixed 430 r_equal_mixed" "equal_tuple 430 r_equal_tuple" \

@@ -234,12 +234,6 @@ func main():
     return x
 end
 HERB
-cat >"$tmp/r_flogger.herb" <<'HERB'
-func main():
-    do flogger("x")
-    return 0
-end
-HERB
 cat >"$tmp/r_user_call.herb" <<'HERB'
 func main():
     return helper()
@@ -275,7 +269,7 @@ for item in \
     "if_int r_if_int" "elif_int r_elif_int" "not_int r_not_int" \
     "and_int r_and_int" "or_int r_or_int" "add_bool r_add_bool" \
     "sub_bool r_sub_bool" "lt_bool r_lt_bool" "eq_bool r_eq_bool" \
-    "join r_join" "flogger r_flogger" "user_call r_user_call" \
+    "join r_join" "user_call r_user_call" \
     "params r_params" "handle_escape r_handle_escape" \
     "handle_reassign r_handle_reassign" "double_clogger r_double_clogger"; do
     set -- $item
@@ -457,5 +451,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link3 sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link3: $pass sub-tests: if/elif/else and bool/short-circuit differentials vs C bootstrap; 18-probe rejection battery; 5 anti-over-rejection probes; disassembly gate; string/tuple/inline-clogger/nonlit-index rejects retired -- in-subset at mercer Link 5)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link3: $pass sub-tests: if/elif/else and bool/short-circuit differentials vs C bootstrap; 17-probe rejection battery; 5 anti-over-rejection probes; disassembly gate; string/tuple/inline-clogger/nonlit-index rejects retired -- in-subset at mercer Link 5; flogger literal reject retired at Link 7)"
 exit 0
