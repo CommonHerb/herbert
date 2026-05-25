@@ -4646,6 +4646,226 @@ func nc_if_uses_name(nodes, kids, i, n, name):
     return nc_if_uses_name(nodes, kids, i + 1, n, name)
 end
 
+-- zelph: never-returning-function (type-bottom) recognition.
+func nc_expr_count_name(nodes, idx, name):
+    let node = get(nodes, idx)
+    if equal(node.0, "name") and equal(get(node.1, 0), name):
+        return 1
+    end
+    return nc_kids_count_name(nodes, node.2, 0, count(node.2), name)
+end
+
+func nc_kids_count_name(nodes, kids, i, n, name):
+    if i >= n:
+        return 0
+    end
+    return nc_expr_count_name(nodes, get(kids, i), name) + nc_kids_count_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_count_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return 0
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    let here = 0
+    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
+        here = nc_expr_count_name(nodes, get(stmt.2, 0), name)
+    elif equal(tag, "if"):
+        here = nc_if_count_name(nodes, stmt.2, 0, count(stmt.2), name)
+    end
+    return here + nc_body_count_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_count_name(nodes, kids, i, n, name):
+    if i >= n:
+        return 0
+    end
+    let arm = get(nodes, get(kids, i))
+    let here = 0
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        here = nc_expr_count_name(nodes, get(arm.2, 0), name)
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    return here + nc_body_count_name(nodes, body.2, 0, count(body.2), name) + nc_if_count_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_assigns_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return false
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    if equal(tag, "assign"):
+        if equal(get(stmt.1, 0), name):
+            return true
+        end
+    elif equal(tag, "if"):
+        if nc_if_assigns_name(nodes, stmt.2, 0, count(stmt.2), name):
+            return true
+        end
+    end
+    return nc_body_assigns_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_assigns_name(nodes, kids, i, n, name):
+    if i >= n:
+        return false
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    if nc_body_assigns_name(nodes, body.2, 0, count(body.2), name):
+        return true
+    end
+    return nc_if_assigns_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_let_target_count_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return 0
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    let here = 0
+    if equal(tag, "let"):
+        if equal(get(stmt.1, 0), name):
+            here = 1
+        end
+    elif equal(tag, "if"):
+        here = nc_if_let_target_count_name(nodes, stmt.2, 0, count(stmt.2), name)
+    end
+    return here + nc_body_let_target_count_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_let_target_count_name(nodes, kids, i, n, name):
+    if i >= n:
+        return 0
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    return nc_body_let_target_count_name(nodes, body.2, 0, count(body.2), name) + nc_if_let_target_count_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_top_let_is_new_array(nodes, stmts, i, n, name):
+    if i >= n:
+        return false
+    end
+    let stmt = get(nodes, get(stmts, i))
+    if equal(stmt.0, "let") and equal(get(stmt.1, 0), name):
+        let val = get(nodes, get(stmt.2, 0))
+        if equal(val.0, "call") and equal(get(val.1, 0), "new_array"):
+            return true
+        end
+        return false
+    end
+    return nc_top_let_is_new_array(nodes, stmts, i + 1, n, name)
+end
+
+func nc_return_is_trap(nodes, top_stmts, expr_idx):
+    let node = get(nodes, expr_idx)
+    if not equal(node.0, "call"):
+        return false
+    end
+    if not equal(get(node.1, 0), "get"):
+        return false
+    end
+    if count(node.2) != 2:
+        return false
+    end
+    let arr = get(nodes, get(node.2, 0))
+    if not equal(arr.0, "name"):
+        return false
+    end
+    let xname = get(arr.1, 0)
+    if not nc_top_let_is_new_array(nodes, top_stmts, 0, count(top_stmts), xname):
+        return false
+    end
+    if nc_body_let_target_count_name(nodes, top_stmts, 0, count(top_stmts), xname) != 1:
+        return false
+    end
+    if nc_body_count_name(nodes, top_stmts, 0, count(top_stmts), xname) != 1:
+        return false
+    end
+    if nc_body_assigns_name(nodes, top_stmts, 0, count(top_stmts), xname):
+        return false
+    end
+    return true
+end
+
+func nc_returns_all_trap(nodes, top_stmts, stmts, i, n):
+    if i >= n:
+        return (true, 0)
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    let here_ok = true
+    let here_cnt = 0
+    if equal(tag, "return"):
+        here_cnt = 1
+        here_ok = nc_return_is_trap(nodes, top_stmts, get(stmt.2, 0))
+    elif equal(tag, "if"):
+        let r = nc_if_returns_all_trap(nodes, top_stmts, stmt.2, 0, count(stmt.2))
+        here_ok = r.0
+        here_cnt = r.1
+    end
+    if not here_ok:
+        return (false, here_cnt)
+    end
+    let rest = nc_returns_all_trap(nodes, top_stmts, stmts, i + 1, n)
+    return (rest.0, here_cnt + rest.1)
+end
+
+func nc_if_returns_all_trap(nodes, top_stmts, kids, i, n):
+    if i >= n:
+        return (true, 0)
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    let r = nc_returns_all_trap(nodes, top_stmts, body.2, 0, count(body.2))
+    if not r.0:
+        return (false, r.1)
+    end
+    let rest = nc_if_returns_all_trap(nodes, top_stmts, kids, i + 1, n)
+    return (rest.0, r.1 + rest.1)
+end
+
+func nc_func_never_returns_node(nodes, fn):
+    let body = get(nodes, get(fn.2, 1))
+    let stmts = body.2
+    let r = nc_returns_all_trap(nodes, stmts, stmts, 0, count(stmts))
+    if r.1 == 0:
+        return false
+    end
+    return r.0
+end
+
+func nc_func_never_returns(nodes, prog_idx, fn_idx):
+    let prog = get(nodes, prog_idx)
+    return nc_func_never_returns_node(nodes, get(nodes, get(prog.2, fn_idx)))
+end
+
 func nc_sig_unify_param(pool, sig, fn_idx, param_idx, want, line):
     let old = nc_sig_get_param(sig, fn_idx, param_idx)
     let u = nc_type_merge(pool, old, want, line)
@@ -4812,6 +5032,10 @@ func nc_constrain_expr(pool, nodes, prog_idx, idx, env, want, sig, fn_idx, funcs
             end
             if callee.2 != count(node.2):
                 return (nc_fail(420, node.3, name), env, sig, 0)
+            end
+            if nc_func_never_returns(nodes, prog_idx, callee.1):
+                let arf = nc_infer_call_args(pool, nodes, prog_idx, node.2, 0, count(node.2), callee.1, env, sig, fn_idx, funcs, n_params, 0)
+                return arf
             end
             let su = nc_sig_unify_ret(pool, sig, callee.1, want, node.3)
             if su.0 != 0:
@@ -5150,6 +5374,9 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         end
         sig = r.3
         let changed = r.4
+        if nc_func_never_returns(nodes, prog_idx, fn_idx):
+            return (0, r.2, sig, changed, 1)
+        end
         if r.1 != 0:
             let su = nc_sig_unify_ret(pool, sig, fn_idx, r.1, node.3)
             if su.0 != 0:
@@ -5450,16 +5677,21 @@ func nc_sig_check_concrete_loop(pool, func_kids, i, n, nodes, sig):
     if pr != 0:
         return pr
     end
-    let used = nc_check_used_wide_params_loop(pool, nodes, body, pn.1, sig, i, 0, count(pn.1))
-    if used != 0:
-        return used
+    let nret = nc_func_never_returns_node(nodes, fn)
+    if not nret:
+        let used = nc_check_used_wide_params_loop(pool, nodes, body, pn.1, sig, i, 0, count(pn.1))
+        if used != 0:
+            return used
+        end
     end
     let ret = nc_sig_get_ret(sig, i)
-    if nc_type_has_array_unknown(pool, ret):
-        return nc_fail(438, fn.3, "")
-    end
-    if nc_type_has_unknown(pool, ret):
-        return nc_fail(424, fn.3, "")
+    if not nret:
+        if nc_type_has_array_unknown(pool, ret):
+            return nc_fail(438, fn.3, "")
+        end
+        if nc_type_has_unknown(pool, ret):
+            return nc_fail(424, fn.3, "")
+        end
     end
     if equal(get(fn.1, 0), "main"):
         if ret != nc_type_int() and ret != nc_type_bool():
@@ -5904,20 +6136,27 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         if popped.0 != 0:
             return (popped.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        let ret = nc_sig_get_ret(sig, instr.1)
+        let ret0 = nc_sig_get_ret(sig, instr.1)
+        let nev = ret0 == nc_type_unknown()
+        let ret = ret0
+        if nev:
+            ret = nc_sig_get_ret(sig, fn_idx)
+        end
         let rw = nc_type_width(pool, ret)
         let aw = nc_meta_call_arg_words(pool, funcs, sig, instr.1)
         let kind = 0
         if rw > 1:
             kind = 1
         end
-        if nc_is_tail_call(code, i, n):
-            let my_ret = nc_sig_get_ret(sig, fn_idx)
-            if nc_type_equal(pool, ret, my_ret):
-                if rw > 1:
-                    kind = 3
-                else:
-                    kind = 2
+        if not nev:
+            if nc_is_tail_call(code, i, n):
+                let my_ret = nc_sig_get_ret(sig, fn_idx)
+                if nc_type_equal(pool, ret, my_ret):
+                    if rw > 1:
+                        kind = 3
+                    else:
+                        kind = 2
+                    end
                 end
             end
         end
@@ -5931,8 +6170,10 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             return (nc_fail(416, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         let ret = nc_sig_get_ret(sig, fn_idx)
-        if not nc_type_equal(pool, get(stack, 0), ret):
-            return (nc_fail(430, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        if ret != nc_type_unknown():
+            if not nc_type_equal(pool, get(stack, 0), ret):
+                return (nc_fail(430, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
         end
         stack = new_array(int)
     elif op == 22:

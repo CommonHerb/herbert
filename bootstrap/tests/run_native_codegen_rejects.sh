@@ -260,6 +260,113 @@ func main():
 end
 HERB
 
+# zelph soundness rails: the never-returning helper `fault` is type-bottom only
+# when it provably traps. These four look bottom-ish but must NOT be classified
+# as never-returning, or the relaxation would unsoundly accept a function that
+# actually returns a value (masking a real type conflict).
+#
+# (1) rebind: `let a = new_array(...); a = filled(); return get(a, 0)` -- the
+# assign rebinds `a` to a non-empty array, so the get does not trap and the
+# function returns (int,int). The assign guard must catch it; otherwise `lb`
+# would be bottom and the int/string conflict at its callers is masked. -> 430.
+cat >"$tmp/r_zelph_rebind.herb" <<'HERB'
+func filled():
+    let t = new_array((int, int))
+    do add(t, (3, 4))
+    return t
+end
+func lb(reason):
+    let a = new_array((int, int))
+    a = filled()
+    return get(a, 0)
+end
+func want_int(v):
+    if v < 10:
+        return lb("low")
+    end
+    return v
+end
+func want_str(v):
+    if v < 10:
+        return lb("low")
+    end
+    return "y"
+end
+func main():
+    let inp = clogger()
+    let v = index(inp, 0)
+    return want_int(v) + length(want_str(v))
+end
+HERB
+
+# (2) let-shadow: a nested `let other = filled()` shadows the top-level fresh
+# `let other = new_array(...)`; the returned `other` is the non-empty inner one,
+# so the function returns. The exactly-one-let-target guard (the cross-model
+# Codex find) must catch it -- the value-use count and assign guard alone do
+# not. -> 430.
+cat >"$tmp/r_zelph_let_shadow.herb" <<'HERB'
+func filled():
+    let t = new_array((int, int))
+    do add(t, (3, 4))
+    return t
+end
+func lb():
+    let slot = new_array((int, int))
+    let other = new_array((int, int))
+    if true:
+        let other = filled()
+        return get(other, 0)
+    end
+    return get(slot, 0)
+end
+func main():
+    return length(lb())
+end
+HERB
+
+# (3) pure-bottom: a function whose every return is `fault(...)` (a CALL, not a
+# direct trap-get) is deliberately NOT classified never-returning -- only direct
+# `get(X, k)` returns match. Its sig-return stays unknown and the concreteness
+# rail rejects it. This preserves the "direct-get-only, not via-call" property
+# that keeps the design free of a call-graph fixpoint. -> 424.
+cat >"$tmp/r_zelph_pure_bottom.herb" <<'HERB'
+func fault(why):
+    let slot = new_array((int, int))
+    return get(slot, 0)
+end
+func only_bad(n):
+    if n > 0:
+        return fault("a")
+    end
+    return fault("b")
+end
+func main():
+    let x = only_bad(3)
+    do flogger("unreached\n")
+    return 0
+end
+HERB
+
+# (4) fake-trap: `let a = new_array(...); do add(a, ...); return get(a, 0)` does
+# a get on a now-non-empty array, so it returns. The exactly-once value-use
+# guard catches it (`a` is used twice: the add and the get). -> 430.
+cat >"$tmp/r_zelph_fake_trap.herb" <<'HERB'
+func notrap(why):
+    let slot = new_array((int, int))
+    do add(slot, (1, 1))
+    return get(slot, 0)
+end
+func pick(n):
+    if n > 0:
+        return 5
+    end
+    return notrap("x")
+end
+func main():
+    return pick(1)
+end
+HERB
+
 check_source_reject_code stable_slice 438 "$tmp/r_slice.herb"
 check_source_reject_code value_append 440 "$tmp/r_return_append.herb"
 check_source_reject_code value_add 440 "$tmp/r_return_add.herb"
@@ -282,6 +389,10 @@ check_source_reject_code call_conflict 430 "$tmp/r_call_conflict.herb"
 check_source_reject_code monomorph 436 "$tmp/r_monomorph.herb"
 check_source_reject_code main_string 432 "$tmp/r_main_string.herb"
 check_source_reject_code main_tuple 432 "$tmp/r_main_tuple.herb"
+check_source_reject_code zelph_rebind 430 "$tmp/r_zelph_rebind.herb"
+check_source_reject_code zelph_let_shadow 430 "$tmp/r_zelph_let_shadow.herb"
+check_source_reject_code zelph_pure_bottom 424 "$tmp/r_zelph_pure_bottom.herb"
+check_source_reject_code zelph_fake_trap 430 "$tmp/r_zelph_fake_trap.herb"
 
 # Malformed bytecode / metadata drivers.
 awk '/^func main\(\):$/ { exit } { print }' "$backend" >"$tmp/stack_underflow_driver.herb"
@@ -390,5 +501,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-reject sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries plus frontier clogger limits)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), plus frontier clogger limits)"
 exit 0

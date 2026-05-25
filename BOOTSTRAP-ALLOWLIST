@@ -26,6 +26,7 @@ bootstrap/tests/run_native_codegen_link5.sh
 bootstrap/tests/run_native_codegen_link6.sh
 bootstrap/tests/run_native_codegen_link7.sh
 bootstrap/tests/run_native_codegen_link8.sh
+bootstrap/tests/run_native_codegen_link9.sh
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/test_01_arith.expected
