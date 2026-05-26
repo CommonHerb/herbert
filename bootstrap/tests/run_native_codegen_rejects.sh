@@ -50,6 +50,30 @@ check_source_reject_code() {
     fi
 }
 
+check_source_reject_code_once() {
+    local label="$1"
+    local code="$2"
+    local probe="$3"
+    total=$((total + 1))
+    local out="$tmp/reject_${label}.out"
+    local err="$tmp/reject_${label}.err"
+    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
+    local magic
+    magic=$(head -c4 "$out" | xxd -p | tr -d '\n')
+    if [[ "$magic" == "7f454c46" ]]; then
+        fail_test "reject $label: unexpectedly emitted ELF"
+        return
+    fi
+    local err_count diag_count
+    err_count=$(grep -c "ERR " "$out" || true)
+    diag_count=$(grep -c "native-subset:" "$out" || true)
+    if grep -q "ERR $code" "$out" && [[ "$err_count" -eq 1 && "$diag_count" -eq 1 ]]; then
+        pass=$((pass + 1))
+    else
+        fail_test "reject $label: expected exactly one ERR $code diagnostic, err_count=$err_count diag_count=$diag_count stdout=$(head -2 "$out" | tr '\n' '|'), stderr=$(head -1 "$err")"
+    fi
+}
+
 check_driver_reject_code() {
     local label="$1"
     local code="$2"
@@ -367,6 +391,67 @@ func main():
 end
 HERB
 
+# kanawha rails: partial aggregate merges may resolve benign unknown leaves, but
+# genuine aggregate conflicts must still reject with one clean diagnostic.
+cat >"$tmp/r_kanawha_array_bool_rebind.herb" <<'HERB'
+func make_bool_array():
+    let b = new_array(bool)
+    do add(b, true)
+    return b
+end
+
+func main():
+    let a = new_array(int)
+    if true:
+        a = make_bool_array()
+    end
+    return 0
+end
+HERB
+cat >"$tmp/r_kanawha_tuple_int_bool_assign.herb" <<'HERB'
+func main():
+    let t = (1, 2)
+    if true:
+        t = (true, 2)
+    end
+    return 0
+end
+HERB
+cat >"$tmp/r_kanawha_array_int_bool_add.herb" <<'HERB'
+func main():
+    let a = new_array((int, int))
+    do add(a, (1, 2))
+    do add(a, (true, 2))
+    return 0
+end
+HERB
+cat >"$tmp/r_kanawha_partial_rebind_conflict.herb" <<'HERB'
+func left(src, x):
+    do add(src, (x, 1))
+    return src
+end
+
+func right(src, y):
+    do add(src, (true, y))
+    return src
+end
+
+func bad(src1, x, src2, y):
+    let a = left(src1, x)
+    a = right(src2, y)
+    return 0
+end
+
+func main():
+    let src1 = new_array((int, int))
+    let src2 = new_array((bool, int))
+    if false:
+        return bad(src1, 0, src2, 2)
+    end
+    return 0
+end
+HERB
+
 check_source_reject_code stable_slice 438 "$tmp/r_slice.herb"
 check_source_reject_code value_append 440 "$tmp/r_return_append.herb"
 check_source_reject_code value_add 440 "$tmp/r_return_add.herb"
@@ -393,6 +478,10 @@ check_source_reject_code zelph_rebind 430 "$tmp/r_zelph_rebind.herb"
 check_source_reject_code zelph_let_shadow 430 "$tmp/r_zelph_let_shadow.herb"
 check_source_reject_code zelph_pure_bottom 424 "$tmp/r_zelph_pure_bottom.herb"
 check_source_reject_code zelph_fake_trap 430 "$tmp/r_zelph_fake_trap.herb"
+check_source_reject_code_once kanawha_array_bool_rebind 436 "$tmp/r_kanawha_array_bool_rebind.herb"
+check_source_reject_code_once kanawha_tuple_int_bool_assign 430 "$tmp/r_kanawha_tuple_int_bool_assign.herb"
+check_source_reject_code_once kanawha_array_int_bool_add 436 "$tmp/r_kanawha_array_int_bool_add.herb"
+check_source_reject_code_once kanawha_partial_rebind_conflict 436 "$tmp/r_kanawha_partial_rebind_conflict.herb"
 
 # Malformed bytecode / metadata drivers.
 awk '/^func main\(\):$/ { exit } { print }' "$backend" >"$tmp/stack_underflow_driver.herb"
@@ -501,5 +590,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-reject sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), plus frontier clogger limits)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), kanawha partial-aggregate single-diagnostic rails, plus frontier clogger limits)"
 exit 0

@@ -4093,6 +4093,37 @@ func nc_type_has_unknown(pool, t):
     return false
 end
 
+func nc_type_merge_possible_children(pool, a, b, i, n):
+    if i >= n:
+        return true
+    end
+    if not nc_type_merge_possible(pool, get(a, i), get(b, i)):
+        return false
+    end
+    return nc_type_merge_possible_children(pool, a, b, i + 1, n)
+end
+
+func nc_type_merge_possible(pool, old, want):
+    if old == nc_type_unknown() or want == nc_type_unknown():
+        return true
+    end
+    if nc_type_equal(pool, old, want):
+        return true
+    end
+    if nc_type_is_array(pool, old) and nc_type_is_array(pool, want):
+        return nc_type_merge_possible(pool, nc_type_array_elem(pool, old), nc_type_array_elem(pool, want))
+    end
+    if nc_type_is_tuple(pool, old) and nc_type_is_tuple(pool, want):
+        let oa = nc_type_tuple_children(pool, old)
+        let wa = nc_type_tuple_children(pool, want)
+        if count(oa) != count(wa):
+            return false
+        end
+        return nc_type_merge_possible_children(pool, oa, wa, 0, count(oa))
+    end
+    return false
+end
+
 func nc_type_has_array_unknown(pool, t):
     if nc_type_is_array(pool, t):
         if nc_type_has_unknown(pool, nc_type_array_elem(pool, t)):
@@ -4917,14 +4948,14 @@ func nc_constrain_name(pool, nodes, node, env, want, sig, fn_idx, n_params):
         return (0, env, sig, 0)
     end
     env = nc_class_env_set_idx(env, li.1, u.1)
-    let changed = 1
+    let changed = 0
     if li.1 < n_params:
         let su = nc_sig_unify_param(pool, sig, fn_idx, li.1, u.1, node.3)
         if su.0 != 0:
             return (su.0, env, sig, changed)
         end
         sig = su.1
-        changed = nc_or_changed(changed, su.2)
+        changed = su.2
     end
     return (0, env, sig, changed)
 end
@@ -4939,6 +4970,16 @@ end
 func nc_expect_array_elem(pool, got, want, line):
     if got == 0 or want == 0 or nc_type_equal(pool, got, want):
         return 0
+    end
+    if nc_type_has_unknown(pool, got) or nc_type_has_unknown(pool, want):
+        if not nc_type_merge_possible(pool, got, want):
+            return nc_fail(436, line, "")
+        end
+        let m = nc_type_merge(pool, got, want, line)
+        if m.0 == 0:
+            return 0
+        end
+        return m.0
     end
     return nc_fail(436, line, "")
 end
@@ -5322,6 +5363,19 @@ end
 
 func nc_rebind_env_type(pool, env, idx, old, got, line):
     if old != nc_type_unknown() and got != nc_type_unknown():
+        if nc_type_has_unknown(pool, old) or nc_type_has_unknown(pool, got):
+            if not nc_type_merge_possible(pool, old, got):
+                if nc_type_is_array(pool, old) or nc_type_is_array(pool, got):
+                    return (nc_fail(436, line, ""), env)
+                end
+                return (nc_fail(430, line, ""), env)
+            end
+            let mp = nc_type_merge(pool, old, got, line)
+            if mp.0 != 0:
+                return (mp.0, env)
+            end
+            return (0, nc_class_env_set_idx(env, idx, mp.1))
+        end
         if nc_type_width(pool, old) != nc_type_width(pool, got):
             return (nc_fail(433, line, ""), env)
         end
