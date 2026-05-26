@@ -5,8 +5,8 @@
 # source), boundary coverage across the old cap, a whole-input fold proving the
 # bytes are actually read, index past the old cap, clogger-after-alloc, a
 # renamed twin, and a white-box disasm gate (heap-tail read present, the old
-# 64 KiB arena/cap bytes absent). The >16 MiB heap-cap fault lives in the
-# consolidated reject battery (run_native_codegen_rejects.sh).
+# 64 KiB arena/cap bytes absent). The heap-cap behavior (cap enlarged to ~2 GiB
+# at tito) lives in the consolidated reject battery (run_native_codegen_rejects.sh).
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"

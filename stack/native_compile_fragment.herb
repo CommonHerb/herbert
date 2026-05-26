@@ -8796,9 +8796,9 @@ func nc_emit_heap_stub(buf):
     do append(buf, 199)
     do append(buf, 198)
     do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 1)
+    do append(buf, 240)
+    do append(buf, 255)
+    do append(buf, 127)
     do append(buf, 72)
     do append(buf, 199)
     do append(buf, 194)
@@ -8838,9 +8838,9 @@ func nc_emit_heap_stub(buf):
     do append(buf, 141)
     do append(buf, 184)
     do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 1)
+    do append(buf, 240)
+    do append(buf, 255)
+    do append(buf, 127)
     return buf
 end
 

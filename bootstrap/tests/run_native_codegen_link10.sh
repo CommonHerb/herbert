@@ -141,6 +141,29 @@ if [[ $self_rc -eq 0 && "$self_magic" == "7f454c46" ]]; then
     else
         fail_test "self-compile altimeter: self compiler did not byte-match reference probe (self_rc=$self_rc native_rc=$native_rc c_rc=$c_rc native_magic=$native_magic c_magic=$c_magic native_size=$(wc -c <"$tmp/self_probe.native.out") c_size=$(wc -c <"$tmp/self_probe.c.out"))"
     fi
+    # tito: full native self-hosting FIXPOINT. gen-1 (the self-compiler just built)
+    # compiles the WHOLE backend into gen-2; gen-2 must byte-match gen-1 (each modulo
+    # its own host trailer: gen-1 from C ends "0\n", gen-2 from native ends 8x\0).
+    # This is the capstone forcing function and is only reachable because tito enlarged
+    # the native heap (16 MiB -> ~2 GiB) so the self-compiler can hold its own compile.
+    # Cheap to add here: gen-1 is already built above; this only adds the ~1-2s gen-2.
+    fix_timeout="${NATIVE_FIXPOINT_TIMEOUT:-180s}"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$fix_timeout" "$tmp/self_compiler.elf" <"$backend" >"$tmp/gen2.out" 2>"$tmp/gen2.err"
+        gen2_rc=$?
+    else
+        "$tmp/self_compiler.elf" <"$backend" >"$tmp/gen2.out" 2>"$tmp/gen2.err"
+        gen2_rc=$?
+    fi
+    gen2_magic=$(head -c4 "$tmp/gen2.out" | xxd -p | tr -d '\n')
+    if [[ $gen2_rc -eq 0 && "$gen2_magic" == "7f454c46" ]] \
+        && strip_c_trailer "$tmp/self_compiler.out" "$tmp/gen1.elf" \
+        && strip_native_trailer "$tmp/gen2.out" "$tmp/gen2.elf" \
+        && cmp -s "$tmp/gen1.elf" "$tmp/gen2.elf"; then
+        pass=$((pass + 1))
+    else
+        fail_test "self-host FIXPOINT: gen-2 (self-compiler compiling the whole backend) did not byte-match gen-1 (gen2_rc=$gen2_rc gen2_magic=$gen2_magic gen1_size=$(wc -c <"$tmp/self_compiler.out") gen2_size=$(wc -c <"$tmp/gen2.out"))"
+    fi
 else
     fail_test "self-compile altimeter: expected self-host ELF, rc=$self_rc magic=$self_magic stdout=$(head -1 "$tmp/self_compiler.out") stderr=$(head -1 "$tmp/self_compiler.err")"
 fi
@@ -150,5 +173,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link10 sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link10: $pass sub-tests: benign complementary partial aggregate compiles+runs byte-exact vs C, self-compile self-host probe byte-exact modulo host trailer)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link10: $pass sub-tests: benign complementary partial aggregate compiles+runs byte-exact vs C, self-compile self-host probe byte-exact modulo host trailer, tito self-hosting FIXPOINT gen2==gen1)"
 exit 0

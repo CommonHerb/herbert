@@ -112,12 +112,15 @@ check_runtime_frontier_cap() {
     local probe="$2"
     local elf="$tmp/${label}.elf"
     compile_probe "$label" "$probe" "$elf" || return
-    # beaver lifted the 64 KiB stack-arena cap: native clogger now reads into the
-    # 16 MiB heap. (a) the old 64 KiB frontier now SUCCEEDS == C (obsolete-proof);
-    # (b) the exact 16 MiB heap cap succeeds == C; (c) the new frontier (> 16 MiB)
-    # faults native (nonzero, empty stdout) while C, which has no fixed cap, succeeds.
+    # beaver lifted the 64 KiB stack-arena cap; tito lifted the 16 MiB heap cap to
+    # ~2 GiB (0x7ffff000). All three historical frontier sizes now SUCCEED == C:
+    # 64 KiB, the old exact-16 MiB cap, and old-16 MiB+1 all fit the 2 GiB heap.
+    # Pre-tito, old-16 MiB+1 faulted native (nonzero, empty stdout); that boundary
+    # MOVED, it did not vanish — the new ~2 GiB cap is proven structurally by the
+    # link6 disasm gate (asserts the 2 GiB mmap-size + cap bytes), since a runtime
+    # over-2-GiB probe is impractical per-push.
     local sizes=(65537 16777216 16777217)
-    local kinds=(obsolete_64k exact_16M over_16M)
+    local kinds=(obsolete_64k old_exact_16M old_over_16M)
     local i=0
     while [[ $i -lt 3 ]]; do
         total=$((total + 1))
@@ -127,19 +130,11 @@ check_runtime_frontier_cap() {
         local nrc=$?
         "$HERBERT" "$probe" <"$tmp/${label}.${kind}.in" >"$tmp/${label}.${kind}.c" 2>/dev/null
         local crc=$?
-        if [[ "$kind" == "over_16M" ]]; then
-            if [[ $nrc -ne 0 && ! -s "$tmp/${label}.${kind}.n" && $crc -eq 0 ]]; then
-                pass=$((pass + 1))
-            else
-                fail_test "frontier $label $kind: ${sz} B must fault native (rc=$nrc) while C succeeds (rc=$crc)"
-            fi
+        python3 -c "import sys;sys.stdout.buffer.write(int((open('$tmp/${label}.${kind}.c').read().strip() or '0')).to_bytes(8,'little'))" >"$tmp/${label}.${kind}.cle" 2>/dev/null
+        if [[ $crc -eq 0 && $nrc -eq 0 ]] && cmp -s "$tmp/${label}.${kind}.n" "$tmp/${label}.${kind}.cle"; then
+            pass=$((pass + 1))
         else
-            python3 -c "import sys;sys.stdout.buffer.write(int((open('$tmp/${label}.${kind}.c').read().strip() or '0')).to_bytes(8,'little'))" >"$tmp/${label}.${kind}.cle" 2>/dev/null
-            if [[ $nrc -eq 0 ]] && cmp -s "$tmp/${label}.${kind}.n" "$tmp/${label}.${kind}.cle"; then
-                pass=$((pass + 1))
-            else
-                fail_test "frontier $label $kind: ${sz} B must succeed == C (native rc=$nrc)"
-            fi
+            fail_test "frontier $label $kind: ${sz} B must succeed == C (native rc=$nrc C rc=$crc)"
         fi
         i=$((i + 1))
     done

@@ -191,7 +191,7 @@ HERB
 run_runtime_fault empty_input_oob "$tmp/oob_input.herb" "$tmp/empty.rt" yes
 run_runtime_fault literal_oob "$tmp/oob_lit.herb" "$tmp/empty.rt" yes
 # (overcap 64 KiB native-fault retired at beaver: clogger now reads into the
-#  16 MiB heap. The capacity frontier moved to run_native_codegen_rejects.sh.)
+#  heap, enlarged to ~2 GiB at tito. The capacity frontier lives in run_native_codegen_rejects.sh.)
 
 cat >"$tmp/r_slice.herb" <<'HERB'
 func main():
