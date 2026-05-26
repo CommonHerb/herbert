@@ -244,24 +244,86 @@ func main():
     return freeze(1)
 end
 HERB
-cat >"$tmp/r_unconstrained_signature.herb" <<'HERB'
-func id(x):
-    return x
+cat >"$tmp/r_poly_direct_pair_growth.herb" <<'HERB'
+func f(x):
+    return f((x, x))
 end
 
 func main():
-    return 1
+    return f(1)
 end
 HERB
-cat >"$tmp/r_call_conflict.herb" <<'HERB'
-func id(x):
-    return x
+cat >"$tmp/r_poly_one_sided_growth.herb" <<'HERB'
+func f(x):
+    return f((x, 0))
 end
 
 func main():
-    let a = id(1)
-    let b = id("x")
-    return a
+    return f(1)
+end
+HERB
+cat >"$tmp/r_poly_mutual_growth.herb" <<'HERB'
+func f(x):
+    return g((x, x))
+end
+
+func g(y):
+    return f((y, y))
+end
+
+func main():
+    return f(1)
+end
+HERB
+cat >"$tmp/r_poly_recursive_fanout.herb" <<'HERB'
+func f(x):
+    return g((x, 0)) + h((x, true))
+end
+
+func g(y):
+    return f((y, y))
+end
+
+func h(z):
+    return f((z, z))
+end
+
+func main():
+    return f(1)
+end
+HERB
+cat >"$tmp/r_poly_array_tuple_growth.herb" <<'HERB'
+func f(x):
+    return f((x, new_array(int)))
+end
+
+func main():
+    return f(1)
+end
+HERB
+cat >"$tmp/r_poly_dead_growth.herb" <<'HERB'
+func f(x):
+    if false:
+        return f((x, x))
+    end
+    return 0
+end
+
+func main():
+    return f(1)
+end
+HERB
+cat >"$tmp/r_poly_same_instance_return_conflict.herb" <<'HERB'
+func f(x):
+    if x:
+        return 1
+    else:
+        return false
+    end
+end
+
+func main():
+    return f(true)
 end
 HERB
 cat >"$tmp/r_monomorph.herb" <<'HERB'
@@ -469,8 +531,13 @@ check_source_reject_code add_non_array 435 "$tmp/r_add_non_array.herb"
 check_source_reject_code array_elem_mismatch 436 "$tmp/r_array_elem_mismatch.herb"
 check_source_reject_code append_non_buffer 437 "$tmp/r_append_non_buffer.herb"
 check_source_reject_code freeze_non_buffer 437 "$tmp/r_freeze_non_buffer.herb"
-check_source_reject_code unconstrained_signature 424 "$tmp/r_unconstrained_signature.herb"
-check_source_reject_code call_conflict 430 "$tmp/r_call_conflict.herb"
+check_source_reject_code_once poly_direct_pair_growth 441 "$tmp/r_poly_direct_pair_growth.herb"
+check_source_reject_code_once poly_one_sided_growth 441 "$tmp/r_poly_one_sided_growth.herb"
+check_source_reject_code_once poly_mutual_growth 441 "$tmp/r_poly_mutual_growth.herb"
+check_source_reject_code_once poly_recursive_fanout 441 "$tmp/r_poly_recursive_fanout.herb"
+check_source_reject_code_once poly_array_tuple_growth 441 "$tmp/r_poly_array_tuple_growth.herb"
+check_source_reject_code_once poly_dead_growth 441 "$tmp/r_poly_dead_growth.herb"
+check_source_reject_code_once poly_same_instance_return_conflict 430 "$tmp/r_poly_same_instance_return_conflict.herb"
 check_source_reject_code monomorph 436 "$tmp/r_monomorph.herb"
 check_source_reject_code main_string 432 "$tmp/r_main_string.herb"
 check_source_reject_code main_tuple 432 "$tmp/r_main_tuple.herb"

@@ -248,16 +248,6 @@ func main():
     return 1.0
 end
 HERB
-cat >"$tmp/r_call_conflict.herb" <<'HERB'
-func id(x):
-    return x
-end
-func main():
-    let a = id(1)
-    let b = id("x")
-    return a
-end
-HERB
 cat >"$tmp/r_rebind_width.herb" <<'HERB'
 func main():
     let x = 1
@@ -282,7 +272,7 @@ for item in \
     "length_int 430 r_length_int" "index_key 430 r_index_key" "index_int 430 r_index_int" \
     "equal_mixed 430 r_equal_mixed" "equal_tuple 430 r_equal_tuple" \
     "dot_range 431 r_dot_range" "dot_non 431 r_dot_non" \
-    "call_conflict 430 r_call_conflict" "rebind_width 433 r_rebind_width" \
+    "rebind_width 433 r_rebind_width" \
     "main_string 432 r_main_string" "main_tuple 432 r_main_tuple"; do
     set -- $item
     check_reject_code "$1" "$2" "$tmp/$3.herb"

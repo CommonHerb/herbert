@@ -60,6 +60,30 @@ check_native_vs_c_int() {
     fi
 }
 
+strip_c_trailer() {
+    local src="$1" dst="$2"
+    python3 - "$src" "$dst" <<'PY'
+from pathlib import Path
+import sys
+data = Path(sys.argv[1]).read_bytes()
+if not data.endswith(b"0\n"):
+    raise SystemExit("missing C trailer")
+Path(sys.argv[2]).write_bytes(data[:-2])
+PY
+}
+
+strip_native_trailer() {
+    local src="$1" dst="$2"
+    python3 - "$src" "$dst" <<'PY'
+from pathlib import Path
+import sys
+data = Path(sys.argv[1]).read_bytes()
+if not data.endswith(b"\0" * 8):
+    raise SystemExit("missing native trailer")
+Path(sys.argv[2]).write_bytes(data[:-8])
+PY
+}
+
 cat >"$tmp/benign_complementary_if.herb" <<'HERB'
 func left(a, x):
     do add(a, (x, 1))
@@ -84,20 +108,41 @@ if [[ -x "$tmp/benign_complementary_if.elf" ]]; then
     check_native_vs_c_int benign_complementary_if "$tmp/benign_complementary_if.herb" "$tmp/benign_complementary_if.elf" 4
 fi
 
-expected_self="$tmp/self.expected"
-printf 'program: native-subset: deferred native operation (ERR 438)\n0\n' >"$expected_self"
+cat >"$tmp/self_host_probe.herb" <<'HERB'
+func main():
+    let i = clogger()
+    return index(i, 0) + index(i, 1)
+end
+HERB
+
+total_self_timeout="${NATIVE_SELF_TIMEOUT:-480s}"
 if command -v timeout >/dev/null 2>&1; then
-    timeout 180 "$HERBERT" "$backend" <"$backend" >"$tmp/self.out" 2>"$tmp/self.err"
+    timeout "$total_self_timeout" "$HERBERT" "$backend" <"$backend" >"$tmp/self_compiler.out" 2>"$tmp/self_compiler.err"
     self_rc=$?
 else
-    "$HERBERT" "$backend" <"$backend" >"$tmp/self.out" 2>"$tmp/self.err"
+    "$HERBERT" "$backend" <"$backend" >"$tmp/self_compiler.out" 2>"$tmp/self_compiler.err"
     self_rc=$?
 fi
-self_magic=$(head -c4 "$tmp/self.out" | xxd -p | tr -d '\n')
-if [[ $self_rc -eq 0 && "$self_magic" != "7f454c46" ]] && cmp -s "$expected_self" "$tmp/self.out"; then
-    pass=$((pass + 1))
+self_magic=$(head -c4 "$tmp/self_compiler.out" | xxd -p | tr -d '\n')
+if [[ $self_rc -eq 0 && "$self_magic" == "7f454c46" ]]; then
+    cp "$tmp/self_compiler.out" "$tmp/self_compiler.elf"
+    chmod +x "$tmp/self_compiler.elf"
+    "$tmp/self_compiler.elf" <"$tmp/self_host_probe.herb" >"$tmp/self_probe.native.out" 2>"$tmp/self_probe.native.err"
+    native_rc=$?
+    "$HERBERT" "$backend" <"$tmp/self_host_probe.herb" >"$tmp/self_probe.c.out" 2>"$tmp/self_probe.c.err"
+    c_rc=$?
+    native_magic=$(head -c4 "$tmp/self_probe.native.out" | xxd -p | tr -d '\n')
+    c_magic=$(head -c4 "$tmp/self_probe.c.out" | xxd -p | tr -d '\n')
+    if [[ $native_rc -eq 0 && $c_rc -eq 0 && "$native_magic" == "7f454c46" && "$c_magic" == "7f454c46" ]] \
+        && strip_native_trailer "$tmp/self_probe.native.out" "$tmp/self_probe.native.elf" \
+        && strip_c_trailer "$tmp/self_probe.c.out" "$tmp/self_probe.c.elf" \
+        && cmp -s "$tmp/self_probe.native.elf" "$tmp/self_probe.c.elf"; then
+        pass=$((pass + 1))
+    else
+        fail_test "self-compile altimeter: self compiler did not byte-match reference probe (self_rc=$self_rc native_rc=$native_rc c_rc=$c_rc native_magic=$native_magic c_magic=$c_magic native_size=$(wc -c <"$tmp/self_probe.native.out") c_size=$(wc -c <"$tmp/self_probe.c.out"))"
+    fi
 else
-    fail_test "self-compile: expected ERR 438 non-ELF, rc=$self_rc magic=$self_magic stdout=$(head -2 "$tmp/self.out" | tr '\n' '|') stderr=$(head -1 "$tmp/self.err")"
+    fail_test "self-compile altimeter: expected self-host ELF, rc=$self_rc magic=$self_magic stdout=$(head -1 "$tmp/self_compiler.out") stderr=$(head -1 "$tmp/self_compiler.err")"
 fi
 
 echo ""
@@ -105,5 +150,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link10 sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link10: $pass sub-tests: benign complementary partial aggregate compiles+runs byte-exact vs C, self-compile reaches ERR 438 frontier)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link10: $pass sub-tests: benign complementary partial aggregate compiles+runs byte-exact vs C, self-compile self-host probe byte-exact modulo host trailer)"
 exit 0

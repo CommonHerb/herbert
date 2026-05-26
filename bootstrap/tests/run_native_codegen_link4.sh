@@ -204,7 +204,20 @@ func is_odd(n):
     end
 end
 func main():
-    return is_even(200000)
+    return is_even(2000000)
+end
+HERB
+
+cat >"$tmp/branch_target_ret_tail.herb" <<'HERB'
+func f(x):
+    return x and f(false)
+end
+func main():
+    if f(false):
+        return 1
+    else:
+        return 2
+    end
 end
 HERB
 
@@ -218,6 +231,27 @@ start = src.index("func nc_is_tail_call(")
 end = src.index("\nend\n", start) + len("\nend\n")
 replacement = """func nc_is_tail_call(code, i, n):
     return false
+end
+"""
+Path(sys.argv[2]).write_text(src[:start] + replacement + src[end:])
+PY
+}
+
+make_old_branch_target_backend() {
+    local dst="$1"
+    python3 - "$backend" "$dst" <<'PY'
+from pathlib import Path
+import sys
+src = Path(sys.argv[1]).read_text()
+start = src.index("func nc_is_tail_call(")
+end = src.index("\nend\n", start) + len("\nend\n")
+replacement = """func nc_is_tail_call(code, i, n):
+    if i + 1 >= n:
+        return false
+    end
+    let instr = get(code, i)
+    let next = get(code, i + 1)
+    return instr.0 == 20 and next.0 == 21
 end
 """
 Path(sys.argv[2]).write_text(src[:start] + replacement + src[end:])
@@ -254,12 +288,37 @@ run_tco_negative() {
     pass=$((pass + 1))
 }
 
+run_branch_target_ret_probe() {
+    local fixed_be="$1" old_be="$2"
+    total=$((total + 1))
+    local elf="$tmp/branch_target_ret_tail.elf" actual="$tmp/branch_target_ret_tail.actual"
+    compile_probe branch_target_ret_tail "$tmp/branch_target_ret_tail.herb" "$elf" "$fixed_be"
+    if ! "$elf" >"$actual" 2>/dev/null; then
+        fail_test "branch-target RET tail probe failed under fixed recognizer"
+        return
+    fi
+    if [[ "$(xxd -p "$actual" | tr -d '\n')" != "0200000000000000" ]]; then
+        fail_test "branch-target RET tail probe expected 2 got $(xxd -p "$actual" | tr -d '\n')"
+        return
+    fi
+    local out="$tmp/branch_target_ret_tail.old.out" err="$tmp/branch_target_ret_tail.old.err"
+    "$HERBERT" "$old_be" <"$tmp/branch_target_ret_tail.herb" >"$out" 2>"$err"
+    if grep -q "ERR 415" "$out"; then
+        pass=$((pass + 1))
+    else
+        fail_test "branch-target RET old recognizer should reject ERR 415, stdout=$(head -1 "$out") stderr=$(head -1 "$err")"
+    fi
+}
+
 forced_backend="$tmp/native_compile_no_tco.herb"
+old_branch_target_backend="$tmp/native_compile_old_branch_target_tail.herb"
 make_forced_false_backend "$forced_backend"
+make_old_branch_target_backend "$old_branch_target_backend"
 run_tco_positive self_sum "$tmp/sum_tco.herb" "20295a6a74000000"
 run_tco_positive mutual_even "$tmp/mutual_tco.herb" "0100000000000000"
 run_tco_negative self_sum "$tmp/sum_tco.herb" "$forced_backend"
 run_tco_negative mutual_even "$tmp/mutual_tco.herb" "$forced_backend"
+run_branch_target_ret_probe "$backend" "$old_branch_target_backend"
 
 check_reject() {
     local label="$1" probe="$2"
@@ -294,16 +353,6 @@ func main():
     return f()
 end
 HERB
-cat >"$tmp/r_poly.herb" <<'HERB'
-func id(x):
-    return x
-end
-func main():
-    let a = id(5)
-    let b = id(true)
-    return a
-end
-HERB
 cat >"$tmp/r_ret.herb" <<'HERB'
 func f(x):
     if x:
@@ -314,23 +363,6 @@ func f(x):
 end
 func main():
     return f(true)
-end
-HERB
-cat >"$tmp/r_ambig.herb" <<'HERB'
-func id(x):
-    return x
-end
-func main():
-    return 0
-end
-HERB
-cat >"$tmp/r_handle.herb" <<'HERB'
-func f(x):
-    return 1
-end
-func main():
-    let input = clogger()
-    return f(input)
 end
 HERB
 cat >"$tmp/r_dup.herb" <<'HERB'
@@ -364,8 +396,8 @@ HERB
 
 for item in \
     "unknown r_unknown" "arity r_arity" "main_call r_main" \
-    "poly r_poly" "return_conflict r_ret" "ambiguous r_ambig" \
-    "handle_boundary r_handle" "duplicate r_dup" "builtin_collision r_builtin" \
+    "return_conflict r_ret" \
+    "duplicate r_dup" "builtin_collision r_builtin" \
     "clogger_nonmain r_clogger_nonmain"; do
     set -- $item
     check_reject "$1" "$tmp/$2.herb"
@@ -451,7 +483,11 @@ if [[ $gate_ok -eq 1 ]]; then grep -Fq "Entry point address:               0x400
 if [[ $gate_ok -eq 1 ]]; then grep -Fq "Number of section headers:         0" "$rh" || { fail_test "disasm gate sections"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -qE 'R E' "$rl" || { fail_test "disasm gate no R E LOAD"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -qE '\bcall\b' "$dump" || { fail_test "disasm gate no non-tail call"; gate_ok=0; }; fi
-if [[ $gate_ok -eq 1 ]]; then grep -qE '\bjmp\b' "$dump" || { fail_test "disasm gate no tail jmp"; gate_ok=0; }; fi
+if [[ $gate_ok -eq 1 ]]; then
+    self_dump="$tmp/self_sum.dump"
+    objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000 "$tmp/self_sum.elf" >"$self_dump" 2>/dev/null || { fail_test "disasm gate self_sum objdump failed"; gate_ok=0; }
+    grep -qE '\bjmp\b' "$self_dump" || { fail_test "disasm gate no self-tail jmp"; gate_ok=0; }
+fi
 if [[ $gate_ok -eq 1 ]]; then grep -qE '\bleave\b' "$dump" && grep -qE '\bret\b' "$dump" || { fail_test "disasm gate no leave/ret"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -qE '0x[0-9a-f]+\(%rbp\)' "$dump" || { fail_test "disasm gate no disp32 rbp access"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -qE 'set(b|be|a|ae|e|ne)\\s+%dl' "$tmp/diff.dump" 2>/dev/null || true; fi
@@ -475,5 +511,5 @@ if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link4 sub-test(s) failed."
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link4: $pass sub-tests: recursive differential, TCO tether with forced-false negative proof, rejection battery, anti-over-rejection incl. wide disp32, disasm gate)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link4: $pass sub-tests: recursive differential, self+mutual TCO tethers with forced-false negative proofs, branch-target RET tail guard, rejection battery, anti-over-rejection incl. wide disp32, disasm gate)"
 exit 0
