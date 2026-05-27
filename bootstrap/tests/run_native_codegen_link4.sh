@@ -60,12 +60,20 @@ PY
 compile_probe() {
     local label="$1" probe="$2" elf="$3" be="${4:-$backend}"
     local out="$tmp/${label}.out" err="$tmp/${label}.err"
-    "$HERBERT" "$be" <"$probe" >"$out" 2>"$err"
-    if grep -qE 'native-subset|ERR 4[0-9][0-9]' "$out"; then
-        echo "FAIL: stack/native_compile_fragment.herb (compile $label rejected: $(head -1 "$out"))"
+    # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
+    # stdout. Run it in a per-label scratch dir and harvest that dir's a.out; a
+    # missing a.out means the program was rejected before the emit. (Works for the
+    # real backend and the forced-false / old-recognizer backends alike -- each
+    # is the post-D12 backend with only nc_is_tail_call swapped, so main still
+    # writes a.out.)
+    local cdir="$tmp/${label}.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$be" <"$probe" >"$out" 2>"$err" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (compile $label rejected/no a.out: $(head -1 "$out"))"
         exit 1
     fi
-    cp "$out" "$elf"
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
 }
 
@@ -497,13 +505,14 @@ if [[ $gate_ok -eq 1 ]]; then
     [[ "$filesz" == "$memsz" ]] || { fail_test "disasm gate FileSiz/MemSiz"; gate_ok=0; }
 fi
 if [[ $gate_ok -eq 1 ]]; then
+    # D12 byte-purity: emitted file is EXACTLY the page-padded image, no trailer.
     filesz_dec=$(python3 -c "print(int('$filesz', 16))")
-    trailer=$(dd if="$tmp/wide_disp32.elf" bs=1 skip="$filesz_dec" count=2 2>/dev/null | xxd -p)
-    [[ "$trailer" == "300a" ]] || { fail_test "disasm gate trailer"; gate_ok=0; }
+    actual_size=$(wc -c < "$tmp/wide_disp32.elf")
+    [[ "$actual_size" -eq "$filesz_dec" ]] || { fail_test "byte-purity gate (file size $actual_size != image size $filesz_dec; trailer present?)"; gate_ok=0; }
 fi
 if [[ $gate_ok -eq 1 ]]; then
     pass=$((pass + 1))
-    echo "PASS: stack/native_compile_fragment.herb (link4 disasm gate: ELF, real call/ret, tail jmp, disp32, trailer)"
+    echo "PASS: stack/native_compile_fragment.herb (link4 disasm gate: ELF, real call/ret, tail jmp, disp32, byte-pure size==image)"
 fi
 
 echo ""

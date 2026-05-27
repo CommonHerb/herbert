@@ -95,14 +95,24 @@ compile_probe() {
     local elf="$3"
     local out="$tmp/${label}.compile.out"
     local err="$tmp/${label}.compile.err"
-    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
-    local magic
-    magic=$(head -c4 "$out" | xxd -p | tr -d '\n')
-    if [[ "$magic" != "7f454c46" ]]; then
-        fail_test "compile $label rejected or did not emit ELF: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+    # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
+    # stdout. Run it in a per-label scratch dir and harvest that dir's a.out. (Only
+    # the frontier-cap ACCEPT probe uses this; every reject check below reads the
+    # diagnostic from stdout, unchanged -- a rejected program writes no a.out.)
+    local cdir="$tmp/${label}.compile.d"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "compile $label rejected or did not emit a.out: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
         return 1
     fi
-    cp "$out" "$elf"
+    local magic
+    magic=$(head -c4 "$cdir/a.out" | xxd -p | tr -d '\n')
+    if [[ "$magic" != "7f454c46" ]]; then
+        fail_test "compile $label: a.out not an ELF (magic=$magic)"
+        return 1
+    fi
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
     return 0
 }

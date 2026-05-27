@@ -35,14 +35,24 @@ fail_test() {
 
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
-    "$HERBERT" "$backend" <"$probe" >"$tmp/$label.o" 2>"$tmp/$label.e"
-    local magic
-    magic=$(head -c4 "$tmp/$label.o" | xxd -p | tr -d '\n')
-    if [[ "$magic" != "7f454c46" ]]; then
-        fail_test "compile $label rejected/no ELF: $(head -1 "$tmp/$label.e")"
+    # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter),
+    # not stdout. Run it in a per-label scratch dir and harvest that dir's a.out.
+    # (The PROBES below still read stdin via clogger and write to STDOUT via
+    # flogger when run -- that is the probe's I/O, unrelated to the a.out file.)
+    local cdir="$tmp/$label.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.o" 2>"$tmp/$label.e" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "compile $label rejected/no a.out: $(head -1 "$tmp/$label.e")"
         return 1
     fi
-    cp "$tmp/$label.o" "$elf"
+    local magic
+    magic=$(head -c4 "$cdir/a.out" | xxd -p | tr -d '\n')
+    if [[ "$magic" != "7f454c46" ]]; then
+        fail_test "compile $label: a.out not an ELF (magic=$magic)"
+        return 1
+    fi
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
     return 0
 }

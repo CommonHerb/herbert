@@ -70,17 +70,22 @@ compile_probe() {
     local out="$tmp/$name.compile.out"
     local err="$tmp/$name.compile.err"
     local elf="$tmp/$name.elf"
-    "$HERBERT" "$backend" < "$probe" >"$out" 2>"$err"
+    # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
+    # stdout. Run it in a per-probe scratch dir and harvest that dir's a.out; no
+    # a.out means the program was rejected (it returns before the emit).
+    local cdir="$tmp/$name.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" < "$probe" >"$out" 2>"$err" )
     local rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "FAIL: stack/native_compile_fragment.herb (compile $name failed: $(head -1 "$err"))"
         exit 1
     fi
-    if grep -qE 'native-subset|ERR 4[0-9][0-9]' "$out"; then
-        echo "FAIL: stack/native_compile_fragment.herb (compile $name: unexpected rejection: $(head -1 "$out"))"
+    if [[ ! -f "$cdir/a.out" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (compile $name: no a.out emitted (unexpected rejection?): $(head -1 "$out"))"
         exit 1
     fi
-    cp "$out" "$elf"
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
 }
 
@@ -287,12 +292,14 @@ check_accept() {
     local rt="$tmp/accept_${label}.rt"
     local actual="$tmp/accept_${label}.actual"
     local expected="$tmp/accept_${label}.expected"
-    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
-    if grep -qE 'native-subset|ERR 4[0-9][0-9]' "$out"; then
-        fail_test "accept $label: unexpected rejection: $(head -1 "$out")"
+    local cdir="$tmp/accept_${label}.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "accept $label: no a.out emitted (unexpected rejection?): $(head -1 "$out")"
         return
     fi
-    cp "$out" "$elf"
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
     printf '%b' "$(echo "$rt_hex" | sed 's/\(..\)/\\x\1/g')" >"$rt"
     if ! oracle_le64 "$probe" "$rt" "$expected"; then
@@ -389,10 +396,11 @@ if [[ $gate_ok -eq 1 ]]; then
     fi
 fi
 if [[ $gate_ok -eq 1 ]]; then
+    # D12 byte-purity: emitted file is EXACTLY the page-padded image, no trailer.
     filesz_dec=$(python3 -c "print(int('$filesz', 16))" 2>/dev/null)
-    trailer=$(dd if="$tmp/p_bool.elf" bs=1 skip="$filesz_dec" count=2 2>/dev/null | xxd -p)
-    if [[ "$trailer" != "300a" ]]; then
-        fail_test "disassembly gate (trailer at $filesz not 0\\n, got '$trailer')"
+    actual_size=$(wc -c < "$tmp/p_bool.elf")
+    if [[ -n "$filesz_dec" && "$actual_size" -ne "$filesz_dec" ]]; then
+        fail_test "byte-purity gate (file size $actual_size != image size $filesz_dec; trailer present?)"
         gate_ok=0
     fi
 fi
@@ -443,7 +451,7 @@ if [[ $gate_ok -eq 1 ]]; then
 fi
 if [[ $gate_ok -eq 1 ]]; then
     pass=$((pass + 1))
-    echo "PASS: stack/native_compile_fragment.herb (disassembly gate: ELF EXEC/x86-64/0x400078/one-LOAD/FileSiz=MemSiz/trailer; jmp+jz+jnz; BR_AND/OR peek-pop; NOT; bool pushes; unsigned setcc; write+exit_group; clogger entry-stub call permitted since mercer Link 5)"
+    echo "PASS: stack/native_compile_fragment.herb (disassembly gate: ELF EXEC/x86-64/0x400078/one-LOAD/FileSiz=MemSiz/byte-pure; jmp+jz+jnz; BR_AND/OR peek-pop; NOT; bool pushes; unsigned setcc; write+exit_group; clogger entry-stub call permitted since mercer Link 5)"
 fi
 
 echo ""

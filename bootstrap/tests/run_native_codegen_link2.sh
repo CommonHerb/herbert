@@ -62,24 +62,29 @@ func main():
 end
 HERB
 
-# Compile each probe once
+# Compile each probe once.
+# D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not to
+# stdout; stdout now carries only the host return-word trailer. Run the compiler in
+# a per-probe scratch dir and harvest that dir's a.out. A rejected program writes
+# NO a.out (it returns before the emit), so a missing a.out IS the rejection signal.
 for probe_name in p1 p2 p3; do
     probe="$tmp/$probe_name.herb"
     elf="$tmp/$probe_name.elf"
     err_file="$tmp/$probe_name.compile.err"
     out_file="$tmp/$probe_name.compile.out"
-    "$HERBERT" "$backend" < "$probe" > "$out_file" 2>"$err_file"
+    cdir="$tmp/$probe_name.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" < "$probe" > "$out_file" 2>"$err_file" )
     rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "FAIL: stack/native_compile_fragment.herb (compile $probe_name failed: $(cat "$err_file" | head -1))"
         exit 1
     fi
-    # The ELF is written to stdout via flogger; check for diagnostic in stdout
-    if grep -q "native-subset\|ERR 4" "$out_file" 2>/dev/null; then
-        echo "FAIL: stack/native_compile_fragment.herb (compile $probe_name: unexpected rejection: $(head -1 "$out_file"))"
+    if [[ ! -f "$cdir/a.out" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (compile $probe_name: no a.out emitted (unexpected rejection?): $(head -1 "$out_file"))"
         exit 1
     fi
-    cp "$out_file" "$elf"
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
 done
 
@@ -216,14 +221,15 @@ if [[ $gate_ok -eq 1 ]]; then
     fi
 fi
 if [[ $gate_ok -eq 1 ]]; then
-    # Trailer at IMG offset outside the segment
+    # D12 byte-purity: the emitted file is EXACTLY the page-padded ELF image with
+    # NO host trailer appended (do fwriter writes only the image bytes; the host
+    # return-word trailer goes to stdout, a separate stream). So the on-disk file
+    # size equals the LOAD image size -- there is no byte at offset filesz.
     filesz_dec=$(python3 -c "print(int('$filesz', 16))" 2>/dev/null)
-    if [[ -n "$filesz_dec" ]]; then
-        trailer=$(dd if="$gate_elf" bs=1 skip="$filesz_dec" count=2 2>/dev/null | xxd -p)
-        if [[ "$trailer" != "300a" ]]; then
-            fail_test "disassembly gate (trailer at $filesz not 0\\n, got '$trailer')"
-            gate_ok=0
-        fi
+    actual_size=$(wc -c < "$gate_elf")
+    if [[ -n "$filesz_dec" && "$actual_size" -ne "$filesz_dec" ]]; then
+        fail_test "byte-purity gate (file size $actual_size != image size $filesz_dec; trailer present?)"
+        gate_ok=0
     fi
 fi
 
@@ -268,7 +274,7 @@ fi
 
 if [[ $gate_ok -eq 1 ]]; then
     pass=$((pass + 1))
-    echo "PASS: stack/native_compile_fragment.herb (disassembly gate: read+add/sub+unsigned-setcc+write+exit_group; ELF EXEC/x86-64/0x400078/one-LOAD/FileSiz=MemSiz; trailer outside segment)"
+    echo "PASS: stack/native_compile_fragment.herb (disassembly gate: read+add/sub+unsigned-setcc+write+exit_group; ELF EXEC/x86-64/0x400078/one-LOAD/FileSiz=MemSiz; byte-pure file size==image size)"
 fi
 
 # ====================================================================
@@ -359,12 +365,14 @@ check_accept() {
     local actual_file="$tmp/accept_${label}.actual"
     local expected_file="$tmp/accept_${label}.expected"
 
-    "$HERBERT" "$backend" < "$probe_file" > "$out_file" 2>"$err_file"
-    if grep -q "native-subset\|ERR 4" "$out_file" 2>/dev/null; then
-        fail_test "accept $label: unexpected rejection: $(head -1 "$out_file")"
+    local cdir="$tmp/accept_${label}.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" < "$probe_file" > "$out_file" 2>"$err_file" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "accept $label: no a.out emitted (unexpected rejection?): $(head -1 "$out_file")"
         return
     fi
-    cp "$out_file" "$elf_file"
+    cp "$cdir/a.out" "$elf_file"
     chmod +x "$elf_file"
     printf '%b' "$(echo "$rt_hex" | sed 's/\(..\)/\\x\1/g')" > "$rt_file"
 

@@ -31,14 +31,25 @@ fail_test() {
 
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
-    "$HERBERT" "$backend" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err"
-    local magic
-    magic=$(head -c4 "$tmp/$label.compile.out" | xxd -p | tr -d '\n')
-    if [[ "$magic" != "7f454c46" ]]; then
-        fail_test "compile $label rejected/no ELF: stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
+    # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter),
+    # not stdout. Run it in a per-label scratch dir and harvest that dir's a.out.
+    # (The make_layout_driver introspection driver below replaces the backend's
+    # main with its OWN flogger-emitting main, so it never reaches fwriter and is
+    # unaffected -- it still writes its LAY/TARGET layout lines to stdout.)
+    local cdir="$tmp/$label.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "compile $label rejected/no a.out: stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
         return 1
     fi
-    cp "$tmp/$label.compile.out" "$elf"
+    local magic
+    magic=$(head -c4 "$cdir/a.out" | xxd -p | tr -d '\n')
+    if [[ "$magic" != "7f454c46" ]]; then
+        fail_test "compile $label: a.out not an ELF (magic=$magic)"
+        return 1
+    fi
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
     return 0
 }

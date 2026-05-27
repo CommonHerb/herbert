@@ -49,14 +49,24 @@ compile_probe() {
     local elf="$3"
     local out="$tmp/${label}.compile.out"
     local err="$tmp/${label}.compile.err"
-    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
-    local magic
-    magic=$(head -c4 "$out" | xxd -p | tr -d '\n')
-    if [[ "$magic" != "7f454c46" ]]; then
-        fail_test "compile $label rejected or did not emit ELF: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+    # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter),
+    # not stdout. Run it in a per-label scratch dir and harvest that dir's a.out.
+    # (NB: the smug PROBES below still write their flogger payload to STDOUT when
+    # run -- that is the probe's output, unrelated to the compiler's a.out.)
+    local cdir="$tmp/${label}.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "compile $label rejected or did not emit a.out: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
         return 1
     fi
-    cp "$out" "$elf"
+    local magic
+    magic=$(head -c4 "$cdir/a.out" | xxd -p | tr -d '\n')
+    if [[ "$magic" != "7f454c46" ]]; then
+        fail_test "compile $label: a.out not an ELF (magic=$magic)"
+        return 1
+    fi
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
     return 0
 }

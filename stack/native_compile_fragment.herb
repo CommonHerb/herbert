@@ -9234,6 +9234,6 @@ func main():
     buf = append_str(buf, frozen_code)
     buf = nc_emit_rodata(buf, prog.1)
     buf = nc_emit_zeroes_loop(buf, pad)
-    do flogger(freeze(buf))
+    do fwriter(freeze(buf))
     return 0
 end

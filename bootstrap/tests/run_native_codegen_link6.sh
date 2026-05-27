@@ -48,12 +48,17 @@ PY
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
     local out="$tmp/${label}.out" err="$tmp/${label}.err"
-    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
-    if grep -qE 'native-subset|ERR 4[0-9][0-9]' "$out"; then
-        fail_test "compile $label rejected: $(head -1 "$out")"
+    # D12: compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
+    # stdout. Run in a per-label scratch dir; harvest that dir's a.out (no a.out
+    # means rejected before the emit).
+    local cdir="$tmp/${label}.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "compile $label rejected/no a.out: $(head -1 "$out")"
         return 1
     fi
-    cp "$out" "$elf"
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
 }
 

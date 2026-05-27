@@ -48,12 +48,17 @@ PY
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
     local out="$tmp/${label}.out" err="$tmp/${label}.err"
-    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
-    if grep -qE 'native-subset|ERR 4[0-9][0-9]' "$out"; then
-        fail_test "compile $label rejected: $(head -1 "$out")"
+    # D12: compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
+    # stdout. Run in a per-label scratch dir; harvest that dir's a.out (no a.out
+    # means rejected before the emit).
+    local cdir="$tmp/${label}.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "compile $label rejected/no a.out: $(head -1 "$out")"
         return 1
     fi
-    cp "$out" "$elf"
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
 }
 
@@ -339,14 +344,15 @@ if [[ $gate_ok -eq 1 ]]; then grep -q '4e 0f b6' <(xxd -p -c999 "$tmp/diff.elf" 
 if [[ $gate_ok -eq 1 ]]; then grep -q '4c 0f b6 04 0e' <(xxd -p -c999 "$tmp/diff.elf" | sed 's/../& /g') || { fail_test "disasm gate no INDEX movzx"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then ! grep -q '0f be' <(xxd -p -c999 "$tmp/diff.elf" | sed 's/../& /g') || { fail_test "disasm gate found movsx"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then
+    # D12 byte-purity: emitted file is EXACTLY the page-padded image, no trailer.
     filesz=$(awk '/LOAD/ { getline; print $1; exit }' "$rl")
     filesz_dec=$(python3 -c "print(int('$filesz', 16))")
-    trailer=$(dd if="$tmp/diff.elf" bs=1 skip="$filesz_dec" count=2 2>/dev/null | xxd -p)
-    [[ "$trailer" == "300a" ]] || { fail_test "disasm gate trailer"; gate_ok=0; }
+    actual_size=$(wc -c < "$tmp/diff.elf")
+    [[ "$actual_size" -eq "$filesz_dec" ]] || { fail_test "byte-purity gate (file size $actual_size != image size $filesz_dec; trailer present?)"; gate_ok=0; }
 fi
 if [[ $gate_ok -eq 1 ]]; then
     pass=$((pass + 1))
-    echo "PASS: stack/native_compile_fragment.herb (link5 disasm gate: rodata, byte loops, checked unsigned index, single RX LOAD, inert trailer)"
+    echo "PASS: stack/native_compile_fragment.herb (link5 disasm gate: rodata, byte loops, checked unsigned index, single RX LOAD, byte-pure size==image)"
 fi
 
 echo ""

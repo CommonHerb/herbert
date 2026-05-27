@@ -34,14 +34,26 @@ fail_test() {
 
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
-    "$HERBERT" "$backend" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err"
-    local magic
-    magic=$(head -c4 "$tmp/$label.compile.out" | xxd -p | tr -d '\n')
-    if [[ "$magic" != "7f454c46" ]]; then
-        fail_test "compile $label rejected/no ELF: stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
+    # D12: the compiler now emits its ELF to a byte-pure file "a.out" (do fwriter),
+    # not stdout. IMPORTANT collision: these probes are themselves fwriter-probes,
+    # so when RUN they also write "a.out". Compile in a DEDICATED dir and harvest
+    # that dir's a.out into $elf (a distinct path), keeping the compiler's output
+    # ELF separate from the probe's runtime a.out (which check_bytepure captures
+    # in its own $nd/$cd dirs below).
+    local cdir="$tmp/$label.compile.d"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "compile $label rejected/no a.out: stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
         return 1
     fi
-    cp "$tmp/$label.compile.out" "$elf"
+    local magic
+    magic=$(head -c4 "$cdir/a.out" | xxd -p | tr -d '\n')
+    if [[ "$magic" != "7f454c46" ]]; then
+        fail_test "compile $label: a.out not an ELF (magic=$magic)"
+        return 1
+    fi
+    cp "$cdir/a.out" "$elf"
     chmod +x "$elf"
     return 0
 }
@@ -93,11 +105,14 @@ check_disasm_gate() {
 # Rejection: a probe that should NOT compile to an ELF (renamed twin / type error).
 check_reject() {
     local label="$1" probe="$2"
-    "$HERBERT" "$backend" <"$probe" >"$tmp/$label.out" 2>"$tmp/$label.err"
-    local magic
-    magic=$(head -c4 "$tmp/$label.out" | xxd -p | tr -d '\n')
-    if [[ "$magic" == "7f454c46" ]]; then
-        fail_test "$label: expected rejection but got an ELF"
+    # A rejected program returns before the fwriter emit, so it must write NO
+    # a.out (and print its diagnostic to stdout). Run in a dir and assert no a.out
+    # -- the post-D12 form of "expected rejection, not an ELF".
+    local rdir="$tmp/$label.reject.d"
+    rm -rf "$rdir"; mkdir -p "$rdir"
+    ( cd "$rdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.out" 2>"$tmp/$label.err" )
+    if [[ -f "$rdir/a.out" ]]; then
+        fail_test "$label: expected rejection but compiler emitted a.out (stdout=$(head -1 "$tmp/$label.out"))"
     else
         pass=$((pass + 1))
     fi
