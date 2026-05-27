@@ -138,11 +138,11 @@ static const char *BUILTIN_NAMES[] = {
     "length", "index", "slice", "equal",
     "new_buffer", "freeze", "clogger",
     "new_array", "get", "count",
-    "append", "add", "flogger",
+    "append", "add", "flogger", "fwriter",
     NULL
 };
 
-static const char *VOIDLESS_NAMES[] = { "append", "add", "flogger", NULL };
+static const char *VOIDLESS_NAMES[] = { "append", "add", "flogger", "fwriter", NULL };
 
 bool is_builtin_name(const char *name) {
     for (int i = 0; BUILTIN_NAMES[i]; i++) {
@@ -487,6 +487,23 @@ static void bi_flogger(int line, Value *args, size_t n) {
     fwrite(args[0].u.s->data, 1, args[0].u.s->len, stdout);
 }
 
+/* fwriter(bytes): write a string's raw bytes to the fixed output file "a.out".
+ * The native back end lowers this to openat/write/close syscalls; here in the
+ * C bootstrap it is the differential oracle. Additive builtin; main.c's output
+ * contract is untouched. */
+static void bi_fwriter(int line, Value *args, size_t n) {
+    check_arity_n(line, "fwriter", 1, n);
+    if (args[0].kind != V_STR) {
+        herr(line, "fwriter: expected string, got %s", v_kind_name(args[0].kind));
+    }
+    FILE *fp = fopen("a.out", "wb");
+    if (!fp) {
+        herr(line, "fwriter: cannot open 'a.out'");
+    }
+    fwrite(args[0].u.s->data, 1, args[0].u.s->len, fp);
+    fclose(fp);
+}
+
 static Value dispatch_builtin_value(const char *name, int line, Value *args, size_t n) {
     if (strcmp(name, "length")     == 0) return bi_length    (line, args, n);
     if (strcmp(name, "index")      == 0) return bi_index     (line, args, n);
@@ -507,6 +524,7 @@ static void dispatch_builtin_void(const char *name, int line, Value *args, size_
     if (strcmp(name, "append") == 0) { bi_append(line, args, n); return; }
     if (strcmp(name, "add")    == 0) { bi_add   (line, args, n); return; }
     if (strcmp(name, "flogger") == 0) { bi_flogger(line, args, n); return; }
+    if (strcmp(name, "fwriter") == 0) { bi_fwriter(line, args, n); return; }
     herr(line, "internal: builtin '%s' has no voidless form", name);
 }
 

@@ -1103,6 +1103,10 @@ func op_flogger():
     return 34
 end
 
+func op_fwriter():
+    return 35
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, ""))
     return ir
@@ -1467,6 +1471,10 @@ func emit_do_call(call_idx, env, ir, strings, nodes, prog_idx, type_pool, caller
     if equal(name, "flogger"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, op_flogger(), 0, 0)
+    end
+    if equal(name, "fwriter"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_fwriter(), 0, 0)
     end
     return fault("bad do call")
 end
@@ -2768,11 +2776,11 @@ func err_is_builtin_name(name):
     if equal(name, "new_array") or equal(name, "get") or equal(name, "count"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger")
+    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter")
 end
 
 func err_is_void_builtin(name):
-    return equal(name, "append") or equal(name, "add") or equal(name, "flogger")
+    return equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "fwriter")
 end
 
 func err_is_value_builtin(name):
@@ -2811,6 +2819,9 @@ func err_value_builtin_arity(name):
 end
 
 func err_void_builtin_arity(name):
+    if equal(name, "fwriter"):
+        return 1
+    end
     if equal(name, "flogger"):
         return 1
     end
@@ -5783,6 +5794,13 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
                 let s = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
                 return (s.0, s.1, s.2, s.3, 0)
             end
+            if equal(name, "fwriter"):
+                if count(ckids) != 1:
+                    return (nc_fail(420, call_node.3, "fwriter"), env, sig, 0, 0)
+                end
+                let sf = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
+                return (sf.0, sf.1, sf.2, sf.3, 0)
+            end
             return (nc_fail(404, node.3, name), env, sig, 0, 0)
         end
         return (nc_fail(404, node.3, "do"), env, sig, 0, 0)
@@ -6212,6 +6230,9 @@ func nc_opcode_name_for_diag(op):
     end
     if op == 34:
         return "FLOGGER"
+    end
+    if op == 35:
+        return "FWRITER"
     end
     return int_to_str(op)
 end
@@ -6719,6 +6740,12 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             return (p.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         stack = p.1
+    elif op == 35:
+        let pf = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
+        if pf.0 != 0:
+            return (pf.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        stack = pf.1
     else:
         return (nc_fail(408, 0, nc_opcode_name_for_diag(op)), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
     end
@@ -7192,6 +7219,9 @@ func nc_group_single_len(op):
     end
     if op == 34:
         return 44
+    end
+    if op == 35:
+        return 120
     end
     return 0
 end
@@ -8423,6 +8453,134 @@ func nc_emit_flogger(buf):
     return buf
 end
 
+func nc_emit_fwriter(buf):
+    -- fwriter(bytes): pop the bytes string (len in r8, ptr in r9), build a
+    -- NUL-terminated "a.out" in an 8-byte stack slot, openat it, write-loop the
+    -- bytes, close, restore rsp; on SUCCESS jmp over the error-exit and return to
+    -- the caller (error paths exit_group(1)). 120 bytes; conductor-silicon-validated.
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 65)
+    do append(buf, 89)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 184)
+    do append(buf, 97)
+    do append(buf, 46)
+    do append(buf, 111)
+    do append(buf, 117)
+    do append(buf, 116)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 199)
+    do append(buf, 156)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 186)
+    do append(buf, 65)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 65)
+    do append(buf, 186)
+    do append(buf, 164)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 120)
+    do append(buf, 53)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 196)
+    do append(buf, 77)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 116)
+    do append(buf, 29)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 206)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 194)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 24)
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 193)
+    do append(buf, 73)
+    do append(buf, 41)
+    do append(buf, 192)
+    do append(buf, 235)
+    do append(buf, 222)
+    do append(buf, 184)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 235)
+    do append(buf, 12)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    return buf
+end
+
 func nc_emit_new_heap_header(buf, backing_size):
     do append(buf, 191)
     do append(buf, 24)
@@ -8973,6 +9131,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, i
         buf = nc_emit_clogger(buf)
     elif op == 34:
         buf = nc_emit_flogger(buf)
+    elif op == 35:
+        buf = nc_emit_fwriter(buf)
     end
     return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, g.1, n, buf)
 end
