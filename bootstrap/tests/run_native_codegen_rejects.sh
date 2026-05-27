@@ -17,6 +17,9 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin rejects || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -138,13 +141,15 @@ check_runtime_frontier_cap() {
         python3 -c "import sys;sys.stdout.buffer.write(b'x'*${sz})" >"$tmp/${label}.${kind}.in"
         "$elf" <"$tmp/${label}.${kind}.in" >"$tmp/${label}.${kind}.n" 2>/dev/null
         local nrc=$?
-        "$HERBERT" "$probe" <"$tmp/${label}.${kind}.in" >"$tmp/${label}.${kind}.c" 2>/dev/null
-        local crc=$?
-        python3 -c "import sys;sys.stdout.buffer.write(int((open('$tmp/${label}.${kind}.c').read().strip() or '0')).to_bytes(8,'little'))" >"$tmp/${label}.${kind}.cle" 2>/dev/null
-        if [[ $crc -eq 0 && $nrc -eq 0 ]] && cmp -s "$tmp/${label}.${kind}.n" "$tmp/${label}.${kind}.cle"; then
+        if ! oracle_expect_le64 "rejects_${label}_${kind}" "$probe" "$tmp/${label}.${kind}.in" "$tmp/${label}.${kind}.expected"; then
+            fail_test "frontier $label $kind: ${sz} B oracle failed"
+            i=$((i + 1))
+            continue
+        fi
+        if [[ $nrc -eq 0 ]] && cmp -s "$tmp/${label}.${kind}.n" "$tmp/${label}.${kind}.expected"; then
             pass=$((pass + 1))
         else
-            fail_test "frontier $label $kind: ${sz} B must succeed == C (native rc=$nrc C rc=$crc)"
+            fail_test "frontier $label $kind: ${sz} B must match golden (native rc=$nrc)"
         fi
         i=$((i + 1))
     done
@@ -660,6 +665,9 @@ check_runtime_frontier_cap frontier_clogger_arena_cap "$tmp/frontier_cap.herb"
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-reject sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), kanawha partial-aggregate single-diagnostic rails, plus frontier clogger limits)"

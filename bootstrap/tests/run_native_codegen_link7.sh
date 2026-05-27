@@ -18,6 +18,9 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link7 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -99,19 +102,16 @@ run_payload_diff() {
     local elf="$3"
     local rt="$4"
     total=$((total + 1))
-    local c_out="$tmp/${label}.c.out"
     local n_out="$tmp/${label}.n.out"
-    local c_payload="$tmp/${label}.c.payload"
+    local expected_payload="$tmp/${label}.expected.payload"
     local n_payload="$tmp/${label}.n.payload"
 
-    "$HERBERT" "$probe" <"$rt" >"$c_out" 2>/dev/null || { fail_test "$label C bootstrap failed"; return; }
+    oracle_expect_payload "link7_${label}" "$probe" "$rt" "$expected_payload" || { fail_test "$label payload oracle failed"; return; }
     "$elf" <"$rt" >"$n_out" 2>/dev/null || { fail_test "$label native failed"; return; }
-    [[ "$(tail -c2 "$c_out" | xxd -p | tr -d '\n')" == "300a" ]] || { fail_test "$label C trailer"; return; }
     [[ "$(tail -c8 "$n_out" | xxd -p | tr -d '\n')" == "0000000000000000" ]] || { fail_test "$label native trailer"; return; }
-    strip_c_payload "$c_out" "$c_payload" || { fail_test "$label C payload strip"; return; }
     strip_native_payload "$n_out" "$n_payload" || { fail_test "$label native payload strip"; return; }
-    if ! cmp -s "$c_payload" "$n_payload"; then
-        fail_test "$label payload mismatch: C=$(xxd -p "$c_payload" | tr -d '\n') native=$(xxd -p "$n_payload" | tr -d '\n')"
+    if ! cmp -s "$expected_payload" "$n_payload"; then
+        fail_test "$label payload mismatch: expected=$(xxd -p "$expected_payload" | tr -d '\n') native=$(xxd -p "$n_payload" | tr -d '\n')"
         return
     fi
     pass=$((pass + 1))
@@ -121,23 +121,7 @@ oracle_le64() {
     local probe_file="$1"
     local rt_file="$2"
     local out_file="$3"
-    local c_out val
-    if ! c_out=$("$HERBERT" "$probe_file" <"$rt_file" 2>/dev/null); then
-        return 1
-    fi
-    if [[ "$c_out" == "true" ]]; then
-        val=1
-    elif [[ "$c_out" == "false" ]]; then
-        val=0
-    else
-        val="$c_out"
-    fi
-    python3 - "$val" "$out_file" <<'PY'
-import struct
-import sys
-with open(sys.argv[2], "wb") as f:
-    f.write(struct.pack("<Q", int(sys.argv[1]) & 0xffffffffffffffff))
-PY
+    oracle_expect_le64 "$(native_codegen_oracle_case_id "$out_file")" "$probe_file" "$rt_file" "$out_file"
 }
 
 run_return_diff() {
@@ -467,6 +451,9 @@ check_disasm_gate "$tmp/disasm_one.herb" "$tmp/multi.herb"
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link7 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link7: $pass sub-tests: flogger payload accept matrix, large output smoke, exact reject codes, renamed twins, anti-over-rejection, decisive disasm gate)"

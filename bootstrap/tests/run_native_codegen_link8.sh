@@ -23,6 +23,9 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link8 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 pass=0
@@ -32,6 +35,12 @@ fail_test() {
     echo "FAIL: stack/native_compile_fragment.herb ($1)"
     fail=$((fail + 1))
 }
+
+link8_fixtures="$NATIVE_CODEGEN_GOLDENS_DIR/fixtures/link8"
+if [[ ! -d "$link8_fixtures" ]]; then
+    echo "FAIL: stack/native_compile_fragment.herb (missing link8 oracle fixtures; run bootstrap/tests/capture_native_goldens.sh)"
+    exit 1
+fi
 
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
@@ -64,14 +73,14 @@ check_return() {
     local label="$1" probe="$2" elf="$3" f="$4"
     "$elf" <"$f" >"$tmp/$label.n" 2>/dev/null
     local nrc=$?
-    "$HERBERT" "$probe" <"$f" >"$tmp/$label.c" 2>/dev/null
-    local cval
-    cval=$(tr -d '\n' <"$tmp/$label.c")
-    le64 "$cval" >"$tmp/$label.cle" 2>/dev/null
-    if [[ $nrc -eq 0 ]] && cmp -s "$tmp/$label.n" "$tmp/$label.cle"; then
+    if ! oracle_expect_le64 "link8_${label}" "$probe" "$f" "$tmp/$label.expected"; then
+        fail_test "$label (in=$(wc -c <"$f") B): return oracle failed"
+        return
+    fi
+    if [[ $nrc -eq 0 ]] && cmp -s "$tmp/$label.n" "$tmp/$label.expected"; then
         pass=$((pass + 1))
     else
-        fail_test "$label (in=$(wc -c <"$f") B): native rc=$nrc word=$(xxd -p "$tmp/$label.n" | tr -d '\n') vs C=$cval"
+        fail_test "$label (in=$(wc -c <"$f") B): native rc=$nrc word=$(xxd -p "$tmp/$label.n" | tr -d '\n') expected=$(xxd -p "$tmp/$label.expected" | tr -d '\n')"
     fi
 }
 
@@ -81,20 +90,25 @@ check_flogger() {
     local label="$1" probe="$2" elf="$3" f="$4"
     "$elf" <"$f" >"$tmp/$label.n" 2>/dev/null
     local nrc=$?
-    "$HERBERT" "$probe" <"$f" >"$tmp/$label.c" 2>/dev/null
     local ns cs
     ns=$(wc -c <"$tmp/$label.n")
-    cs=$(wc -c <"$tmp/$label.c")
-    if [[ $nrc -ne 0 || $ns -lt 8 || $cs -lt 2 ]]; then
-        fail_test "$label (in=$(wc -c <"$f") B): native rc=$nrc ns=$ns cs=$cs"
+    if [[ $nrc -ne 0 || $ns -lt 8 ]]; then
+        fail_test "$label (in=$(wc -c <"$f") B): native rc=$nrc ns=$ns"
         return
     fi
     head -c $((ns - 8)) "$tmp/$label.n" >"$tmp/$label.np"
-    head -c $((cs - 2)) "$tmp/$label.c" >"$tmp/$label.cp"
-    if cmp -s "$tmp/$label.np" "$tmp/$label.cp"; then
+    if [[ "$(tail -c8 "$tmp/$label.n" | xxd -p | tr -d '\n')" != "0000000000000000" ]]; then
+        fail_test "$label native trailer"
+        return
+    fi
+    if ! oracle_expect_payload "link8_${label}" "$probe" "$f" "$tmp/$label.expected"; then
+        fail_test "$label (in=$(wc -c <"$f") B): payload oracle failed"
+        return
+    fi
+    if cmp -s "$tmp/$label.np" "$tmp/$label.expected"; then
         pass=$((pass + 1))
     else
-        fail_test "$label payload: native=$(xxd -p "$tmp/$label.np" | tr -d '\n') C=$(xxd -p "$tmp/$label.cp" | tr -d '\n')"
+        fail_test "$label payload: native=$(xxd -p "$tmp/$label.np" | tr -d '\n') expected=$(xxd -p "$tmp/$label.expected" | tr -d '\n')"
     fi
 }
 
@@ -187,13 +201,13 @@ end
 HERB
 
 # ---- inputs (real bytes from the compiler's own source; the self-hosting input)
-: >"$tmp/i_empty"
-head -c 65535 "$backend" >"$tmp/i_65535"
-head -c 65536 "$backend" >"$tmp/i_65536"
-head -c 65537 "$backend" >"$tmp/i_65537"
-head -c 100000 "$backend" >"$tmp/i_100k"
-head -c 5 "$backend" >"$tmp/i_5"
-cp "$backend" "$tmp/i_src"   # the compiler's own ~237 KiB source -- the self-hosting input
+cp "$link8_fixtures/i_empty" "$tmp/i_empty"
+cp "$link8_fixtures/i_65535" "$tmp/i_65535"
+cp "$link8_fixtures/i_65536" "$tmp/i_65536"
+cp "$link8_fixtures/i_65537" "$tmp/i_65537"
+cp "$link8_fixtures/i_100k" "$tmp/i_100k"
+cp "$link8_fixtures/i_5" "$tmp/i_5"
+cp "$link8_fixtures/i_src" "$tmp/i_src"   # snapshot of the compiler source input
 
 # ---- length boundary across the old 64 KiB cap (all must match C) -------
 compile_probe len "$tmp/len.herb" "$tmp/len.elf" || true
@@ -254,6 +268,9 @@ fi
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link8 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link8: $pass sub-tests: clogger-into-heap length boundary across 64 KiB, whole-input fold incl. the compiler's own source, index past the old cap, clogger-after-alloc, renamed twin, disasm gate)"

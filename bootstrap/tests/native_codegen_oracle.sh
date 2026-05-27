@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# Shared Role-1 oracle for the native-codegen tests.
+#
+# Default mode validates live-C-derived native-canonical artifacts against the
+# committed golden. Golden mode loads only the committed artifact.
+
+native_codegen_oracle__script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NATIVE_CODEGEN_GOLDENS_DIR="${NATIVE_CODEGEN_GOLDENS_DIR:-$native_codegen_oracle__script_dir/native_codegen_goldens}"
+NATIVE_CODEGEN_ORACLE="${NATIVE_CODEGEN_ORACLE:-c}"
+NATIVE_CODEGEN_CAPTURE="${NATIVE_CODEGEN_ORACLE_CAPTURE:-0}"
+NATIVE_CODEGEN_MANIFEST="${NATIVE_CODEGEN_MANIFEST:-$NATIVE_CODEGEN_GOLDENS_DIR/manifest.tsv}"
+NATIVE_CODEGEN_CAPTURE_MANIFEST="${NATIVE_CODEGEN_CAPTURE_MANIFEST:-$NATIVE_CODEGEN_MANIFEST}"
+
+native_codegen_oracle_script=
+native_codegen_oracle_consumed=
+
+native_codegen_oracle_fail() {
+    echo "FAIL: native-codegen oracle ($1)" >&2
+    return 1
+}
+
+native_codegen_oracle_begin() {
+    native_codegen_oracle_script="$1"
+    native_codegen_oracle_consumed="$(mktemp)"
+    case "$NATIVE_CODEGEN_ORACLE" in
+        ""|c|golden) ;;
+        *) native_codegen_oracle_fail "unknown NATIVE_CODEGEN_ORACLE=$NATIVE_CODEGEN_ORACLE"; return 1 ;;
+    esac
+    if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" ]]; then
+        mkdir -p "$NATIVE_CODEGEN_GOLDENS_DIR/artifacts/$native_codegen_oracle_script"
+        if [[ ! -f "$NATIVE_CODEGEN_CAPTURE_MANIFEST" ]]; then
+            printf 'case_id\tscript\tprobe_label\tinput_label\tkind\texpected\tprobe_sha256\tinput_sha256\tc_transform\n' >"$NATIVE_CODEGEN_CAPTURE_MANIFEST"
+        fi
+    elif [[ ! -f "$NATIVE_CODEGEN_MANIFEST" ]]; then
+        native_codegen_oracle_fail "missing manifest $NATIVE_CODEGEN_MANIFEST; run bootstrap/tests/capture_native_goldens.sh"
+        return 1
+    fi
+}
+
+native_codegen_oracle_case_id() {
+    local path="$1"
+    local base
+    base="$(basename "$path")"
+    base="${base%.bin}"
+    base="${base%.expected}"
+    base="${base%.actual}"
+    printf '%s_%s' "$native_codegen_oracle_script" "$base" | tr -cs 'A-Za-z0-9_' '_'
+}
+
+native_codegen_oracle_sha256() {
+    sha256sum "$1" | awk '{print $1}'
+}
+
+native_codegen_oracle_manifest_row() {
+    local case_id="$1"
+    awk -F '\t' -v cid="$case_id" -v script="$native_codegen_oracle_script" '
+        NR == 1 { next }
+        $1 == cid && $2 == script { print; found++ }
+        END { if (found != 1) exit found == 0 ? 2 : 3 }
+    ' "$NATIVE_CODEGEN_MANIFEST"
+}
+
+native_codegen_oracle_consume() {
+    local case_id="$1"
+    if grep -Fxq "$case_id" "$native_codegen_oracle_consumed"; then
+        native_codegen_oracle_fail "$case_id consumed more than once"
+        return 1
+    fi
+    printf '%s\n' "$case_id" >>"$native_codegen_oracle_consumed"
+}
+
+native_codegen_oracle_finish() {
+    [[ "$NATIVE_CODEGEN_CAPTURE" == "1" ]] && return 0
+    local missing=0
+    while IFS=$'\t' read -r case_id script _rest; do
+        [[ "$case_id" == "case_id" ]] && continue
+        [[ "$script" == "$native_codegen_oracle_script" ]] || continue
+        if ! grep -Fxq "$case_id" "$native_codegen_oracle_consumed"; then
+            echo "FAIL: native-codegen oracle (manifest row not consumed: $native_codegen_oracle_script/$case_id)" >&2
+            missing=1
+        fi
+    done <"$NATIVE_CODEGEN_MANIFEST"
+    rm -f "$native_codegen_oracle_consumed"
+    [[ $missing -eq 0 ]]
+}
+
+native_codegen_oracle_append_manifest() {
+    local case_id="$1" probe="$2" input="$3" kind="$4" expected_rel="$5" transform="$6"
+    local probe_label input_label probe_hash input_hash
+    probe_label="$(basename "$probe")"
+    input_label="$(basename "$input")"
+    probe_hash="$(native_codegen_oracle_sha256 "$probe")"
+    input_hash="$(native_codegen_oracle_sha256 "$input")"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$case_id" "$native_codegen_oracle_script" "$probe_label" "$input_label" \
+        "$kind" "$expected_rel" "$probe_hash" "$input_hash" "$transform" \
+        >>"$NATIVE_CODEGEN_CAPTURE_MANIFEST"
+}
+
+native_codegen_oracle_prepare_expected() {
+    local case_id="$1" probe="$2" input="$3" out="$4" transform="$5" derived="$6" derived_kind="$7"
+    local row script probe_label input_label row_kind expected_rel probe_hash input_hash row_transform
+    local expected_abs current_probe_hash current_input_hash
+
+    native_codegen_oracle_consume "$case_id" || return 1
+
+    if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" ]]; then
+        expected_rel="artifacts/$native_codegen_oracle_script/$case_id.bin"
+        expected_abs="$NATIVE_CODEGEN_GOLDENS_DIR/$expected_rel"
+        mkdir -p "$(dirname "$expected_abs")"
+        cp "$derived" "$expected_abs"
+        native_codegen_oracle_append_manifest "$case_id" "$probe" "$input" "$derived_kind" "$expected_rel" "$transform"
+        cp "$expected_abs" "$out"
+        printf '%s\n' "$derived_kind"
+        return 0
+    fi
+
+    row="$(native_codegen_oracle_manifest_row "$case_id")"
+    local lookup_rc=$?
+    if [[ $lookup_rc -eq 2 ]]; then
+        native_codegen_oracle_fail "missing manifest row for $native_codegen_oracle_script/$case_id"
+        return 1
+    elif [[ $lookup_rc -eq 3 ]]; then
+        native_codegen_oracle_fail "duplicate manifest rows for $native_codegen_oracle_script/$case_id"
+        return 1
+    elif [[ $lookup_rc -ne 0 ]]; then
+        native_codegen_oracle_fail "manifest lookup failed for $native_codegen_oracle_script/$case_id"
+        return 1
+    fi
+
+    IFS=$'\t' read -r _case_id script probe_label input_label row_kind expected_rel probe_hash input_hash row_transform <<<"$row"
+    expected_abs="$NATIVE_CODEGEN_GOLDENS_DIR/$expected_rel"
+    if [[ ! -f "$expected_abs" ]]; then
+        native_codegen_oracle_fail "missing golden artifact $expected_rel for $case_id"
+        return 1
+    fi
+    current_probe_hash="$(native_codegen_oracle_sha256 "$probe")"
+    current_input_hash="$(native_codegen_oracle_sha256 "$input")"
+    if [[ "$current_probe_hash" != "$probe_hash" ]]; then
+        native_codegen_oracle_fail "$case_id probe hash drift: $current_probe_hash != $probe_hash"
+        return 1
+    fi
+    if [[ "$current_input_hash" != "$input_hash" ]]; then
+        native_codegen_oracle_fail "$case_id input hash drift: $current_input_hash != $input_hash"
+        return 1
+    fi
+
+    if [[ "$NATIVE_CODEGEN_ORACLE" == "golden" ]]; then
+        cp "$expected_abs" "$out"
+        printf '%s\n' "$row_kind"
+        return 0
+    fi
+
+    if [[ "$row_kind" != "$derived_kind" ]]; then
+        native_codegen_oracle_fail "$case_id kind drift: C produced $derived_kind, golden records $row_kind"
+        return 1
+    fi
+    if [[ "$row_transform" != "$transform" ]]; then
+        native_codegen_oracle_fail "$case_id transform drift: $row_transform != $transform"
+        return 1
+    fi
+    if ! cmp -s "$derived" "$expected_abs"; then
+        native_codegen_oracle_fail "$case_id C-derived artifact differs from committed golden (golden=$(xxd -p "$expected_abs" | tr -d '\n') C=$(xxd -p "$derived" | tr -d '\n'))"
+        return 1
+    fi
+    cp "$expected_abs" "$out"
+    printf '%s\n' "$row_kind"
+}
+
+native_codegen_oracle_pack_le64() {
+    local val="$1" out="$2"
+    if [[ "$val" == "true" ]]; then
+        val=1
+    elif [[ "$val" == "false" ]]; then
+        val=0
+    fi
+    python3 - "$val" "$out" <<'PY'
+import struct
+import sys
+with open(sys.argv[2], "wb") as f:
+    f.write(struct.pack("<Q", int(sys.argv[1]) & 0xFFFFFFFFFFFFFFFF))
+PY
+}
+
+oracle_expect_le64() {
+    local case_id="$1" probe="$2" input="$3" out="$4"
+    local derived c_out
+    derived="$(mktemp)"
+    if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" || "$NATIVE_CODEGEN_ORACLE" != "golden" ]]; then
+        if ! c_out=$("$HERBERT" "$probe" <"$input" 2>/dev/null); then
+            rm -f "$derived"
+            return 1
+        fi
+        native_codegen_oracle_pack_le64 "$c_out" "$derived" || { rm -f "$derived"; return 1; }
+    fi
+    native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_stdout_decimal_bool_to_le64" "$derived" "le64" >/dev/null
+    local rc=$?
+    rm -f "$derived"
+    return $rc
+}
+
+oracle_expect_payload() {
+    local case_id="$1" probe="$2" input="$3" out="$4"
+    local derived c_out size trailer
+    derived="$(mktemp)"
+    c_out="$(mktemp)"
+    if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" || "$NATIVE_CODEGEN_ORACLE" != "golden" ]]; then
+        if ! "$HERBERT" "$probe" <"$input" >"$c_out" 2>/dev/null; then
+            rm -f "$derived" "$c_out"
+            return 1
+        fi
+        size=$(wc -c <"$c_out")
+        if (( size < 2 )); then
+            rm -f "$derived" "$c_out"
+            return 1
+        fi
+        trailer="$(tail -c2 "$c_out" | xxd -p | tr -d '\n')"
+        if [[ "$trailer" != "300a" ]]; then
+            native_codegen_oracle_fail "$case_id C payload trailer was $trailer, expected 300a"
+            rm -f "$derived" "$c_out"
+            return 1
+        fi
+        head -c $((size - 2)) "$c_out" >"$derived"
+    fi
+    native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_stdout_strip_decimal_zero_trailer" "$derived" "payload" >/dev/null
+    local rc=$?
+    rm -f "$derived" "$c_out"
+    return $rc
+}
+
+oracle_expect_trap_stdout() {
+    local case_id="$1" probe="$2" input="$3" out="$4"
+    local derived
+    derived="$(mktemp)"
+    if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" || "$NATIVE_CODEGEN_ORACLE" != "golden" ]]; then
+        "$HERBERT" "$probe" <"$input" >"$derived" 2>/dev/null
+        local c_rc=$?
+        if [[ $c_rc -eq 0 ]]; then
+            rm -f "$derived"
+            return 1
+        fi
+    fi
+    native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_trap_stdout" "$derived" "trap_stdout" >/dev/null
+    local rc=$?
+    rm -f "$derived"
+    return $rc
+}
+
+oracle_expect_return_or_trap() {
+    local case_id="$1" probe="$2" input="$3" out="$4" kind_out="$5"
+    local derived c_out c_rc derived_kind row_kind
+    derived="$(mktemp)"
+    c_out="$(mktemp)"
+    derived_kind="le64"
+    if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" || "$NATIVE_CODEGEN_ORACLE" != "golden" ]]; then
+        "$HERBERT" "$probe" <"$input" >"$c_out" 2>/dev/null
+        c_rc=$?
+        if [[ $c_rc -eq 0 ]]; then
+            native_codegen_oracle_pack_le64 "$(tr -d '\n' <"$c_out")" "$derived" || { rm -f "$derived" "$c_out"; return 1; }
+            derived_kind="le64"
+        else
+            cp "$c_out" "$derived"
+            derived_kind="trap_stdout"
+        fi
+    fi
+    row_kind="$(native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_stdout_le64_or_trap_stdout" "$derived" "$derived_kind")"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        printf '%s\n' "$row_kind" >"$kind_out"
+    fi
+    rm -f "$derived" "$c_out"
+    return $rc
+}
+
+oracle_expect_file() {
+    local case_id="$1" probe="$2" run_dir="$3" artifact="$4" out="$5"
+    local input="$6"
+    local derived artifact_path
+    derived="$(mktemp)"
+    if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" || "$NATIVE_CODEGEN_ORACLE" != "golden" ]]; then
+        rm -rf "$run_dir"
+        mkdir -p "$run_dir"
+        ( cd "$run_dir" && "$HERBERT" "$probe" >/dev/null 2>&1 )
+        artifact_path="$run_dir/$artifact"
+        if [[ ! -f "$artifact_path" ]]; then
+            rm -f "$derived"
+            return 1
+        fi
+        cp "$artifact_path" "$derived"
+    fi
+    native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_runtime_file_artifact" "$derived" "file" >/dev/null
+    local rc=$?
+    rm -f "$derived"
+    return $rc
+}

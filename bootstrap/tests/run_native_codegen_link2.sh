@@ -24,6 +24,9 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link2 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -99,28 +102,7 @@ oracle_le64() {
     local probe_file="$1"
     local rt_file="$2"
     local out_file="$3"
-    # Run C bootstrap
-    local c_out
-    if ! c_out=$("$HERBERT" "$probe_file" < "$rt_file" 2>/dev/null); then
-        return 1
-    fi
-    # Parse and pack: bool true -> 1, bool false -> 0, else decimal integer
-    local val
-    if [[ "$c_out" == "true" ]]; then
-        val=1
-    elif [[ "$c_out" == "false" ]]; then
-        val=0
-    else
-        val="$c_out"
-    fi
-    # Pack as LE64 via python3
-    python3 - "$val" "$out_file" << 'PY'
-import sys, struct
-val = int(sys.argv[1])
-out_path = sys.argv[2]
-with open(out_path, 'wb') as f:
-    f.write(struct.pack('<Q', val & 0xFFFFFFFFFFFFFFFF))
-PY
+    oracle_expect_le64 "$(native_codegen_oracle_case_id "$out_file")" "$probe_file" "$rt_file" "$out_file"
 }
 
 # ====================================================================
@@ -412,6 +394,9 @@ check_accept "p3_sub" "$tmp/p3.herb" "0001" "ffffffffffffffff"
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link2 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs C bootstrap oracle; disassembly gate; 6-probe rejection battery incl. double-clogger + 3 anti-over-rejection; string/tuple/length/nonlit-index/inline-clogger rejects retired -- now in-subset at mercer Link 5)"

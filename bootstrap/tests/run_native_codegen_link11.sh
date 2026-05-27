@@ -18,6 +18,9 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link11 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 pass=0
@@ -75,17 +78,17 @@ check_diff() {
     total=$((total + 1))
     local elf="$tmp/$label.elf"
     compile_probe "$label" "$probe" "$elf" || return
-    "$HERBERT" "$probe" >"$tmp/$label.c" 2>"$tmp/$label.c.err"
-    local crc=$?
+    : >"$tmp/$label.empty"
+    if ! oracle_expect_le64 "link11_${label}" "$probe" "$tmp/$label.empty" "$tmp/$label.expected"; then
+        fail_test "differential $label: oracle failed"
+        return
+    fi
     "$elf" >"$tmp/$label.native" 2>"$tmp/$label.native.err"
     local nrc=$?
-    local cval
-    cval=$(tr -d '\n' <"$tmp/$label.c")
-    c_to_le64 "$cval" "$tmp/$label.expected"
-    if [[ $crc -eq 0 && $nrc -eq 0 ]] && cmp -s "$tmp/$label.expected" "$tmp/$label.native"; then
+    if [[ $nrc -eq 0 ]] && cmp -s "$tmp/$label.expected" "$tmp/$label.native"; then
         pass=$((pass + 1))
     else
-        fail_test "differential $label: native rc=$nrc bytes=$(xxd -p "$tmp/$label.native" | tr -d '\n') C rc=$crc value=$cval"
+        fail_test "differential $label: native rc=$nrc bytes=$(xxd -p "$tmp/$label.native" | tr -d '\n') expected=$(xxd -p "$tmp/$label.expected" | tr -d '\n')"
     fi
 }
 
@@ -455,6 +458,9 @@ check_call_target_gate
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link11 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link11: $pass sub-tests: polymorphic monomorphization differentials, guarded finite recursion accepts, frozen-emitter bytes, call-target resolution)"

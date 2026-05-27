@@ -18,6 +18,9 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link10 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 pass=0
@@ -56,15 +59,16 @@ check_native_vs_c_int() {
     local label="$1" probe="$2" elf="$3" expected_int="$4"
     "$elf" >"$tmp/$label.native" 2>/dev/null
     local nrc=$?
-    "$HERBERT" "$probe" >"$tmp/$label.c" 2>/dev/null
-    local crc=$?
-    local cval
-    cval=$(tr -d '\n' <"$tmp/$label.c")
-    le64 "$cval" >"$tmp/$label.cle"
-    if [[ $nrc -eq 0 && $crc -eq 0 && "$cval" == "$expected_int" ]] && cmp -s "$tmp/$label.native" "$tmp/$label.cle"; then
+    : >"$tmp/$label.empty"
+    if ! oracle_expect_le64 "link10_${label}" "$probe" "$tmp/$label.empty" "$tmp/$label.expected"; then
+        fail_test "$label: oracle failed"
+        return
+    fi
+    le64 "$expected_int" >"$tmp/$label.hardcoded"
+    if [[ $nrc -eq 0 ]] && cmp -s "$tmp/$label.expected" "$tmp/$label.hardcoded" && cmp -s "$tmp/$label.native" "$tmp/$label.expected"; then
         pass=$((pass + 1))
     else
-        fail_test "$label: native rc=$nrc word=$(xxd -p "$tmp/$label.native" | tr -d '\n') vs C rc=$crc value=$cval expected=$expected_int"
+        fail_test "$label: native rc=$nrc word=$(xxd -p "$tmp/$label.native" | tr -d '\n') expected=$(xxd -p "$tmp/$label.expected" | tr -d '\n') hardcoded_int=$expected_int"
     fi
 }
 
@@ -169,6 +173,9 @@ fi
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link10 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link10: $pass sub-tests: benign complementary partial aggregate compiles+runs byte-exact vs C, self-compile self-host probe byte-exact (byte-pure files, direct cmp), tito self-hosting FIXPOINT gen2==gen1 (byte-pure direct cmp, no trailer strip))"

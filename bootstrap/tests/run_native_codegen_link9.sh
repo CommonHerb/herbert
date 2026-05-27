@@ -28,6 +28,9 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link9 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 pass=0
@@ -72,22 +75,23 @@ check_return_or_trap() {
     byte "$b" >"$tmp/$label.$b.in"
     "$elf" <"$tmp/$label.$b.in" >"$tmp/$label.$b.n" 2>/dev/null
     local nrc=$?
-    "$HERBERT" "$probe" <"$tmp/$label.$b.in" >"$tmp/$label.$b.c" 2>/dev/null
-    local crc=$?
-    if [[ $crc -ne 0 ]]; then
-        if [[ $nrc -ne 0 && ! -s "$tmp/$label.$b.n" ]]; then
+    if ! oracle_expect_return_or_trap "link9_${label}_${b}" "$probe" "$tmp/$label.$b.in" "$tmp/$label.$b.expected" "$tmp/$label.$b.kind"; then
+        fail_test "$label byte=$b: return/trap oracle failed"
+        return
+    fi
+    local kind
+    kind=$(cat "$tmp/$label.$b.kind")
+    if [[ "$kind" == "trap_stdout" ]]; then
+        if [[ $nrc -ne 0 ]] && cmp -s "$tmp/$label.$b.expected" "$tmp/$label.$b.n"; then
             pass=$((pass + 1))
         else
-            fail_test "$label byte=$b: C trapped (rc=$crc) but native rc=$nrc size=$(wc -c <"$tmp/$label.$b.n")"
+            fail_test "$label byte=$b: expected trap stdout=$(xxd -p "$tmp/$label.$b.expected" | tr -d '\n') native rc=$nrc stdout=$(xxd -p "$tmp/$label.$b.n" | tr -d '\n')"
         fi
     else
-        local cval
-        cval=$(tr -d '\n' <"$tmp/$label.$b.c")
-        le64 "$cval" >"$tmp/$label.$b.cle" 2>/dev/null
-        if [[ $nrc -eq 0 ]] && cmp -s "$tmp/$label.$b.n" "$tmp/$label.$b.cle"; then
+        if [[ $nrc -eq 0 ]] && cmp -s "$tmp/$label.$b.n" "$tmp/$label.$b.expected"; then
             pass=$((pass + 1))
         else
-            fail_test "$label byte=$b: native rc=$nrc word=$(xxd -p "$tmp/$label.$b.n" | tr -d '\n') vs C=$cval"
+            fail_test "$label byte=$b: native rc=$nrc word=$(xxd -p "$tmp/$label.$b.n" | tr -d '\n') expected=$(xxd -p "$tmp/$label.$b.expected" | tr -d '\n')"
         fi
     fi
 }
@@ -253,6 +257,9 @@ fi
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link9 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link9: $pass sub-tests: fault-as-bottom idiom compiles+runs byte-exact vs C across int/string/tuple/bool + mid-expression contexts incl. the trap path, renamed twin byte-identical, disasm gate fault=call-not-TCO'd)"

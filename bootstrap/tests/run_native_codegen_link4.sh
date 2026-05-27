@@ -13,6 +13,9 @@ if [[ ! -x "$HERBERT" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link4 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -39,22 +42,7 @@ oracle_le64() {
     local probe_file="$1"
     local rt_file="$2"
     local out_file="$3"
-    local c_out val
-    if ! c_out=$("$HERBERT" "$probe_file" <"$rt_file" 2>/dev/null); then
-        return 1
-    fi
-    if [[ "$c_out" == "true" ]]; then
-        val=1
-    elif [[ "$c_out" == "false" ]]; then
-        val=0
-    else
-        val="$c_out"
-    fi
-    python3 - "$val" "$out_file" <<'PY'
-import struct, sys
-with open(sys.argv[2], "wb") as f:
-    f.write(struct.pack("<Q", int(sys.argv[1]) & 0xffffffffffffffff))
-PY
+    oracle_expect_le64 "$(native_codegen_oracle_case_id "$out_file")" "$probe_file" "$rt_file" "$out_file"
 }
 
 compile_probe() {
@@ -518,6 +506,9 @@ fi
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link4 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link4: $pass sub-tests: recursive differential, self+mutual TCO tethers with forced-false negative proofs, branch-target RET tail guard, rejection battery, anti-over-rejection incl. wide disp32, disasm gate)"

@@ -13,6 +13,9 @@ if [[ ! -x "$HERBERT" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link6 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -27,22 +30,7 @@ fail_test() {
 
 oracle_le64() {
     local probe_file="$1" rt_file="$2" out_file="$3"
-    local c_out val
-    if ! c_out=$("$HERBERT" "$probe_file" <"$rt_file" 2>/dev/null); then
-        return 1
-    fi
-    if [[ "$c_out" == "true" ]]; then
-        val=1
-    elif [[ "$c_out" == "false" ]]; then
-        val=0
-    else
-        val="$c_out"
-    fi
-    python3 - "$val" "$out_file" <<'PY'
-import struct, sys
-with open(sys.argv[2], "wb") as f:
-    f.write(struct.pack("<Q", int(sys.argv[1]) & 0xffffffffffffffff))
-PY
+    oracle_expect_le64 "$(native_codegen_oracle_case_id "$out_file")" "$probe_file" "$rt_file" "$out_file"
 }
 
 compile_probe() {
@@ -107,16 +95,18 @@ check_reject_code() {
 check_runtime_parity() {
     local label="$1" probe="$2" rt="$3"
     total=$((total + 1))
-    local elf="$tmp/${label}.elf" c_out="$tmp/${label}.c.out" n_out="$tmp/${label}.n.out"
+    local elf="$tmp/${label}.elf" expected="$tmp/${label}.expected" n_out="$tmp/${label}.n.out"
     if ! compile_probe "$label" "$probe" "$elf"; then
         return
     fi
-    "$HERBERT" "$probe" <"$rt" >"$c_out" 2>/dev/null
-    local c_rc=$?
     "$elf" <"$rt" >"$n_out" 2>/dev/null
     local n_rc=$?
-    if [[ $c_rc -eq 0 || $n_rc -eq 0 ]]; then
-        fail_test "runtime $label expected both nonzero (C rc=$c_rc native rc=$n_rc)"
+    if ! oracle_expect_trap_stdout "link6_${label}" "$probe" "$rt" "$expected"; then
+        fail_test "runtime $label trap oracle failed"
+        return
+    fi
+    if [[ $n_rc -eq 0 ]] || ! cmp -s "$expected" "$n_out"; then
+        fail_test "runtime $label expected native trap stdout $(xxd -p "$expected" | tr -d '\n') (native rc=$n_rc stdout=$(xxd -p "$n_out" | tr -d '\n'))"
         return
     fi
     pass=$((pass + 1))
@@ -470,6 +460,9 @@ fi
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link6 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link6: $pass sub-tests: heap differential, composite, rejects, runtime traps, anti-over-rejection, renamed twins, disasm gate)"

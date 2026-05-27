@@ -1194,6 +1194,31 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    if [[ "${NATIVE_CODEGEN_ORACLE:-c}" != "golden" ]]; then
+        for native_codegen_script in \
+            "$PWD/run_native_codegen_link1.sh" \
+            "$PWD/run_native_codegen_link2.sh" \
+            "$PWD/run_native_codegen_link3.sh" \
+            "$PWD/run_native_codegen_link4.sh" \
+            "$PWD/run_native_codegen_link5.sh" \
+            "$PWD/run_native_codegen_link6.sh" \
+            "$PWD/run_native_codegen_link7.sh" \
+            "$PWD/run_native_codegen_link8.sh" \
+            "$PWD/run_native_codegen_link9.sh" \
+            "$PWD/run_native_codegen_link10.sh" \
+            "$PWD/run_native_codegen_link11.sh" \
+            "$PWD/run_native_codegen_link12.sh" \
+            "$PWD/run_native_codegen_rejects.sh"; do
+            [[ -f "$native_codegen_script" ]] || continue
+            total=$((total + 1))
+            if NATIVE_CODEGEN_ORACLE=golden HERBERT="$HERBERT" "$native_codegen_script"; then
+                pass=$((pass + 1))
+            else
+                fail=$((fail + 1))
+            fi
+        done
+    fi
+
     # Suke codegen forcing-function tests: the C bootstrap runs each probe
     # directly as the oracle, then the Herbert pipeline fragment compiles the
     # same embedded source and executes it on the VM with the same stdin.

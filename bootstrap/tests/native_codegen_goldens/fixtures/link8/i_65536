@@ -1,0 +1,2364 @@
+-- Herbert diagnostics fragment. This is the error fragment with source
+-- locations threaded through lexing, parsing, AST construction, and static
+-- checking. It reads a Herbert program from stdin, emits a located diagnostic
+-- for malformed input, and otherwise compiles and runs the program through
+-- the same lowerer/VM path as the error fragment.
+--
+-- AST representation. Each node is a tuple (tag, atoms, kids, line) where:
+--   - tag    : string — the S-expression head (e.g. "program", "add",
+--                       "name", "if", "clause", "type-tuple", "dot")
+--   - atoms  : array(string) — verbatim atoms following the tag (names,
+--                       decimal integers for int/char/str payloads,
+--                       "true"/"false", type words)
+--   - kids   : array(int) — indices of child nodes in the shared pool
+-- The pool is an array((string, array(string), array(int), int)). Children
+-- are referenced by integer index into the pool — Herbert types are
+-- finite (no recursive type aliases), so a node cannot directly contain
+-- an array of nodes; an index-into-the-pool encoding is the standard
+-- arena representation and lets a tuple-and-array AST hold the tree.
+-- Counts (`count(pool)`, indices into arrays) are always non-negative,
+-- so the parser never produces a negative intermediate value.
+--
+-- Parser structure. Each parse routine takes (tokens, pos, pool) and
+-- returns (node_idx, new_pos). For list-collecting helpers (params,
+-- args, statements) the caller passes the destination array and the
+-- helper returns just the new position. Keyword classification is
+-- positional: the lexer never tags keywords — an IDENTIFIER token's
+-- text is inspected by the parser at the point where the grammar
+-- decides whether `let`/`if`/`and`/`int`/... starts a production or
+-- names a value. The full set of decision points is small and local
+-- to each routine.
+--
+-- Serializer. `ser` walks the pool and appends bytes to a shared
+-- buffer (the buffer is mutated by reference; the caller threads its
+-- handle through assignment). One special case: a `dot` node emits
+-- kids before atoms (the spec writes `(dot EXPR N)`); every other
+-- node emits atoms before kids.
+
+-- ====================================================================
+-- LEXER FUNCTIONS (verbatim from stack/lexer_fragment.herb)
+-- ====================================================================
+
+func is_digit(c):
+    return c >= '0' and c <= '9'
+end
+
+func is_lower(c):
+    return c >= 'a' and c <= 'z'
+end
+
+func is_upper(c):
+    return c >= 'A' and c <= 'Z'
+end
+
+func is_alpha(c):
+    return is_lower(c) or is_upper(c)
+end
+
+func is_ident_start(c):
+    return is_alpha(c) or c == '_'
+end
+
+func is_ident_cont(c):
+    return is_ident_start(c) or is_digit(c)
+end
+
+func is_ws(c):
+    return c == ' ' or c == '\n' or c == 9 or c == 13
+end
+
+func is_two_byte_op_start(c):
+    return c == '=' or c == '!' or c == '<' or c == '>'
+end
+
+func is_one_byte_op(c):
+    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>'
+end
+
+func end_of_ident(src, i, n):
+    if i >= n:
+        return i
+    elif is_ident_cont(index(src, i)):
+        return end_of_ident(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+func end_of_int(src, i, n):
+    if i >= n:
+        return i
+    elif is_digit(index(src, i)):
+        return end_of_int(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+func end_of_line(src, i, n):
+    if i >= n:
+        return i
+    elif index(src, i) == '\n':
+        return i
+    else:
+        return end_of_line(src, i + 1, n)
+    end
+end
+
+func end_of_string(src, i, n):
+    let c = index(src, i)
+    if c == '"':
+        return i + 1
+    elif c == '\\':
+        return end_of_string(src, i + 2, n)
+    else:
+        return end_of_string(src, i + 1, n)
+    end
+end
+
+func end_of_char(src, i, n):
+    if index(src, i) == '\\':
+        return i + 3
+    else:
+        return i + 2
+    end
+end
+
+func pour(src, from, to, b):
+    if from >= to:
+        return b
+    else:
+        do append(b, index(src, from))
+        return pour(src, from + 1, to, b)
+    end
+end
+
+func slice_text(src, from, to):
+    return freeze(pour(src, from, to, new_buffer()))
+end
+
+func scan(src, i, n, line, out):
+    if i >= n:
+        return out
+    end
+    let c = index(src, i)
+    if is_ws(c):
+        if c == '\n':
+            return scan(src, i + 1, n, line + 1, out)
+        end
+        return scan(src, i + 1, n, line, out)
+    elif c == '-' and i + 1 < n and index(src, i + 1) == '-':
+        return scan(src, end_of_line(src, i + 2, n), n, line, out)
+    elif is_ident_start(c):
+        let j = end_of_ident(src, i + 1, n)
+        do add(out, (0, slice_text(src, i, j), line))
+        return scan(src, j, n, line, out)
+    elif is_digit(c):
+        let j = end_of_int(src, i + 1, n)
+        do add(out, (1, slice_text(src, i, j), line))
+        return scan(src, j, n, line, out)
+    elif c == '"':
+        let j = end_of_string(src, i + 1, n)
+        do add(out, (2, slice_text(src, i, j), line))
+        return scan(src, j, n, line, out)
+    elif c == '\'':
+        let j = end_of_char(src, i + 1, n)
+        do add(out, (3, slice_text(src, i, j), line))
+        return scan(src, j, n, line, out)
+    elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2), line))
+        return scan(src, i + 2, n, line, out)
+    elif is_one_byte_op(c):
+        do add(out, (5, slice_text(src, i, i + 1), line))
+        return scan(src, i + 1, n, line, out)
+    else:
+        do add(out, (4, slice_text(src, i, i + 1), line))
+        return scan(src, i + 1, n, line, out)
+    end
+end
+
+func lex_source(src):
+    return scan(src, 0, length(src), 1, new_array((int, string, int)))
+end
+
+-- ====================================================================
+-- DECIMAL CONVERSION (no */% in Herbert; build div10/mod10 by subtraction)
+-- ====================================================================
+
+func div10_acc(n, q):
+    if n < 10:
+        return q
+    end
+    return div10_acc(n - 10, q + 1)
+end
+
+func div10(n):
+    return div10_acc(n, 0)
+end
+
+func mod10(n):
+    if n < 10:
+        return n
+    end
+    return mod10(n - 10)
+end
+
+-- Append decimal digits of n to buf, high-order first. Recursive on
+-- div10(n); not a true tail call but the interpreter's heap-stack
+-- model has no fixed depth ceiling.
+func emit_decimal(buf, n):
+    if n >= 10:
+        buf = emit_decimal(buf, div10(n))
+    end
+    do append(buf, 48 + mod10(n))
+    return buf
+end
+
+func int_to_str(n):
+    return freeze(emit_decimal(new_buffer(), n))
+end
+
+-- ====================================================================
+-- STRING / BUFFER HELPERS
+-- ====================================================================
+
+func append_str_loop(buf, s, i, n):
+    if i >= n:
+        return buf
+    end
+    do append(buf, index(s, i))
+    return append_str_loop(buf, s, i + 1, n)
+end
+
+func append_str(buf, s):
+    return append_str_loop(buf, s, 0, length(s))
+end
+
+-- ====================================================================
+-- AST NODE POOL
+-- ====================================================================
+
+func pool_new():
+    return new_array((string, array(string), array(int), int))
+end
+
+func add_node(pool, tag, atoms, kids, line):
+    do add(pool, (tag, atoms, kids, line))
+    return count(pool) - 1
+end
+
+func atoms0():
+    return new_array(string)
+end
+
+func atoms1(s):
+    let a = new_array(string)
+    do add(a, s)
+    return a
+end
+
+func kids0():
+    return new_array(int)
+end
+
+func kids1(i):
+    let a = new_array(int)
+    do add(a, i)
+    return a
+end
+
+func kids2(a, b):
+    let r = new_array(int)
+    do add(r, a)
+    do add(r, b)
+    return r
+end
+
+func make_binop(pool, tag, lidx, ridx, line):
+    return add_node(pool, tag, atoms0(), kids2(lidx, ridx), line)
+end
+
+-- ====================================================================
+-- CHAR / STRING LITERAL DECODING
+-- ====================================================================
+
+-- s is the raw lexed CHAR text, e.g. "'a'" or "'\\n'" — three or four
+-- bytes including the surrounding single quotes. Returns the byte value.
+func decode_char(s):
+    let c1 = index(s, 1)
+    if c1 == '\\':
+        let c2 = index(s, 2)
+        if c2 == 'n':
+            return 10
+        end
+        if c2 == '\\':
+            return 92
+        end
+        return 39
+    end
+    return c1
+end
+
+-- s is the raw lexed STRING text including the surrounding double quotes.
+-- Walk s[1 .. length(s)-1) decoding \n \\ \" into a buffer; returns the
+-- frozen byte string.
+func decode_string_loop(s, i, end_i, buf):
+    if i >= end_i:
+        return buf
+    end
+    let c = index(s, i)
+    if c == '\\':
+        let c2 = index(s, i + 1)
+        if c2 == 'n':
+            do append(buf, 10)
+            return decode_string_loop(s, i + 2, end_i, buf)
+        end
+        if c2 == '\\':
+            do append(buf, 92)
+            return decode_string_loop(s, i + 2, end_i, buf)
+        end
+        do append(buf, 34)
+        return decode_string_loop(s, i + 2, end_i, buf)
+    end
+    do append(buf, c)
+    return decode_string_loop(s, i + 1, end_i, buf)
+end
+
+func decode_string(s):
+    return freeze(decode_string_loop(s, 1, length(s) - 1, new_buffer()))
+end
+
+-- Append decimal forms of each byte of `bytes` (a string) as a fresh
+-- entry in the `atoms` array.
+func collect_str_atoms(atoms, bytes, i, n):
+    if i >= n:
+        return atoms
+    end
+    do add(atoms, int_to_str(index(bytes, i)))
+    return collect_str_atoms(atoms, bytes, i + 1, n)
+end
+
+-- ====================================================================
+-- TOKEN INSPECTION
+-- ====================================================================
+
+func tok_is_ident_text(tokens, pos, text):
+    if pos >= count(tokens):
+        return false
+    end
+    let t = get(tokens, pos)
+    return t.0 == 0 and equal(t.1, text)
+end
+
+func tok_is_punct_text(tokens, pos, text):
+    if pos >= count(tokens):
+        return false
+    end
+    let t = get(tokens, pos)
+    return t.0 == 4 and equal(t.1, text)
+end
+
+func tok_is_op_text(tokens, pos, text):
+    if pos >= count(tokens):
+        return false
+    end
+    let t = get(tokens, pos)
+    return t.0 == 5 and equal(t.1, text)
+end
+
+-- ====================================================================
+-- TYPE EXPRESSIONS (only inside new_array(...))
+-- ====================================================================
+
+func parse_type(tokens, pos, pool):
+    let t = get(tokens, pos)
+    let ln = t.2
+    if t.0 == 0:
+        if equal(t.1, "array"):
+            -- array ( TYPE )
+            pos = pos + 2
+            let r = parse_type(tokens, pos, pool)
+            pos = r.1 + 1
+            return (add_node(pool, "type-array", atoms0(), kids1(r.0), ln), pos)
+        end
+        return (add_node(pool, "type", atoms1(t.1), kids0(), ln), pos + 1)
+    end
+    -- LPAREN starts a tuple type
+    pos = pos + 1
+    let kids = new_array(int)
+    let r = parse_type(tokens, pos, pool)
+    do add(kids, r.0)
+    pos = parse_type_tail(tokens, r.1, pool, kids)
+    pos = pos + 1
+    return (add_node(pool, "type-tuple", atoms0(), kids, ln), pos)
+end
+
+func parse_type_tail(tokens, pos, pool, kids):
+    if tok_is_punct_text(tokens, pos, ","):
+        let r = parse_type(tokens, pos + 1, pool)
+        do add(kids, r.0)
+        return parse_type_tail(tokens, r.1, pool, kids)
+    end
+    return pos
+end
+
+-- ====================================================================
+-- EXPRESSIONS
+-- ====================================================================
+
+func parse_expr(tokens, pos, pool):
+    return parse_or(tokens, pos, pool)
+end
+
+func parse_or(tokens, pos, pool):
+    let r = parse_and(tokens, pos, pool)
+    return parse_or_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_or_loop(tokens, pos, pool, lidx):
+    if tok_is_ident_text(tokens, pos, "or"):
+        let op_tok = get(tokens, pos)
+        let r = parse_and(tokens, pos + 1, pool)
+        return parse_or_loop(tokens, r.1, pool, make_binop(pool, "or", lidx, r.0, op_tok.2))
+    end
+    return (lidx, pos)
+end
+
+func parse_and(tokens, pos, pool):
+    let r = parse_cmp(tokens, pos, pool)
+    return parse_and_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_and_loop(tokens, pos, pool, lidx):
+    if tok_is_ident_text(tokens, pos, "and"):
+        let op_tok = get(tokens, pos)
+        let r = parse_cmp(tokens, pos + 1, pool)
+        return parse_and_loop(tokens, r.1, pool, make_binop(pool, "and", lidx, r.0, op_tok.2))
+    end
+    return (lidx, pos)
+end
+
+func cmp_tag(text):
+    if equal(text, "=="):
+        return "eq"
+    end
+    if equal(text, "!="):
+        return "ne"
+    end
+    if equal(text, "<"):
+        return "lt"
+    end
+    if equal(text, ">"):
+        return "gt"
+    end
+    if equal(text, "<="):
+        return "le"
+    end
+    if equal(text, ">="):
+        return "ge"
+    end
+    return ""
+end
+
+func parse_cmp(tokens, pos, pool):
+    let r = parse_add(tokens, pos, pool)
+    return parse_cmp_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_cmp_loop(tokens, pos, pool, lidx):
+    if pos >= count(tokens):
+        return (lidx, pos)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5:
+        let tag = cmp_tag(t.1)
+        if not equal(tag, ""):
+            let r = parse_add(tokens, pos + 1, pool)
+            return parse_cmp_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
+        end
+    end
+    return (lidx, pos)
+end
+
+func add_tag(text):
+    if equal(text, "+"):
+        return "add"
+    end
+    if equal(text, "-"):
+        return "sub"
+    end
+    return ""
+end
+
+func parse_add(tokens, pos, pool):
+    let r = parse_not(tokens, pos, pool)
+    return parse_add_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_add_loop(tokens, pos, pool, lidx):
+    if pos >= count(tokens):
+        return (lidx, pos)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5:
+        let tag = add_tag(t.1)
+        if not equal(tag, ""):
+            let r = parse_not(tokens, pos + 1, pool)
+            return parse_add_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
+        end
+    end
+    return (lidx, pos)
+end
+
+func parse_not(tokens, pos, pool):
+    if tok_is_ident_text(tokens, pos, "not"):
+        let t = get(tokens, pos)
+        let r = parse_not(tokens, pos + 1, pool)
+        return (add_node(pool, "not", atoms0(), kids1(r.0), t.2), r.1)
+    end
+    return parse_dot(tokens, pos, pool)
+end
+
+func parse_dot(tokens, pos, pool):
+    let r = parse_atom(tokens, pos, pool)
+    return parse_dot_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_dot_loop(tokens, pos, pool, lidx):
+    if tok_is_punct_text(tokens, pos, "."):
+        let dot_tok = get(tokens, pos)
+        let idx_tok = get(tokens, pos + 1)
+        let new_idx = add_node(pool, "dot", atoms1(idx_tok.1), kids1(lidx), dot_tok.2)
+        return parse_dot_loop(tokens, pos + 2, pool, new_idx)
+    end
+    return (lidx, pos)
+end
+
+func parse_atom(tokens, pos, pool):
+    let t = get(tokens, pos)
+    let k = t.0
+    let s = t.1
+    let ln = t.2
+    if k == 1:
+        return (add_node(pool, "int", atoms1(s), kids0(), ln), pos + 1)
+    end
+    if k == 3:
+        return (add_node(pool, "char", atoms1(int_to_str(decode_char(s))), kids0(), ln), pos + 1)
+    end
+    if k == 2:
+        let frozen = decode_string(s)
+        let n = length(frozen)
+        let atoms = atoms1(int_to_str(n))
+        atoms = collect_str_atoms(atoms, frozen, 0, n)
+        return (add_node(pool, "str", atoms, kids0(), ln), pos + 1)
+    end
+    if k == 0:
+        if equal(s, "true"):
+            return (add_node(pool, "bool", atoms1("true"), kids0(), ln), pos + 1)
+        end
+        if equal(s, "false"):
+            return (add_node(pool, "bool", atoms1("false"), kids0(), ln), pos + 1)
+        end
+        if tok_is_punct_text(tokens, pos + 1, "("):
+            return parse_call(tokens, pos, pool)
+        end
+        return (add_node(pool, "name", atoms1(s), kids0(), ln), pos + 1)
+    end
+    -- LPAREN: grouping or tuple
+    return parse_group_or_tuple(tokens, pos + 1, pool, ln)
+end
+
+func parse_call(tokens, pos, pool):
+    let name_tok = get(tokens, pos)
+    let name = name_tok.1
+    let ln = name_tok.2
+    pos = pos + 2
+    if equal(name, "new_array"):
+        let r = parse_type(tokens, pos, pool)
+        pos = r.1 + 1
+        return (add_node(pool, "call", atoms1(name), kids1(r.0), ln), pos)
+    end
+    let kids = new_array(int)
+    if tok_is_punct_text(tokens, pos, ")"):
+        return (add_node(pool, "call", atoms1(name), kids, ln), pos + 1)
+    end
+    pos = parse_args_loop(tokens, pos, pool, kids)
+    pos = pos + 1
+    return (add_node(pool, "call", atoms1(name), kids, ln), pos)
+end
+
+func parse_args_loop(tokens, pos, pool, kids):
+    let r = parse_expr(tokens, pos, pool)
+    do add(kids, r.0)
+    if tok_is_punct_text(tokens, r.1, ","):
+        return parse_args_loop(tokens, r.1 + 1, pool, kids)
+    end
+    return r.1
+end
+
+func parse_group_or_tuple(tokens, pos, pool, line):
+    let r = parse_expr(tokens, pos, pool)
+    let first_idx = r.0
+    pos = r.1
+    if tok_is_punct_text(tokens, pos, ","):
+        let kids = new_array(int)
+        do add(kids, first_idx)
+        pos = parse_tuple_tail(tokens, pos + 1, pool, kids)
+        pos = pos + 1
+        return (add_node(pool, "tuple", atoms0(), kids, line), pos)
+    end
+    pos = pos + 1
+    return (first_idx, pos)
+end
+
+func parse_tuple_tail(tokens, pos, pool, kids):
+    let r = parse_expr(tokens, pos, pool)
+    do add(kids, r.0)
+    if tok_is_punct_text(tokens, r.1, ","):
+        return parse_tuple_tail(tokens, r.1 + 1, pool, kids)
+    end
+    return r.1
+end
+
+-- ====================================================================
+-- STATEMENTS
+-- ====================================================================
+
+func is_body_terminator(tokens, pos):
+    if pos >= count(tokens):
+        return true
+    end
+    let t = get(tokens, pos)
+    if t.0 != 0:
+        return false
+    end
+    if equal(t.1, "end"):
+        return true
+    end
+    if equal(t.1, "elif"):
+        return true
+    end
+    if equal(t.1, "else"):
+        return true
+    end
+    return false
+end
+
+func parse_body(tokens, pos, pool):
+    let stmt_kids = new_array(int)
+    pos = parse_body_loop(tokens, pos, pool, stmt_kids)
+    let line = 0
+    if pos < count(tokens):
+        let t = get(tokens, pos)
+        line = t.2
+    end
+    return (add_node(pool, "body", atoms0(), stmt_kids, line), pos)
+end
+
+func parse_body_loop(tokens, pos, pool, stmt_kids):
+    if is_body_terminator(tokens, pos):
+        return pos
+    end
+    let r = parse_stmt(tokens, pos, pool)
+    do add(stmt_kids, r.0)
+    return parse_body_loop(tokens, r.1, pool, stmt_kids)
+end
+
+func parse_stmt(tokens, pos, pool):
+    let t = get(tokens, pos)
+    -- t is IDENTIFIER per grammar
+    let text = t.1
+    let ln = t.2
+    if equal(text, "let"):
+        return parse_let(tokens, pos + 1, pool, ln)
+    end
+    if equal(text, "return"):
+        return parse_return(tokens, pos + 1, pool, ln)
+    end
+    if equal(text, "do"):
+        return parse_do(tokens, pos + 1, pool, ln)
+    end
+    if equal(text, "if"):
+        return parse_if(tokens, pos + 1, pool, ln)
+    end
+    return parse_assign(tokens, pos, pool, ln)
+end
+
+func parse_let(tokens, pos, pool, line):
+    let name_tok = get(tokens, pos)
+    let name = name_tok.1
+    let r = parse_expr(tokens, pos + 2, pool)
+    return (add_node(pool, "let", atoms1(name), kids1(r.0), line), r.1)
+end
+
+func parse_return(tokens, pos, pool, line):
+    let r = parse_expr(tokens, pos, pool)
+    return (add_node(pool, "return", atoms0(), kids1(r.0), line), r.1)
+end
+
+func parse_do(tokens, pos, pool, line):
+    let r = parse_expr(tokens, pos, pool)
+    return (add_node(pool, "do", atoms0(), kids1(r.0), line), r.1)
+end
+
+func parse_assign(tokens, pos, pool, line):
+    let name_tok = get(tokens, pos)
+    let name = name_tok.1
+    let r = parse_expr(tokens, pos + 2, pool)
+    return (add_node(pool, "assign", atoms1(name), kids1(r.0), line), r.1)
+end
+
+func parse_if(tokens, pos, pool, line):
+    let if_kids = new_array(int)
+    pos = parse_clause_into(tokens, pos, pool, if_kids)
+    pos = parse_elifs(tokens, pos, pool, if_kids)
+    if tok_is_ident_text(tokens, pos, "else"):
+        let r = parse_else_clause(tokens, pos + 1, pool)
+        do add(if_kids, r.0)
+        pos = r.1
+    end
+    -- consume "end"
+    pos = pos + 1
+    return (add_node(pool, "if", atoms0(), if_kids, line), pos)
+end
+
+func parse_elifs(tokens, pos, pool, if_kids):
+    if tok_is_ident_text(tokens, pos, "elif"):
+        pos = parse_clause_into(tokens, pos + 1, pool, if_kids)
+        return parse_elifs(tokens, pos, pool, if_kids)
+    end
+    return pos
+end
+
+func parse_clause_into(tokens, pos, pool, if_kids):
+    let cr = parse_expr(tokens, pos, pool)
+    pos = cr.1 + 1
+    let br = parse_body(tokens, pos, pool)
+    let cidx = add_node(pool, "clause", atoms0(), kids2(cr.0, br.0), get(tokens, pos).2)
+    do add(if_kids, cidx)
+    return br.1
+end
+
+func parse_else_clause(tokens, pos, pool):
+    -- pos is just after 'else'; consume ':'
+    let line = get(tokens, pos - 1).2
+    pos = pos + 1
+    let br = parse_body(tokens, pos, pool)
+    return (add_node(pool, "else", atoms0(), kids1(br.0), line), br.1)
+end
+
+-- ====================================================================
+-- FUNCTIONS / PROGRAM
+-- ====================================================================
+
+func parse_program(tokens, pos, pool):
+    let kids = new_array(int)
+    pos = parse_funcs(tokens, pos, pool, kids)
+    let line = 0
+    if count(tokens) > 0:
+        line = get(tokens, 0).2
+    end
+    return (add_node(pool, "program", atoms0(), kids, line), pos)
+end
+
+func parse_funcs(tokens, pos, pool, kids):
+    if pos >= count(tokens):
+        return pos
+    end
+    let r = parse_funcdef(tokens, pos, pool)
+    do add(kids, r.0)
+    return parse_funcs(tokens, r.1, pool, kids)
+end
+
+func parse_funcdef(tokens, pos, pool):
+    -- tokens[pos+0]: "func"; pos+1: name; pos+2: "("
+    let line = get(tokens, pos).2
+    let name_tok = get(tokens, pos + 1)
+    let name = name_tok.1
+    pos = pos + 3
+    let pr = parse_param_list(tokens, pos, pool)
+    pos = pr.1 + 2
+    let br = parse_body(tokens, pos, pool)
+    pos = br.1 + 1
+    let kids = kids2(pr.0, br.0)
+    return (add_node(pool, "func", atoms1(name), kids, line), pos)
+end
+
+func parse_param_list(tokens, pos, pool):
+    let atoms = new_array(string)
+    let line = get(tokens, pos).2
+    if tok_is_punct_text(tokens, pos, ")"):
+        return (add_node(pool, "params", atoms, kids0(), line), pos)
+    end
+    pos = parse_param_loop(tokens, pos, atoms)
+    return (add_node(pool, "params", atoms, kids0(), line), pos)
+end
+
+func parse_param_loop(tokens, pos, atoms):
+    let t = get(tokens, pos)
+    do add(atoms, t.1)
+    if tok_is_punct_text(tokens, pos + 1, ","):
+        return parse_param_loop(tokens, pos + 2, atoms)
+    end
+    return pos + 1
+end
+
+-- ====================================================================
+-- SERIALIZER
+-- ====================================================================
+
+func ser(buf, pool, idx):
+    let node = get(pool, idx)
+    let tag = node.0
+    let atoms = node.1
+    let kids = node.2
+    do append(buf, '(')
+    buf = append_str(buf, tag)
+    if equal(tag, "dot"):
+        buf = emit_kids(buf, pool, kids, 0, count(kids))
+        buf = emit_atoms(buf, atoms, 0, count(atoms))
+    else:
+        buf = emit_atoms(buf, atoms, 0, count(atoms))
+        buf = emit_kids(buf, pool, kids, 0, count(kids))
+    end
+    do append(buf, ')')
+    return buf
+end
+
+func emit_atoms(buf, atoms, i, n):
+    if i >= n:
+        return buf
+    end
+    do append(buf, ' ')
+    buf = append_str(buf, get(atoms, i))
+    return emit_atoms(buf, atoms, i + 1, n)
+end
+
+func emit_kids(buf, pool, kids, i, n):
+    if i >= n:
+        return buf
+    end
+    do append(buf, ' ')
+    buf = ser(buf, pool, get(kids, i))
+    return emit_kids(buf, pool, kids, i + 1, n)
+end
+
+-- ====================================================================
+-- EMITTER
+-- ====================================================================
+
+func fault(msg):
+    let a = new_array((int, int))
+    return get(a, 0)
+end
+
+func times10(n):
+    return n + n + n + n + n + n + n + n + n + n
+end
+
+func parse_decimal_loop(s, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    return parse_decimal_loop(s, i + 1, n, times10(acc) + index(s, i) - '0')
+end
+
+func parse_decimal(s):
+    return parse_decimal_loop(s, 0, length(s), 0)
+end
+
+-- ====================================================================
+-- BUNDLE DEMUX (virtual-stdin source channel)
+-- A bundle on stdin is, positionally:
+--   0x00 'H' 'E' 'R' 'B' '1'  <ASCII decimal D>  0x0A  <D source bytes>  <runtime_input to EOF>
+--   \________ 6-byte MAGIC ________/  \ len(src) /  \LF/
+-- The leading NUL makes the 6-byte magic collision-proof (NUL never
+-- appears in valid Herbert source). The split is positional: once D is
+-- parsed, source = stdin[src_start, src_start+D), runtime_input =
+-- stdin[src_start+D, EOF). Bodies are never scanned. No magic, or any
+-- malformed header, falls back to (stdin, "") = today's behavior.
+-- ====================================================================
+
+func bundle_has_magic(s):
+    if length(s) < 6:
+        return false
+    end
+    if index(s, 0) != 0:
+        return false
+    end
+    if index(s, 1) != 'H':
+        return false
+    end
+    if index(s, 2) != 'E':
+        return false
+    end
+    if index(s, 3) != 'R':
+        return false
+    end
+    if index(s, 4) != 'B':
+        return false
+    end
+    if index(s, 5) != '1':
+        return false
+    end
+    return true
+end
+
+-- Scan the decimal length field starting at offset 6. Walk forward over
+-- ASCII digits; the field ends at the first 0x0A. Returns the index of
+-- that 0x0A, or n if a non-digit non-LF byte appears or EOF is reached
+-- first (malformed header).
+func bundle_scan_lf(s, i, n):
+    if i >= n:
+        return n
+    end
+    let c = index(s, i)
+    if c == '\n':
+        return i
+    end
+    if is_digit(c):
+        return bundle_scan_lf(s, i + 1, n)
+    end
+    return n
+end
+
+func bundle_parse_decimal_loop(s, i, n, acc, limit):
+    if i >= n:
+        return acc
+    end
+    if acc > limit:
+        return limit + 1
+    end
+    let next = times10(acc) + index(s, i) - '0'
+    if next > limit:
+        return limit + 1
+    end
+    return bundle_parse_decimal_loop(s, i + 1, n, next, limit)
+end
+
+func bundle_parse_decimal(s, from, to, limit):
+    return bundle_parse_decimal_loop(s, from, to, 0, limit)
+end
+
+func demux_bundle(stdin):
+    if not bundle_has_magic(stdin):
+        return (stdin, slice_text(stdin, 0, 0))
+    end
+    let n = length(stdin)
+    let lf = bundle_scan_lf(stdin, 6, n)
+    if lf >= n:
+        return (stdin, slice_text(stdin, 0, 0))
+    end
+    if lf == 6:
+        return (stdin, slice_text(stdin, 0, 0))
+    end
+    let d = bundle_parse_decimal(stdin, 6, lf, n)
+    let src_start = lf + 1
+    let src_end = src_start + d
+    if src_end > n:
+        return (stdin, slice_text(stdin, 0, 0))
+    end
+    let source = slice_text(stdin, src_start, src_end)
+    let runtime_input = slice_text(stdin, src_end, n)
+    return (source, runtime_input)
+end
+
+func op_push_int():
+    return 0
+end
+
+func op_push_bool():
+    return 1
+end
+
+func op_push_str():
+    return 2
+end
+
+func op_load_local():
+    return 3
+end
+
+func op_store_local():
+    return 4
+end
+
+func op_add():
+    return 5
+end
+
+func op_sub():
+    return 6
+end
+
+func op_lt():
+    return 7
+end
+
+func op_le():
+    return 8
+end
+
+func op_gt():
+    return 9
+end
+
+func op_ge():
+    return 10
+end
+
+func op_eq():
+    return 11
+end
+
+func op_ne():
+    return 12
+end
+
+func op_not():
+    return 13
+end
+
+func op_make_tuple():
+    return 14
+end
+
+func op_tuple_get():
+    return 15
+end
+
+func op_br():
+    return 16
+end
+
+func op_br_if_false():
+    return 17
+end
+
+func op_br_and():
+    return 18
+end
+
+func op_br_or():
+    return 19
+end
+
+func op_call():
+    return 20
+end
+
+func op_ret():
+    return 21
+end
+
+func op_length():
+    return 22
+end
+
+func op_index():
+    return 23
+end
+
+func op_slice():
+    return 24
+end
+
+func op_equal():
+    return 25
+end
+
+func op_new_buffer():
+    return 26
+end
+
+func op_freeze():
+    return 27
+end
+
+func op_new_array():
+    return 28
+end
+
+func op_get():
+    return 29
+end
+
+func op_count():
+    return 30
+end
+
+func op_buf_append():
+    return 31
+end
+
+func op_arr_add():
+    return 32
+end
+
+func op_clogger():
+    return 33
+end
+
+func op_flogger():
+    return 34
+end
+
+func op_fwriter():
+    return 35
+end
+
+func emit_instr(ir, op, a, b):
+    do add(ir, (0, op, a, b, 0, ""))
+    return ir
+end
+
+func emit_instr_meta(ir, op, a, b, meta):
+    do add(ir, (0, op, a, b, meta, ""))
+    return ir
+end
+
+func emit_target_instr(ir, op, label):
+    do add(ir, (0, op, 0, 0, 0, label))
+    return ir
+end
+
+func emit_label(ir, label):
+    do add(ir, (1, 0, 0, 0, 0, label))
+    return ir
+end
+
+func make_label(prefix, n):
+    let buf = new_buffer()
+    buf = append_str(buf, prefix)
+    buf = append_str(buf, int_to_str(n))
+    return freeze(buf)
+end
+
+func collect_labels_loop(ir, i, n, pc, labels):
+    if i >= n:
+        return labels
+    end
+    let item = get(ir, i)
+    if item.0 == 1:
+        do add(labels, (item.5, pc))
+        return collect_labels_loop(ir, i + 1, n, pc, labels)
+    end
+    return collect_labels_loop(ir, i + 1, n, pc + 1, labels)
+end
+
+func collect_labels(ir):
+    return collect_labels_loop(ir, 0, count(ir), 0, new_array((string, int)))
+end
+
+func find_label_pos_loop(labels, name, i, n):
+    if i >= n:
+        return fault("missing label")
+    end
+    let item = get(labels, i)
+    if equal(item.0, name):
+        return item.1
+    end
+    return find_label_pos_loop(labels, name, i + 1, n)
+end
+
+func find_label_pos(labels, name):
+    return find_label_pos_loop(labels, name, 0, count(labels))
+end
+
+func resolve_ir_loop(ir, i, n, labels, out):
+    if i >= n:
+        return out
+    end
+    let item = get(ir, i)
+    if item.0 == 1:
+        return resolve_ir_loop(ir, i + 1, n, labels, out)
+    end
+    if equal(item.5, ""):
+        do add(out, (item.1, item.2, item.3))
+    else:
+        do add(out, (item.1, find_label_pos(labels, item.5), item.3))
+    end
+    return resolve_ir_loop(ir, i + 1, n, labels, out)
+end
+
+func resolve_ir(ir):
+    let labels = collect_labels(ir)
+    return resolve_ir_loop(ir, 0, count(ir), labels, new_array((int, int, int)))
+end
+
+func resolve_new_array_meta_loop(ir, i, n, out):
+    if i >= n:
+        return out
+    end
+    let item = get(ir, i)
+    if item.0 == 1:
+        return resolve_new_array_meta_loop(ir, i + 1, n, out)
+    end
+    do add(out, item.4)
+    return resolve_new_array_meta_loop(ir, i + 1, n, out)
+end
+
+func resolve_new_array_meta(ir):
+    return resolve_new_array_meta_loop(ir, 0, count(ir), new_array(int))
+end
+
+func env_from_params_loop(params, i, n, names, slots):
+    if i >= n:
+        return (names, slots, n)
+    end
+    do add(names, get(params, i))
+    do add(slots, i)
+    return env_from_params_loop(params, i + 1, n, names, slots)
+end
+
+func env_from_params(params):
+    return env_from_params_loop(params, 0, count(params), new_array(string), new_array(int))
+end
+
+func env_let(env, name):
+    do add(env.0, name)
+    do add(env.1, env.2)
+    return (env.0, env.1, env.2 + 1)
+end
+
+func env_lookup_loop(names, slots, name, n):
+    if n == 0:
+        return fault("name undefined")
+    end
+    let k = n - 1
+    if equal(get(names, k), name):
+        return get(slots, k)
+    end
+    return env_lookup_loop(names, slots, name, k)
+end
+
+func env_lookup(env, name):
+    return env_lookup_loop(env.0, env.1, name, count(env.0))
+end
+
+func env_rebuild_loop(env, i, keep, names, slots):
+    if i >= keep:
+        return (names, slots, env.2)
+    end
+    do add(names, get(env.0, i))
+    do add(slots, get(env.1, i))
+    return env_rebuild_loop(env, i + 1, keep, names, slots)
+end
+
+func env_rebuild(env, keep):
+    return env_rebuild_loop(env, 0, keep, new_array(string), new_array(int))
+end
+
+func string_from_atoms_loop(atoms, i, n, buf):
+    if i >= n:
+        return buf
+    end
+    do append(buf, parse_decimal(get(atoms, i)))
+    return string_from_atoms_loop(atoms, i + 1, n, buf)
+end
+
+func string_from_atoms(atoms):
+    let n = parse_decimal(get(atoms, 0))
+    if n + 1 != count(atoms):
+        return fault("bad string node")
+    end
+    return freeze(string_from_atoms_loop(atoms, 1, count(atoms), new_buffer()))
+end
+
+func intern_string_loop(strings, s, i, n):
+    if i >= n:
+        do add(strings, s)
+        return count(strings) - 1
+    end
+    if equal(get(strings, i), s):
+        return i
+    end
+    return intern_string_loop(strings, s, i + 1, n)
+end
+
+func intern_string(strings, s):
+    return intern_string_loop(strings, s, 0, count(strings))
+end
+
+func find_func_idx_loop(funcs, i, n, name, nodes):
+    if i >= n:
+        return fault("unknown function")
+    end
+    let fn = get(nodes, get(funcs, i))
+    if equal(get(fn.1, 0), name):
+        return i
+    end
+    return find_func_idx_loop(funcs, i + 1, n, name, nodes)
+end
+
+func find_func_idx(name, nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    return find_func_idx_loop(prog.2, 0, count(prog.2), name, nodes)
+end
+
+func opcode_for_binop(tag):
+    if equal(tag, "add"):
+        return op_add()
+    end
+    if equal(tag, "sub"):
+        return op_sub()
+    end
+    if equal(tag, "eq"):
+        return op_eq()
+    end
+    if equal(tag, "ne"):
+        return op_ne()
+    end
+    if equal(tag, "lt"):
+        return op_lt()
+    end
+    if equal(tag, "le"):
+        return op_le()
+    end
+    if equal(tag, "gt"):
+        return op_gt()
+    end
+    return op_ge()
+end
+
+func emit_exprs(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    if i >= n:
+        return ir
+    end
+    ir = emit_expr(get(kids, i), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    return emit_exprs(kids, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+end
+
+func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    if equal(name, "new_array"):
+        let elem = nc_type_from_type_expr(type_pool, nodes, get(kids, 0))
+        if elem.0 != 0:
+            return fault("bad new_array meta")
+        end
+        return emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_intern_array(type_pool, elem.1))
+    end
+    ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    if equal(name, "clogger"):
+        return emit_instr(ir, op_clogger(), 0, 0)
+    end
+    if equal(name, "length"):
+        return emit_instr(ir, op_length(), 0, 0)
+    end
+    if equal(name, "index"):
+        return emit_instr(ir, op_index(), 0, 0)
+    end
+    if equal(name, "slice"):
+        return emit_instr(ir, op_slice(), 0, 0)
+    end
+    if equal(name, "equal"):
+        return emit_instr(ir, op_equal(), 0, 0)
+    end
+    if equal(name, "new_buffer"):
+        return emit_instr(ir, op_new_buffer(), 0, 0)
+    end
+    if equal(name, "freeze"):
+        return emit_instr(ir, op_freeze(), 0, 0)
+    end
+    if equal(name, "get"):
+        return emit_instr(ir, op_get(), 0, 0)
+    end
+    if equal(name, "count"):
+        return emit_instr(ir, op_count(), 0, 0)
+    end
+    if equal(name, "append") or equal(name, "add") or equal(name, "flogger"):
+        return fault("void builtin in expression")
+    end
+    return emit_instr(ir, op_call(), nc_poly_lowered_call_target(poly, caller_inst_idx, call_node_idx), count(kids))
+end
+
+func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    let node = get(nodes, node_idx)
+    let tag = node.0
+    let atoms = node.1
+    let kids = node.2
+    if equal(tag, "int"):
+        return emit_instr(ir, op_push_int(), parse_decimal(get(atoms, 0)), 0)
+    end
+    if equal(tag, "char"):
+        return emit_instr(ir, op_push_int(), parse_decimal(get(atoms, 0)), 0)
+    end
+    if equal(tag, "str"):
+        let s = string_from_atoms(atoms)
+        return emit_instr(ir, op_push_str(), intern_string(strings, s), 0)
+    end
+    if equal(tag, "bool"):
+        if equal(get(atoms, 0), "true"):
+            return emit_instr(ir, op_push_bool(), 1, 0)
+        end
+        return emit_instr(ir, op_push_bool(), 0, 0)
+    end
+    if equal(tag, "name"):
+        return emit_instr(ir, op_load_local(), env_lookup(env, get(atoms, 0)), 0)
+    end
+    if equal(tag, "and"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        let done = make_label("and", count(ir))
+        ir = emit_target_instr(ir, op_br_and(), done)
+        ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_label(ir, done)
+    end
+    if equal(tag, "or"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        let done = make_label("or", count(ir))
+        ir = emit_target_instr(ir, op_br_or(), done)
+        ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_label(ir, done)
+    end
+    if equal(tag, "not"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_not(), 0, 0)
+    end
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, opcode_for_binop(tag), 0, 0)
+    end
+    if equal(tag, "tuple"):
+        ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_make_tuple(), count(kids), 0)
+    end
+    if equal(tag, "dot"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_tuple_get(), parse_decimal(get(atoms, 0)), 0)
+    end
+    if equal(tag, "call"):
+        return emit_call_expr(get(atoms, 0), kids, node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    end
+    return fault("bad expression")
+end
+
+func body_ends_return(body_idx, nodes):
+    let body = get(nodes, body_idx)
+    let kids = body.2
+    let n = count(kids)
+    if n == 0:
+        return false
+    end
+    let stmt = get(nodes, get(kids, n - 1))
+    return equal(stmt.0, "return")
+end
+
+func emit_body(stmts, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    if i >= n:
+        return env
+    end
+    env = emit_stmt(get(stmts, i), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    return emit_body(stmts, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+end
+
+func emit_do_call(call_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    let node = get(nodes, call_idx)
+    if not equal(node.0, "call"):
+        return fault("do non-call")
+    end
+    let name = get(node.1, 0)
+    let kids = node.2
+    if equal(name, "append"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_buf_append(), 0, 0)
+    end
+    if equal(name, "add"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_arr_add(), 0, 0)
+    end
+    if equal(name, "flogger"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_flogger(), 0, 0)
+    end
+    if equal(name, "fwriter"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_fwriter(), 0, 0)
+    end
+    return fault("bad do call")
+end
+
+func emit_if_arms(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, join_label, caller_inst_idx, poly):
+    if i >= n:
+        return env
+    end
+    let arm_idx = get(kids, i)
+    let arm = get(nodes, arm_idx)
+    let scope_mark = count(env.0)
+    if equal(arm.0, "else"):
+        let body_idx = get(arm.2, 0)
+        let body = get(nodes, body_idx)
+        let body_env = emit_body(body.2, 0, count(body.2), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return env_rebuild(body_env, scope_mark)
+    end
+    let next_label = make_label("if", count(ir))
+    ir = emit_expr(get(arm.2, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    ir = emit_target_instr(ir, op_br_if_false(), next_label)
+    let body_idx = get(arm.2, 1)
+    let body = get(nodes, body_idx)
+    let body_env = emit_body(body.2, 0, count(body.2), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    env = env_rebuild(body_env, scope_mark)
+    if (not body_ends_return(body_idx, nodes)) and i + 1 < n:
+        ir = emit_target_instr(ir, op_br(), join_label)
+    end
+    ir = emit_label(ir, next_label)
+    return emit_if_arms(kids, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, join_label, caller_inst_idx, poly)
+end
+
+func emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    let join_label = make_label("join", count(ir))
+    env = emit_if_arms(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, join_label, caller_inst_idx, poly)
+    ir = emit_label(ir, join_label)
+    return env
+end
+
+func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    let stmt = get(nodes, stmt_idx)
+    let tag = stmt.0
+    let atoms = stmt.1
+    let kids = stmt.2
+    if equal(tag, "let"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_instr(ir, op_store_local(), env.2, 0)
+        return env_let(env, get(atoms, 0))
+    end
+    if equal(tag, "assign"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_instr(ir, op_store_local(), env_lookup(env, get(atoms, 0)), 0)
+        return env
+    end
+    if equal(tag, "return"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_instr(ir, op_ret(), 0, 0)
+        return env
+    end
+    if equal(tag, "do"):
+        ir = emit_do_call(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return env
+    end
+    if equal(tag, "if"):
+        return emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    end
+    return fault("bad statement")
+end
+
+func lower_func_poly(func_idx, inst_idx, entry_pc, strings, nodes, prog_idx, type_pool, poly):
+    let fn = get(nodes, func_idx)
+    let name = get(fn.1, 0)
+    let params_node = get(nodes, get(fn.2, 0))
+    let body_node = get(nodes, get(fn.2, 1))
+    let env = env_from_params(params_node.1)
+    let ir = new_array((int, int, int, int, int, string))
+    let out_env = emit_body(body_node.2, 0, count(body_node.2), env, ir, strings, nodes, prog_idx, type_pool, inst_idx, poly)
+    let code = resolve_ir(ir)
+    let new_array_meta = resolve_new_array_meta(ir)
+    return (name, entry_pc, count(params_node.1), out_env.2, code, new_array_meta)
+end
+
+func lower_program_poly_loop(instances, i, entry_pc, funcs, strings, nodes, prog_idx, type_pool, poly):
+    if i >= count(instances):
+        return funcs
+    end
+    let prog = get(nodes, prog_idx)
+    let inst = get(instances, i)
+    let fn = lower_func_poly(get(prog.2, inst.0), i, entry_pc, strings, nodes, prog_idx, type_pool, poly)
+    do add(funcs, fn)
+    return lower_program_poly_loop(instances, i + 1, entry_pc + count(fn.4), funcs, strings, nodes, prog_idx, type_pool, poly)
+end
+
+func find_table_func_loop(funcs, i, n, name):
+    if i >= n:
+        return fault("entry missing")
+    end
+    let fn = get(funcs, i)
+    if equal(fn.0, name):
+        return i
+    end
+    return find_table_func_loop(funcs, i + 1, n, name)
+end
+
+func find_table_func(funcs, name):
+    return find_table_func_loop(funcs, 0, count(funcs), name)
+end
+
+func lower_program_poly(nodes, prog_idx, type_pool, poly):
+    let strings = new_array(string)
+    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int)))
+    funcs = lower_program_poly_loop(poly.0, 0, 0, funcs, strings, nodes, prog_idx, type_pool, poly)
+    return (funcs, strings, 0)
+end
+
+func lower_program(nodes, prog_idx, type_pool):
+    let ast_result = nc_verify_ast(nodes, prog_idx, type_pool)
+    if ast_result.0 != 0:
+        return (new_array((string, int, int, int, array((int, int, int)), array(int))), new_array(string), 0)
+    end
+    return lower_program_poly(nodes, prog_idx, type_pool, ast_result.2)
+end
+
+func opcode_name(op):
+    if op == op_push_int():
+        return "PUSH_INT"
+    end
+    if op == op_push_bool():
+        return "PUSH_BOOL"
+    end
+    if op == op_push_str():
+        return "PUSH_STR"
+    end
+    if op == op_load_local():
+        return "LOAD_LOCAL"
+    end
+    if op == op_store_local():
+        return "STORE_LOCAL"
+    end
+    if op == op_add():
+        return "ADD"
+    end
+    if op == op_sub():
+        return "SUB"
+    end
+    if op == op_lt():
+        return "LT"
+    end
+    if op == op_le():
+        return "LE"
+    end
+    if op == op_gt():
+        return "GT"
+    end
+    if op == op_ge():
+        return "GE"
+    end
+    if op == op_eq():
+        return "EQ"
+    end
+    if op == op_ne():
+        return "NE"
+    end
+    if op == op_not():
+        return "NOT"
+    end
+    if op == op_make_tuple():
+        return "MAKE_TUPLE"
+    end
+    if op == op_tuple_get():
+        return "TUPLE_GET"
+    end
+    if op == op_br():
+        return "BR"
+    end
+    if op == op_br_if_false():
+        return "BR_IF_FALSE"
+    end
+    if op == op_br_and():
+        return "BR_AND"
+    end
+    if op == op_br_or():
+        return "BR_OR"
+    end
+    if op == op_call():
+        return "CALL"
+    end
+    if op == op_ret():
+        return "RET"
+    end
+    if op == op_length():
+        return "LENGTH"
+    end
+    if op == op_index():
+        return "INDEX"
+    end
+    if op == op_slice():
+        return "SLICE"
+    end
+    if op == op_equal():
+        return "EQUAL"
+    end
+    if op == op_new_buffer():
+        return "NEW_BUFFER"
+    end
+    if op == op_freeze():
+        return "FREEZE"
+    end
+    if op == op_new_array():
+        return "NEW_ARRAY"
+    end
+    if op == op_get():
+        return "GET"
+    end
+    if op == op_count():
+        return "COUNT"
+    end
+    if op == op_buf_append():
+        return "BUF_APPEND"
+    end
+    if op == op_arr_add():
+        return "ARR_ADD"
+    end
+    if op == op_clogger():
+        return "CLOGGER"
+    end
+    if op == op_flogger():
+        return "FLOGGER"
+    end
+    return "ARR_ADD"
+end
+
+func opcode_operands(op):
+    if op == op_call():
+        return 2
+    end
+    if op == op_push_int() or op == op_push_bool() or op == op_push_str() or op == op_load_local() or op == op_store_local() or op == op_make_tuple() or op == op_tuple_get() or op == op_br() or op == op_br_if_false() or op == op_br_and() or op == op_br_or():
+        return 1
+    end
+    if op == op_clogger() or op == op_flogger():
+        return 0
+    end
+    return 0
+end
+
+func append_quoted_pool_string_loop(buf, s, i, n):
+    if i >= n:
+        return buf
+    end
+    let c = index(s, i)
+    if c == '\n':
+        do append(buf, '\\')
+        do append(buf, 'n')
+    elif c == '\\':
+        do append(buf, '\\')
+        do append(buf, '\\')
+    elif c == '"':
+        do append(buf, '\\')
+        do append(buf, '"')
+    else:
+        do append(buf, c)
+    end
+    return append_quoted_pool_string_loop(buf, s, i + 1, n)
+end
+
+func append_quoted_pool_string(buf, s):
+    do append(buf, '"')
+    buf = append_quoted_pool_string_loop(buf, s, 0, length(s))
+    do append(buf, '"')
+    return buf
+end
+
+func serialize_strings_loop(buf, strings, i, n):
+    if i >= n:
+        return buf
+    end
+    buf = emit_decimal(buf, i)
+    do append(buf, ' ')
+    buf = append_quoted_pool_string(buf, get(strings, i))
+    do append(buf, '\n')
+    return serialize_strings_loop(buf, strings, i + 1, n)
+end
+
+func serialize_funcs_loop(buf, funcs, i, n):
+    if i >= n:
+        return buf
+    end
+    let fn = get(funcs, i)
+    buf = emit_decimal(buf, i)
+    do append(buf, ' ')
+    buf = append_str(buf, fn.0)
+    buf = append_str(buf, " n_params=")
+    buf = emit_decimal(buf, fn.2)
+    buf = append_str(buf, " n_locals=")
+    buf = emit_decimal(buf, fn.3)
+    do append(buf, '\n')
+    return serialize_funcs_loop(buf, funcs, i + 1, n)
+end
+
+func serialize_instr(buf, idx, instr):
+    let op = instr.0
+    buf = emit_decimal(buf, idx)
+    do append(buf, ' ')
+    buf = append_str(buf, opcode_name(op))
+    if opcode_operands(op) >= 1:
+        do append(buf, ' ')
+        buf = emit_decimal(buf, instr.1)
+    end
+    if opcode_operands(op) >= 2:
+        do append(buf, ' ')
+        buf = emit_decimal(buf, instr.2)
+    end
+    do append(buf, '\n')
+    return buf
+end
+
+func serialize_code_instrs(buf, code, i, n):
+    if i >= n:
+        return buf
+    end
+    buf = serialize_instr(buf, i, get(code, i))
+    return serialize_code_instrs(buf, code, i + 1, n)
+end
+
+func serialize_code_loop(buf, funcs, i, n):
+    if i >= n:
+        return buf
+    end
+    let fn = get(funcs, i)
+    buf = append_str(buf, "fn ")
+    buf = emit_decimal(buf, i)
+    do append(buf, ' ')
+    buf = append_str(buf, fn.0)
+    do append(buf, '\n')
+    buf = serialize_code_instrs(buf, fn.4, 0, count(fn.4))
+    return serialize_code_loop(buf, funcs, i + 1, n)
+end
+
+func serialize_bytecode(prog):
+    let buf = new_buffer()
+    buf = append_str(buf, "STRING_POOL\n")
+    buf = serialize_strings_loop(buf, prog.1, 0, count(prog.1))
+    do append(buf, '\n')
+    buf = append_str(buf, "FUNCTIONS\n")
+    buf = serialize_funcs_loop(buf, prog.0, 0, count(prog.0))
+    do append(buf, '\n')
+    buf = append_str(buf, "CODE\n")
+    buf = serialize_code_loop(buf, prog.0, 0, count(prog.0))
+    return freeze(buf)
+end
+
+-- ====================================================================
+-- ERROR-HANDLING FRONT END
+-- ====================================================================
+
+func err_ok_tag():
+    return 0
+end
+
+func err_err_tag():
+    return 1
+end
+
+func err_no_diag():
+    return (0, 0, "")
+end
+
+func err_diag(code, line, payload):
+    return (code, line, payload)
+end
+
+func diagnostic_with_payload(prefix, payload, suffix):
+    let buf = new_buffer()
+    buf = append_str(buf, prefix)
+    buf = append_str(buf, payload)
+    buf = append_str(buf, suffix)
+    return freeze(buf)
+end
+
+func diagnostic_message(code, payload):
+    if code == 101:
+        return "unexpected character"
+    end
+    if code == 102:
+        return "expected digit"
+    end
+    if code == 103:
+        return "integer literal does not fit in 64 bits"
+    end
+    if code == 104:
+        return "unknown escape sequence"
+    end
+    if code == 105:
+        return "unterminated escape"
+    end
+    if code == 106:
+        return "newline in string literal"
+    end
+    if code == 107:
+        return "unterminated string literal"
+    end
+    if code == 108:
+        return "empty character literal"
+    end
+    if code == 109:
+        return "character literal not closed"
+    end
+    if code == 110:
+        return "newline in character literal"
+    end
+    if code == 201:
+        return "expected 'func' at top level"
+    end
+    if code == 202:
+        return "invalid function header"
+    end
+    if code == 203:
+        return "expected end"
+    end
+    if code == 204:
+        return "expected expression"
+    end
+    if code == 205:
+        return "'do' must be followed by a call"
+    end
+    if code == 206:
+        return "expected integer after '.'"
+    end
+    if code == 207:
+        return "expected ')'"
+    end
+    if code == 208:
+        return "new_array requires a type argument"
+    end
+    if code == 209:
+        return "function body must contain at least one statement"
+    end
+    if code == 210:
+        return "if/elif/else arm must contain at least one statement"
+    end
+    if code == 211:
+        return "invalid type expression"
+    end
+    if code == 212:
+        return "invalid assignment or name"
+    end
+    if code == 301:
+        return diagnostic_with_payload("duplicate let '", payload, "' in this scope")
+    end
+    if code == 302:
+        return diagnostic_with_payload("undefined name '", payload, "'")
+    end
+    if code == 303:
+        return diagnostic_with_payload("assignment to undefined name '", payload, "'")
+    end
+    if code == 304:
+        return diagnostic_with_payload("unknown function '", payload, "'")
+    end
+    if code == 305:
+        return diagnostic_with_payload("wrong number of arguments to '", payload, "'")
+    end
+    if code == 306:
+        return diagnostic_with_payload("wrong number of arguments to '", payload, "'")
+    end
+    if code == 307:
+        return diagnostic_with_payload("wrong number of arguments to '", payload, "'")
+    end
+    if code == 308:
+        return diagnostic_with_payload("builtin '", payload, "' has no value")
+    end
+    if code == 310:
+        return diagnostic_with_payload("'do' requires a value-less call, got '", payload, "'")
+    end
+    if code == 311:
+        return diagnostic_with_payload("duplicate parameter '", payload, "'")
+    end
+    if code == 312:
+        return diagnostic_with_payload("duplicate function '", payload, "'")
+    end
+    if code == 313:
+        return diagnostic_with_payload("function reuses built-in name '", payload, "'")
+    end
+    if code == 314:
+        return "no main function defined"
+    end
+    if code == 315:
+        return diagnostic_with_payload("function '", payload, "' must take zero parameters")
+    end
+    if code == 316:
+        return diagnostic_with_payload("function '", payload, "' may complete without returning")
+    end
+    return "unknown error"
+end
+
+func serialize_diagnostic(diag):
+    let code = diag.0
+    let line = diag.1
+    let payload = diag.2
+    let buf = new_buffer()
+    if line > 0:
+        buf = append_str(buf, "line ")
+        buf = append_str(buf, int_to_str(line))
+        buf = append_str(buf, ": ")
+    else:
+        buf = append_str(buf, "program: ")
+    end
+    buf = append_str(buf, diagnostic_message(code, payload))
+    buf = append_str(buf, " (ERR ")
+    buf = append_str(buf, int_to_str(code))
+    buf = append_str(buf, ")")
+    return freeze(buf)
+end
+
+func serialize_error(code):
+    return serialize_diagnostic(err_diag(code, 0, ""))
+end
+
+func err_empty_tokens():
+    return new_array((int, string, int))
+end
+
+func err_lex_ok(tokens, eof_line):
+    return (err_ok_tag(), err_no_diag(), tokens, eof_line)
+end
+
+func err_lex_fail(diag):
+    return (err_err_tag(), diag, err_empty_tokens(), 0)
+end
+
+func err_pos_ok(pos):
+    return (err_ok_tag(), err_no_diag(), pos)
+end
+
+func err_pos_fail(diag):
+    return (err_err_tag(), diag, 0)
+end
+
+func err_parse_ok(pos):
+    return (err_ok_tag(), err_no_diag(), pos, 0)
+end
+
+func err_parse_ok_extra(pos, extra):
+    return (err_ok_tag(), err_no_diag(), pos, extra)
+end
+
+func err_parse_fail(diag):
+    return (err_err_tag(), diag, 0, 0)
+end
+
+func err_parse_fail_at(code, line):
+    return err_parse_fail(err_diag(code, line, ""))
+end
+
+func err_parse_fail_payload(code, line, payload):
+    return err_parse_fail(err_diag(code, line, payload))
+end
+
+func err_token_line(tokens, pos, eof_line):
+    if pos >= count(tokens):
+        return eof_line
+    end
+    let t = get(tokens, pos)
+    return t.2
+end
+
+func err_parse_fail_current(code, tokens, pos, eof_line):
+    return err_parse_fail_at(code, err_token_line(tokens, pos, eof_line))
+end
+
+func err_check_ok():
+    return (err_ok_tag(), err_no_diag())
+end
+
+func err_check_fail(diag):
+    return (err_err_tag(), diag)
+end
+
+func err_check_fail_at(code, line, payload):
+    return err_check_fail(err_diag(code, line, payload))
+end
+
+func err_empty_env():
+    return new_array(string)
+end
+
+func err_env_ok(env):
+    return (err_ok_tag(), err_no_diag(), env)
+end
+
+func err_env_fail(diag):
+    return (err_err_tag(), diag, err_empty_env())
+end
+
+func err_env_fail_at(code, line, payload):
+    return err_env_fail(err_diag(code, line, payload))
+end
+
+func err_expr_other():
+    return 0
+end
+
+func err_expr_call():
+    return 1
+end
+
+func err_expr_new_array():
+    return 2
+end
+
+func err_is_valid_punct(c):
+    return c == '(' or c == ')' or c == ',' or c == '.' or c == ':'
+end
+
+func err_end_of_int(src, i, n, line, acc):
+    if i >= n:
+        return err_pos_ok(i)
+    end
+    let c = index(src, i)
+    if not is_digit(c):
+        return err_pos_ok(i)
+    end
+    let d = c - '0'
+    if acc > 1844674407370955161:
+        return err_pos_fail(err_diag(103, line, ""))
+    end
+    if acc == 1844674407370955161 and d > 5:
+        return err_pos_fail(err_diag(103, line, ""))
+    end
+    return err_end_of_int(src, i + 1, n, line, times10(acc) + d)
+end
+
+func err_string_escape_ok(c):
+    return c == 'n' or c == '\\' or c == '"'
+end
+
+func err_char_escape_ok(c):
+    return c == 'n' or c == '\\' or c == '\''
+end
+
+func err_end_of_string(src, i, n, line):
+    if i >= n:
+        return err_pos_fail(err_diag(107, line, ""))
+    end
+    let c = index(src, i)
+    if c == '"':
+        return err_pos_ok(i + 1)
+    end
+    if c == '\n':
+        return err_pos_fail(err_diag(106, line, ""))
+    end
+    if c == '\\':
+        if i + 1 >= n:
+            return err_pos_fail(err_diag(105, line, ""))
+        end
+        if not err_string_escape_ok(index(src, i + 1)):
+            return err_pos_fail(err_diag(104, line, ""))
+        end
+        return err_end_of_string(src, i + 2, n, line)
+    end
+    return err_end_of_string(src, i + 1, n, line)
+end
+
+func err_check_char_close(src, pos, n, line):
+    if pos >= n:
+        return err_pos_fail(err_diag(109, line, ""))
+    end
+    if index(src, pos) == '\n':
+        return err_pos_fail(err_diag(110, line, ""))
+    end
+    if index(src, pos) != '\'':
+        return err_pos_fail(err_diag(109, line, ""))
+    end
+    return err_pos_ok(pos + 1)
+end
+
+func err_end_of_char(src, i, n, line):
+    if i >= n:
+        return err_pos_fail(err_diag(109, line, ""))
+    end
+    let c = index(src, i)
+    if c == '\n':
+        return err_pos_fail(err_diag(110, line, ""))
+    end
+    if c == '\'':
+        return err_pos_fail(err_diag(108, line, ""))
+    end
+    if c == '\\':
+        if i + 1 >= n:
+            return err_pos_fail(err_diag(105, line, ""))
+        end
+        if not err_char_escape_ok(index(src, i + 1)):
+            return err_pos_fail(err_diag(104, line, ""))
+        end
+        return err_check_char_close(src, i + 2, n, line)
+    end
+    return err_check_char_close(src, i + 1, n, line)
+end
+
+func err_scan(src, i, n, line, out):
+    if i >= n:
+        return err_lex_ok(out, line)
+    end
+    let c = index(src, i)
+    if is_ws(c):
+        if c == '\n':
+            return err_scan(src, i + 1, n, line + 1, out)
+        end
+        return err_scan(src, i + 1, n, line, out)
+    elif c == '-' and i + 1 < n and index(src, i + 1) == '-':
+        return err_scan(src, end_of_line(src, i + 2, n), n, line, out)
+    elif is_ident_start(c):
+        let j = end_of_ident(src, i + 1, n)
+        do add(out, (0, slice_text(src, i, j), line))
+        return err_scan(src, j, n, line, out)
+    elif is_digit(c):
+        let r = err_end_of_int(src, i, n, line, 0)
+        if r.0 == err_err_tag():
+            return err_lex_fail(r.1)
+        end
+        do add(out, (1, slice_text(src, i, r.2), line))
+        return err_scan(src, r.2, n, line, out)
+    elif c == '"':
+        let r = err_end_of_string(src, i + 1, n, line)
+        if r.0 == err_err_tag():
+            return err_lex_fail(r.1)
+        end
+        do add(out, (2, slice_text(src, i, r.2), line))
+        return err_scan(src, r.2, n, line, out)
+    elif c == '\'':
+        let r = err_end_of_char(src, i + 1, n, line)
+        if r.0 == err_err_tag():
+            return err_lex_fail(r.1)
+        end
+        do add(out, (3, slice_text(src, i, r.2), line))
+        return err_scan(src, r.2, n, line, out)
+    elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2), line))
+        return err_scan(src, i + 2, n, line, out)
+    elif is_one_byte_op(c):
+        do add(out, (5, slice_text(src, i, i + 1), line))
+        return err_scan(src, i + 1, n, line, out)
+    elif err_is_valid_punct(c):
+        do add(out, (4, slice_text(src, i, i + 1), line))
+        return err_scan(src, i + 1, n, line, out)
+    end
+    return err_lex_fail(err_diag(101, line, slice_text(src, i, i + 1)))
+end
+
+func err_lex_source(src):
+    return err_scan(src, 0, length(src), 1, new_array((int, string, int)))
+end
+
+func err_is_reserved_word(s):
+    if equal(s, "func") or equal(s, "let") or equal(s, "return") or equal(s, "do"):
+        return true
+    end
+    if equal(s, "if") or equal(s, "elif") or equal(s, "else") or equal(s, "end"):
+        return true
+    end
+    if equal(s, "and") or equal(s, "or") or equal(s, "not"):
+        return true
+    end
+    if equal(s, "true") or equal(s, "false"):
+        return true
+    end
+    if equal(s, "int") or equal(s, "bool") or equal(s, "string"):
+        return true
+    end
+    return equal(s, "buffer") or equal(s, "array")
+end
+
+func err_is_valid_name_token(tokens, pos):
+    if pos >= count(tokens):
+        return false
+    end
+    let t = get(tokens, pos)
+    return t.0 == 0 and not err_is_reserved_word(t.1)
+end
+
+func err_name_seen_loop(names, start, n, name):
+    if start >= n:
+        return false
+    end
+    if equal(get(names, start), name):
+        return true
+    end
+    return err_name_seen_loop(names, start + 1, n, name)
+end
+
+func err_name_seen(names, name):
+    return err_name_seen_loop(names, 0, count(names), name)
+end
+
+func err_parse_type(tokens, pos, eof_line):
+    let line = err_token_line(tokens, pos, eof_line)
+    if pos >= count(tokens):
+        return err_parse_fail_at(211, line)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 0:
+        if equal(t.1, "int") or equal(t.1, "bool") or equal(t.1, "string") or equal(t.1, "buffer"):
+            return err_parse_ok(pos + 1)
+        end
+        if equal(t.1, "array"):
+            if not tok_is_punct_text(tokens, pos + 1, "("):
+                return err_parse_fail_current(211, tokens, pos + 1, eof_line)
+            end
+            let r = err_parse_type(tokens, pos + 2, eof_line)
+            if r.0 == err_err_tag():
+                return r
+            end
+            if not tok_is_punct_text(tokens, r.2, ")"):
+                return err_parse_fail_current(211, tokens, r.2, eof_line)
+            end
+            return err_parse_ok(r.2 + 1)
+        end
+        return err_parse_fail_at(211, line)
+    end
+    if tok_is_punct_text(tokens, pos, "("):
+        let r = err_parse_type(tokens, pos + 1, eof_line)
+        if r.0 == err_err_tag():
+            return r
+        end
+        return err_parse_type_tuple_tail(tokens, r.2, eof_line, 1, line)
+    end
+    return err_parse_fail_at(211, line)
+end
+
+func err_parse_type_tuple_tail(tokens, pos, eof_line, n_items, tuple_line):
+    if tok_is_punct_text(tokens, pos, ","):
+        let r = err_parse_type(tokens, pos + 1, eof_line)
+        if r.0 == err_err_tag():
+            return r
+        end
+        return err_parse_type_tuple_tail(tokens, r.2, eof_line, n_items + 1, tuple_line)
+    end
+    if not tok_is_punct_text(tokens, pos, ")"):
+        return err_parse_fail_current(211, tokens, pos, eof_line)
+    end
+    if n_items < 2:
+        return err_parse_fail_at(211, tuple_line)
+    end
+    return err_parse_ok(pos + 1)
+end
+
+func err_parse_expr(tokens, pos, eof_line):
+    return err_parse_or(tokens, pos, eof_line)
+end
+
+func err_parse_or(tokens, pos, eof_line):
+    let r = err_parse_and(tokens, pos, eof_line)
+    if r.0 == err_err_tag():
+        return r
+    end
+    return err_parse_or_loop(tokens, r.2, eof_line, r.3)
+end
+
+func err_parse_or_loop(tokens, pos, eof_line, root_kind):
+    if tok_is_ident_text(tokens, pos, "or"):
+        let r = err_parse_and(tokens, pos + 1, eof_line)
+        if r.0 == err_err_tag():
+            return r
+        end
+        return err_parse_or_loop(tokens, r.2, eof_line, err_expr_other())
+    end
+    return err_parse_ok_extra(pos, root_kind)
+end
+
+func err_parse_and(tokens, pos, eof_line):
+    let r = err_parse_cmp(tokens, pos, eof_line)
+    if r.0 == err_err_tag():
+        return r
+    end
+    return err_parse_and_loop(tokens, r.2, eof_line, r.3)
+end
+
+func err_parse_and_loop(tokens, pos, eof_line, root_kind):
+    if tok_is_ident_text(tokens, pos, "and"):
+        let r = err_parse_cmp(tokens, pos + 1, eof_line)
+        if r.0 == err_err_tag():
+            return r
+        end
+        return err_parse_and_loop(tokens, r.2, eof_line, err_expr_other())
+    end
+    return err_parse_ok_extra(pos, root_kind)
+end
+
+func err_parse_cmp(t

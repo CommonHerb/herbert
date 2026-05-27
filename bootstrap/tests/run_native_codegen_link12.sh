@@ -22,6 +22,9 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_oracle_begin link12 || exit 1
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 pass=0
@@ -65,18 +68,22 @@ check_bytepure() {
     local elf="$tmp/$label.elf"
     compile_probe "$label" "$probe" "$elf" || return
     local nd="$tmp/$label.nat" cd="$tmp/$label.c"
+    local expected="$tmp/$label.expected.a.out" empty_input="$tmp/$label.empty"
     rm -rf "$nd" "$cd"; mkdir -p "$nd" "$cd"
     ( cd "$nd" && "$elf" >/dev/null 2>&1 )
-    ( cd "$cd" && "$HERBERT" "$probe" >/dev/null 2>&1 )
+    : >"$empty_input"
     if [[ ! -f "$nd/a.out" ]]; then fail_test "$label: native run produced no a.out"; return; fi
-    if [[ ! -f "$cd/a.out" ]]; then fail_test "$label: C oracle produced no a.out"; return; fi
+    if ! oracle_expect_file "link12_${label}" "$probe" "$cd" "a.out" "$expected" "$empty_input"; then
+        fail_test "$label: file oracle failed"
+        return
+    fi
     local nsz csz
-    nsz=$(wc -c <"$nd/a.out"); csz=$(wc -c <"$cd/a.out")
+    nsz=$(wc -c <"$nd/a.out"); csz=$(wc -c <"$expected")
     if [[ "$nsz" -ne "$expect_size" ]]; then
         fail_test "$label: native a.out size $nsz != expected $expect_size (trailer present?)"
         return
     fi
-    if cmp -s "$nd/a.out" "$cd/a.out"; then
+    if cmp -s "$nd/a.out" "$expected"; then
         pass=$((pass + 1))
     else
         fail_test "$label: native a.out differs from C oracle a.out (native $nsz, C $csz)"
@@ -164,6 +171,9 @@ check_reject badarg "$tmp/badarg.herb"
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-link12 sub-test(s) failed."
+    exit 1
+fi
+if ! native_codegen_oracle_finish; then
     exit 1
 fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link12: $pass sub-tests: fwriter byte-pure file differential vs C (hi/empty), openat/close/jmp-over-error disasm gate, renamed-twin + non-string rejects)"
