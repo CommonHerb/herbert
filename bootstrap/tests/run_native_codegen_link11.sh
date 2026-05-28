@@ -146,11 +146,15 @@ func main():
         return 1
     end
     let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let has_faultable = nc_prog_has_faultable(prog)
+    if has_faultable != 0:
+        let diag_strings = nc_append_fault_rodata(prog.1)
+    end
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
     if analyzed.0 != 0:
         return 2
     end
-    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3)
+    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable)
     if pass1.0 != 0:
         return 3
     end

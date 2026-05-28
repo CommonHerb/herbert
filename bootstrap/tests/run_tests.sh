@@ -1184,6 +1184,16 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    NATIVE_CODEGEN_LINK13="$PWD/run_native_codegen_link13.sh"
+    if [[ -f "$NATIVE_CODEGEN_LINK13" ]]; then
+        total=$((total + 1))
+        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK13"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
     NATIVE_CODEGEN_REJECTS="$PWD/run_native_codegen_rejects.sh"
     if [[ -f "$NATIVE_CODEGEN_REJECTS" ]]; then
         total=$((total + 1))
@@ -1208,6 +1218,7 @@ if [[ -d ../../stack ]]; then
             "$PWD/run_native_codegen_link10.sh" \
             "$PWD/run_native_codegen_link11.sh" \
             "$PWD/run_native_codegen_link12.sh" \
+            "$PWD/run_native_codegen_link13.sh" \
             "$PWD/run_native_codegen_rejects.sh"; do
             [[ -f "$native_codegen_script" ]] || continue
             total=$((total + 1))

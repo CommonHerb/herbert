@@ -565,12 +565,14 @@ awk '/^func main\(\):$/ { exit } { print }' "$backend" >"$tmp/stack_underflow_dr
 cat >>"$tmp/stack_underflow_driver.herb" <<'HERB'
 func main():
     let type_pool = nc_type_pool_new()
-    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int)))
+    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int), array(int)))
     let code = new_array((int, int, int))
     do add(code, (21, 0, 0))
     let meta = new_array(int)
     do add(meta, 0)
-    do add(funcs, ("main", 0, 0, 0, code, meta))
+    let lines = new_array(int)
+    do add(lines, 0)
+    do add(funcs, ("main", 0, 0, 0, code, meta, lines))
     let strings = new_array(string)
     let prog = (funcs, strings, 0)
     let params = new_array(array(int))
@@ -594,13 +596,14 @@ func main():
     let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
     let prog = lower_program(nodes, parsed.0, type_pool)
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
-    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3)
+    let has_faultable = nc_prog_has_faultable(prog)
+    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable)
     let layouts = pass1.1
     let main_layout = get(layouts, prog.2)
     let bad_layout = (main_layout.0, main_layout.1, main_layout.2, main_layout.3, main_layout.4, main_layout.5 + 1)
     let bad_layouts = new_array((int, array(int), array(int), int, int, int))
     do add(bad_layouts, bad_layout)
-    let emitted = nc_emit_function(new_buffer(), get(prog.0, prog.2), prog.0, get(analyzed.1, prog.2), analyzed.1, bad_layout, bad_layouts, prog.1, pass1.2)
+    let emitted = nc_emit_function(new_buffer(), get(prog.0, prog.2), prog.0, get(analyzed.1, prog.2), analyzed.1, bad_layout, bad_layouts, prog.1, pass1.2, 0)
     return 0
 end
 HERB
@@ -609,12 +612,15 @@ awk '/^func main\(\):$/ { exit } { print }' "$backend" >"$tmp/missing_meta_drive
 cat >>"$tmp/missing_meta_driver.herb" <<'HERB'
 func main():
     let type_pool = nc_type_pool_new()
-    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int)))
+    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int), array(int)))
     let code = new_array((int, int, int))
     do add(code, (28, 0, 0))
     do add(code, (21, 0, 0))
     let missing = new_array(int)
-    do add(funcs, ("main", 0, 0, 0, code, missing))
+    let lines = new_array(int)
+    do add(lines, 0)
+    do add(lines, 0)
+    do add(funcs, ("main", 0, 0, 0, code, missing, lines))
     let strings = new_array(string)
     let prog = (funcs, strings, 0)
     let params = new_array(array(int))

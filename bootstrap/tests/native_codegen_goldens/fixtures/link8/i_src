@@ -1108,22 +1108,27 @@ func op_fwriter():
 end
 
 func emit_instr(ir, op, a, b):
-    do add(ir, (0, op, a, b, 0, ""))
+    do add(ir, (0, op, a, b, 0, "", 0))
+    return ir
+end
+
+func emit_instr_line(ir, op, a, b, line):
+    do add(ir, (0, op, a, b, 0, "", line))
     return ir
 end
 
 func emit_instr_meta(ir, op, a, b, meta):
-    do add(ir, (0, op, a, b, meta, ""))
+    do add(ir, (0, op, a, b, meta, "", 0))
     return ir
 end
 
 func emit_target_instr(ir, op, label):
-    do add(ir, (0, op, 0, 0, 0, label))
+    do add(ir, (0, op, 0, 0, 0, label, 0))
     return ir
 end
 
 func emit_label(ir, label):
-    do add(ir, (1, 0, 0, 0, 0, label))
+    do add(ir, (1, 0, 0, 0, 0, label, 0))
     return ir
 end
 
@@ -1200,6 +1205,22 @@ end
 
 func resolve_new_array_meta(ir):
     return resolve_new_array_meta_loop(ir, 0, count(ir), new_array(int))
+end
+
+func resolve_instr_lines_loop(ir, i, n, out):
+    if i >= n:
+        return out
+    end
+    let item = get(ir, i)
+    if item.0 == 1:
+        return resolve_instr_lines_loop(ir, i + 1, n, out)
+    end
+    do add(out, item.6)
+    return resolve_instr_lines_loop(ir, i + 1, n, out)
+end
+
+func resolve_instr_lines(ir):
+    return resolve_instr_lines_loop(ir, 0, count(ir), new_array(int))
 end
 
 func env_from_params_loop(params, i, n, names, slots):
@@ -1330,6 +1351,7 @@ func emit_exprs(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller
 end
 
 func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    let call_line = get(nodes, call_node_idx).3
     if equal(name, "new_array"):
         let elem = nc_type_from_type_expr(type_pool, nodes, get(kids, 0))
         if elem.0 != 0:
@@ -1345,7 +1367,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         return emit_instr(ir, op_length(), 0, 0)
     end
     if equal(name, "index"):
-        return emit_instr(ir, op_index(), 0, 0)
+        return emit_instr_line(ir, op_index(), 0, 0, call_line)
     end
     if equal(name, "slice"):
         return emit_instr(ir, op_slice(), 0, 0)
@@ -1360,7 +1382,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         return emit_instr(ir, op_freeze(), 0, 0)
     end
     if equal(name, "get"):
-        return emit_instr(ir, op_get(), 0, 0)
+        return emit_instr_line(ir, op_get(), 0, 0, call_line)
     end
     if equal(name, "count"):
         return emit_instr(ir, op_count(), 0, 0)
@@ -1451,7 +1473,7 @@ func emit_body(stmts, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller
     return emit_body(stmts, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
 end
 
-func emit_do_call(call_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+func emit_do_call(call_idx, stmt_line, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
     let node = get(nodes, call_idx)
     if not equal(node.0, "call"):
         return fault("do non-call")
@@ -1461,7 +1483,7 @@ func emit_do_call(call_idx, env, ir, strings, nodes, prog_idx, type_pool, caller
     if equal(name, "append"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_buf_append(), 0, 0)
+        return emit_instr_line(ir, op_buf_append(), 0, 0, stmt_line)
     end
     if equal(name, "add"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
@@ -1534,7 +1556,7 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         return env
     end
     if equal(tag, "do"):
-        ir = emit_do_call(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_do_call(get(kids, 0), stmt.3, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return env
     end
     if equal(tag, "if"):
@@ -1549,11 +1571,12 @@ func lower_func_poly(func_idx, inst_idx, entry_pc, strings, nodes, prog_idx, typ
     let params_node = get(nodes, get(fn.2, 0))
     let body_node = get(nodes, get(fn.2, 1))
     let env = env_from_params(params_node.1)
-    let ir = new_array((int, int, int, int, int, string))
+    let ir = new_array((int, int, int, int, int, string, int))
     let out_env = emit_body(body_node.2, 0, count(body_node.2), env, ir, strings, nodes, prog_idx, type_pool, inst_idx, poly)
     let code = resolve_ir(ir)
     let new_array_meta = resolve_new_array_meta(ir)
-    return (name, entry_pc, count(params_node.1), out_env.2, code, new_array_meta)
+    let instr_lines = resolve_instr_lines(ir)
+    return (name, entry_pc, count(params_node.1), out_env.2, code, new_array_meta, instr_lines)
 end
 
 func lower_program_poly_loop(instances, i, entry_pc, funcs, strings, nodes, prog_idx, type_pool, poly):
@@ -1584,7 +1607,7 @@ end
 
 func lower_program_poly(nodes, prog_idx, type_pool, poly):
     let strings = new_array(string)
-    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int)))
+    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int), array(int)))
     funcs = lower_program_poly_loop(poly.0, 0, 0, funcs, strings, nodes, prog_idx, type_pool, poly)
     return (funcs, strings, 0)
 end
@@ -1592,7 +1615,7 @@ end
 func lower_program(nodes, prog_idx, type_pool):
     let ast_result = nc_verify_ast(nodes, prog_idx, type_pool)
     if ast_result.0 != 0:
-        return (new_array((string, int, int, int, array((int, int, int)), array(int))), new_array(string), 0)
+        return (new_array((string, int, int, int, array((int, int, int)), array(int), array(int))), new_array(string), 0)
     end
     return lower_program_poly(nodes, prog_idx, type_pool, ast_result.2)
 end
@@ -6782,6 +6805,9 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     if count(fn.5) != n:
         return (nc_fail(439, 0, ""), (0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, new_array(array(int)), new_array((int, int, int)), new_array((int, int, int)), 0, 0, heap_meta0, 0))
     end
+    if count(fn.6) != n:
+        return (nc_fail(439, 0, ""), (0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, new_array(array(int)), new_array((int, int, int)), new_array((int, int, int)), 0, 0, heap_meta0, 0))
+    end
     let local_types = nc_init_local_types(fn, sig, fn_idx)
     let stacks = nc_make_stacks(n + 1)
     let tuple_meta = nc_make_tuple3s(n, (0 - 1, 0 - 1, 0 - 1))
@@ -6830,6 +6856,31 @@ end
 
 func nc_analyze_program(pool, prog, sig):
     return nc_analyze_program_loop(pool, prog, sig, 0, count(prog.0), new_array((int, int, int, array(int), array(int), int, int, int, int, array(array(int)), array((int, int, int)), array((int, int, int)), int, int, array((int, int, int)), int)), 0, 0)
+end
+
+func nc_code_has_faultable_loop(code, i, n):
+    if i >= n:
+        return 0
+    end
+    let op = get(code, i).0
+    if op == 23 or op == 29 or op == 31:
+        return 1
+    end
+    return nc_code_has_faultable_loop(code, i + 1, n)
+end
+
+func nc_funcs_have_faultable_loop(funcs, i, n):
+    if i >= n:
+        return 0
+    end
+    if nc_code_has_faultable_loop(get(funcs, i).4, 0, count(get(funcs, i).4)) != 0:
+        return 1
+    end
+    return nc_funcs_have_faultable_loop(funcs, i + 1, n)
+end
+
+func nc_prog_has_faultable(prog):
+    return nc_funcs_have_faultable_loop(prog.0, 0, count(prog.0))
 end
 
 func nc_mod256_loop(v, acc):
@@ -7116,6 +7167,86 @@ end
 
 func nc_frame_total(meta):
     return nc_round16_up(nc_mul8(nc_frame_total_words(meta)))
+end
+
+func nc_fault_route_len():
+    return 12
+end
+
+func nc_fault_rodata_len():
+    return 135
+end
+
+func nc_fault_helper_len():
+    return 418
+end
+
+func nc_fault_helper_start(has_heap):
+    let off = 35
+    if has_heap != 0:
+        off = off + 70
+    end
+    return off
+end
+
+func nc_fault_diag_index_rel():
+    return 0
+end
+
+func nc_fault_diag_get_rel():
+    return 106
+end
+
+func nc_fault_diag_append_rel():
+    return 212
+end
+
+func nc_fault_write_fd2_rel():
+    return 307
+end
+
+func nc_fault_dec_fd2_rel():
+    return 353
+end
+
+func nc_fault_exit1_rel():
+    return 406
+end
+
+func nc_fault_prefix_off():
+    return 0
+end
+
+func nc_fault_sep_index_off():
+    return 14
+end
+
+func nc_fault_sep_get_off():
+    return 32
+end
+
+func nc_fault_sep_append_off():
+    return 48
+end
+
+func nc_fault_mid_len_off():
+    return 69
+end
+
+func nc_fault_mid_cnt_off():
+    return 91
+end
+
+func nc_fault_mid_byte_off():
+    return 112
+end
+
+func nc_fault_close_paren_nl_off():
+    return 132
+end
+
+func nc_fault_just_nl_off():
+    return 134
 end
 
 func nc_arg_copy_len_loop(k, nwords, acc):
@@ -7457,12 +7588,16 @@ func nc_verify_layout_rels_loop(funcs, metas, layouts, i, n):
     return nc_verify_layout_rels_loop(funcs, metas, layouts, i + 1, n)
 end
 
-func nc_entry_stub_len(has_clogger, has_heap):
+func nc_entry_stub_len(has_clogger, has_heap, has_faultable):
     let heap_len = 0
     if has_heap != 0:
         heap_len = 70
     end
-    return heap_len + 35
+    let fault_len = 0
+    if has_faultable != 0:
+        fault_len = nc_fault_helper_len()
+    end
+    return heap_len + fault_len + 35
 end
 
 func nc_pass1_program_loop(funcs, metas, i, n, entry, layouts):
@@ -7479,10 +7614,10 @@ func nc_pass1_program_loop(funcs, metas, i, n, entry, layouts):
     return nc_pass1_program_loop(funcs, metas, i + 1, n, entry + fn_len, layouts)
 end
 
-func nc_pass1_program(prog, metas, has_clogger, has_heap):
+func nc_pass1_program(prog, metas, has_clogger, has_heap, has_faultable):
     let funcs = prog.0
     let layouts = new_array((int, array(int), array(int), int, int, int))
-    let stub_len = nc_entry_stub_len(has_clogger, has_heap)
+    let stub_len = nc_entry_stub_len(has_clogger, has_heap, has_faultable)
     let r = nc_pass1_program_loop(funcs, metas, 0, count(funcs), stub_len, layouts)
     if r.0 != 0:
         return r
@@ -7881,6 +8016,246 @@ func nc_emit_heap_alloc(buf):
     return nc_emit_heap_trap(buf)
 end
 
+func nc_emit_call_abs(buf, target):
+    let base = length(freeze(buf)) + 5
+    do append(buf, 232)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_jmp_abs(buf, target):
+    let base = length(freeze(buf)) + 5
+    do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_fault_route(buf, line, target, base):
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 194)
+    buf = nc_append_le32(buf, line)
+    do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_fault_fragment(buf, ro_base, frag_off, frag_len, write_off):
+    let instr_off = length(freeze(buf))
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 53)
+    buf = nc_append_rel32(buf, ro_base + frag_off, instr_off + 7)
+    do append(buf, 186)
+    buf = nc_append_le32(buf, frag_len)
+    return nc_emit_call_abs(buf, write_off)
+end
+
+func nc_emit_diag_dec_r12(buf, dec_off):
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 224)
+    return nc_emit_call_abs(buf, dec_off)
+end
+
+func nc_emit_diag_dec_r13(buf, dec_off):
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 232)
+    return nc_emit_call_abs(buf, dec_off)
+end
+
+func nc_emit_diag_dec_r14(buf, dec_off):
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 240)
+    return nc_emit_call_abs(buf, dec_off)
+end
+
+func nc_emit_diag_index(buf, ro_base, write_off, dec_off, exit_off):
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 204)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 213)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 214)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
+    buf = nc_emit_diag_dec_r14(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_index_off(), 18, write_off)
+    buf = nc_emit_diag_dec_r12(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_mid_len_off(), 22, write_off)
+    buf = nc_emit_diag_dec_r13(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_close_paren_nl_off(), 2, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+func nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off):
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 204)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 205)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 214)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
+    buf = nc_emit_diag_dec_r14(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_get_off(), 16, write_off)
+    buf = nc_emit_diag_dec_r12(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_mid_cnt_off(), 21, write_off)
+    buf = nc_emit_diag_dec_r13(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_close_paren_nl_off(), 2, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+func nc_emit_diag_append(buf, ro_base, write_off, dec_off, exit_off):
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 204)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 214)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
+    buf = nc_emit_diag_dec_r14(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_append_off(), 21, write_off)
+    buf = nc_emit_diag_dec_r12(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_mid_byte_off(), 20, write_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_just_nl_off(), 1, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+func nc_emit_write_fd2(buf):
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 116)
+    do append(buf, 28)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 12)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 117)
+    do append(buf, 228)
+    do append(buf, 195)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    return buf
+end
+
+func nc_emit_dec_fd2(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 32)
+    do append(buf, 76)
+    do append(buf, 141)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, 20)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 214)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 193)
+    do append(buf, 10)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 241)
+    do append(buf, 128)
+    do append(buf, 194)
+    do append(buf, 48)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 206)
+    do append(buf, 136)
+    do append(buf, 22)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 238)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 242)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 32)
+    do append(buf, 195)
+    return buf
+end
+
+func nc_emit_fault_exit1(buf):
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    return buf
+end
+
+func nc_emit_fault_helpers(buf, ro_base, helper_start):
+    let write_off = helper_start + nc_fault_write_fd2_rel()
+    let dec_off = helper_start + nc_fault_dec_fd2_rel()
+    let exit_off = helper_start + nc_fault_exit1_rel()
+    buf = nc_emit_diag_index(buf, ro_base, write_off, dec_off, exit_off)
+    buf = nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off)
+    buf = nc_emit_diag_append(buf, ro_base, write_off, dec_off, exit_off)
+    buf = nc_emit_write_fd2(buf)
+    buf = nc_emit_dec_fd2(buf, write_off)
+    return nc_emit_fault_exit1(buf)
+end
+
 func nc_emit_rdi_store_rax(buf, mag):
     do append(buf, 72)
     do append(buf, 137)
@@ -8053,7 +8428,7 @@ func nc_emit_length(buf):
     return buf
 end
 
-func nc_emit_index(buf):
+func nc_emit_index(buf, line, diag_index_off, instr_off):
     do append(buf, 89)
     do append(buf, 90)
     do append(buf, 94)
@@ -8061,19 +8436,8 @@ func nc_emit_index(buf):
     do append(buf, 57)
     do append(buf, 209)
     do append(buf, 114)
-    do append(buf, 12)
-    do append(buf, 184)
-    do append(buf, 231)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 191)
-    do append(buf, 1)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 15)
-    do append(buf, 5)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_index_off, instr_off + 20)
     do append(buf, 76)
     do append(buf, 15)
     do append(buf, 182)
@@ -8644,7 +9008,7 @@ func nc_emit_get_loads(buf, width, j):
     return nc_emit_get_loads(buf, width, j + 1)
 end
 
-func nc_emit_get(buf, width):
+func nc_emit_get(buf, width, line, diag_get_off, instr_off):
     do append(buf, 89)
     do append(buf, 65)
     do append(buf, 88)
@@ -8655,8 +9019,8 @@ func nc_emit_get(buf, width):
     do append(buf, 57)
     do append(buf, 201)
     do append(buf, 114)
-    do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 23)
     do append(buf, 77)
     do append(buf, 139)
     do append(buf, 80)
@@ -8794,7 +9158,7 @@ func nc_emit_arr_add(buf, width):
     return buf
 end
 
-func nc_emit_buf_append(buf):
+func nc_emit_buf_append(buf, line, diag_append_off, instr_off):
     do append(buf, 89)
     do append(buf, 72)
     do append(buf, 129)
@@ -8804,8 +9168,8 @@ func nc_emit_buf_append(buf):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 118)
-    do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_append_off, instr_off + 22)
     do append(buf, 65)
     do append(buf, 88)
     do append(buf, 77)
@@ -9002,7 +9366,7 @@ func nc_emit_heap_stub(buf):
     return buf
 end
 
-func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap):
+func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, code_len, strings):
     let call_shift = 0
     if has_heap != 0:
         buf = nc_emit_heap_stub(buf)
@@ -9040,10 +9404,14 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap):
     do append(buf, 255)
     do append(buf, 15)
     do append(buf, 5)
+    if has_faultable != 0:
+        let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
+        buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap))
+    end
     return buf
 end
 
-func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, i, n, buf):
+func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, i, n, buf):
     if i >= n:
         return buf
     end
@@ -9110,7 +9478,7 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, i
     elif op == 22:
         buf = nc_emit_length(buf)
     elif op == 23:
-        buf = nc_emit_index(buf)
+        buf = nc_emit_index(buf, get(fn.6, i), diag_base + nc_fault_diag_index_rel(), instr_off)
     elif op == 25:
         buf = nc_emit_equal(buf)
     elif op == 26:
@@ -9120,11 +9488,11 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, i
     elif op == 28:
         buf = nc_emit_new_array(buf, get(meta.14, i).1)
     elif op == 29:
-        buf = nc_emit_get(buf, get(meta.14, i).1)
+        buf = nc_emit_get(buf, get(meta.14, i).1, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
     elif op == 30:
         buf = nc_emit_count(buf)
     elif op == 31:
-        buf = nc_emit_buf_append(buf)
+        buf = nc_emit_buf_append(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
     elif op == 32:
         buf = nc_emit_arr_add(buf, get(meta.14, i).1)
     elif op == 33:
@@ -9134,10 +9502,10 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, i
     elif op == 35:
         buf = nc_emit_fwriter(buf)
     end
-    return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, g.1, n, buf)
+    return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, g.1, n, buf)
 end
 
-func nc_emit_function(buf, fn, funcs, meta, metas, layout, layouts, strings, code_len):
+func nc_emit_function(buf, fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base):
     let start_len = length(freeze(buf))
     buf = nc_emit_prologue(buf, layout.3)
     buf = nc_emit_sret_save(buf, meta)
@@ -9146,7 +9514,7 @@ func nc_emit_function(buf, fn, funcs, meta, metas, layout, layouts, strings, cod
     if after_prefix != layout.4:
         return (nc_fail(418, 0, "prefix"), buf)
     end
-    buf = nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, 0, count(fn.4), buf)
+    buf = nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, 0, count(fn.4), buf)
     let len = length(freeze(buf)) - start_len
     if len != layout.5:
         return (nc_fail(418, 0, "length"), buf)
@@ -9154,15 +9522,15 @@ func nc_emit_function(buf, fn, funcs, meta, metas, layout, layouts, strings, cod
     return (0, buf)
 end
 
-func nc_emit_functions_loop(buf, funcs, metas, layouts, strings, code_len, i, n):
+func nc_emit_functions_loop(buf, funcs, metas, layouts, strings, code_len, diag_base, i, n):
     if i >= n:
         return (0, buf)
     end
-    let r = nc_emit_function(buf, get(funcs, i), funcs, get(metas, i), metas, get(layouts, i), layouts, strings, code_len)
+    let r = nc_emit_function(buf, get(funcs, i), funcs, get(metas, i), metas, get(layouts, i), layouts, strings, code_len, diag_base)
     if r.0 != 0:
         return r
     end
-    return nc_emit_functions_loop(r.1, funcs, metas, layouts, strings, code_len, i + 1, n)
+    return nc_emit_functions_loop(r.1, funcs, metas, layouts, strings, code_len, diag_base, i + 1, n)
 end
 
 func nc_emit_zeroes_loop(buf, n):
@@ -9185,6 +9553,19 @@ func nc_emit_rodata(buf, strings):
     return nc_emit_rodata_loop(buf, strings, 0, count(strings))
 end
 
+func nc_append_fault_rodata(strings):
+    do add(strings, "herbert: line ")
+    do add(strings, ": index: position ")
+    do add(strings, ": get: position ")
+    do add(strings, ": append: byte value ")
+    do add(strings, " out of range (length ")
+    do add(strings, " out of range (count ")
+    do add(strings, " out of range 0..255")
+    do add(strings, ")\n")
+    do add(strings, "\n")
+    return strings
+end
+
 func main():
     let source = clogger()
     let tokens = lex_source(source)
@@ -9196,22 +9577,30 @@ func main():
         return 0
     end
     let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let has_faultable = nc_prog_has_faultable(prog)
+    if has_faultable != 0:
+        let diag_strings = nc_append_fault_rodata(prog.1)
+    end
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
     if analyzed.0 != 0:
         let fail_an = nc_fail(analyzed.0, 0, "")
         return 0
     end
     let metas = analyzed.1
-    let pass1 = nc_pass1_program(prog, metas, analyzed.2, analyzed.3)
+    let pass1 = nc_pass1_program(prog, metas, analyzed.2, analyzed.3, has_faultable)
     if pass1.0 != 0:
         return 0
     end
     let funcs = prog.0
     let layouts = pass1.1
     let main_layout = get(layouts, prog.2)
+    let diag_base = 0
+    if has_faultable != 0:
+        diag_base = nc_fault_helper_start(analyzed.3)
+    end
     let cbuf = new_buffer()
-    cbuf = nc_emit_entry_stub(cbuf, main_layout.0, analyzed.2, analyzed.3)
-    let emitted = nc_emit_functions_loop(cbuf, funcs, metas, layouts, prog.1, pass1.2, 0, count(funcs))
+    cbuf = nc_emit_entry_stub(cbuf, main_layout.0, analyzed.2, analyzed.3, has_faultable, pass1.2, prog.1)
+    let emitted = nc_emit_functions_loop(cbuf, funcs, metas, layouts, prog.1, pass1.2, diag_base, 0, count(funcs))
     if emitted.0 != 0:
         return 0
     end

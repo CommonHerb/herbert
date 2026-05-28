@@ -391,12 +391,15 @@ awk '/^func main\(\):$/ { exit } { print }' "$backend" >"$tmp/missing_meta_drive
 cat >>"$tmp/missing_meta_driver.herb" <<'HERB'
 func main():
     let type_pool = nc_type_pool_new()
-    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int)))
+    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int), array(int)))
     let code = new_array((int, int, int))
     do add(code, (28, 0, 0))
     do add(code, (21, 0, 0))
     let missing = new_array(int)
-    do add(funcs, ("main", 0, 0, 0, code, missing))
+    let lines = new_array(int)
+    do add(lines, 0)
+    do add(lines, 0)
+    do add(funcs, ("main", 0, 0, 0, code, missing, lines))
     let strings = new_array(string)
     let prog = (funcs, strings, 0)
     let params = new_array(array(int))

@@ -182,6 +182,26 @@ with open(sys.argv[2], "wb") as f:
 PY
 }
 
+native_codegen_oracle_pack_stdio_exit() {
+    local exit_status="$1" stdout_file="$2" stderr_file="$3" out="$4"
+    python3 - "$exit_status" "$stdout_file" "$stderr_file" "$out" <<'PY'
+import struct
+import sys
+
+exit_status = int(sys.argv[1]) & 0xFFFFFFFFFFFFFFFF
+with open(sys.argv[2], "rb") as f:
+    stdout = f.read()
+with open(sys.argv[3], "rb") as f:
+    stderr = f.read()
+with open(sys.argv[4], "wb") as f:
+    f.write(struct.pack("<Q", exit_status))
+    f.write(struct.pack("<Q", len(stdout)))
+    f.write(stdout)
+    f.write(struct.pack("<Q", len(stderr)))
+    f.write(stderr)
+PY
+}
+
 oracle_expect_le64() {
     local case_id="$1" probe="$2" input="$3" out="$4"
     local derived c_out
@@ -243,6 +263,26 @@ oracle_expect_trap_stdout() {
     native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_trap_stdout" "$derived" "trap_stdout" >/dev/null
     local rc=$?
     rm -f "$derived"
+    return $rc
+}
+
+oracle_expect_stdio_exit() {
+    local case_id="$1" probe="$2" input="$3" out="$4"
+    local derived c_out c_err c_rc
+    derived="$(mktemp)"
+    c_out="$(mktemp)"
+    c_err="$(mktemp)"
+    if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" || "$NATIVE_CODEGEN_ORACLE" != "golden" ]]; then
+        "$HERBERT" "$probe" <"$input" >"$c_out" 2>"$c_err"
+        c_rc=$?
+        native_codegen_oracle_pack_stdio_exit "$c_rc" "$c_out" "$c_err" "$derived" || {
+            rm -f "$derived" "$c_out" "$c_err"
+            return 1
+        }
+    fi
+    native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_stdio_exit_envelope" "$derived" "stdio_exit" >/dev/null
+    local rc=$?
+    rm -f "$derived" "$c_out" "$c_err"
     return $rc
 }
 

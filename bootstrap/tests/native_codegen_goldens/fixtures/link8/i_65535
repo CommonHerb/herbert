@@ -1108,22 +1108,27 @@ func op_fwriter():
 end
 
 func emit_instr(ir, op, a, b):
-    do add(ir, (0, op, a, b, 0, ""))
+    do add(ir, (0, op, a, b, 0, "", 0))
+    return ir
+end
+
+func emit_instr_line(ir, op, a, b, line):
+    do add(ir, (0, op, a, b, 0, "", line))
     return ir
 end
 
 func emit_instr_meta(ir, op, a, b, meta):
-    do add(ir, (0, op, a, b, meta, ""))
+    do add(ir, (0, op, a, b, meta, "", 0))
     return ir
 end
 
 func emit_target_instr(ir, op, label):
-    do add(ir, (0, op, 0, 0, 0, label))
+    do add(ir, (0, op, 0, 0, 0, label, 0))
     return ir
 end
 
 func emit_label(ir, label):
-    do add(ir, (1, 0, 0, 0, 0, label))
+    do add(ir, (1, 0, 0, 0, 0, label, 0))
     return ir
 end
 
@@ -1200,6 +1205,22 @@ end
 
 func resolve_new_array_meta(ir):
     return resolve_new_array_meta_loop(ir, 0, count(ir), new_array(int))
+end
+
+func resolve_instr_lines_loop(ir, i, n, out):
+    if i >= n:
+        return out
+    end
+    let item = get(ir, i)
+    if item.0 == 1:
+        return resolve_instr_lines_loop(ir, i + 1, n, out)
+    end
+    do add(out, item.6)
+    return resolve_instr_lines_loop(ir, i + 1, n, out)
+end
+
+func resolve_instr_lines(ir):
+    return resolve_instr_lines_loop(ir, 0, count(ir), new_array(int))
 end
 
 func env_from_params_loop(params, i, n, names, slots):
@@ -1330,6 +1351,7 @@ func emit_exprs(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller
 end
 
 func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    let call_line = get(nodes, call_node_idx).3
     if equal(name, "new_array"):
         let elem = nc_type_from_type_expr(type_pool, nodes, get(kids, 0))
         if elem.0 != 0:
@@ -1345,7 +1367,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         return emit_instr(ir, op_length(), 0, 0)
     end
     if equal(name, "index"):
-        return emit_instr(ir, op_index(), 0, 0)
+        return emit_instr_line(ir, op_index(), 0, 0, call_line)
     end
     if equal(name, "slice"):
         return emit_instr(ir, op_slice(), 0, 0)
@@ -1360,7 +1382,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         return emit_instr(ir, op_freeze(), 0, 0)
     end
     if equal(name, "get"):
-        return emit_instr(ir, op_get(), 0, 0)
+        return emit_instr_line(ir, op_get(), 0, 0, call_line)
     end
     if equal(name, "count"):
         return emit_instr(ir, op_count(), 0, 0)
@@ -1451,7 +1473,7 @@ func emit_body(stmts, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller
     return emit_body(stmts, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
 end
 
-func emit_do_call(call_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+func emit_do_call(call_idx, stmt_line, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
     let node = get(nodes, call_idx)
     if not equal(node.0, "call"):
         return fault("do non-call")
@@ -1461,7 +1483,7 @@ func emit_do_call(call_idx, env, ir, strings, nodes, prog_idx, type_pool, caller
     if equal(name, "append"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_buf_append(), 0, 0)
+        return emit_instr_line(ir, op_buf_append(), 0, 0, stmt_line)
     end
     if equal(name, "add"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
@@ -1534,7 +1556,7 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         return env
     end
     if equal(tag, "do"):
-        ir = emit_do_call(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_do_call(get(kids, 0), stmt.3, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return env
     end
     if equal(tag, "if"):
@@ -1549,11 +1571,12 @@ func lower_func_poly(func_idx, inst_idx, entry_pc, strings, nodes, prog_idx, typ
     let params_node = get(nodes, get(fn.2, 0))
     let body_node = get(nodes, get(fn.2, 1))
     let env = env_from_params(params_node.1)
-    let ir = new_array((int, int, int, int, int, string))
+    let ir = new_array((int, int, int, int, int, string, int))
     let out_env = emit_body(body_node.2, 0, count(body_node.2), env, ir, strings, nodes, prog_idx, type_pool, inst_idx, poly)
     let code = resolve_ir(ir)
     let new_array_meta = resolve_new_array_meta(ir)
-    return (name, entry_pc, count(params_node.1), out_env.2, code, new_array_meta)
+    let instr_lines = resolve_instr_lines(ir)
+    return (name, entry_pc, count(params_node.1), out_env.2, code, new_array_meta, instr_lines)
 end
 
 func lower_program_poly_loop(instances, i, entry_pc, funcs, strings, nodes, prog_idx, type_pool, poly):
@@ -1584,7 +1607,7 @@ end
 
 func lower_program_poly(nodes, prog_idx, type_pool, poly):
     let strings = new_array(string)
-    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int)))
+    let funcs = new_array((string, int, int, int, array((int, int, int)), array(int), array(int)))
     funcs = lower_program_poly_loop(poly.0, 0, 0, funcs, strings, nodes, prog_idx, type_pool, poly)
     return (funcs, strings, 0)
 end
@@ -1592,7 +1615,7 @@ end
 func lower_program(nodes, prog_idx, type_pool):
     let ast_result = nc_verify_ast(nodes, prog_idx, type_pool)
     if ast_result.0 != 0:
-        return (new_array((string, int, int, int, array((int, int, int)), array(int))), new_array(string), 0)
+        return (new_array((string, int, int, int, array((int, int, int)), array(int), array(int))), new_array(string), 0)
     end
     return lower_program_poly(nodes, prog_idx, type_pool, ast_result.2)
 end
@@ -2337,28 +2360,4 @@ func err_parse_or_loop(tokens, pos, eof_line, root_kind):
         if r.0 == err_err_tag():
             return r
         end
-        return err_parse_or_loop(tokens, r.2, eof_line, err_expr_other())
-    end
-    return err_parse_ok_extra(pos, root_kind)
-end
-
-func err_parse_and(tokens, pos, eof_line):
-    let r = err_parse_cmp(tokens, pos, eof_line)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_and_loop(tokens, r.2, eof_line, r.3)
-end
-
-func err_parse_and_loop(tokens, pos, eof_line, root_kind):
-    if tok_is_ident_text(tokens, pos, "and"):
-        let r = err_parse_cmp(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return err_parse_and_loop(tokens, r.2, eof_line, err_expr_other())
-    end
-    return err_parse_ok_extra(pos, root_kind)
-end
-
-func err_parse_cmp(
+        return

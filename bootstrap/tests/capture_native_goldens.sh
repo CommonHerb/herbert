@@ -50,6 +50,7 @@ scripts=(
     run_native_codegen_link10.sh
     run_native_codegen_link11.sh
     run_native_codegen_link12.sh
+    run_native_codegen_link13.sh
     run_native_codegen_rejects.sh
 )
 
@@ -97,6 +98,7 @@ awk -F '\t' -v root="$new_dir" '
         expected["link10"] = 1
         expected["link11"] = 6
         expected["link12"] = 2
+        expected["link13"] = 5
         expected["rejects"] = 3
         for (script in expected) {
             if (count[script] != expected[script]) {

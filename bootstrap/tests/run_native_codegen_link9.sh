@@ -236,20 +236,23 @@ if [[ -x "$tmp/twin_poly.elf" ]]; then
 fi
 
 # ---- white-box disasm gate: fault = ordinary call, NOT TCO'd ------------
-# accept_poly has exactly five direct calls: entry-stub->main, main->grade_int,
-# main->grade_str, grade_int->fault, grade_str->fault. The last two are in tail
-# position; zelph deliberately does NOT TCO a bottom (never-returning) callee, so
-# they stay real `call`s. A wrong TCO would turn either into a `jmp`, dropping
-# the count below 5. (clogger/index/length are lowered inline, not as calls.)
+# accept_poly has two distinct tail-position calls to the same `fault` entry:
+# grade_int->fault and grade_str->fault. Zelph deliberately does NOT TCO a
+# bottom (never-returning) callee, so those stay real `call`s. The native
+# runtime diagnostic helper also contains direct calls, so count call targets
+# instead of whole-ELF call opcodes.
 if [[ -x "$tmp/accept_poly.elf" ]]; then
     if ! command -v objdump >/dev/null 2>&1; then
         fail_test "disasm gate: objdump unavailable"
     else
-        calls=$(objdump -D -b binary -m i386:x86-64 -M intel "$tmp/accept_poly.elf" 2>/dev/null | grep -cE 'call[[:space:]]+0x')
-        if [[ "$calls" -eq 5 ]]; then
+        dump="$tmp/accept_poly.disasm"
+        objdump -D -b binary -m i386:x86-64 -M intel "$tmp/accept_poly.elf" >"$dump" 2>/dev/null
+        calls=$(grep -cE 'call[[:space:]]+0x' "$dump")
+        twin_targets=$(awk '/call[[:space:]]+0x/ { print $NF }' "$dump" | sort | uniq -c | awk '$1 == 2 { n++ } END { print n + 0 }')
+        if [[ "$calls" -ge 5 && "$twin_targets" -eq 1 ]]; then
             pass=$((pass + 1))
         else
-            fail_test "disasm gate: expected 5 direct calls (fault reached via call, not TCO'd), got $calls"
+            fail_test "disasm gate: expected one call target reached exactly twice by grade_* fault calls (total calls=$calls exact-two-targets=$twin_targets)"
         fi
     fi
 fi
