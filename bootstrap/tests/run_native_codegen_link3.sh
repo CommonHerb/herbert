@@ -22,6 +22,7 @@ native_codegen_oracle_begin link3 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 
 pass=0
 fail=0
@@ -60,7 +61,7 @@ compile_probe() {
     # a.out means the program was rejected (it returns before the emit).
     local cdir="$tmp/$name.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" < "$probe" >"$out" 2>"$err" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < "$probe" >"$out" 2>"$err" )
     local rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "FAIL: stack/native_compile_fragment.herb (compile $name failed: $(head -1 "$err"))"
@@ -152,7 +153,7 @@ check_reject() {
     total=$((total + 1))
     local out="$tmp/reject_${label}.out"
     local err="$tmp/reject_${label}.err"
-    "$HERBERT" "$backend" <"$probe_file" >"$out" 2>"$err"
+    "$NATIVE_CODEGEN_COMPILER" <"$probe_file" >"$out" 2>"$err"
     if grep -qE 'ERR 4[0-9][0-9]' "$out"; then
         pass=$((pass + 1))
     else
@@ -279,7 +280,7 @@ check_accept() {
     local expected="$tmp/accept_${label}.expected"
     local cdir="$tmp/accept_${label}.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "accept $label: no a.out emitted (unexpected rejection?): $(head -1 "$out")"
         return

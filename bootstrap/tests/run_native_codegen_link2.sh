@@ -29,6 +29,7 @@ native_codegen_oracle_begin link2 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 
 pass=0
 fail=0
@@ -77,7 +78,7 @@ for probe_name in p1 p2 p3; do
     out_file="$tmp/$probe_name.compile.out"
     cdir="$tmp/$probe_name.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" < "$probe" > "$out_file" 2>"$err_file" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < "$probe" > "$out_file" 2>"$err_file" )
     rc=$?
     if [[ $rc -ne 0 ]]; then
         echo "FAIL: stack/native_compile_fragment.herb (compile $probe_name failed: $(cat "$err_file" | head -1))"
@@ -268,7 +269,7 @@ check_reject() {
     total=$((total + 1))
     local out_file="$tmp/reject_${label}.elf"
     local err_file="$tmp/reject_${label}.err"
-    "$HERBERT" "$backend" < "$probe_file" > "$out_file" 2>"$err_file"
+    "$NATIVE_CODEGEN_COMPILER" < "$probe_file" > "$out_file" 2>"$err_file"
     # Diagnostic goes to stdout (via flogger); check there
     if grep -qE 'ERR 4[0-9][0-9]' "$out_file"; then
         pass=$((pass + 1))
@@ -284,7 +285,7 @@ check_reject_code() {
     total=$((total + 1))
     local out_file="$tmp/reject_${label}.elf"
     local err_file="$tmp/reject_${label}.err"
-    "$HERBERT" "$backend" < "$probe_file" > "$out_file" 2>"$err_file"
+    "$NATIVE_CODEGEN_COMPILER" < "$probe_file" > "$out_file" 2>"$err_file"
     if grep -q "ERR $code" "$out_file"; then
         pass=$((pass + 1))
     else
@@ -349,7 +350,7 @@ check_accept() {
 
     local cdir="$tmp/accept_${label}.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" < "$probe_file" > "$out_file" 2>"$err_file" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < "$probe_file" > "$out_file" 2>"$err_file" )
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "accept $label: no a.out emitted (unexpected rejection?): $(head -1 "$out_file")"
         return

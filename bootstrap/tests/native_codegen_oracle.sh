@@ -84,6 +84,71 @@ native_codegen_oracle_finish() {
     [[ $missing -eq 0 ]]
 }
 
+native_codegen_compiler_mint() {
+    local mint_root="$1"
+    local mint_work="$mint_root/work"
+    local compiler="$mint_root/gen1-herbert"
+    local out="$mint_root/mint.out"
+    local err="$mint_root/mint.err"
+    local timeout_arg="${NATIVE_SELF_TIMEOUT:-480s}"
+    local start end elapsed rc magic count
+
+    if [[ -z "${HERBERT:-}" || ! -x "$HERBERT" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (cannot find herbert at ${HERBERT:-<unset>})"
+        return 1
+    fi
+    if [[ -z "${backend:-}" || ! -f "$backend" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (missing backend ${backend:-<unset>})"
+        return 1
+    fi
+
+    rm -rf "$mint_root"
+    mkdir -p "$mint_work" || return 1
+
+    start=$(date +%s)
+    if command -v timeout >/dev/null 2>&1; then
+        ( cd "$mint_work" && timeout "$timeout_arg" "$HERBERT" "$backend" <"$backend" >"$out" 2>"$err" )
+        rc=$?
+    else
+        ( cd "$mint_work" && "$HERBERT" "$backend" <"$backend" >"$out" 2>"$err" )
+        rc=$?
+    fi
+    end=$(date +%s)
+    elapsed=$((end - start))
+
+    magic=""
+    [[ -f "$mint_work/a.out" ]] && magic=$(head -c4 "$mint_work/a.out" | xxd -p | tr -d '\n')
+    if [[ $rc -ne 0 || "$magic" != "7f454c46" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (gen-1 mint failed: rc=$rc magic=$magic stdout=$(head -1 "$out" 2>/dev/null) stderr=$(head -1 "$err" 2>/dev/null))"
+        return 1
+    fi
+
+    cp "$mint_work/a.out" "$compiler" || return 1
+    chmod +x "$compiler" || return 1
+    export NATIVE_CODEGEN_COMPILER="$compiler"
+    export NATIVE_CODEGEN_COMPILER_MINT_SECONDS="$elapsed"
+
+    count="${NATIVE_CODEGEN_COMPILER_MINT_COUNT:-0}"
+    case "$count" in
+        ''|*[!0-9]*) count=0 ;;
+    esac
+    count=$((count + 1))
+    export NATIVE_CODEGEN_COMPILER_MINT_COUNT="$count"
+    echo "native-codegen: minted gen-1 compiler at $NATIVE_CODEGEN_COMPILER (mint-count=$count, seconds=$elapsed)"
+}
+
+native_codegen_ensure_compiler() {
+    local mint_root="$1"
+    if [[ -n "${NATIVE_CODEGEN_COMPILER:-}" ]]; then
+        if [[ ! -x "$NATIVE_CODEGEN_COMPILER" ]]; then
+            echo "FAIL: stack/native_compile_fragment.herb (cannot execute NATIVE_CODEGEN_COMPILER=$NATIVE_CODEGEN_COMPILER)"
+            return 1
+        fi
+        return 0
+    fi
+    native_codegen_compiler_mint "$mint_root"
+}
+
 native_codegen_oracle_append_manifest() {
     local case_id="$1" probe="$2" input="$3" kind="$4" expected_rel="$5" transform="$6"
     local probe_label input_label probe_hash input_hash

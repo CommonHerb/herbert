@@ -23,6 +23,7 @@ native_codegen_oracle_begin link7 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 
 pass=0
 fail=0
@@ -58,7 +59,7 @@ compile_probe() {
     # run -- that is the probe's output, unrelated to the compiler's a.out.)
     local cdir="$tmp/${label}.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected or did not emit a.out: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
         return 1
@@ -149,7 +150,7 @@ check_reject_code() {
     total=$((total + 1))
     local out="$tmp/reject_${label}.out"
     local err="$tmp/reject_${label}.err"
-    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
+    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"
     local magic
     magic=$(head -c4 "$out" | xxd -p | tr -d '\n')
     if [[ "$magic" == "7f454c46" ]]; then

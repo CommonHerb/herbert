@@ -20,6 +20,7 @@ if [[ ! -x "$HERBERT" ]]; then
     echo "run_tests: cannot find herbert at $HERBERT" >&2
     exit 2
 fi
+source "./native_codegen_oracle.sh"
 
 fail=0
 pass=0
@@ -28,6 +29,14 @@ SLOPE_TOL_NUM=3
 SLOPE_TOL_DEN=2
 test_14a_heap=
 test_14b_heap=
+native_codegen_dispatch_tmp=
+
+cleanup_run_tests() {
+    if [[ -n "$native_codegen_dispatch_tmp" && -d "$native_codegen_dispatch_tmp" ]]; then
+        rm -rf "$native_codegen_dispatch_tmp"
+    fi
+}
+trap cleanup_run_tests EXIT
 
 run_one() {
     local prog="$1"
@@ -568,6 +577,92 @@ run_suke_diff() {
     rm -f "$oracle" "$actual" "$oracle_err" "$err"
 }
 
+run_native_codegen_non_vacuity_check() {
+    total=$((total + 1))
+    local out="$native_codegen_dispatch_tmp/non_vacuity.out"
+    local err="$native_codegen_dispatch_tmp/non_vacuity.err"
+    if NATIVE_CODEGEN_COMPILER=/bin/false NATIVE_CODEGEN_ORACLE=golden HERBERT="$HERBERT" "$PWD/run_native_codegen_link2.sh" >"$out" 2>"$err"; then
+        echo "FAIL: native-codegen switchover non-vacuity (/bin/false compiler unexpectedly passed)"
+        fail=$((fail + 1))
+    elif grep -q "compile p1 failed" "$out"; then
+        echo "PASS: native-codegen switchover non-vacuity (/bin/false compiler fails at first Role-2 compile)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: native-codegen switchover non-vacuity (unexpected failure mode)"
+        echo "--- stdout"
+        cat "$out"
+        echo "--- stderr"
+        cat "$err"
+        fail=$((fail + 1))
+    fi
+}
+
+run_native_codegen_corrupt_compiler_check() {
+    total=$((total + 1))
+    local wrapper="$native_codegen_dispatch_tmp/corrupt-native-codegen.sh"
+    local out="$native_codegen_dispatch_tmp/corrupt.out"
+    local err="$native_codegen_dispatch_tmp/corrupt.err"
+    cat >"$wrapper" <<'SH'
+#!/usr/bin/env bash
+set -u
+"$NATIVE_CODEGEN_REAL_COMPILER" "$@"
+rc=$?
+if [[ $rc -eq 0 && -f a.out ]]; then
+    printf 'BAD!' | dd of=a.out bs=1 count=4 conv=notrunc >/dev/null 2>&1
+fi
+exit "$rc"
+SH
+    chmod +x "$wrapper"
+    if NATIVE_CODEGEN_REAL_COMPILER="$NATIVE_CODEGEN_COMPILER" NATIVE_CODEGEN_COMPILER="$wrapper" NATIVE_CODEGEN_ORACLE=golden HERBERT="$HERBERT" "$PWD/run_native_codegen_link2.sh" >"$out" 2>"$err"; then
+        echo "FAIL: native-codegen switchover corrupt-compiler proof (corrupting wrapper unexpectedly passed)"
+        fail=$((fail + 1))
+    elif grep -Eq "native exit non-zero|readelf -h failed|not an ELF" "$out"; then
+        echo "PASS: native-codegen switchover corrupt-compiler proof (corrupted a.out is caught)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: native-codegen switchover corrupt-compiler proof (unexpected failure mode)"
+        echo "--- stdout"
+        cat "$out"
+        echo "--- stderr"
+        cat "$err"
+        fail=$((fail + 1))
+    fi
+}
+
+run_native_codegen_completeness_grep() {
+    total=$((total + 1))
+    local hits="$native_codegen_dispatch_tmp/herbert_backend_hits.txt"
+    local bad="$native_codegen_dispatch_tmp/herbert_backend_bad.txt"
+    : >"$bad"
+    grep -n '"\$HERBERT"[[:space:]]*"\$backend"' native_codegen_oracle.sh run_native_codegen_*.sh >"$hits" 2>/dev/null || true
+    while IFS= read -r hit; do
+        case "$hit" in
+            native_codegen_oracle.sh:*'<"$backend"'*) ;;
+            run_native_codegen_link10.sh:*'<"$tmp/self_host_probe.herb"'*) ;;
+            *) printf '%s\n' "$hit" >>"$bad" ;;
+        esac
+    done <"$hits"
+    if [[ ! -s "$bad" ]]; then
+        echo "PASS: native-codegen switchover completeness grep (no ordinary Role-2 HERBERT/backend compile sites remain)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: native-codegen switchover completeness grep (unexpected HERBERT/backend sites)"
+        cat "$bad"
+        fail=$((fail + 1))
+    fi
+}
+
+check_native_codegen_mint_count() {
+    total=$((total + 1))
+    if [[ "${NATIVE_CODEGEN_COMPILER_MINT_COUNT:-0}" == "1" ]]; then
+        echo "PASS: native-codegen gen-1 mint count: 1 (seconds=${NATIVE_CODEGEN_COMPILER_MINT_SECONDS:-unknown})"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: native-codegen gen-1 mint count: ${NATIVE_CODEGEN_COMPILER_MINT_COUNT:-0} (expected 1)"
+        fail=$((fail + 1))
+    fi
+}
+
 shopt -s nullglob
 for prog in test_*.herb; do
     total=$((total + 1))
@@ -1065,6 +1160,10 @@ if [[ -d ../../stack ]]; then
     fi
 
     NATIVE_CODEGEN_LINK1="$PWD/run_native_codegen_link1.sh"
+    backend="$STACK_DIR/native_compile_fragment.herb"
+    native_codegen_dispatch_tmp="$(mktemp -d)"
+    native_codegen_compiler_mint "$native_codegen_dispatch_tmp/compiler" || exit 1
+
     if [[ -f "$NATIVE_CODEGEN_LINK1" ]]; then
         total=$((total + 1))
         if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK1"; then
@@ -1229,6 +1328,11 @@ if [[ -d ../../stack ]]; then
             fi
         done
     fi
+
+    run_native_codegen_non_vacuity_check
+    run_native_codegen_corrupt_compiler_check
+    run_native_codegen_completeness_grep
+    check_native_codegen_mint_count
 
     # Suke codegen forcing-function tests: the C bootstrap runs each probe
     # directly as the oracle, then the Herbert pipeline fragment compiles the

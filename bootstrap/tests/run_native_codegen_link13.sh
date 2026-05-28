@@ -22,6 +22,7 @@ native_codegen_oracle_begin link13 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 pass=0
 fail=0
 
@@ -34,7 +35,7 @@ compile_probe() {
     local label="$1" probe="$2" elf="$3"
     local cdir="$tmp/$label.compile.d"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected/no a.out: stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
         return 1

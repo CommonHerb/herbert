@@ -27,6 +27,7 @@ native_codegen_oracle_begin link12 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 pass=0
 fail=0
 
@@ -45,7 +46,7 @@ compile_probe() {
     # in its own $nd/$cd dirs below).
     local cdir="$tmp/$label.compile.d"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected/no a.out: stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
         return 1
@@ -117,7 +118,7 @@ check_reject() {
     # -- the post-D12 form of "expected rejection, not an ELF".
     local rdir="$tmp/$label.reject.d"
     rm -rf "$rdir"; mkdir -p "$rdir"
-    ( cd "$rdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.out" 2>"$tmp/$label.err" )
+    ( cd "$rdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.out" 2>"$tmp/$label.err" )
     if [[ -f "$rdir/a.out" ]]; then
         fail_test "$label: expected rejection but compiler emitted a.out (stdout=$(head -1 "$tmp/$label.out"))"
     else

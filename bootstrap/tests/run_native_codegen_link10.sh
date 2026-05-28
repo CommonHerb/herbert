@@ -23,6 +23,7 @@ native_codegen_oracle_begin link10 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 pass=0
 fail=0
 
@@ -39,7 +40,7 @@ compile_probe() {
     # not stdout. Run it in a per-label scratch dir and harvest that dir's a.out.
     local cdir="$tmp/$label.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.o" 2>"$tmp/$label.e" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.o" 2>"$tmp/$label.e" )
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected/no a.out: $(head -1 "$tmp/$label.o") $(head -1 "$tmp/$label.e")"
         return 1
@@ -107,22 +108,14 @@ func main():
 end
 HERB
 
-# gen-1: the self-compiler emitted by C, compiling the whole backend. With D12 it
-# writes a byte-pure ELF to a.out in its own dir (stdout = only the "0\n" host
-# trailer). Run in g1d and harvest g1d/a.out.
-g1d="$tmp/gen1.d"; rm -rf "$g1d"; mkdir -p "$g1d"
-total_self_timeout="${NATIVE_SELF_TIMEOUT:-480s}"
-if command -v timeout >/dev/null 2>&1; then
-    ( cd "$g1d" && timeout "$total_self_timeout" "$HERBERT" "$backend" <"$backend" >"$tmp/self_compiler.out" 2>"$tmp/self_compiler.err" )
-    self_rc=$?
-else
-    ( cd "$g1d" && "$HERBERT" "$backend" <"$backend" >"$tmp/self_compiler.out" 2>"$tmp/self_compiler.err" )
-    self_rc=$?
-fi
+# gen-1: the shared self-compiler emitted by the C bootstrap once per dispatcher
+# run, or lazily by this script when run standalone. With D12 it is a byte-pure
+# ELF, so link10 reuses it directly instead of minting another C seed.
+self_rc=0
 self_magic=""
-[[ -f "$g1d/a.out" ]] && self_magic=$(head -c4 "$g1d/a.out" | xxd -p | tr -d '\n')
-if [[ $self_rc -eq 0 && "$self_magic" == "7f454c46" ]]; then
-    cp "$g1d/a.out" "$tmp/self_compiler.elf"
+[[ -f "$NATIVE_CODEGEN_COMPILER" ]] && self_magic=$(head -c4 "$NATIVE_CODEGEN_COMPILER" | xxd -p | tr -d '\n')
+if [[ -x "$NATIVE_CODEGEN_COMPILER" && "$self_magic" == "7f454c46" ]]; then
+    cp "$NATIVE_CODEGEN_COMPILER" "$tmp/self_compiler.elf"
     chmod +x "$tmp/self_compiler.elf"
     # Altimeter: gen-1 and C each compile the same probe to a byte-pure a.out (each
     # in its own dir); the two files must be byte-identical -- a DIRECT cmp, no
@@ -167,7 +160,7 @@ if [[ $self_rc -eq 0 && "$self_magic" == "7f454c46" ]]; then
         fail_test "self-host FIXPOINT: gen-2 (self-compiler compiling the whole backend) did not byte-match gen-1 (gen2_rc=$gen2_rc gen2_magic=$gen2_magic gen1_size=$(wc -c <"$tmp/self_compiler.elf") gen2_size=$([[ -f "$g2d/a.out" ]] && wc -c <"$g2d/a.out" || echo none))"
     fi
 else
-    fail_test "self-compile altimeter: expected self-host ELF, rc=$self_rc magic=$self_magic stdout=$(head -1 "$tmp/self_compiler.out") stderr=$(head -1 "$tmp/self_compiler.err")"
+    fail_test "self-compile altimeter: expected self-host ELF, rc=$self_rc magic=$self_magic compiler=$NATIVE_CODEGEN_COMPILER"
 fi
 
 echo ""

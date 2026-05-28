@@ -18,6 +18,7 @@ native_codegen_oracle_begin link4 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 
 pass=0
 fail=0
@@ -56,7 +57,11 @@ compile_probe() {
     # writes a.out.)
     local cdir="$tmp/${label}.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$be" <"$probe" >"$out" 2>"$err" )
+    if [[ "$be" == "$backend" ]]; then
+        ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
+    else
+        ( cd "$cdir" && "$HERBERT" "$be" <"$probe" >"$out" 2>"$err" )
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
         echo "FAIL: stack/native_compile_fragment.herb (compile $label rejected/no a.out: $(head -1 "$out"))"
         exit 1
@@ -320,7 +325,7 @@ check_reject() {
     local label="$1" probe="$2"
     total=$((total + 1))
     local out="$tmp/reject_${label}.out" err="$tmp/reject_${label}.err"
-    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
+    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"
     if grep -qE 'ERR 4[0-9][0-9]' "$out"; then
         pass=$((pass + 1))
     else

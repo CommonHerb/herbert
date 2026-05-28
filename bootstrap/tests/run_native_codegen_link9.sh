@@ -33,6 +33,7 @@ native_codegen_oracle_begin link9 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 pass=0
 fail=0
 
@@ -47,7 +48,7 @@ compile_probe() {
     # not stdout. Run it in a per-label scratch dir and harvest that dir's a.out.
     local cdir="$tmp/$label.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$tmp/$label.o" 2>"$tmp/$label.e" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.o" 2>"$tmp/$label.e" )
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected/no a.out: $(head -1 "$tmp/$label.o") $(head -1 "$tmp/$label.e")"
         return 1

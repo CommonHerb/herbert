@@ -18,6 +18,7 @@ native_codegen_oracle_begin link5 || exit 1
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 
 pass=0
 fail=0
@@ -41,7 +42,7 @@ compile_probe() {
     # means rejected before the emit).
     local cdir="$tmp/${label}.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err" )
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected/no a.out: $(head -1 "$out")"
         return 1
@@ -73,7 +74,7 @@ check_reject_code() {
     local label="$1" code="$2" probe="$3"
     total=$((total + 1))
     local out="$tmp/reject_${label}.out" err="$tmp/reject_${label}.err"
-    "$HERBERT" "$backend" <"$probe" >"$out" 2>"$err"
+    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"
     if grep -q "ERR $code" "$out"; then
         pass=$((pass + 1))
     else
