@@ -7181,12 +7181,52 @@ func nc_fault_helper_len():
     return 418
 end
 
-func nc_fault_helper_start(has_heap):
-    let off = 35
-    if has_heap != 0:
-        off = off + 70
+func nc_write_helper_len():
+    return 46
+end
+
+func nc_render_int_body_len():
+    return 58
+end
+
+func nc_render_bool_body_len():
+    return 75
+end
+
+func nc_render_body_len(main_ret):
+    if main_ret == nc_type_bool():
+        return nc_render_bool_body_len()
     end
-    return off
+    return nc_render_int_body_len()
+end
+
+func nc_render_len(main_ret):
+    return nc_render_body_len(main_ret) + nc_write_helper_len()
+end
+
+func nc_entry_head_len():
+    return 19
+end
+
+func nc_entry_layout(has_heap, has_faultable, main_ret):
+    let heap_len = 0
+    if has_heap != 0:
+        heap_len = 70
+    end
+    let head_len = nc_entry_head_len()
+    let fault_len = 0
+    if has_faultable != 0:
+        fault_len = nc_fault_helper_len()
+    end
+    let render_len = nc_render_len(main_ret)
+    let fault_start = heap_len + head_len
+    let render_start = fault_start + fault_len
+    let function_start = render_start + render_len
+    return (heap_len, head_len, fault_len, render_len, fault_start, render_start, function_start)
+end
+
+func nc_fault_helper_start(has_heap, has_faultable, main_ret):
+    return nc_entry_layout(has_heap, has_faultable, main_ret).4
 end
 
 func nc_fault_diag_index_rel():
@@ -7588,16 +7628,8 @@ func nc_verify_layout_rels_loop(funcs, metas, layouts, i, n):
     return nc_verify_layout_rels_loop(funcs, metas, layouts, i + 1, n)
 end
 
-func nc_entry_stub_len(has_clogger, has_heap, has_faultable):
-    let heap_len = 0
-    if has_heap != 0:
-        heap_len = 70
-    end
-    let fault_len = 0
-    if has_faultable != 0:
-        fault_len = nc_fault_helper_len()
-    end
-    return heap_len + fault_len + 35
+func nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret):
+    return nc_entry_layout(has_heap, has_faultable, main_ret).6
 end
 
 func nc_pass1_program_loop(funcs, metas, i, n, entry, layouts):
@@ -7617,17 +7649,20 @@ end
 func nc_pass1_program(prog, metas, has_clogger, has_heap, has_faultable):
     let funcs = prog.0
     let layouts = new_array((int, array(int), array(int), int, int, int))
-    let stub_len = nc_entry_stub_len(has_clogger, has_heap, has_faultable)
+    let main_ret = get(metas, prog.2).1
+    let entry_layout = nc_entry_layout(has_heap, has_faultable, main_ret)
+    let stub_len = nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret)
     let r = nc_pass1_program_loop(funcs, metas, 0, count(funcs), stub_len, layouts)
     if r.0 != 0:
         return r
     end
     let main_layout = get(r.1, prog.2)
-    let call_base = 5
-    if has_heap != 0:
-        call_base = call_base + 70
+    let call_main_base = entry_layout.0 + 5
+    if not nc_rel_ok(main_layout.0, call_main_base):
+        return (nc_fail(427, 0, ""), r.1, r.2)
     end
-    if not nc_rel_ok(main_layout.0, call_base):
+    let call_render_base = entry_layout.0 + 10
+    if not nc_rel_ok(entry_layout.5, call_render_base):
         return (nc_fail(427, 0, ""), r.1, r.2)
     end
     let vr = nc_verify_layout_rels_loop(funcs, metas, r.1, 0, count(funcs))
@@ -8125,7 +8160,7 @@ func nc_emit_diag_append(buf, ro_base, write_off, dec_off, exit_off):
     return nc_emit_jmp_abs(buf, exit_off)
 end
 
-func nc_emit_write_fd2(buf):
+func nc_emit_write_fd(buf, fd):
     do append(buf, 72)
     do append(buf, 133)
     do append(buf, 210)
@@ -8137,7 +8172,7 @@ func nc_emit_write_fd2(buf):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 191)
-    do append(buf, 2)
+    do append(buf, fd)
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
@@ -8173,6 +8208,10 @@ func nc_emit_write_fd2(buf):
     do append(buf, 15)
     do append(buf, 5)
     return buf
+end
+
+func nc_emit_write_fd2(buf):
+    return nc_emit_write_fd(buf, 2)
 end
 
 func nc_emit_dec_fd2(buf, write_off):
@@ -8226,6 +8265,139 @@ func nc_emit_dec_fd2(buf, write_off):
     do append(buf, 32)
     do append(buf, 195)
     return buf
+end
+
+func nc_emit_render_int_fd1(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 32)
+    do append(buf, 76)
+    do append(buf, 141)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, 20)
+    do append(buf, 65)
+    do append(buf, 198)
+    do append(buf, 2)
+    do append(buf, 10)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 214)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 193)
+    do append(buf, 10)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 241)
+    do append(buf, 128)
+    do append(buf, 194)
+    do append(buf, 48)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 206)
+    do append(buf, 136)
+    do append(buf, 22)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 238)
+    do append(buf, 73)
+    do append(buf, 141)
+    do append(buf, 82)
+    do append(buf, 1)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 242)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 32)
+    do append(buf, 195)
+    return buf
+end
+
+func nc_emit_render_bool_fd1(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 116)
+    do append(buf, 34)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 116)
+    do append(buf, 114)
+    do append(buf, 117)
+    do append(buf, 101)
+    do append(buf, 198)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 4)
+    do append(buf, 10)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    buf = nc_append_le32(buf, 5)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 195)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 102)
+    do append(buf, 97)
+    do append(buf, 108)
+    do append(buf, 115)
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 4)
+    do append(buf, 101)
+    do append(buf, 10)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    buf = nc_append_le32(buf, 6)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 195)
+    return buf
+end
+
+func nc_emit_render_main(buf, main_ret, render_start):
+    let write_off = render_start + nc_render_body_len(main_ret)
+    if main_ret == nc_type_bool():
+        buf = nc_emit_render_bool_fd1(buf, write_off)
+    else:
+        buf = nc_emit_render_int_fd1(buf, write_off)
+    end
+    return nc_emit_write_fd(buf, 1)
 end
 
 func nc_emit_fault_exit1(buf):
@@ -9366,35 +9538,28 @@ func nc_emit_heap_stub(buf):
     return buf
 end
 
-func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, code_len, strings):
-    let call_shift = 0
+func nc_emit_entry_check(start_len, buf, want, label):
+    let got = length(freeze(buf)) - start_len
+    if got != want:
+        return nc_fail(418, 0, label)
+    end
+    return 0
+end
+
+func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, main_ret, code_len, strings):
+    let layout = nc_entry_layout(has_heap, has_faultable, main_ret)
+    let start_len = length(freeze(buf))
     if has_heap != 0:
         buf = nc_emit_heap_stub(buf)
-        call_shift = 70
+    end
+    let ck = nc_emit_entry_check(start_len, buf, layout.0, "entry-heap")
+    if ck != 0:
+        return (ck, buf)
     end
     do append(buf, 232)
-    buf = nc_append_rel32(buf, main_entry, call_shift + 5)
-    do append(buf, 80)
-    do append(buf, 184)
-    do append(buf, 1)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 191)
-    do append(buf, 1)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 72)
-    do append(buf, 137)
-    do append(buf, 230)
-    do append(buf, 186)
-    do append(buf, 8)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 15)
-    do append(buf, 5)
+    buf = nc_append_rel32(buf, main_entry, layout.0 + 5)
+    do append(buf, 232)
+    buf = nc_append_rel32(buf, layout.5, layout.0 + 10)
     do append(buf, 184)
     do append(buf, 231)
     do append(buf, 0)
@@ -9404,11 +9569,24 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, c
     do append(buf, 255)
     do append(buf, 15)
     do append(buf, 5)
+    ck = nc_emit_entry_check(start_len, buf, layout.4, "entry-head")
+    if ck != 0:
+        return (ck, buf)
+    end
     if has_faultable != 0:
         let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
-        buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap))
+        buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret))
     end
-    return buf
+    ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
+    if ck != 0:
+        return (ck, buf)
+    end
+    buf = nc_emit_render_main(buf, main_ret, layout.5)
+    ck = nc_emit_entry_check(start_len, buf, layout.6, "entry-render")
+    if ck != 0:
+        return (ck, buf)
+    end
+    return (0, buf)
 end
 
 func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, i, n, buf):
@@ -9587,6 +9765,7 @@ func main():
         return 0
     end
     let metas = analyzed.1
+    let main_ret = get(metas, prog.2).1
     let pass1 = nc_pass1_program(prog, metas, analyzed.2, analyzed.3, has_faultable)
     if pass1.0 != 0:
         return 0
@@ -9596,11 +9775,14 @@ func main():
     let main_layout = get(layouts, prog.2)
     let diag_base = 0
     if has_faultable != 0:
-        diag_base = nc_fault_helper_start(analyzed.3)
+        diag_base = nc_fault_helper_start(analyzed.3, has_faultable, main_ret)
     end
     let cbuf = new_buffer()
-    cbuf = nc_emit_entry_stub(cbuf, main_layout.0, analyzed.2, analyzed.3, has_faultable, pass1.2, prog.1)
-    let emitted = nc_emit_functions_loop(cbuf, funcs, metas, layouts, prog.1, pass1.2, diag_base, 0, count(funcs))
+    let entry = nc_emit_entry_stub(cbuf, main_layout.0, analyzed.2, analyzed.3, has_faultable, main_ret, pass1.2, prog.1)
+    if entry.0 != 0:
+        return 0
+    end
+    let emitted = nc_emit_functions_loop(entry.1, funcs, metas, layouts, prog.1, pass1.2, diag_base, 0, count(funcs))
     if emitted.0 != 0:
         return 0
     end

@@ -232,21 +232,6 @@ native_codegen_oracle_prepare_expected() {
     printf '%s\n' "$row_kind"
 }
 
-native_codegen_oracle_pack_le64() {
-    local val="$1" out="$2"
-    if [[ "$val" == "true" ]]; then
-        val=1
-    elif [[ "$val" == "false" ]]; then
-        val=0
-    fi
-    python3 - "$val" "$out" <<'PY'
-import struct
-import sys
-with open(sys.argv[2], "wb") as f:
-    f.write(struct.pack("<Q", int(sys.argv[1]) & 0xFFFFFFFFFFFFFFFF))
-PY
-}
-
 native_codegen_oracle_pack_stdio_exit() {
     local exit_status="$1" stdout_file="$2" stderr_file="$3" out="$4"
     python3 - "$exit_status" "$stdout_file" "$stderr_file" "$out" <<'PY'
@@ -269,16 +254,19 @@ PY
 
 oracle_expect_le64() {
     local case_id="$1" probe="$2" input="$3" out="$4"
-    local derived c_out
+    local derived
     derived="$(mktemp)"
     if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" || "$NATIVE_CODEGEN_ORACLE" != "golden" ]]; then
-        if ! c_out=$("$HERBERT" "$probe" <"$input" 2>/dev/null); then
+        # D14: the native program renders its main return value as canonical text
+        # (unsigned decimal / true|false) + newline directly to stdout, so the golden
+        # is C's full canonical stdout. Captured to a file (not command substitution,
+        # which strips the trailing newline). No LE64 packing. Kind tag stays "le64".
+        if ! "$HERBERT" "$probe" <"$input" >"$derived" 2>/dev/null; then
             rm -f "$derived"
             return 1
         fi
-        native_codegen_oracle_pack_le64 "$c_out" "$derived" || { rm -f "$derived"; return 1; }
     fi
-    native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_stdout_decimal_bool_to_le64" "$derived" "le64" >/dev/null
+    native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_stdout_canonical" "$derived" "le64" >/dev/null
     local rc=$?
     rm -f "$derived"
     return $rc
@@ -361,14 +349,16 @@ oracle_expect_return_or_trap() {
         "$HERBERT" "$probe" <"$input" >"$c_out" 2>/dev/null
         c_rc=$?
         if [[ $c_rc -eq 0 ]]; then
-            native_codegen_oracle_pack_le64 "$(tr -d '\n' <"$c_out")" "$derived" || { rm -f "$derived" "$c_out"; return 1; }
+            # D14: success path stores C's full canonical stdout (value + newline),
+            # matching the native program's own decimal/bool render. No LE64 packing.
+            cp "$c_out" "$derived"
             derived_kind="le64"
         else
             cp "$c_out" "$derived"
             derived_kind="trap_stdout"
         fi
     fi
-    row_kind="$(native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_stdout_le64_or_trap_stdout" "$derived" "$derived_kind")"
+    row_kind="$(native_codegen_oracle_prepare_expected "$case_id" "$probe" "$input" "$out" "c_stdout_canonical_or_trap_stdout" "$derived" "$derived_kind")"
     local rc=$?
     if [[ $rc -eq 0 ]]; then
         printf '%s\n' "$row_kind" >"$kind_out"

@@ -298,7 +298,7 @@ run_branch_target_ret_probe() {
         fail_test "branch-target RET tail probe failed under fixed recognizer"
         return
     fi
-    if [[ "$(xxd -p "$actual" | tr -d '\n')" != "0200000000000000" ]]; then
+    if [[ "$(xxd -p "$actual" | tr -d '\n')" != "320a" ]]; then
         fail_test "branch-target RET tail probe expected 2 got $(xxd -p "$actual" | tr -d '\n')"
         return
     fi
@@ -315,8 +315,8 @@ forced_backend="$tmp/native_compile_no_tco.herb"
 old_branch_target_backend="$tmp/native_compile_old_branch_target_tail.herb"
 make_forced_false_backend "$forced_backend"
 make_old_branch_target_backend "$old_branch_target_backend"
-run_tco_positive self_sum "$tmp/sum_tco.herb" "20295a6a74000000"
-run_tco_positive mutual_even "$tmp/mutual_tco.herb" "0100000000000000"
+run_tco_positive self_sum "$tmp/sum_tco.herb" "3530303030303530303030300a"
+run_tco_positive mutual_even "$tmp/mutual_tco.herb" "747275650a"
 run_tco_negative self_sum "$tmp/sum_tco.herb" "$forced_backend"
 run_tco_negative mutual_even "$tmp/mutual_tco.herb" "$forced_backend"
 run_branch_target_ret_probe "$backend" "$old_branch_target_backend"

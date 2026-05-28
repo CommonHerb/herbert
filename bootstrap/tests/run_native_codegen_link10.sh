@@ -32,8 +32,6 @@ fail_test() {
     fail=$((fail + 1))
 }
 
-le64() { python3 -c "import sys;sys.stdout.buffer.write(int(sys.argv[1]).to_bytes(8,'little'))" "$1"; }
-
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
     # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter),
@@ -65,7 +63,7 @@ check_native_vs_c_int() {
         fail_test "$label: oracle failed"
         return
     fi
-    le64 "$expected_int" >"$tmp/$label.hardcoded"
+    printf '%s\n' "$expected_int" >"$tmp/$label.hardcoded"
     if [[ $nrc -eq 0 ]] && cmp -s "$tmp/$label.expected" "$tmp/$label.hardcoded" && cmp -s "$tmp/$label.native" "$tmp/$label.expected"; then
         pass=$((pass + 1))
     else

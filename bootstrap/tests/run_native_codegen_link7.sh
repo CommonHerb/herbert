@@ -91,10 +91,10 @@ strip_native_payload() {
     local out="$2"
     local size
     size=$(wc -c <"$in")
-    if (( size < 8 )); then
+    if (( size < 2 )); then
         return 1
     fi
-    head -c $((size - 8)) "$in" >"$out"
+    head -c $((size - 2)) "$in" >"$out"
 }
 
 run_payload_diff() {
@@ -109,7 +109,7 @@ run_payload_diff() {
 
     oracle_expect_payload "link7_${label}" "$probe" "$rt" "$expected_payload" || { fail_test "$label payload oracle failed"; return; }
     "$elf" <"$rt" >"$n_out" 2>/dev/null || { fail_test "$label native failed"; return; }
-    [[ "$(tail -c8 "$n_out" | xxd -p | tr -d '\n')" == "0000000000000000" ]] || { fail_test "$label native trailer"; return; }
+    [[ "$(tail -c2 "$n_out" | xxd -p | tr -d '\n')" == "300a" ]] || { fail_test "$label native trailer"; return; }
     strip_native_payload "$n_out" "$n_payload" || { fail_test "$label native payload strip"; return; }
     if ! cmp -s "$expected_payload" "$n_payload"; then
         fail_test "$label payload mismatch: expected=$(xxd -p "$expected_payload" | tr -d '\n') native=$(xxd -p "$n_payload" | tr -d '\n')"
@@ -313,13 +313,13 @@ compile_probe renamed_accept "$tmp/renamed_accept.herb" "$tmp/renamed_accept.elf
 total=$((total + 1))
 if compile_probe large "$tmp/large.herb" "$tmp/large.elf"; then
     "$tmp/large.elf" <"$tmp/ab.rt" >"$tmp/large.out" 2>/dev/null || { fail_test "large native failed"; }
-    if [[ "$(tail -c8 "$tmp/large.out" | xxd -p | tr -d '\n')" != "0000000000000000" ]]; then
+    if [[ "$(tail -c2 "$tmp/large.out" | xxd -p | tr -d '\n')" != "300a" ]]; then
         fail_test "large native trailer"
     elif ! python3 - "$tmp/large.out" <<'PY'
 import sys
 data = open(sys.argv[1], "rb").read()
-payload, trailer = data[:-8], data[-8:]
-if len(payload) != 1048576 or trailer != b"\x00" * 8 or payload != b"\xab" * 1048576:
+payload, trailer = data[:-2], data[-2:]
+if len(payload) != 1048576 or trailer != b"0\n" or payload != b"\xab" * 1048576:
     raise SystemExit(1)
 PY
     then

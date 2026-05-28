@@ -385,9 +385,9 @@ check_accept() {
     pass=$((pass + 1))
 }
 
-check_accept "p1_add" "$tmp/p1.herb" "4142" "8300000000000000"
-check_accept "p2_lt"  "$tmp/p2.herb" "01ff" "0100000000000000"
-check_accept "p3_sub" "$tmp/p3.herb" "0001" "ffffffffffffffff"
+check_accept "p1_add" "$tmp/p1.herb" "4142" "3133310a"
+check_accept "p2_lt"  "$tmp/p2.herb" "01ff" "747275650a"
+check_accept "p3_sub" "$tmp/p3.herb" "0001" "31383434363734343037333730393535313631350a"
 
 # ====================================================================
 # Report

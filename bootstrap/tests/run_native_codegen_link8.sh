@@ -85,20 +85,20 @@ check_return() {
     fi
 }
 
-# flogger probe: native stdout = payload||le64(0); C stdout = payload||"0\n".
-# Strip the fixed trailers (native -8, C -2) and compare the payloads.
+# flogger probe (D14): native stdout = payload||"0\n"; C stdout = payload||"0\n".
+# Strip the fixed 2-byte "0\n" trailer from native and compare to the payload golden.
 check_flogger() {
     local label="$1" probe="$2" elf="$3" f="$4"
     "$elf" <"$f" >"$tmp/$label.n" 2>/dev/null
     local nrc=$?
     local ns cs
     ns=$(wc -c <"$tmp/$label.n")
-    if [[ $nrc -ne 0 || $ns -lt 8 ]]; then
+    if [[ $nrc -ne 0 || $ns -lt 2 ]]; then
         fail_test "$label (in=$(wc -c <"$f") B): native rc=$nrc ns=$ns"
         return
     fi
-    head -c $((ns - 8)) "$tmp/$label.n" >"$tmp/$label.np"
-    if [[ "$(tail -c8 "$tmp/$label.n" | xxd -p | tr -d '\n')" != "0000000000000000" ]]; then
+    head -c $((ns - 2)) "$tmp/$label.n" >"$tmp/$label.np"
+    if [[ "$(tail -c2 "$tmp/$label.n" | xxd -p | tr -d '\n')" != "300a" ]]; then
         fail_test "$label native trailer"
         return
     fi
