@@ -29,16 +29,23 @@ bool is_builtin_name(const char *name);
 typedef struct {
     Token *t;
     size_t i;
-    int    depth;   /* live recursive-descent nesting (expr + block) */
+    int    depth;   /* live recursive-descent nesting; shared budget across
+                       parse_expr / parse_not / parse_type / parse_block */
 } P;
 
 /* Bound recursive-descent nesting so pathologically deep input fails with a
- * clean diagnostic instead of overflowing the C stack (a bare SIGSEGV). Four
- * functions recurse and so each carries the shared counter: parse_expr (paren
- * groups, tuple elements, call arguments), parse_block (nested statement arms),
- * parse_not (prefix `not`/`~` chains), and parse_type (nested array/tuple
- * types). The real .herb corpus nests <10 deep, so 1000 is ~100x headroom while
- * sitting far below the C-stack overflow each path otherwise hits. */
+ * clean diagnostic instead of overflowing the C stack (a bare SIGSEGV). One
+ * shared budget (P.depth, one limit, one diagnostic) is carried by the four
+ * functions that recurse — parse_expr (paren groups, tuple elements, call
+ * arguments), parse_block (nested statement arms), parse_not (prefix `not`/`~`
+ * chains), parse_type (nested array/tuple types). Each is necessary: e.g.
+ * parse_block's increment is what carries the counter up through nested `if`
+ * arms (without it, deep statement nesting overflows ~100k deep). Because a
+ * single syntactic level can spend more than one increment (a paren level hits
+ * both parse_expr and parse_not, ~2), the effective limit is a few hundred
+ * nested levels — still vast headroom over the real corpus (max nesting 5) and
+ * far below the C-stack overflow, which varies by construct (~35k nested parens,
+ * ~100k+ nested statement blocks). */
 #define PARSE_MAX_DEPTH 1000
 
 static Token *cur(P *p)   { return &p->t[p->i]; }
@@ -112,7 +119,7 @@ static TypeExpr *parse_type_body(P *p) {
 static TypeExpr *parse_type(P *p) {
     TypeExpr *t;
     if (++p->depth > PARSE_MAX_DEPTH)
-        herr(cur(p)->line, "type nesting too deep (limit %d)", PARSE_MAX_DEPTH);
+        herr(cur(p)->line, "nesting too deep (limit %d)", PARSE_MAX_DEPTH);
     t = parse_type_body(p);
     p->depth--;
     return t;
@@ -170,8 +177,7 @@ static BinOp bit_op(TokKind k) {
 static Expr *parse_expr(P *p) {
     Expr *e;
     if (++p->depth > PARSE_MAX_DEPTH)
-        herr(cur(p)->line, "expression nesting too deep (limit %d)",
-             PARSE_MAX_DEPTH);
+        herr(cur(p)->line, "nesting too deep (limit %d)", PARSE_MAX_DEPTH);
     e = parse_bitwise(p);
     p->depth--;
     return e;
@@ -330,8 +336,7 @@ static Expr *parse_not_body(P *p) {
 static Expr *parse_not(P *p) {
     Expr *e;
     if (++p->depth > PARSE_MAX_DEPTH)
-        herr(cur(p)->line, "expression nesting too deep (limit %d)",
-             PARSE_MAX_DEPTH);
+        herr(cur(p)->line, "nesting too deep (limit %d)", PARSE_MAX_DEPTH);
     e = parse_not_body(p);
     p->depth--;
     return e;
@@ -464,8 +469,7 @@ static Block parse_block(P *p) {
     Block b = {0};
     size_t cap = 0;
     if (++p->depth > PARSE_MAX_DEPTH)
-        herr(cur(p)->line, "block nesting too deep (limit %d)",
-             PARSE_MAX_DEPTH);
+        herr(cur(p)->line, "nesting too deep (limit %d)", PARSE_MAX_DEPTH);
     while (!is_block_end(cur(p)->kind)) {
         if (b.n == cap) {
             cap = cap ? cap * 2 : 8;

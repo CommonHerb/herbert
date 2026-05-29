@@ -665,48 +665,52 @@ check_native_codegen_mint_count() {
 
 run_recursion_depth_guard_check() {
     # The C bootstrap must fail pathologically deep nesting with a CLEAN
-    # diagnostic, never a C-stack overflow (SIGSEGV/139). Seven shapes cover
-    # every unbounded-recursion site in the trusted root: parens, call-args and
-    # nested tuples re-enter parse_expr; nested-if arms re-enter parse_block;
-    # not/tilde prefix chains re-enter parse_not; nested array types re-enter
-    # parse_type; and a deep runtime-built nested value exercises the canonical
-    # value printer (v_print_canonical_rec). Each is driven past its empirical
-    # C-stack-overflow threshold, so a regressed/removed guard SIGSEGVs and the
-    # shape goes RED. Post-guard every shape must exit nonzero (and NOT 139)
-    # carrying a "too deep" diagnostic. parens<->calls is a renamed-twin (same
-    # parse_expr guard, different surface syntax); nots<->tildes twin the two
-    # parse_not branches.
-    local shape prog err rc label depth
+    # diagnostic, never a C-stack overflow (SIGSEGV/139). The parser's four
+    # recursive sites share ONE depth budget (P.depth, one limit, one
+    # "nesting too deep" diagnostic): parens, call-args and nested tuples
+    # re-enter parse_expr; nested-if arms re-enter parse_block (its increment is
+    # what bounds statement nesting — verified: removing it overflows ~100k-deep
+    # ifs); not/tilde prefix chains re-enter parse_not; nested array types
+    # re-enter parse_type. A seventh shape, deepvalue, builds an n-deep nested
+    # value with TAIL recursion (so the evaluator runs flat and the only deep C
+    # recursion is the canonical printer v_print_canonical_rec, PRINT_MAX_DEPTH)
+    # and prints it. Every shape is driven past its empirical overflow threshold,
+    # so a regressed/removed guard SIGSEGVs (rc=139) and the shape goes RED;
+    # post-guard each must exit nonzero (NOT 139) with its expected diagnostic.
+    # parens<->calls is a renamed-twin; nots<->tildes twin the parse_not branches.
+    local shape prog err rc label depth want
     for shape in parens calls ifs nots tildes types deepvalue; do
         total=$((total + 1))
+        want="nesting too deep"
         case "$shape" in
-            parens|calls|ifs) depth=50000 ;;
-            nots|tildes)      depth=300000 ;;
-            types)            depth=400000 ;;
-            deepvalue)        depth=300000 ;;
+            parens|calls)  depth=50000 ;;
+            ifs)           depth=250000 ;;
+            nots|tildes)   depth=300000 ;;
+            types)         depth=400000 ;;
+            deepvalue)     depth=300000; want="value nested too deep to print" ;;
         esac
         label="recursion depth guard ($shape, $depth deep)"
         prog=$(mktemp)
         err=$(mktemp)
         case "$shape" in
             parens)
-                python3 -c "import sys; n=50000; sys.stdout.write('func main():\n    return '+'('*n+'0'+')'*n+'\nend\n')" >"$prog" ;;
+                python3 -c "import sys; n=int(sys.argv[1]); sys.stdout.write('func main():\n    return '+'('*n+'0'+')'*n+'\nend\n')" "$depth" >"$prog" ;;
             calls)
-                python3 -c "import sys; n=50000; sys.stdout.write('func id(x): return x end\nfunc main():\n    return '+'id('*n+'0'+')'*n+'\nend\n')" >"$prog" ;;
+                python3 -c "import sys; n=int(sys.argv[1]); sys.stdout.write('func id(x): return x end\nfunc main():\n    return '+'id('*n+'0'+')'*n+'\nend\n')" "$depth" >"$prog" ;;
             ifs)
-                python3 -c "import sys; n=50000; sys.stdout.write('func main():\n'+'    if true:\n'*n+'        return 0\n'+'    end\n'*n+'end\n')" >"$prog" ;;
+                python3 -c "import sys; n=int(sys.argv[1]); sys.stdout.write('func main():\n'+'    if true:\n'*n+'        return 0\n'+'    end\n'*n+'end\n')" "$depth" >"$prog" ;;
             nots)
-                python3 -c "import sys; n=300000; sys.stdout.write('func main():\n    return '+'not '*n+'true\nend\n')" >"$prog" ;;
+                python3 -c "import sys; n=int(sys.argv[1]); sys.stdout.write('func main():\n    return '+'not '*n+'true\nend\n')" "$depth" >"$prog" ;;
             tildes)
-                python3 -c "import sys; n=300000; sys.stdout.write('func main():\n    return '+'~'*n+'0\nend\n')" >"$prog" ;;
+                python3 -c "import sys; n=int(sys.argv[1]); sys.stdout.write('func main():\n    return '+'~'*n+'0\nend\n')" "$depth" >"$prog" ;;
             types)
-                python3 -c "import sys; n=400000; sys.stdout.write('func main():\n    let a = new_array('+'array('*n+'int'+')'*n+')\n    return 0\nend\n')" >"$prog" ;;
+                python3 -c "import sys; n=int(sys.argv[1]); sys.stdout.write('func main():\n    let a = new_array('+'array('*n+'int'+')'*n+')\n    return 0\nend\n')" "$depth" >"$prog" ;;
             deepvalue)
-                # Build a 300000-deep nested tuple at runtime and RETURN it, so
-                # the canonical printer must descend it. The evaluator is
-                # heap-stacked (builds fine); only the printer recurses on the C
-                # stack, so pre-guard this SIGSEGVs in v_print_canonical_rec.
-                python3 -c "import sys; n=300000; sys.stdout.write('func wrap(k):\n    if k == 0:\n        return 0\n    end\n    return (wrap(k - 1), 0)\nend\nfunc main():\n    return wrap(%d)\nend\n' % n)" >"$prog" ;;
+                # Tail-recursive accumulator: `return wrap(...)` is tail-called,
+                # so the evaluator runs flat (the n-deep value lives on the heap,
+                # not the C stack). Returning it forces the canonical printer to
+                # descend n deep, so pre-guard this SIGSEGVs ONLY in the printer.
+                python3 -c "import sys; n=int(sys.argv[1]); sys.stdout.write('func wrap(k, acc):\n    if k == 0:\n        return acc\n    end\n    return wrap(k - 1, (acc, 0))\nend\nfunc main():\n    return wrap(%d, 0)\nend\n' % n)" "$depth" >"$prog" ;;
         esac
         HERBERT_REPORT_PEAK=1 "$HERBERT" "$prog" >/dev/null 2>"$err"
         rc=$?
@@ -716,11 +720,11 @@ run_recursion_depth_guard_check() {
         elif [[ $rc -eq 0 ]]; then
             echo "FAIL: $label (deep input accepted — guard did not fire)"
             fail=$((fail + 1))
-        elif grep -q "too deep" "$err"; then
-            echo "PASS: $label (clean diagnostic, exit $rc)"
+        elif grep -q "$want" "$err"; then
+            echo "PASS: $label (clean diagnostic: $want, exit $rc)"
             pass=$((pass + 1))
         else
-            echo "FAIL: $label (nonzero exit $rc but no depth diagnostic)"
+            echo "FAIL: $label (nonzero exit $rc but missing diagnostic '$want')"
             echo "--- stderr"
             cat "$err"
             fail=$((fail + 1))
