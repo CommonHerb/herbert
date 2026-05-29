@@ -1,0 +1,8 @@
+-- Multiply accept probe. Data-dependent operands (clogger bytes) so a
+-- constant-folding regression could not hide the imul emit.
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    let b = index(inp, 1)
+    return a * b
+end

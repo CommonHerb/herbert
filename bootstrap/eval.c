@@ -541,6 +541,18 @@ static Value eval_arith(int line, BinOp op, Value l, Value r) {
     switch (op) {
         case OP_ADD:    return v_int (l.u.i +  r.u.i);
         case OP_SUB:    return v_int (l.u.i -  r.u.i);
+        /* `*` is the low 64 bits of the product (modular wrap); identical for
+         * signed/unsigned, matching the native `imul`. `/` and `%` are unsigned
+         * 64-bit quotient/remainder. Division or modulo by zero is a located
+         * runtime fault (clean nonzero exit) — never a raw C divide-by-zero
+         * (#DE/SIGFPE), which the native back end also guards against. */
+        case OP_MUL:    return v_int (l.u.i *  r.u.i);
+        case OP_DIV:
+            if (r.u.i == 0) herr(line, "division by zero");
+            return v_int (l.u.i / r.u.i);
+        case OP_MOD:
+            if (r.u.i == 0) herr(line, "division by zero");
+            return v_int (l.u.i % r.u.i);
         case OP_LT:     return v_bool(l.u.i <  r.u.i);
         case OP_LE:     return v_bool(l.u.i <= r.u.i);
         case OP_GT:     return v_bool(l.u.i >  r.u.i);

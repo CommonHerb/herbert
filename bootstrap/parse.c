@@ -8,6 +8,7 @@
  *   atom / call / tuple / paren
  *   `.N`        postfix tuple access (chains: `t.0.1`)
  *   `not`       prefix unary
+ *   `*` `/` `%` multiplicative
  *   `+` `-`     additive
  *   `<` `<=` `>` `>=` `==` `!=`   comparisons
  *   `and`
@@ -133,6 +134,7 @@ static Expr *parse_or     (P *p);
 static Expr *parse_and    (P *p);
 static Expr *parse_cmp    (P *p);
 static Expr *parse_add    (P *p);
+static Expr *parse_mul    (P *p);
 static Expr *parse_not    (P *p);
 static Expr *parse_dot    (P *p);
 static Expr *parse_atom   (P *p);
@@ -219,6 +221,7 @@ static Expr *parse_bitwise(P *p) {
              * (`)`, `,`, `:`, end, EOF, `.`) simply ends the expression. */
             switch (k) {
                 case TOK_PLUS: case TOK_MINUS:
+                case TOK_STAR: case TOK_SLASH: case TOK_PERCENT:
                 case TOK_LT: case TOK_LE: case TOK_GT: case TOK_GE:
                 case TOK_EQ: case TOK_NE:
                 case TOK_AND: case TOK_OR:
@@ -297,12 +300,37 @@ static Expr *parse_cmp(P *p) {
 }
 
 static Expr *parse_add(P *p) {
-    Expr *l = parse_not(p);
+    Expr *l = parse_mul(p);
     for (;;) {
         TokKind k = cur(p)->kind;
         if (k != TOK_PLUS && k != TOK_MINUS) return l;
         int ln = cur(p)->line;
         BinOp op = (k == TOK_PLUS) ? OP_ADD : OP_SUB;
+        adv(p);
+        Expr *e = new_expr(E_BINOP, ln);
+        e->op = op;
+        e->l  = l;
+        e->r  = parse_mul(p);
+        l = e;
+    }
+}
+
+/* Multiplicative tier (`*` `/` `%`): binds tighter than additive `+ -` and
+ * looser than prefix-unary `not`/`~`, so additive calls multiplicative and
+ * multiplicative calls the prefix-unary primary level (parse_not).
+ * Left-associative: `a / b / c` = `(a/b)/c`. These are ordinary arithmetic
+ * (same class as `+ -`), so they do NOT participate in the bitwise/shift
+ * class-mix rule. */
+static Expr *parse_mul(P *p) {
+    Expr *l = parse_not(p);
+    for (;;) {
+        TokKind k = cur(p)->kind;
+        BinOp op;
+        if      (k == TOK_STAR)    op = OP_MUL;
+        else if (k == TOK_SLASH)   op = OP_DIV;
+        else if (k == TOK_PERCENT) op = OP_MOD;
+        else return l;
+        int ln = cur(p)->line;
         adv(p);
         Expr *e = new_expr(E_BINOP, ln);
         e->op = op;

@@ -490,8 +490,21 @@ func add_tag(text):
     return ""
 end
 
+func mul_tag(text):
+    if equal(text, "*"):
+        return "mul"
+    end
+    if equal(text, "/"):
+        return "div"
+    end
+    if equal(text, "%"):
+        return "mod"
+    end
+    return ""
+end
+
 func parse_add(tokens, pos, pool):
-    let r = parse_not(tokens, pos, pool)
+    let r = parse_mul(tokens, pos, pool)
     return parse_add_loop(tokens, r.1, pool, r.0)
 end
 
@@ -503,8 +516,31 @@ func parse_add_loop(tokens, pos, pool, lidx):
     if t.0 == 5:
         let tag = add_tag(t.1)
         if not equal(tag, ""):
-            let r = parse_not(tokens, pos + 1, pool)
+            let r = parse_mul(tokens, pos + 1, pool)
             return parse_add_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0))
+        end
+    end
+    return (lidx, pos)
+end
+
+-- Multiplicative tier (`*` `/` `%`): binds tighter than additive `+ -`, looser
+-- than prefix-unary `not`. Left-associative. Mirrors parse_add exactly, calling
+-- the prefix-unary primary level (parse_not).
+func parse_mul(tokens, pos, pool):
+    let r = parse_not(tokens, pos, pool)
+    return parse_mul_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_mul_loop(tokens, pos, pool, lidx):
+    if pos >= count(tokens):
+        return (lidx, pos)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5:
+        let tag = mul_tag(t.1)
+        if not equal(tag, ""):
+            let r = parse_not(tokens, pos + 1, pool)
+            return parse_mul_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0))
         end
     end
     return (lidx, pos)

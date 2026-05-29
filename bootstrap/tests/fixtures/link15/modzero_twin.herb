@@ -1,0 +1,13 @@
+-- Renamed twin of modzero: same shape, different names and a helper
+-- indirection. If it behaves differently from modzero.herb the trap was
+-- probe-fitted.
+func residue(numer, denom):
+    return numer % denom
+end
+
+func main():
+    let stream = clogger()
+    let top = index(stream, 0)
+    let bot = index(stream, 1)
+    return residue(top, bot)
+end

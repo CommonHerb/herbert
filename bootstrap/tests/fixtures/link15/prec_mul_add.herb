@@ -1,0 +1,11 @@
+-- Precedence probe: `a + b * c` must parse as `a + (b * c)` (multiplicative
+-- binds tighter than additive). Data-dependent operands. With bytes (2,3,4)
+-- this is 2 + 3*4 = 14, NOT (2+3)*4 = 20 -- the companion prec_paren_add probe
+-- computes the parenthesised form so the harness asserts they differ.
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    let b = index(inp, 1)
+    let c = index(inp, 2)
+    return a + b * c
+end

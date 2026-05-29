@@ -1,0 +1,15 @@
+-- Multiply modular-wrap probe. Builds a large 64-bit multiplicand at RUNTIME
+-- (so the source literal stays small) and multiplies by a data-dependent
+-- clogger byte, producing a product that overflows 64 bits -- only the low 64
+-- bits survive (imul truncation == C uint64_t wrap). Graded byte-exact vs C.
+--
+-- `huge` = 3037000500 * 3037000500 = 9223371131704000250 (~2^63), via two
+-- multiplies. Multiplying that by a clogger byte >= 3 overflows 2^64 and wraps.
+-- Source literals stay under the native compiler's large-decimal-immediate
+-- limit (see the nc_div256/nc_mod256 note in the tonka report).
+func main():
+    let inp = clogger()
+    let k = index(inp, 0)
+    let huge = 3037000500 * 3037000500
+    return huge * k
+end

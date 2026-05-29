@@ -1,0 +1,12 @@
+-- Divide-by-zero TRAP probe. The divisor is a clogger byte; fed a zero byte it
+-- is a runtime division by zero. Both the C bootstrap and the native ELF must
+-- fault CLEANLY: nonzero exit, empty stdout, NO SIGFPE/#DE crash. (The native
+-- back end guards with `test rcx,rcx; jz <exit1>` before `div`.) Graded for
+-- exit-status parity vs C; C also prints `herbert: line N: division by zero`,
+-- the native side matches exit + empty stdout (exact-stderr text deferred, D13).
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    let b = index(inp, 1)
+    return a / b
+end

@@ -1,0 +1,13 @@
+-- Renamed twin of divzero: same shape (a clogger-byte divisor that is zero on a
+-- zero input), different function/local names and a helper indirection. If this
+-- twin behaves differently from divzero.herb, the trap was probe-fitted.
+func quotient(numer, denom):
+    return numer / denom
+end
+
+func main():
+    let stream = clogger()
+    let top = index(stream, 0)
+    let bot = index(stream, 1)
+    return quotient(top, bot)
+end

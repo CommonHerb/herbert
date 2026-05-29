@@ -1,0 +1,8 @@
+-- Divide accept probe (unsigned 64-bit quotient). Data-dependent so the
+-- xor rdx,rdx / div rcx sequence is exercised, not constant-folded.
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    let b = index(inp, 1)
+    return a / b
+end

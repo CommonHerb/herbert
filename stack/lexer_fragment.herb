@@ -17,7 +17,8 @@
 --                      but not decoded)
 --     3 = CHAR        (`'` one byte or one escape `'`)
 --     4 = PUNCT       (exactly one of `(` `)` `,` `:` `.`)
---     5 = OPERATOR    (one of `=` `+` `-` `<` `>` `==` `!=` `<=` `>=`)
+--     5 = OPERATOR    (one of `=` `+` `-` `*` `/` `%` `<` `>` `==` `!=`
+--                      `<=` `>=`)
 --
 -- Raw rather than decoded text so that the byte length of `text`
 -- equals the number of source bytes consumed for that token, which
@@ -72,8 +73,8 @@ func is_two_byte_op_start(c):
 end
 
 func is_one_byte_op(c):
-    -- bytes that stand alone as a one-byte operator (=, +, -, <, >)
-    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>'
+    -- bytes that stand alone as a one-byte operator (=, +, -, *, /, %, <, >)
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>'
 end
 
 -- ---------- per-token scanners ----------

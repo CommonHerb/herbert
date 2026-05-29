@@ -1,0 +1,16 @@
+-- Divide/modulo on a large 64-bit dividend built at RUNTIME (source literals
+-- stay small, avoiding the native compiler's large-decimal-immediate limit --
+-- see the nc_div256/nc_mod256 note in the tonka report). A near-2^63 dividend
+-- exercises the full UNSIGNED 64-bit div (a signed idiv would mishandle the
+-- high bit). Data-dependent divisor (clogger byte + 1, never zero) defeats
+-- constant folding. Graded byte-exact vs C.
+--
+-- `huge` = 3037000500 * 3037000500 = 9223371131704000250.
+func main():
+    let inp = clogger()
+    let d = index(inp, 0) + 1
+    let huge = 3037000500 * 3037000500
+    let q = huge / d
+    let r = huge % d
+    return q + r
+end

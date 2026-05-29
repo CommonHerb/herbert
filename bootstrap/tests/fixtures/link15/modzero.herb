@@ -1,0 +1,9 @@
+-- Modulo-by-zero TRAP probe. Same shape as divzero but `%`. Fed a zero second
+-- byte, the modulo divisor is zero: a clean runtime fault (nonzero exit, empty
+-- stdout, no #DE crash), matching the C bootstrap's exit status.
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    let b = index(inp, 1)
+    return a % b
+end

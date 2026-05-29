@@ -217,6 +217,9 @@ static void lex_punct(L *l) {
         case '.': tl_push(l->out, make_tok(TOK_DOT,    line)); return;
         case '+': tl_push(l->out, make_tok(TOK_PLUS,   line)); return;
         case '-': tl_push(l->out, make_tok(TOK_MINUS,  line)); return;
+        case '*': tl_push(l->out, make_tok(TOK_STAR,    line)); return;
+        case '/': tl_push(l->out, make_tok(TOK_SLASH,   line)); return;
+        case '%': tl_push(l->out, make_tok(TOK_PERCENT, line)); return;
         case '<': tl_push(l->out, make_tok(TOK_LT,     line)); return;
         case '>': tl_push(l->out, make_tok(TOK_GT,     line)); return;
         case '=': tl_push(l->out, make_tok(TOK_ASSIGN, line)); return;

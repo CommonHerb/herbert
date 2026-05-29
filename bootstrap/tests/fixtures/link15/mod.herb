@@ -1,0 +1,7 @@
+-- Modulo accept probe (unsigned 64-bit remainder in rdx). Data-dependent.
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    let b = index(inp, 1)
+    return a % b
+end

@@ -1,0 +1,25 @@
+-- Adler-32 accept probe (the tonka differential centerpiece). Reads the stdin
+-- bytes via clogger(), runs the Adler-32 rolling checksum, and returns it.
+--
+-- Adler-32 keeps two running sums modulo 65521 (the largest prime < 2^16):
+--   a starts at 1, b at 0; for each byte v: a = (a + v) % 65521,
+--   b = (b + a) % 65521. The checksum is b * 65536 + a.
+--
+-- This genuinely exercises the tonka operators together: `+` (the rolling
+-- sums), `%` with the non-power-of-two modulus 65521 (which CANNOT be lowered
+-- to a mask/shift -- it needs real unsigned division), and `*` (combining b and
+-- a into the 32-bit result, b * 65536). Graded byte-for-byte against the C
+-- bootstrap, so any divergence in mul/div/mod or the modular folding shows up.
+func roll(s, i, n, a, b):
+    if i >= n:
+        return b * 65536 + a
+    end
+    let na = (a + index(s, i)) % 65521
+    let nb = (b + na) % 65521
+    return roll(s, i + 1, n, na, nb)
+end
+
+func main():
+    let inp = clogger()
+    return roll(inp, 0, length(inp), 1, 0)
+end

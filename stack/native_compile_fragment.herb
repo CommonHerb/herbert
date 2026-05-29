@@ -79,7 +79,7 @@ func is_shift_op_start(c):
 end
 
 func is_one_byte_op(c):
-    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
 end
 
 func end_of_ident(src, i, n):
@@ -563,6 +563,22 @@ func add_tag(text):
     return ""
 end
 
+-- Multiplicative operator -> AST tag. `*` `/` `%` bind tighter than `+ -`. They
+-- are ordinary arithmetic (same operator class as add/sub), so no class-mix
+-- poison applies to them; they just join the arithmetic ladder a tier tighter.
+func mul_tag(text):
+    if equal(text, "*"):
+        return "mul"
+    end
+    if equal(text, "/"):
+        return "div"
+    end
+    if equal(text, "%"):
+        return "mod"
+    end
+    return ""
+end
+
 -- The bitwise/shift operators split into mutually-exclusive classes:
 -- 1 = AND (&), 2 = OR (|), 3 = XOR (^), 4 = SHIFT (<< >>). 0 = not a
 -- bitwise/shift op. Mirrors the C bootstrap's bit_class. Same-class chaining is
@@ -631,6 +647,9 @@ func bin_op_class(tokens, pos):
     if not equal(add_tag(t.1), ""):
         return 5
     end
+    if not equal(mul_tag(t.1), ""):
+        return 5
+    end
     if not equal(cmp_tag(t.1), ""):
         return 5
     end
@@ -638,7 +657,7 @@ func bin_op_class(tokens, pos):
 end
 
 func parse_add(tokens, pos, pool):
-    let r = parse_not(tokens, pos, pool)
+    let r = parse_mul(tokens, pos, pool)
     return parse_add_loop(tokens, r.1, pool, r.0)
 end
 
@@ -650,8 +669,31 @@ func parse_add_loop(tokens, pos, pool, lidx):
     if t.0 == 5:
         let tag = add_tag(t.1)
         if not equal(tag, ""):
-            let r = parse_not(tokens, pos + 1, pool)
+            let r = parse_mul(tokens, pos + 1, pool)
             return parse_add_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
+        end
+    end
+    return (lidx, pos)
+end
+
+-- Multiplicative tier (`*` `/` `%`): one precedence level tighter than additive
+-- `+ -`, looser than the prefix-unary level (parse_not). Left-associative.
+-- Mirrors parse_add, calling parse_not for its operands.
+func parse_mul(tokens, pos, pool):
+    let r = parse_not(tokens, pos, pool)
+    return parse_mul_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_mul_loop(tokens, pos, pool, lidx):
+    if pos >= count(tokens):
+        return (lidx, pos)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5:
+        let tag = mul_tag(t.1)
+        if not equal(tag, ""):
+            let r = parse_not(tokens, pos + 1, pool)
+            return parse_mul_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
         end
     end
     return (lidx, pos)
@@ -1302,6 +1344,23 @@ func op_bnot():
     return 41
 end
 
+-- Multiplicative opcodes. Appended at 42-44 after the current max (op_bnot=41);
+-- NEVER renumber an existing opcode (the VM range-checks binops and pass-1 sizes
+-- by op number). mul/div/mod are int x int -> int binops. div/mod also fault on a
+-- zero divisor (a located runtime fault, exit-status parity with the C oracle),
+-- so they are "faultable" (see nc_code_has_faultable_loop); mul never faults.
+func op_mul():
+    return 42
+end
+
+func op_div():
+    return 43
+end
+
+func op_mod():
+    return 44
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1519,6 +1578,15 @@ func opcode_for_binop(tag):
     if equal(tag, "sub"):
         return op_sub()
     end
+    if equal(tag, "mul"):
+        return op_mul()
+    end
+    if equal(tag, "div"):
+        return op_div()
+    end
+    if equal(tag, "mod"):
+        return op_mod()
+    end
     if equal(tag, "eq"):
         return op_eq()
     end
@@ -1649,7 +1717,7 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, op_bnot(), 0, 0)
     end
-    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, opcode_for_binop(tag), 0, 0)
@@ -1957,6 +2025,15 @@ func opcode_name(op):
     end
     if op == op_bnot():
         return "BNOT"
+    end
+    if op == op_mul():
+        return "MUL"
+    end
+    if op == op_div():
+        return "DIV"
+    end
+    if op == op_mod():
+        return "MOD"
     end
     return "ARR_ADD"
 end
@@ -2640,7 +2717,7 @@ func err_parse_cmp_loop(tokens, pos, eof_line, root_kind):
 end
 
 func err_parse_add(tokens, pos, eof_line):
-    let r = err_parse_not(tokens, pos, eof_line)
+    let r = err_parse_mul(tokens, pos, eof_line)
     if r.0 == err_err_tag():
         return r
     end
@@ -2653,11 +2730,36 @@ func err_parse_add_loop(tokens, pos, eof_line, root_kind):
     end
     let t = get(tokens, pos)
     if t.0 == 5 and not equal(add_tag(t.1), ""):
-        let r = err_parse_not(tokens, pos + 1, eof_line)
+        let r = err_parse_mul(tokens, pos + 1, eof_line)
         if r.0 == err_err_tag():
             return r
         end
         return err_parse_add_loop(tokens, r.2, eof_line, err_expr_other())
+    end
+    return err_parse_ok_extra(pos, root_kind)
+end
+
+-- Multiplicative tier in the structural err-parse mirror (`*` `/` `%`), one
+-- level tighter than additive. Mirrors err_parse_add, calling err_parse_not.
+func err_parse_mul(tokens, pos, eof_line):
+    let r = err_parse_not(tokens, pos, eof_line)
+    if r.0 == err_err_tag():
+        return r
+    end
+    return err_parse_mul_loop(tokens, r.2, eof_line, r.3)
+end
+
+func err_parse_mul_loop(tokens, pos, eof_line, root_kind):
+    if pos >= count(tokens):
+        return err_parse_ok_extra(pos, root_kind)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5 and not equal(mul_tag(t.1), ""):
+        let r = err_parse_not(tokens, pos + 1, eof_line)
+        if r.0 == err_err_tag():
+            return r
+        end
+        return err_parse_mul_loop(tokens, r.2, eof_line, err_expr_other())
     end
     return err_parse_ok_extra(pos, root_kind)
 end
@@ -3237,7 +3339,7 @@ func err_sem_expr(node_idx, env, nodes, prog_idx):
     if equal(tag, "tuple"):
         return err_sem_exprs(kids, 0, count(kids), env, nodes, prog_idx)
     end
-    if equal(tag, "and") or equal(tag, "or") or equal(tag, "add") or equal(tag, "sub") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+    if equal(tag, "and") or equal(tag, "or") or equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
         let left = err_sem_expr(get(kids, 0), env, nodes, prog_idx)
         if left.0 == err_err_tag():
             return left
@@ -3845,7 +3947,26 @@ func int_binop(op, lhs_v, rhs_v):
     if op == 39:
         return make_int_value(lhs << (rhs & 63))
     end
-    return make_int_value(lhs >> (rhs & 63))
+    if op == 40:
+        return make_int_value(lhs >> (rhs & 63))
+    end
+    -- Multiplicative binops (opcodes 42-44). mul keeps the low 64 bits (u64
+    -- modular-wrap product); div/mod are unsigned 64-bit quotient/remainder and
+    -- fault cleanly on a zero divisor (matching the C oracle and the native
+    -- zero-check) rather than dividing by zero.
+    if op == 42:
+        return make_int_value(lhs * rhs)
+    end
+    if op == 43:
+        if rhs == 0:
+            return fault("division by zero")
+        end
+        return make_int_value(lhs / rhs)
+    end
+    if rhs == 0:
+        return fault("division by zero")
+    end
+    return make_int_value(lhs % rhs)
 end
 
 func vm_push_result(frame, frames, pools, prog, v):
@@ -3910,6 +4031,12 @@ func vm_loop(frame, frames, pools, prog):
         return vm_loop((frame.0, frame.1 + 1, frame.2, lhs_popped.0), frames, pools, prog)
     end
     if op >= 36 and op <= 40:
+        let rhs_popped = stack_pop(frame.3)
+        let lhs_popped = stack_pop(rhs_popped.0)
+        do add(lhs_popped.0, int_binop(op, lhs_popped.1, rhs_popped.1))
+        return vm_loop((frame.0, frame.1 + 1, frame.2, lhs_popped.0), frames, pools, prog)
+    end
+    if op >= 42 and op <= 44:
         let rhs_popped = stack_pop(frame.3)
         let lhs_popped = stack_pop(rhs_popped.0)
         do add(lhs_popped.0, int_binop(op, lhs_popped.1, rhs_popped.1))
@@ -5788,11 +5915,11 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         end
         return (0, li.2, env, sig, 0)
     end
-    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
-        -- Bitwise / shift binops are int x int -> int, identical to add/sub:
-        -- constrain both operands to int and yield int. A non-int operand hits
-        -- the existing type-mismatch fail code via nc_constrain_expr (no new
-        -- fail code needed).
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
+        -- Arithmetic and bitwise/shift binops are all int x int -> int: constrain
+        -- both operands to int and yield int. mul/div/mod join add/sub here
+        -- (ordinary arithmetic). A non-int operand hits the existing type-mismatch
+        -- fail code via nc_constrain_expr (no new fail code needed).
         let l = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
         if l.0 != 0:
             return (l.0, 0, l.1, l.2, l.3)
@@ -6595,6 +6722,15 @@ func nc_opcode_name_for_diag(op):
     if op == 41:
         return "BNOT"
     end
+    if op == 42:
+        return "MUL"
+    end
+    if op == 43:
+        return "DIV"
+    end
+    if op == 44:
+        return "MOD"
+    end
     return int_to_str(op)
 end
 
@@ -6861,9 +6997,10 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         end
         stack = p.1
         local_types = st.1
-    elif op == 5 or op == 6 or op == 36 or op == 37 or op == 38 or op == 39 or op == 40:
-        -- add/sub and the bitwise/shift binops (band/bor/bxor/shl/shr) all pop
-        -- two ints and push one int; identical stack discipline.
+    elif op == 5 or op == 6 or op == 36 or op == 37 or op == 38 or op == 39 or op == 40 or op == 42 or op == 43 or op == 44:
+        -- add/sub, the bitwise/shift binops (band/bor/bxor/shl/shr), and the
+        -- multiplicative binops (mul/div/mod) all pop two ints and push one int;
+        -- identical stack discipline.
         let r = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
         if r.0 != 0:
             return (r.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
@@ -7210,7 +7347,10 @@ func nc_code_has_faultable_loop(code, i, n):
         return 0
     end
     let op = get(code, i).0
-    if op == 23 or op == 29 or op == 31:
+    -- 23/29/31 = index/get/append OOB faults; 43/44 = div/mod by-zero fault.
+    -- A faultable op forces the fault-helper block (incl. the exit1 routine the
+    -- div/mod zero-check jumps to) to be emitted. op_mul (42) never faults.
+    if op == 23 or op == 29 or op == 31 or op == 43 or op == 44:
         return 1
     end
     return nc_code_has_faultable_loop(code, i + 1, n)
@@ -7752,6 +7892,18 @@ func nc_group_single_len(op):
     end
     if op == 41:
         return 5
+    end
+    -- Multiplicative (42-44). LOAD-BEARING for branch-displacement layout: a
+    -- wrong length here silently rots every branch offset in any function that
+    -- uses these ops. mul is 7 bytes (pop rcx; pop rax; imul rax,rcx [4 bytes];
+    -- push rax). div and mod are 18 bytes each: pop rcx; pop rax; test rcx,rcx
+    -- [3]; jz exit1 [6]; xor rdx,rdx [3]; div rcx [3]; push rax|rdx [1]. These
+    -- MUST match the byte counts emitted by nc_emit_mul / nc_emit_div_or_mod.
+    if op == 42:
+        return 7
+    end
+    if op == 43 or op == 44:
+        return 18
     end
     return 0
 end
@@ -9017,6 +9169,57 @@ func nc_emit_bnot(buf):
     return buf
 end
 
+-- Multiply: pop rhs->rcx (0x59), pop lhs->rax (0x58), imul rax,rcx
+-- (48 0F AF C1), push rax (0x50). imul keeps the low 64 bits, which is the
+-- u64 modular-wrap product (identical for signed/unsigned). 7 bytes; must equal
+-- nc_group_single_len(42).
+func nc_emit_mul(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 15)
+    do append(buf, 175)
+    do append(buf, 193)
+    do append(buf, 80)
+    return buf
+end
+
+-- Divide / modulo. pop rhs(divisor)->rcx (0x59), pop lhs(dividend)->rax (0x58).
+-- Guard divide-by-zero BEFORE `div`: test rcx,rcx (48 85 C9); jz exit1
+-- (0F 84 rel32) routes to the shared clean fault-exit (exit 1, empty stdout) --
+-- exit-status parity with the C oracle's `herbert: line N: division by zero`.
+-- (Exact-stderr text is deferred per the D13 fault-parity convention; the C
+-- side keeps the located message, the native side matches exit status + empty
+-- stdout. Reusing the located-diagnostic helper would be a much larger addition
+-- -- a new ro-data fragment + diag handler -- so exit-status parity is used.)
+-- Then xor rdx,rdx (48 31 D2) zero-extends the dividend, div rcx (48 F7 F1)
+-- gives the unsigned 64-bit quotient in rax / remainder in rdx; push rax (0x50)
+-- for `/`, push rdx (0x52) for `%`. 18 bytes; must equal
+-- nc_group_single_len(43/44). The jz rel32 base is instr_off + 11 (the byte
+-- after the rel32 field: 1+1+3 prefix + 2 jz opcode + 4 rel32).
+func nc_emit_div_or_mod(buf, is_mod, exit_off, instr_off):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 201)
+    do append(buf, 15)
+    do append(buf, 132)
+    buf = nc_append_rel32(buf, exit_off, instr_off + 11)
+    do append(buf, 72)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 241)
+    if is_mod != 0:
+        do append(buf, 82)
+    else:
+        do append(buf, 80)
+    end
+    return buf
+end
+
 func nc_emit_length(buf):
     do append(buf, 88)
     do append(buf, 94)
@@ -10063,6 +10266,12 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         buf = nc_emit_shr(buf)
     elif op == 41:
         buf = nc_emit_bnot(buf)
+    elif op == 42:
+        buf = nc_emit_mul(buf)
+    elif op == 43:
+        buf = nc_emit_div_or_mod(buf, 0, diag_base + nc_fault_exit1_rel(), instr_off)
+    elif op == 44:
+        buf = nc_emit_div_or_mod(buf, 1, diag_base + nc_fault_exit1_rel(), instr_off)
     elif op == 15:
         buf = nc_emit_tuple_get(buf, meta, i)
     elif op == 16:

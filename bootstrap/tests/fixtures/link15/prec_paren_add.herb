@@ -1,0 +1,12 @@
+-- Precedence companion: `(a + b) * c`. Parentheses override the multiplicative
+-- tier, so with bytes (2,3,4) this is (2+3)*4 = 20, differing from the
+-- prec_mul_add probe's 2 + 3*4 = 14. The harness asserts the two native results
+-- differ -- proving `*` really does bind tighter than `+` (a parser that gave
+-- them the same value would be flagged).
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    let b = index(inp, 1)
+    let c = index(inp, 2)
+    return (a + b) * c
+end
