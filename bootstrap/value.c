@@ -157,7 +157,18 @@ static bool print_path_contains(PrintPath *path, const void *obj) {
     return false;
 }
 
+/* Bound print recursion the way the parser is bounded. A runtime value (nested
+ * tuples/arrays) can be built arbitrarily deep by recursion, and
+ * v_print_canonical_rec descends it on the C stack; without a cap a deep value
+ * SIGSEGVs the printer instead of failing cleanly. PrintPath->n already tracks
+ * the live nesting depth (for cycle detection), so the cap lives here, at the
+ * one push site. Real printed values nest a handful deep; 10000 is ample
+ * headroom and far below the C-stack overflow. */
+#define PRINT_MAX_DEPTH 10000
+
 static void print_path_push(PrintPath *path, const void *obj) {
+    if (path->n >= PRINT_MAX_DEPTH)
+        herr(0, "value nested too deep to print (limit %d)", PRINT_MAX_DEPTH);
     if (path->n == path->cap) {
         path->cap = path->cap ? path->cap * 2 : 32;
         path->items = (const void **)xrealloc(path->items,

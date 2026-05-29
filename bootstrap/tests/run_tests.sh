@@ -663,6 +663,72 @@ check_native_codegen_mint_count() {
     fi
 }
 
+run_recursion_depth_guard_check() {
+    # The C bootstrap must fail pathologically deep nesting with a CLEAN
+    # diagnostic, never a C-stack overflow (SIGSEGV/139). Seven shapes cover
+    # every unbounded-recursion site in the trusted root: parens, call-args and
+    # nested tuples re-enter parse_expr; nested-if arms re-enter parse_block;
+    # not/tilde prefix chains re-enter parse_not; nested array types re-enter
+    # parse_type; and a deep runtime-built nested value exercises the canonical
+    # value printer (v_print_canonical_rec). Each is driven past its empirical
+    # C-stack-overflow threshold, so a regressed/removed guard SIGSEGVs and the
+    # shape goes RED. Post-guard every shape must exit nonzero (and NOT 139)
+    # carrying a "too deep" diagnostic. parens<->calls is a renamed-twin (same
+    # parse_expr guard, different surface syntax); nots<->tildes twin the two
+    # parse_not branches.
+    local shape prog err rc label depth
+    for shape in parens calls ifs nots tildes types deepvalue; do
+        total=$((total + 1))
+        case "$shape" in
+            parens|calls|ifs) depth=50000 ;;
+            nots|tildes)      depth=300000 ;;
+            types)            depth=400000 ;;
+            deepvalue)        depth=300000 ;;
+        esac
+        label="recursion depth guard ($shape, $depth deep)"
+        prog=$(mktemp)
+        err=$(mktemp)
+        case "$shape" in
+            parens)
+                python3 -c "import sys; n=50000; sys.stdout.write('func main():\n    return '+'('*n+'0'+')'*n+'\nend\n')" >"$prog" ;;
+            calls)
+                python3 -c "import sys; n=50000; sys.stdout.write('func id(x): return x end\nfunc main():\n    return '+'id('*n+'0'+')'*n+'\nend\n')" >"$prog" ;;
+            ifs)
+                python3 -c "import sys; n=50000; sys.stdout.write('func main():\n'+'    if true:\n'*n+'        return 0\n'+'    end\n'*n+'end\n')" >"$prog" ;;
+            nots)
+                python3 -c "import sys; n=300000; sys.stdout.write('func main():\n    return '+'not '*n+'true\nend\n')" >"$prog" ;;
+            tildes)
+                python3 -c "import sys; n=300000; sys.stdout.write('func main():\n    return '+'~'*n+'0\nend\n')" >"$prog" ;;
+            types)
+                python3 -c "import sys; n=400000; sys.stdout.write('func main():\n    let a = new_array('+'array('*n+'int'+')'*n+')\n    return 0\nend\n')" >"$prog" ;;
+            deepvalue)
+                # Build a 300000-deep nested tuple at runtime and RETURN it, so
+                # the canonical printer must descend it. The evaluator is
+                # heap-stacked (builds fine); only the printer recurses on the C
+                # stack, so pre-guard this SIGSEGVs in v_print_canonical_rec.
+                python3 -c "import sys; n=300000; sys.stdout.write('func wrap(k):\n    if k == 0:\n        return 0\n    end\n    return (wrap(k - 1), 0)\nend\nfunc main():\n    return wrap(%d)\nend\n' % n)" >"$prog" ;;
+        esac
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$prog" >/dev/null 2>"$err"
+        rc=$?
+        if [[ $rc -eq 139 ]]; then
+            echo "FAIL: $label (SIGSEGV — recursion depth guard missing/ineffective)"
+            fail=$((fail + 1))
+        elif [[ $rc -eq 0 ]]; then
+            echo "FAIL: $label (deep input accepted — guard did not fire)"
+            fail=$((fail + 1))
+        elif grep -q "too deep" "$err"; then
+            echo "PASS: $label (clean diagnostic, exit $rc)"
+            pass=$((pass + 1))
+        else
+            echo "FAIL: $label (nonzero exit $rc but no depth diagnostic)"
+            echo "--- stderr"
+            cat "$err"
+            fail=$((fail + 1))
+        fi
+        rm -f "$prog" "$err"
+    done
+}
+
 shopt -s nullglob
 for prog in test_*.herb; do
     total=$((total + 1))
@@ -692,6 +758,8 @@ if [[ -n "$test_14a_heap" || -n "$test_14b_heap" ]]; then
         pass=$((pass + 1))
     fi
 fi
+
+run_recursion_depth_guard_check
 
 if [[ -d ../../stack ]]; then
     STACK_DIR="$(cd ../../stack && pwd)"

@@ -29,7 +29,17 @@ bool is_builtin_name(const char *name);
 typedef struct {
     Token *t;
     size_t i;
+    int    depth;   /* live recursive-descent nesting (expr + block) */
 } P;
+
+/* Bound recursive-descent nesting so pathologically deep input fails with a
+ * clean diagnostic instead of overflowing the C stack (a bare SIGSEGV). Four
+ * functions recurse and so each carries the shared counter: parse_expr (paren
+ * groups, tuple elements, call arguments), parse_block (nested statement arms),
+ * parse_not (prefix `not`/`~` chains), and parse_type (nested array/tuple
+ * types). The real .herb corpus nests <10 deep, so 1000 is ~100x headroom while
+ * sitting far below the C-stack overflow each path otherwise hits. */
+#define PARSE_MAX_DEPTH 1000
 
 static Token *cur(P *p)   { return &p->t[p->i]; }
 static Token *peek1(P *p) { return &p->t[p->i + 1]; }
@@ -56,7 +66,9 @@ static TypeExpr *new_type(TEKind k, int line) {
     return t;
 }
 
-static TypeExpr *parse_type(P *p) {
+static TypeExpr *parse_type(P *p);   /* guarded wrapper, defined below */
+
+static TypeExpr *parse_type_body(P *p) {
     Token *tk = cur(p);
     int    ln = tk->line;
     switch (tk->kind) {
@@ -95,6 +107,15 @@ static TypeExpr *parse_type(P *p) {
             herr(ln, "expected type expression");
             return NULL;
     }
+}
+
+static TypeExpr *parse_type(P *p) {
+    TypeExpr *t;
+    if (++p->depth > PARSE_MAX_DEPTH)
+        herr(cur(p)->line, "type nesting too deep (limit %d)", PARSE_MAX_DEPTH);
+    t = parse_type_body(p);
+    p->depth--;
+    return t;
 }
 
 /* ---- expressions ---- */
@@ -146,7 +167,15 @@ static BinOp bit_op(TokKind k) {
     }
 }
 
-static Expr *parse_expr(P *p) { return parse_bitwise(p); }
+static Expr *parse_expr(P *p) {
+    Expr *e;
+    if (++p->depth > PARSE_MAX_DEPTH)
+        herr(cur(p)->line, "expression nesting too deep (limit %d)",
+             PARSE_MAX_DEPTH);
+    e = parse_bitwise(p);
+    p->depth--;
+    return e;
+}
 
 /* Bitwise/shift level — sits above the classless ladder. Parse a classless
  * expression (parse_or); if a bitwise/shift operator follows, the left operand
@@ -166,7 +195,7 @@ static Expr *parse_bitwise(P *p) {
      * exactly where parse_or stopped. If parse_or consumed more (an
      * unparenthesised +/-/cmp/and/or), the operator classes are mixed. */
     {
-        P probe = { p->t, start };
+        P probe = { p->t, start, p->depth };
         parse_not(&probe);  /* one prefix-unary primary (~/not/dot/atom/group) */
         if (probe.i != p->i) {
             herr(cur(p)->line,
@@ -277,7 +306,7 @@ static Expr *parse_add(P *p) {
     }
 }
 
-static Expr *parse_not(P *p) {
+static Expr *parse_not_body(P *p) {
     if (cur(p)->kind == TOK_NOT) {
         int ln = cur(p)->line;
         adv(p);
@@ -296,6 +325,16 @@ static Expr *parse_not(P *p) {
         return e;
     }
     return parse_dot(p);
+}
+
+static Expr *parse_not(P *p) {
+    Expr *e;
+    if (++p->depth > PARSE_MAX_DEPTH)
+        herr(cur(p)->line, "expression nesting too deep (limit %d)",
+             PARSE_MAX_DEPTH);
+    e = parse_not_body(p);
+    p->depth--;
+    return e;
 }
 
 static Expr *parse_dot(P *p) {
@@ -424,6 +463,9 @@ static bool is_block_end(TokKind k) {
 static Block parse_block(P *p) {
     Block b = {0};
     size_t cap = 0;
+    if (++p->depth > PARSE_MAX_DEPTH)
+        herr(cur(p)->line, "block nesting too deep (limit %d)",
+             PARSE_MAX_DEPTH);
     while (!is_block_end(cur(p)->kind)) {
         if (b.n == cap) {
             cap = cap ? cap * 2 : 8;
@@ -431,6 +473,7 @@ static Block parse_block(P *p) {
         }
         b.items[b.n++] = parse_stmt(p);
     }
+    p->depth--;
     return b;
 }
 
