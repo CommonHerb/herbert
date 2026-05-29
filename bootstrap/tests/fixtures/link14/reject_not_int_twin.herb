@@ -1,0 +1,4 @@
+-- Renamed/revalued twin of reject_not_int: not 42 also rejects.
+func main():
+    return not 42
+end

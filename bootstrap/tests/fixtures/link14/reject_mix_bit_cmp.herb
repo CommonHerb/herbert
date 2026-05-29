@@ -1,0 +1,7 @@
+-- REJECT: & mixed with == without parens (C's famous footgun). ((x&1)==0)
+-- accepts. Returns a bool, but the parse error fires before type-check.
+func main():
+    let inp = clogger()
+    let x = index(inp, 0)
+    return x & 1 == 0
+end

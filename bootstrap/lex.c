@@ -199,10 +199,15 @@ static void lex_punct(L *l) {
     int  line = l->line;
     char c    = l->src[l->pos];
     char d    = peek(l, 1);
+    /* Two-character operators are matched before the single-character forms
+     * below (longest match): `<=`/`>=`/`==`/`!=`, and the new shifts `<<`/`>>`
+     * which must win over a bare `<`/`>`. */
     if (c == '<' && d == '=') { l->pos += 2; tl_push(l->out, make_tok(TOK_LE, line)); return; }
     if (c == '>' && d == '=') { l->pos += 2; tl_push(l->out, make_tok(TOK_GE, line)); return; }
     if (c == '=' && d == '=') { l->pos += 2; tl_push(l->out, make_tok(TOK_EQ, line)); return; }
     if (c == '!' && d == '=') { l->pos += 2; tl_push(l->out, make_tok(TOK_NE, line)); return; }
+    if (c == '<' && d == '<') { l->pos += 2; tl_push(l->out, make_tok(TOK_SHL, line)); return; }
+    if (c == '>' && d == '>') { l->pos += 2; tl_push(l->out, make_tok(TOK_SHR, line)); return; }
     l->pos++;
     switch (c) {
         case '(': tl_push(l->out, make_tok(TOK_LPAREN, line)); return;
@@ -215,6 +220,10 @@ static void lex_punct(L *l) {
         case '<': tl_push(l->out, make_tok(TOK_LT,     line)); return;
         case '>': tl_push(l->out, make_tok(TOK_GT,     line)); return;
         case '=': tl_push(l->out, make_tok(TOK_ASSIGN, line)); return;
+        case '&': tl_push(l->out, make_tok(TOK_AMP,    line)); return;
+        case '|': tl_push(l->out, make_tok(TOK_PIPE,   line)); return;
+        case '^': tl_push(l->out, make_tok(TOK_CARET,  line)); return;
+        case '~': tl_push(l->out, make_tok(TOK_TILDE,  line)); return;
         default:
             herr(line, "unexpected character '%c' (0x%02x)", c, (unsigned char)c);
     }

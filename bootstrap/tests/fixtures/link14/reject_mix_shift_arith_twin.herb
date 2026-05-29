@@ -1,0 +1,9 @@
+-- Renamed/revalued twin of reject_mix_shift_arith: same reject verdict.
+func shifty(data):
+    let v = index(data, 0)
+    return v << 7 + 9
+end
+func main():
+    let data = clogger()
+    return shifty(data)
+end

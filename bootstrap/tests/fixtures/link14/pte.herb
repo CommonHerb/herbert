@@ -1,0 +1,21 @@
+-- Build an x86-64 4 KiB page-table entry from runtime input.
+-- stdin: byte0 = low 8 bits of frame, byte1 = next 8 bits, byte2 = flag byte.
+-- The 40-bit frame mask is written (1 << 40) - 1, NOT the decimal literal
+-- 1099511627775: the literal would hit the O(value) PUSH_INT encoder and hang
+-- the build; small literals + the new shift build the big mask at runtime.
+-- Exercises & << |. Sample 0xDE 0xAD 0x07 -> 0xADDE007 -> prints 182312967.
+func pte(frame, flags):
+    let frame40 = frame & ((1 << 40) - 1)
+    let addr = frame40 << 12
+    let low = flags & ((1 << 12) - 1)
+    return addr | low
+end
+
+func main():
+    let inp = clogger()
+    let b0 = index(inp, 0)
+    let b1 = index(inp, 1)
+    let fl = index(inp, 2)
+    let frame = (b1 << 8) | b0
+    return pte(frame, fl)
+end

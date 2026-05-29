@@ -1,0 +1,4 @@
+-- REJECT: ~ requires int, not bool (the int/bool category split).
+func main():
+    return ~true
+end

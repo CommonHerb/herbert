@@ -1,0 +1,6 @@
+-- ((a & 2) | 3) -- the parenthesised form of the cross-class reject; accepts.
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    return ((a & 2) | 3)
+end

@@ -1,0 +1,8 @@
+-- XOR accept probe: ^ is exercised by no other link14 probe. Data-dependent
+-- (operands from clogger) so a constant-folding regression could not hide it.
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    let b = index(inp, 1)
+    return a ^ b
+end

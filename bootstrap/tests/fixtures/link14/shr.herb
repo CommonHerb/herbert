@@ -1,0 +1,9 @@
+-- Logical right-shift accept probe (the PTE probe omits >>). >> must be `shr`
+-- (zero-fill), not arithmetic. Reads a byte from clogger and shifts it right.
+func main():
+    let inp = clogger()
+    let x = index(inp, 0)
+    let hi = index(inp, 1)
+    let wide = (hi << 8) | x
+    return wide >> 3
+end

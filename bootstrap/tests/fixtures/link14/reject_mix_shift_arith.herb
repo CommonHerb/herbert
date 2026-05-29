@@ -1,0 +1,6 @@
+-- REJECT: << mixed with + without parens. (1 << (2 + 3)) accepts.
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    return a << 2 + 3
+end

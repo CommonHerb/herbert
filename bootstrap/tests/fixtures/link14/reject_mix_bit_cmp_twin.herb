@@ -1,0 +1,9 @@
+-- Renamed/revalued twin of reject_mix_bit_cmp: same reject verdict.
+func parity(src):
+    let y = index(src, 0)
+    return y & 2 != 1
+end
+func main():
+    let src = clogger()
+    return parity(src)
+end

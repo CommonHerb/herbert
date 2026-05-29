@@ -1,0 +1,7 @@
+-- One's-complement accept probe (the PTE probe omits ~). ~ is the int->int
+-- unary, distinct from boolean `not`. Full 64-bit width: ~x flips every bit.
+func main():
+    let inp = clogger()
+    let x = index(inp, 0)
+    return ~x
+end

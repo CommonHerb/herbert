@@ -1,0 +1,4 @@
+-- Renamed/revalued twin of reject_bnot_bool: ~false also rejects.
+func main():
+    return ~false
+end

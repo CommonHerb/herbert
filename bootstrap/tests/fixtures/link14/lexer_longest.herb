@@ -1,0 +1,24 @@
+-- Lexer longest-match probe. `<<`/`>>` must lex as single shift tokens (not two
+-- `<`/`>`), and `>=`/`>`/`<`/`<=` must still lex correctly with the shifts
+-- present. All cross-class mixes are parenthesised (precedence c). The value
+-- combines a shift result with comparison results; the differential vs C pins
+-- the token boundaries (a mis-lex of `<<` as `< <` would change the parse).
+func main():
+    let inp = clogger()
+    let x = index(inp, 0)
+    let sh = x << 2
+    let sr = (x << 4) >> 1
+    let ge = 0
+    if x >= 5:
+        ge = 1
+    end
+    let gt = 0
+    if x > 3:
+        gt = 1
+    end
+    let lt = 0
+    if x < 100:
+        lt = 1
+    end
+    return (((sh << 8) | sr) << 4) | ((ge << 2) | ((gt << 1) | lt))
+end

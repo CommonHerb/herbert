@@ -31,6 +31,7 @@ bootstrap/tests/run_native_codegen_link10.sh
 bootstrap/tests/run_native_codegen_link11.sh
 bootstrap/tests/run_native_codegen_link12.sh
 bootstrap/tests/run_native_codegen_link13.sh
+bootstrap/tests/run_native_codegen_link14.sh
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/capture_native_goldens.sh
@@ -49,6 +50,16 @@ bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_get_oob.bin
 bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_index_oob.bin
 bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_large_index_oob.bin
 bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_partial_stdout_then_fault.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_bnot.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_branch_after_bitwise.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_lexer_longest.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_nonshortcircuit.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_parens_bit_cmp.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_parens_cross.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_parens_shift_arith.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_pte.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_shr.bin
+bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_xor.bin
 bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_accept_p1_add.bin
 bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_accept_p2_lt.bin
 bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_accept_p3_sub.bin

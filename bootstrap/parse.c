@@ -99,14 +99,15 @@ static TypeExpr *parse_type(P *p) {
 
 /* ---- expressions ---- */
 
-static Expr *parse_expr(P *p);
-static Expr *parse_or  (P *p);
-static Expr *parse_and (P *p);
-static Expr *parse_cmp (P *p);
-static Expr *parse_add (P *p);
-static Expr *parse_not (P *p);
-static Expr *parse_dot (P *p);
-static Expr *parse_atom(P *p);
+static Expr *parse_expr   (P *p);
+static Expr *parse_bitwise(P *p);
+static Expr *parse_or     (P *p);
+static Expr *parse_and    (P *p);
+static Expr *parse_cmp    (P *p);
+static Expr *parse_add    (P *p);
+static Expr *parse_not    (P *p);
+static Expr *parse_dot    (P *p);
+static Expr *parse_atom   (P *p);
 
 static Expr *new_expr(EKind k, int line) {
     Expr *e = (Expr *)xcalloc(1, sizeof(Expr));
@@ -115,7 +116,99 @@ static Expr *new_expr(EKind k, int line) {
     return e;
 }
 
-static Expr *parse_expr(P *p) { return parse_or(p); }
+/* The six bitwise/shift operators form three mutually-exclusive "classes":
+ * the AND class (`&`), the OR class (`|`), the XOR class (`^`), and the SHIFT
+ * class (`<<` `>>`). Per the settled precedence (Oberon-flat / require-parens-
+ * when-mixing), they do NOT join the +/-/cmp/and/or ladder: same-class chaining
+ * is left-associative, but mixing a bitwise/shift op with arithmetic, a
+ * comparison, a boolean op, or a DIFFERENT bitwise class WITHOUT parentheses is
+ * a parse-time error. bit_class() maps a token kind to a class id (0 = not a
+ * bitwise/shift op). The SHIFT class lumps `<<` and `>>` together (chaining
+ * mixed shifts like `a << b >> c` is same-class and allowed). */
+static int bit_class(TokKind k) {
+    switch (k) {
+        case TOK_AMP:   return 1;  /* AND   */
+        case TOK_PIPE:  return 2;  /* OR    */
+        case TOK_CARET: return 3;  /* XOR   */
+        case TOK_SHL:
+        case TOK_SHR:   return 4;  /* SHIFT */
+        default:        return 0;
+    }
+}
+
+static BinOp bit_op(TokKind k) {
+    switch (k) {
+        case TOK_AMP:   return OP_BAND;
+        case TOK_PIPE:  return OP_BOR;
+        case TOK_CARET: return OP_BXOR;
+        case TOK_SHL:   return OP_SHL;
+        default:        return OP_SHR;  /* TOK_SHR */
+    }
+}
+
+static Expr *parse_expr(P *p) { return parse_bitwise(p); }
+
+/* Bitwise/shift level — sits above the classless ladder. Parse a classless
+ * expression (parse_or); if a bitwise/shift operator follows, the left operand
+ * must be a parenthesised/atomic primary (not a bare classless chain), and the
+ * whole chain must stay within a single class. Both rules are enforced so that
+ * `a & b | c`, `a << 2 + 3`, `x & 1 == 0`, and `1 + 2 << 1` all reject, while
+ * their fully-parenthesised forms parse. */
+static Expr *parse_bitwise(P *p) {
+    size_t start = p->i;
+    Expr  *l     = parse_or(p);
+    int    cls   = bit_class(cur(p)->kind);
+    if (cls == 0) {
+        return l;  /* pure classless expression — ladder unchanged among itself */
+    }
+    /* A bitwise/shift op follows the left operand. The left operand must be a
+     * single primary: parse one primary from `start` and require it to end
+     * exactly where parse_or stopped. If parse_or consumed more (an
+     * unparenthesised +/-/cmp/and/or), the operator classes are mixed. */
+    {
+        P probe = { p->t, start };
+        parse_not(&probe);  /* one prefix-unary primary (~/not/dot/atom/group) */
+        if (probe.i != p->i) {
+            herr(cur(p)->line,
+                 "bitwise/shift operator mixed with another operator class "
+                 "without parentheses");
+        }
+    }
+    for (;;) {
+        TokKind k   = cur(p)->kind;
+        int     kc  = bit_class(k);
+        if (kc == 0) {
+            /* A non-bitwise binary operator after a committed bitwise chain is
+             * a class mix (e.g. the `+` in `1 << 2 + 3`, the `==` in
+             * `x & 1 == 0`). Anything that is not a binary operator at all
+             * (`)`, `,`, `:`, end, EOF, `.`) simply ends the expression. */
+            switch (k) {
+                case TOK_PLUS: case TOK_MINUS:
+                case TOK_LT: case TOK_LE: case TOK_GT: case TOK_GE:
+                case TOK_EQ: case TOK_NE:
+                case TOK_AND: case TOK_OR:
+                    herr(cur(p)->line,
+                         "bitwise/shift operator mixed with another operator "
+                         "class without parentheses");
+                    break;  /* unreachable (herr is noreturn) */
+                default:
+                    return l;
+            }
+        }
+        if (kc != cls) {
+            herr(cur(p)->line,
+                 "different bitwise operator classes mixed without parentheses");
+        }
+        int ln = cur(p)->line;
+        BinOp op = bit_op(k);
+        adv(p);
+        Expr *e = new_expr(E_BINOP, ln);
+        e->op = op;
+        e->l  = l;
+        e->r  = parse_not(p);  /* operands are primaries, not classless chains */
+        l = e;
+    }
+}
 
 static Expr *parse_or(P *p) {
     Expr *l = parse_and(p);
@@ -189,6 +282,16 @@ static Expr *parse_not(P *p) {
         int ln = cur(p)->line;
         adv(p);
         Expr *e = new_expr(E_NOT, ln);
+        e->child = parse_not(p);
+        return e;
+    }
+    /* `~` is the bitwise (one's-complement) unary. It is a distinct AST kind
+     * from boolean `not`, with a distinct type rule (int, not bool); it sits at
+     * the same prefix-unary precedence level. */
+    if (cur(p)->kind == TOK_TILDE) {
+        int ln = cur(p)->line;
+        adv(p);
+        Expr *e = new_expr(E_BNOT, ln);
         e->child = parse_not(p);
         return e;
     }

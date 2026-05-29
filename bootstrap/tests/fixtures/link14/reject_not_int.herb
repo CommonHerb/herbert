@@ -1,0 +1,4 @@
+-- REJECT: boolean not requires bool, not int (the other half of the split).
+func main():
+    return not 5
+end

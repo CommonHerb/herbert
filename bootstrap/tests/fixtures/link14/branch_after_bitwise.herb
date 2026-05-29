@@ -1,0 +1,21 @@
+-- Branch-after-bitwise probe: the forcing function for the nc_group_single_len
+-- layout-sizing arm. classify() branches on (x & 1) == 0 and returns different
+-- values per arm; x comes from clogger so it is data-dependent. If the pass-1
+-- sizing for the new bitwise opcodes is wrong (length 0), the branch
+-- displacement rots and the native output diverges from C. A straight-line
+-- probe (like pte) has no branch to expose this -- this one does.
+func classify(x):
+    if (x & 1) == 0:
+        return 40000
+    end
+    return 50001
+end
+
+func main():
+    let inp = clogger()
+    let x = index(inp, 0)
+    let y = index(inp, 1)
+    let a = classify(x)
+    let b = classify(y)
+    return (a << 20) | b
+end

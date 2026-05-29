@@ -1,0 +1,7 @@
+-- ((x & 1) == 0) -- the parenthesised form of the bitwise+cmp reject; accepts.
+-- Returns a bool; the native back end renders true/false.
+func main():
+    let inp = clogger()
+    let x = index(inp, 0)
+    return ((x & 1) == 0)
+end

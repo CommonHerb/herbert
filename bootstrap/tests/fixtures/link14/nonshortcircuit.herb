@@ -1,0 +1,20 @@
+-- Non-short-circuit probe: & and | evaluate BOTH operands, unlike the boolean
+-- and/or (which short-circuit). The right operand of each is a user-function
+-- call whose result contributes bits; if it were skipped, the value would
+-- differ from the C oracle. side() also reads a SECOND clogger byte, so a
+-- skipped right operand would change the result. The differential vs C (which
+-- also evaluates both) pins that the native back end evaluates both operands.
+func side(inp):
+    let b = index(inp, 1)
+    return b
+end
+
+func main():
+    let inp = clogger()
+    let a = index(inp, 0)
+    -- a is nonzero in the test input; a boolean `or` would short-circuit, but
+    -- `|` must still OR in side(inp). Likewise `&` must AND in side(inp).
+    let ored = a | side(inp)
+    let anded = a & side(inp)
+    return (ored << 8) | anded
+end

@@ -63,6 +63,7 @@ typedef enum {
     TOK_LPAREN, TOK_RPAREN, TOK_COMMA, TOK_COLON, TOK_DOT,
     TOK_PLUS, TOK_MINUS,
     TOK_LT, TOK_LE, TOK_GT, TOK_GE, TOK_EQ, TOK_NE,
+    TOK_AMP, TOK_PIPE, TOK_CARET, TOK_TILDE, TOK_SHL, TOK_SHR,
     TOK_ASSIGN,
     TOK_INT_LIT,
     TOK_STR_LIT,
@@ -108,13 +109,14 @@ typedef struct TypeExpr {
 
 typedef enum {
     E_INT, E_BOOL, E_STR, E_NAME, E_CALL, E_NEW_ARRAY,
-    E_TUPLE, E_DOT, E_NOT, E_BINOP
+    E_TUPLE, E_DOT, E_NOT, E_BNOT, E_BINOP
 } EKind;
 
 typedef enum {
     OP_ADD, OP_SUB,
     OP_LT, OP_LE, OP_GT, OP_GE, OP_EQ_INT, OP_NE_INT,
-    OP_AND, OP_OR
+    OP_AND, OP_OR,
+    OP_BAND, OP_BOR, OP_BXOR, OP_SHL, OP_SHR
 } BinOp;
 
 typedef struct Expr Expr;

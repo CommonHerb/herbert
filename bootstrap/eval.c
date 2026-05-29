@@ -165,6 +165,7 @@ bool is_builtin_voidless(const char *name) {
 typedef enum {
     OP_EVAL_EXPR,         /* u.expr: decompose into postorder work          */
     OP_AFTER_NOT,         /* pop bool, push negation                        */
+    OP_AFTER_BNOT,        /* pop int, push one's complement                 */
     OP_AFTER_DOT,         /* n=idx: pop tuple, push element                 */
     OP_AFTER_BINOP,       /* binop: pop right, left; push arith/cmp result  */
     OP_AFTER_AND,         /* u.expr=right: short-circuit on left            */
@@ -546,6 +547,16 @@ static Value eval_arith(int line, BinOp op, Value l, Value r) {
         case OP_GE:     return v_bool(l.u.i >= r.u.i);
         case OP_EQ_INT: return v_bool(l.u.i == r.u.i);
         case OP_NE_INT: return v_bool(l.u.i != r.u.i);
+        case OP_BAND:   return v_int (l.u.i &  r.u.i);
+        case OP_BOR:    return v_int (l.u.i |  r.u.i);
+        case OP_BXOR:   return v_int (l.u.i ^  r.u.i);
+        /* Shift count is masked to 6 bits to match the x86-64 hardware the
+         * native back end targets (`shl/shr r/m64, cl` masks CL to 6 bits).
+         * Raw C `<<`/`>>` with a count >= 64 is undefined behaviour and would
+         * diverge from native; the mask makes the operation total and the two
+         * back ends agree byte-for-byte. `>>` is logical (unsigned) shift. */
+        case OP_SHL:    return v_int (l.u.i << (r.u.i & 63));
+        case OP_SHR:    return v_int (l.u.i >> (r.u.i & 63));
         default: break;
     }
     herr(line, "internal: unexpected binop %d", op);
@@ -600,6 +611,15 @@ static DriveResult drive(Activation *a) {
                     case E_NOT: {
                         Op af = {0};
                         af.kind = OP_AFTER_NOT;
+                        af.line = e->line;
+                        act_push_op(a, af);
+                        push_eval(a, e->child);
+                        break;
+                    }
+
+                    case E_BNOT: {
+                        Op af = {0};
+                        af.kind = OP_AFTER_BNOT;
                         af.line = e->line;
                         act_push_op(a, af);
                         push_eval(a, e->child);
@@ -694,6 +714,15 @@ static DriveResult drive(Activation *a) {
                     herr(op.line, "'not' requires bool, got %s", v_kind_name(v.kind));
                 }
                 act_push_val(a, v_bool(!v.u.b));
+                break;
+            }
+
+            case OP_AFTER_BNOT: {
+                Value v = act_pop_val(a);
+                if (v.kind != V_INT) {
+                    herr(op.line, "'~' requires int, got %s", v_kind_name(v.kind));
+                }
+                act_push_val(a, v_int(~v.u.i));
                 break;
             }
 

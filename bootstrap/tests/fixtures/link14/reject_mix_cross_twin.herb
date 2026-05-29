@@ -1,0 +1,10 @@
+-- Renamed/revalued twin of reject_mix_cross: must get the SAME reject verdict.
+-- If this flips to compile, the rejection was probe-fitted (a bug).
+func compute(buf):
+    let z = index(buf, 0)
+    return z & 6 | 9
+end
+func main():
+    let buf = clogger()
+    return compute(buf)
+end

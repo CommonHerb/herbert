@@ -1,0 +1,11 @@
+-- REJECT (F1): a class-mix (`x & 1 == 0`, bitwise mixed with comparison) in a
+-- function NOT reachable from main. C rejects class-mix syntactically for ALL
+-- functions, so native must too -- reachability-independent, with a clean ERR 442
+-- (not silently emit an ELF, not crash). main never calls dead(); the mix is in
+-- the dead function only.
+func main():
+    return 7
+end
+func dead(x):
+    return x & 1 == 0
+end

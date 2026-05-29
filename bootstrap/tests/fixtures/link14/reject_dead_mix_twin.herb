@@ -1,0 +1,11 @@
+-- Renamed/revalued twin of reject_dead_mix: a DIFFERENT dead-function class-mix
+-- (different bitwise class mix `y | 4 ^ 8`, different names/values) that must get
+-- the SAME clean ERR 442 verdict. If this flips to compile, the fix was
+-- probe-fitted to the exact F1 repro rather than a real reachability-independent
+-- class-mix scan.
+func main():
+    return 99
+end
+func orphan(y):
+    return y | 4 ^ 8
+end
