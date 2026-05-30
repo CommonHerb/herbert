@@ -1,0 +1,7 @@
+-- throne / D15 large-literal probe: 2^64-1 = 18446744073709551615 =
+-- 0xFFFFFFFFFFFFFFFF (all eight bytes 0xFF, the maximal quotient at every div
+-- step). The boundary case of the byte encoder; pre-throne it was the worst
+-- O(value) hang of all.
+func main():
+    return 18446744073709551615
+end

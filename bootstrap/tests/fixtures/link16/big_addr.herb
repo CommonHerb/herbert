@@ -1,0 +1,8 @@
+-- throne / D15 large-literal probe: 0xFFFFFFFF80000000 = 18446744071562067968,
+-- the x86-64 higher-half kernel base -- a literal a real kernel must load as an
+-- immediate. LE bytes 00 00 00 80 FF FF FF FF. Pre-throne, PUSH_INT serialized
+-- these 8 bytes with the O(value) nc_div256/nc_mod256 subtraction loops, so
+-- compiling this HUNG (~7e16 iterations); tonka's real / % make it O(1) per byte.
+func main():
+    return 18446744071562067968
+end

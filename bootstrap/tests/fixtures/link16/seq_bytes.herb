@@ -1,0 +1,8 @@
+-- throne / D15 large-literal probe: 0x0102030405060708 = 72623859790382856.
+-- All eight LE bytes are distinct and ascending (08 07 06 05 04 03 02 01), so a
+-- wrong byte ORDER or a shift bug in the fast encoder changes the value -- the
+-- canonical-decimal differential vs the C bootstrap catches an endianness bug
+-- here that the all-0xFF and zero-mix probes could not.
+func main():
+    return 72623859790382856
+end

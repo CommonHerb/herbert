@@ -7370,26 +7370,17 @@ func nc_prog_has_faultable(prog):
     return nc_funcs_have_faultable_loop(prog.0, 0, count(prog.0))
 end
 
-func nc_mod256_loop(v, acc):
-    if v < 256:
-        return v
-    end
-    return nc_mod256_loop(v - 256, acc)
-end
-
+-- Little-endian byte-serialization helpers. Now that tonka added * / %, these
+-- use real remainder/division. Pre-tonka (no * / %) they were O(value)
+-- repeated-subtraction loops, which hung compilation on a large literal whose
+-- PUSH_INT byte split ran billions of iterations (D15 -- throne). The byte
+-- values are unchanged; only the cost is (O(value) -> O(1) per byte).
 func nc_mod256(v):
-    return nc_mod256_loop(v, 0)
-end
-
-func nc_div256_loop(v, q):
-    if v < 256:
-        return q
-    end
-    return nc_div256_loop(v - 256, q + 1)
+    return v % 256
 end
 
 func nc_div256(v):
-    return nc_div256_loop(v, 0)
+    return v / 256
 end
 
 func nc_append_le32(buf, v):
