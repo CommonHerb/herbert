@@ -10380,8 +10380,303 @@ func nc_append_fault_rodata(strings):
     return strings
 end
 
+-- ====================================================================
+-- L1 (first kernel-arc link): freestanding 32-bit Multiboot1 emit mode.
+-- A SECOND back-end target, selected by an anchored first-line directive
+-- "-- emit: multiboot32" in the stdin source. The compiler's own source
+-- has no such first line, so self-compilation stays on the x86-64 Linux
+-- ELF path and the gen2==gen1 fixpoint is preserved. Scope: 32-bit
+-- protected mode, paging off; subset = integer literal, multiply, return.
+-- The emitted image computes the byte with a real runtime imul (0F AF C1,
+-- 32-bit, no REX.W) and writes it -- framed 0xDE <byte> 0xAD -- to debugcon
+-- 0xE9 via the DX form, then a RESULT-DEPENDENT isa-debug-exit completion
+-- (((payload ^ 0x31) & 0x7F)) and a Bochs power-off. Graded on the far-axis
+-- dual-substrate (QEMU + Bochs) oracle vs a host-derived golden, NOT C.
+-- See bootstrap/tests/run_native_codegen_link17.sh. Exact byte layout was
+-- proven on BOTH substrates before implementation (the empirical gate);
+-- a valid ELF cannot place the multiboot header at byte 0, so the header
+-- sits at the page-aligned segment offset 0x1000 (vaddr 0x100000) with
+-- e_entry = 0x10000c, and a one-entry (NULL) section table is required or
+-- GRUB rejects e_shoff (QEMU -kernel tolerates its absence; GRUB does not).
+-- ====================================================================
+
+func nc_mb_marker_match(source, marker, i, n):
+    if i >= n:
+        return true
+    end
+    if i >= length(source):
+        return false
+    end
+    if index(source, i) != index(marker, i):
+        return false
+    end
+    return nc_mb_marker_match(source, marker, i + 1, n)
+end
+
+func nc_is_multiboot32(source):
+    let marker = "-- emit: multiboot32"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    -- Require the marker to be a COMPLETE first line (followed by a newline),
+    -- so "-- emit: multiboot32whatever" does NOT select the mode (it falls to
+    -- the ELF64 path). Marker-only input (no newline) is not a real program.
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- The freestanding subset: every op is PUSH_INT (0) or MUL (42), and the
+-- final op is RET (21). Anything else (locals, calls, strings, heap,
+-- control flow, div/mod, bitwise) is rejected -- the honest narrow L1
+-- boundary, widened by later kernel links. `depth` tracks the simulated
+-- stack so the gate is a real well-formedness check, not just an opcode
+-- allowlist: PUSH_INT +1, MUL needs >=2 (pops 2, pushes 1), and the
+-- terminal RET requires exactly one value to pop into eax. (A verified AST
+-- only lowers to balanced IR, so this is defense-in-depth, not a path a
+-- valid program takes -- a cross-model review flag, folded in.)
+func nc32_body_ok(code, i, n, depth):
+    if i >= n:
+        return false
+    end
+    let op = get(code, i).0
+    if i == n - 1:
+        return op == 21 and depth == 1
+    end
+    if op == 0:
+        return nc32_body_ok(code, i + 1, n, depth + 1)
+    end
+    if op == 42:
+        if depth < 2:
+            return false
+        end
+        return nc32_body_ok(code, i + 1, n, depth - 1)
+    end
+    return false
+end
+
+-- 32-bit lowering of the freestanding subset. Distinct from the x86-64
+-- table (NOT a de-REX of it -- de-REXing would mis-decode, e.g. 48 -> dec
+-- eax). PUSH_INT n = 68 <le32> (push imm32); MUL = 59 58 0F AF C1 50 (pop
+-- ecx; pop eax; imul eax,ecx; push eax); terminal RET = 58 (pop eax ->
+-- result low byte lands in al).
+func nc32_lower_body(buf, code, i, n):
+    if i >= n:
+        return buf
+    end
+    let op = get(code, i).0
+    if op == 0:
+        do append(buf, 104)
+        buf = nc_append_le32(buf, get(code, i).1)
+    elif op == 42:
+        do append(buf, 89)
+        do append(buf, 88)
+        do append(buf, 15)
+        do append(buf, 175)
+        do append(buf, 193)
+        do append(buf, 80)
+    elif op == 21:
+        do append(buf, 88)
+    end
+    return nc32_lower_body(buf, code, i + 1, n)
+end
+
+func nc32_emit_out_char(buf, c):
+    do append(buf, 176)
+    do append(buf, c)
+    do append(buf, 238)
+    return buf
+end
+
+-- Fixed 58-byte epilogue: frame the payload on 0xE9, a result-dependent
+-- isa-debug-exit completion, a Bochs power-off, then halt.
+func nc32_emit_epilogue(buf):
+    do append(buf, 136)
+    do append(buf, 195)
+    do append(buf, 102)
+    do append(buf, 186)
+    do append(buf, 233)
+    do append(buf, 0)
+    do append(buf, 176)
+    do append(buf, 222)
+    do append(buf, 238)
+    do append(buf, 136)
+    do append(buf, 216)
+    do append(buf, 238)
+    do append(buf, 176)
+    do append(buf, 173)
+    do append(buf, 238)
+    do append(buf, 136)
+    do append(buf, 216)
+    do append(buf, 52)
+    do append(buf, 49)
+    do append(buf, 36)
+    do append(buf, 127)
+    do append(buf, 102)
+    do append(buf, 186)
+    do append(buf, 244)
+    do append(buf, 0)
+    do append(buf, 238)
+    do append(buf, 102)
+    do append(buf, 186)
+    do append(buf, 0)
+    do append(buf, 137)
+    buf = nc32_emit_out_char(buf, 83)
+    buf = nc32_emit_out_char(buf, 104)
+    buf = nc32_emit_out_char(buf, 117)
+    buf = nc32_emit_out_char(buf, 116)
+    buf = nc32_emit_out_char(buf, 100)
+    buf = nc32_emit_out_char(buf, 111)
+    buf = nc32_emit_out_char(buf, 119)
+    buf = nc32_emit_out_char(buf, 110)
+    do append(buf, 250)
+    do append(buf, 244)
+    do append(buf, 235)
+    do append(buf, 253)
+    return buf
+end
+
+func nc32_roundup4(v):
+    let r = v % 4
+    if r == 0:
+        return v
+    end
+    return v + 4 - r
+end
+
+func nc32_emit_ehdr(buf, entry, shoff):
+    do append(buf, 127)
+    do append(buf, 69)
+    do append(buf, 76)
+    do append(buf, 70)
+    do append(buf, 1)
+    do append(buf, 1)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_append_le32(buf, entry)
+    buf = nc_append_le32(buf, 52)
+    buf = nc_append_le32(buf, shoff)
+    buf = nc_append_le32(buf, 0)
+    do append(buf, 52)
+    do append(buf, 0)
+    do append(buf, 32)
+    do append(buf, 0)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 40)
+    do append(buf, 0)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    return buf
+end
+
+func nc32_emit_phdr(buf, filesz, memsz):
+    buf = nc_append_le32(buf, 1)
+    buf = nc_append_le32(buf, 4096)
+    buf = nc_append_le32(buf, 1048576)
+    buf = nc_append_le32(buf, 1048576)
+    buf = nc_append_le32(buf, filesz)
+    buf = nc_append_le32(buf, memsz)
+    buf = nc_append_le32(buf, 7)
+    buf = nc_append_le32(buf, 4096)
+    return buf
+end
+
+func nc32_emit_mbheader(buf):
+    do append(buf, 2)
+    do append(buf, 176)
+    do append(buf, 173)
+    do append(buf, 27)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 254)
+    do append(buf, 79)
+    do append(buf, 82)
+    do append(buf, 228)
+    return buf
+end
+
+func nc_emit_multiboot32_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let f1 = nc_fail(450, 0, "multiboot32: main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    let code = mainfn.4
+    let n = count(code)
+    if not nc32_body_ok(code, 0, n, 0):
+        let f2 = nc_fail(451, 0, "multiboot32: body must be integer literal/multiply/return")
+        return 0
+    end
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_body(bodybuf, code, 0, n)
+    let bodylen = length(freeze(bodybuf))
+    let code_len = 5 + bodylen + 58
+    let memsz = 12 + code_len + 16384
+    let esp_val = 1048576 + memsz
+    let cbuf = new_buffer()
+    do append(cbuf, 188)
+    cbuf = nc_append_le32(cbuf, esp_val)
+    cbuf = append_str(cbuf, freeze(bodybuf))
+    cbuf = nc32_emit_epilogue(cbuf)
+    let frozen_code = freeze(cbuf)
+    if length(frozen_code) != code_len:
+        let f3 = nc_fail(452, 0, "multiboot32: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
+end
+
 func main():
     let source = clogger()
+    if nc_is_multiboot32(source):
+        let mb_done = nc_emit_multiboot32_program(source)
+        return 0
+    end
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)

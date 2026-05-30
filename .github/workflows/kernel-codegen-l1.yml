@@ -1,0 +1,44 @@
+name: kernel-codegen-l1
+
+# The far-axis silicon gate for L1 (the first kernel-arc link). The native
+# compiler's freestanding 32-bit Multiboot emit mode (selected by the
+# "-- emit: multiboot32" directive) is graded NOT against the C reference but on
+# a dual-substrate oracle: the emitted image must boot under BOTH QEMU
+# (-kernel direct multiboot) and Bochs (GRUB on a partitioned HDD) and emit a
+# runtime-computed byte that matches a HOST-DERIVED golden. This workflow is the
+# authoritative run of bootstrap/tests/run_native_codegen_link17.sh, with
+# KERNEL_CODEGEN_REQUIRE_EMU=1 so a missing emulator is a hard failure, never a
+# silent skip. (It replaces the throwaway kernel-substrate-proof workflow, whose
+# working incantation it folds in.) `make test` keeps its emulator-free
+# C-golden scope; this is the separate, emulator-graded kernel gate.
+
+on:
+  push:
+    branches:
+      - main
+      - l1-kernel-boot-emit
+
+jobs:
+  l1-dual-substrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: install emulators + boot tooling (TEST dependencies)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            qemu-system-x86 \
+            bochs bochs-x bochsbios vgabios \
+            xvfb \
+            grub-pc-bin grub-common \
+            parted dosfstools
+      - name: tool versions
+        run: |
+          qemu-system-x86_64 --version | head -1
+          bochs --help 2>&1 | head -1 || true
+          grub-install --version | head -1
+      - name: build the C bootstrap (build/herbert)
+        run: make build/herbert
+      - name: L1 dual-substrate gate (QEMU + Bochs vs host-derived golden)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link17.sh

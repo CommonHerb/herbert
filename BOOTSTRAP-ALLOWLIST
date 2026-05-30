@@ -14,6 +14,7 @@
 
 # --- scaffolding (stable: build, CI, guard, docs) ---
 .github/workflows/check.yml
+.github/workflows/kernel-codegen-l1.yml
 .gitignore
 BOOTSTRAP-ALLOWLIST
 Makefile
@@ -34,6 +35,7 @@ bootstrap/tests/run_native_codegen_link13.sh
 bootstrap/tests/run_native_codegen_link14.sh
 bootstrap/tests/run_native_codegen_link15.sh
 bootstrap/tests/run_native_codegen_link16.sh
+bootstrap/tests/run_native_codegen_link17.sh
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/capture_native_goldens.sh
