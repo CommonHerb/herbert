@@ -10428,48 +10428,319 @@ func nc_is_multiboot32(source):
     return index(source, mlen) == 10
 end
 
--- The freestanding subset: every op is PUSH_INT (0) or MUL (42), and the
--- final op is RET (21). Anything else (locals, calls, strings, heap,
--- control flow, div/mod, bitwise) is rejected -- the honest narrow L1
--- boundary, widened by later kernel links. `depth` tracks the simulated
--- stack so the gate is a real well-formedness check, not just an opcode
--- allowlist: PUSH_INT +1, MUL needs >=2 (pops 2, pushes 1), and the
--- terminal RET requires exactly one value to pop into eax. (A verified AST
--- only lowers to balanced IR, so this is defense-in-depth, not a path a
--- valid program takes -- a cross-model review flag, folded in.)
-func nc32_body_ok(code, i, n, depth):
-    if i >= n:
-        return false
-    end
-    let op = get(code, i).0
-    if i == n - 1:
-        return op == 21 and depth == 1
-    end
+-- The toakie freestanding subset (widens lingo's {PUSH_INT, MUL, RET}): adds
+-- LOAD_LOCAL (3), STORE_LOCAL (4), ADD (5), SUB (6), EQ (11), BR (16),
+-- BR_IF_FALSE (17) -- a single acyclic function that makes a data-dependent
+-- branch from computed state. Anything else (calls 20, div/mod 43/44, the other
+-- comparators 7-10/12, bitwise 36-41, tuples 14/15, strings, heap, and/or
+-- short-circuit 18/19) stays rejected -- the honest narrow boundary, widened by
+-- later kernel links. Every newly-admitted opcode is exercised by a forcing
+-- probe; nothing is admitted for ergonomics.
+func nc32_op_allowed(op):
     if op == 0:
-        return nc32_body_ok(code, i + 1, n, depth + 1)
+        return true
+    end
+    if op == 3:
+        return true
+    end
+    if op == 4:
+        return true
+    end
+    if op == 5:
+        return true
+    end
+    if op == 6:
+        return true
+    end
+    if op == 11:
+        return true
+    end
+    if op == 16:
+        return true
+    end
+    if op == 17:
+        return true
+    end
+    if op == 21:
+        return true
     end
     if op == 42:
-        if depth < 2:
-            return false
-        end
-        return nc32_body_ok(code, i + 1, n, depth - 1)
+        return true
     end
     return false
 end
 
--- 32-bit lowering of the freestanding subset. Distinct from the x86-64
--- table (NOT a de-REX of it -- de-REXing would mis-decode, e.g. 48 -> dec
--- eax). PUSH_INT n = 68 <le32> (push imm32); MUL = 59 58 0F AF C1 50 (pop
--- ecx; pop eax; imul eax,ecx; push eax); terminal RET = 58 (pop eax ->
--- result low byte lands in al).
-func nc32_lower_body(buf, code, i, n):
+-- Stack effect of each admitted op (pops then pushes). Used by the depth gate.
+func nc32_pops(op):
+    if op == 4:
+        return 1
+    end
+    if op == 5:
+        return 2
+    end
+    if op == 6:
+        return 2
+    end
+    if op == 11:
+        return 2
+    end
+    if op == 42:
+        return 2
+    end
+    if op == 17:
+        return 1
+    end
+    if op == 21:
+        return 1
+    end
+    return 0
+end
+
+func nc32_pushes(op):
+    if op == 0:
+        return 1
+    end
+    if op == 3:
+        return 1
+    end
+    if op == 5:
+        return 1
+    end
+    if op == 6:
+        return 1
+    end
+    if op == 11:
+        return 1
+    end
+    if op == 42:
+        return 1
+    end
+    return 0
+end
+
+-- nlocals = max(slot)+1 over LOAD_LOCAL/STORE_LOCAL; 0 if none. Slot reuse
+-- across if-arms means the env's final counter can understate the peak, so the
+-- frame is sized from the actual slots the code touches.
+func nc32_nlocals_loop(code, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    let op = get(code, i).0
+    let a = acc
+    if op == 3 or op == 4:
+        if get(code, i).1 + 1 > a:
+            a = get(code, i).1 + 1
+        end
+    end
+    return nc32_nlocals_loop(code, i + 1, n, a)
+end
+
+-- PASS A of the depth gate (Codex C1): record the stack depth BEFORE each instr
+-- by a linear forward walk, rejecting any unknown opcode, any underflow, and any
+-- RET not at depth exactly 1 (every return -- terminal or mid-body -- pops the
+-- one result into eax/al). Returns (ok, depths). Herbert ints are unsigned, so
+-- every subtraction is guarded by a prior `cur < pops` check (no wraparound).
+func nc32_build_depths(code, i, n, cur, depths):
+    if i >= n:
+        return (1, depths)
+    end
+    let op = get(code, i).0
+    if not nc32_op_allowed(op):
+        return (0, depths)
+    end
+    -- Structural stack-budget guard (Codex H7): the freestanding image reuses
+    -- lingo's fixed 16 KiB reserve (memsz = 12 + code_len + 16384) for both the
+    -- ebp frame and the expression stack. nlocals is capped at 31 (<=124 B); cap
+    -- the value-stack depth at 3000 (<=12 KiB) so frame + expr stack cannot
+    -- scribble below the reserve. Real acyclic probes peak under 10; this is a
+    -- defense-in-depth ceiling, not a real limit.
+    if cur > 3000:
+        return (0, depths)
+    end
+    let pops = nc32_pops(op)
+    if cur < pops:
+        return (0, depths)
+    end
+    do add(depths, cur)
+    if op == 21:
+        if cur != 1:
+            return (0, depths)
+        end
+    end
+    return nc32_build_depths(code, i + 1, n, cur - pops + nc32_pushes(op), depths)
+end
+
+-- PASS B of the depth gate (Codex C1): every branch must target strictly forward
+-- (forbids loops/back-edges structurally), within (i, n], and the depth it hands
+-- the target must AGREE with the depth the linear fall-through reaches there. A
+-- merge-point depth mismatch is what would otherwise boot and print a stable
+-- WRONG byte, defeating the dual-substrate oracle. target == n is the epilogue
+-- (depth 0). depths[i] >= 1 for op 17 is guaranteed by PASS A.
+func nc32_check_branches(code, i, n, depths):
+    if i >= n:
+        return true
+    end
+    let op = get(code, i).0
+    if op == 16 or op == 17:
+        let t = get(code, i).1
+        if t <= i:
+            return false
+        end
+        -- Strictly forward AND strictly inside the body (Codex C3): a branch
+        -- target == n would jump to the epilogue skipping the result `pop eax`,
+        -- leaving al stale. The epilogue is reachable only via a mid-body RET's
+        -- own jmp, never an IR branch operand (no valid structured program emits
+        -- one), so reject t >= n outright.
+        if t >= n:
+            return false
+        end
+        let want = get(depths, i)
+        if op == 17:
+            want = want - 1
+        end
+        let actual = 0
+        if t < n:
+            actual = get(depths, t)
+        end
+        if actual != want:
+            return false
+        end
+    end
+    return nc32_check_branches(code, i + 1, n, depths)
+end
+
+-- The full subset gate: ends in RET, all opcodes admitted + stack-balanced
+-- (PASS A), all branches forward + depth-agreeing (PASS B). Defense-in-depth: a
+-- verified AST already lowers to balanced structured IR, but the far-axis oracle
+-- has no C reference, so the gate proves well-formedness itself.
+func nc32_body_ok(code, n):
+    if n == 0:
+        return false
+    end
+    if get(code, n - 1).0 != 21:
+        return false
+    end
+    let bd = nc32_build_depths(code, 0, n, 0, new_array(int))
+    if bd.0 == 0:
+        return false
+    end
+    return nc32_check_branches(code, 0, n, bd.1)
+end
+
+-- 32-bit instruction sizes (the toakie lowering; NOT a de-REX of the x86-64
+-- table). Terminal RET is 1 byte (pop eax, fall through to the epilogue);
+-- mid-body RET is 6 (pop eax; jmp epilogue). Drives the two-pass layout that
+-- resolves branch rel32s.
+func nc32_op_size(op, is_last):
+    if op == 0:
+        return 5
+    end
+    if op == 3:
+        return 3
+    end
+    if op == 4:
+        return 3
+    end
+    if op == 5:
+        return 5
+    end
+    if op == 6:
+        return 5
+    end
+    if op == 11:
+        return 11
+    end
+    if op == 16:
+        return 5
+    end
+    if op == 17:
+        return 9
+    end
+    if op == 42:
+        return 6
+    end
+    if op == 21:
+        if is_last == 1:
+            return 1
+        end
+        return 6
+    end
+    return 0
+end
+
+-- PASS 1 layout: byte offset of each instr from code start (offsets INCLUDE the
+-- prefix, so a branch rel cancels the prefix). Returns (offs, epilogue_off); a
+-- branch target == n resolves to epilogue_off.
+func nc32_layout_loop(code, i, n, cur, offs):
+    if i >= n:
+        return (offs, cur)
+    end
+    do add(offs, cur)
+    let il = 0
+    if i == n - 1:
+        il = 1
+    end
+    return nc32_layout_loop(code, i + 1, n, cur + nc32_op_size(get(code, i).0, il), offs)
+end
+
+-- Frame-local displacement as a disp8 byte: [ebp - 4*(slot+1)]. nlocals is
+-- capped at 31 upstream (max slot 30), so 4*(slot+1) <= 124 fits a signed byte.
+-- The cap is 31 not 32 because the frame prologue is `sub esp, imm8` (83 EC ib),
+-- which SIGN-EXTENDS: frame = 4*32 = 128 would encode as 0x80 = -128 and ADD to
+-- esp. So 31 locals (frame 124, 0x7C) is the true boundary, not the disp8 limit.
+func nc32_emit_local_disp(buf, slot):
+    do append(buf, 256 - 4 * (slot + 1))
+    return buf
+end
+
+-- PASS 2 lowering: emit each instr's bytes, resolving BR/BR_IF_FALSE/mid-RET
+-- rel32 from the layout. All rel32s are non-negative (forward-only branches,
+-- gated), so nc_append_le32 serializes them directly.
+func nc32_lower_loop(buf, code, i, n, offs, epi):
     if i >= n:
         return buf
     end
     let op = get(code, i).0
+    let il = 0
+    if i == n - 1:
+        il = 1
+    end
+    let endoff = get(offs, i) + nc32_op_size(op, il)
     if op == 0:
         do append(buf, 104)
         buf = nc_append_le32(buf, get(code, i).1)
+    elif op == 3:
+        do append(buf, 255)
+        do append(buf, 117)
+        buf = nc32_emit_local_disp(buf, get(code, i).1)
+    elif op == 4:
+        do append(buf, 143)
+        do append(buf, 69)
+        buf = nc32_emit_local_disp(buf, get(code, i).1)
+    elif op == 5:
+        do append(buf, 89)
+        do append(buf, 88)
+        do append(buf, 1)
+        do append(buf, 200)
+        do append(buf, 80)
+    elif op == 6:
+        do append(buf, 89)
+        do append(buf, 88)
+        do append(buf, 41)
+        do append(buf, 200)
+        do append(buf, 80)
+    elif op == 11:
+        do append(buf, 89)
+        do append(buf, 88)
+        do append(buf, 57)
+        do append(buf, 200)
+        do append(buf, 15)
+        do append(buf, 148)
+        do append(buf, 192)
+        do append(buf, 15)
+        do append(buf, 182)
+        do append(buf, 192)
+        do append(buf, 80)
     elif op == 42:
         do append(buf, 89)
         do append(buf, 88)
@@ -10477,10 +10748,36 @@ func nc32_lower_body(buf, code, i, n):
         do append(buf, 175)
         do append(buf, 193)
         do append(buf, 80)
-    elif op == 21:
+    elif op == 16:
+        do append(buf, 233)
+        let t = get(code, i).1
+        let toff = epi
+        if t < n:
+            toff = get(offs, t)
+        end
+        buf = nc_append_le32(buf, toff - endoff)
+    elif op == 17:
         do append(buf, 88)
+        do append(buf, 133)
+        do append(buf, 192)
+        do append(buf, 15)
+        do append(buf, 132)
+        let t2 = get(code, i).1
+        let toff2 = epi
+        if t2 < n:
+            toff2 = get(offs, t2)
+        end
+        buf = nc_append_le32(buf, toff2 - endoff)
+    elif op == 21:
+        if il == 1:
+            do append(buf, 88)
+        else:
+            do append(buf, 88)
+            do append(buf, 233)
+            buf = nc_append_le32(buf, epi - endoff)
+        end
     end
-    return nc32_lower_body(buf, code, i + 1, n)
+    return nc32_lower_loop(buf, code, i + 1, n, offs, epi)
 end
 
 func nc32_emit_out_char(buf, c):
@@ -10634,21 +10931,48 @@ func nc_emit_multiboot32_program(source):
         return 0
     end
     let mainfn = get(funcs, prog.2)
-    let code = mainfn.4
-    let n = count(code)
-    if not nc32_body_ok(code, 0, n, 0):
-        let f2 = nc_fail(451, 0, "multiboot32: body must be integer literal/multiply/return")
+    if mainfn.2 != 0:
+        let f6 = nc_fail(454, 0, "multiboot32: main must take no parameters")
         return 0
     end
+    let code = mainfn.4
+    let n = count(code)
+    if not nc32_body_ok(code, n):
+        let f2 = nc_fail(451, 0, "multiboot32: body not in the control-flow+locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let f4 = nc_fail(453, 0, "multiboot32: too many locals (max 31)")
+        return 0
+    end
+    let prefix_len = 5
+    if nlocals > 0:
+        prefix_len = 10
+    end
+    let lay = nc32_layout_loop(code, 0, n, prefix_len, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
     let bodybuf = new_buffer()
-    bodybuf = nc32_lower_body(bodybuf, code, 0, n)
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
     let bodylen = length(freeze(bodybuf))
-    let code_len = 5 + bodylen + 58
+    if bodylen != epi - prefix_len:
+        let f5 = nc_fail(452, 0, "multiboot32: body length invariant")
+        return 0
+    end
+    let code_len = prefix_len + bodylen + 58
     let memsz = 12 + code_len + 16384
     let esp_val = 1048576 + memsz
     let cbuf = new_buffer()
     do append(cbuf, 188)
     cbuf = nc_append_le32(cbuf, esp_val)
+    if nlocals > 0:
+        do append(cbuf, 137)
+        do append(cbuf, 229)
+        do append(cbuf, 131)
+        do append(cbuf, 236)
+        do append(cbuf, 4 * nlocals)
+    end
     cbuf = append_str(cbuf, freeze(bodybuf))
     cbuf = nc32_emit_epilogue(cbuf)
     let frozen_code = freeze(cbuf)

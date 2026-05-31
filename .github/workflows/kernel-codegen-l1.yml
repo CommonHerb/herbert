@@ -1,16 +1,19 @@
 name: kernel-codegen-l1
 
-# The far-axis silicon gate for L1 (the first kernel-arc link). The native
-# compiler's freestanding 32-bit Multiboot emit mode (selected by the
-# "-- emit: multiboot32" directive) is graded NOT against the C reference but on
-# a dual-substrate oracle: the emitted image must boot under BOTH QEMU
-# (-kernel direct multiboot) and Bochs (GRUB on a partitioned HDD) and emit a
-# runtime-computed byte that matches a HOST-DERIVED golden. This workflow is the
-# authoritative run of bootstrap/tests/run_native_codegen_link17.sh, with
-# KERNEL_CODEGEN_REQUIRE_EMU=1 so a missing emulator is a hard failure, never a
-# silent skip. (It replaces the throwaway kernel-substrate-proof workflow, whose
-# working incantation it folds in.) `make test` keeps its emulator-free
-# C-golden scope; this is the separate, emulator-graded kernel gate.
+# The far-axis silicon gate for the kernel-arc links. The native compiler's
+# freestanding 32-bit Multiboot emit mode (selected by the "-- emit: multiboot32"
+# directive) is graded NOT against the C reference but on a dual-substrate
+# oracle: each emitted image must boot under BOTH QEMU (-kernel direct multiboot)
+# and Bochs (GRUB on a partitioned HDD) and emit a runtime-computed byte that
+# matches a HOST-DERIVED golden. This workflow is the authoritative run of the
+# kernel-codegen link harnesses, with KERNEL_CODEGEN_REQUIRE_EMU=1 so a missing
+# emulator is a hard failure, never a silent skip. `make test` keeps its
+# emulator-free C-golden scope; this is the separate, emulator-graded kernel gate.
+#
+# Links gated here:
+#   L1 = lingo  (link17): "boot and emit a byte" (literal * literal).
+#   L2 = toakie (link18): first data-dependent branch on bare metal (control
+#        flow + locals), plus a mutation proof that the dual-substrate gate bites.
 
 on:
   push:
@@ -40,5 +43,9 @@ jobs:
           grub-install --version | head -1
       - name: build the C bootstrap (build/herbert)
         run: make build/herbert
-      - name: L1 dual-substrate gate (QEMU + Bochs vs host-derived golden)
+      - name: L1 dual-substrate gate (lingo -- boot and emit a byte)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link17.sh
+      - name: L2 dual-substrate gate (toakie -- data-dependent branch + locals)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L2_BOCHS_PROBES="merge_then merge_else return_then return_else" bash bootstrap/tests/run_native_codegen_link18.sh
+      - name: L2 mutation proof (the dual-substrate gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link18_mutation.sh
