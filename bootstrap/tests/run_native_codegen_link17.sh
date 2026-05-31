@@ -250,11 +250,21 @@ for spec in $QEMU_PROBES; do
     fi
 done
 
-# rejects + renamed/revalued twins (rejection must be structural, not fitted)
-reject_probe add        'func main(): return 5+15 end'
-reject_probe add_twin   'func main(): return 7+9 end'
-reject_probe local      'func main(): let x = 3 return x*5 end'
-reject_probe local_twin 'func main(): let y = 8 return y*9 end'
+# rejects + renamed/revalued twins (rejection must be structural, not fitted).
+# These prove the multiboot32 mode is a GATE, not a pass-through. The constructs
+# must stay OUTSIDE the current freestanding subset. The next kernel link, toakie
+# (link18), deliberately WIDENED that subset to admit `+`/`-` and locals + control
+# flow, so the original add/local reject probes became obsolete (those programs now
+# correctly emit a valid image -- empirically confirmed) and were retired here,
+# replaced with div/mod/bitwise, which remain out-of-subset. (toakie's own harness,
+# link18, owns the new boundary: it rejects div/mod/bitwise/calls/non-`==`
+# comparators/parameterised-main/non-`==`-bool-conditions with twins.) calls stay
+# rejected at both links. This is an obsolete-assertion retirement proven against
+# the widened subset, not a masked regression.
+reject_probe div        'func main(): return 100 / 4 end'
+reject_probe div_twin   'func main(): return 84 / 2 end'
+reject_probe bitand     'func main(): return 12 & 10 end'
+reject_probe bitand_twin 'func main(): return 30 & 14 end'
 reject_probe call       'func helper(): return 2 end\nfunc main(): return helper()*5 end'
 reject_probe call_twin  'func other(): return 4 end\nfunc main(): return other()*9 end'
 [[ "$fail" -eq 0 ]] && pass=$((pass + 6))
