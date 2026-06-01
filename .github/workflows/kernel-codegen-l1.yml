@@ -26,6 +26,11 @@ name: kernel-codegen-l1
 #        mapping a build-time-unmapped page, then accesses it and the MMU
 #        honors it; a broken store #PFs into a fail-closed IDT -> triple-fault.
 #        Plus a mutation proof that the runtime-store / MMU-judge gate bites.
+#   L6 = link22 (sixth kernel-arc link): DEMAND PAGING / iret-RESUMPTION --
+#        touches an unmapped page, takes the CPU's own #PF, a handler maps the
+#        page at runtime + flushes the TLB + drops the error code + iret, and the
+#        faulting load RE-EXECUTES and reads a seeded frame (the first link whose
+#        fault handler RESUMES). Plus a mutation proof that the resume gate bites.
 
 on:
   push:
@@ -73,3 +78,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L5_BOCHS_PROBES="store_then store_else store_lit" bash bootstrap/tests/run_native_codegen_link21.sh
       - name: L5 mutation proof (the runtime-store / MMU-judge gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link21_mutation.sh
+      - name: L6 dual-substrate gate (demand paging -- map a faulting page at runtime and iret-resume)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L6_BOCHS_PROBES="demand_then demand_else demand_lit" bash bootstrap/tests/run_native_codegen_link22.sh
+      - name: L6 mutation proof (the iret-resume / demand-paging gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link22_mutation.sh

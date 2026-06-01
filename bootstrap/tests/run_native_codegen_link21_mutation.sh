@@ -100,11 +100,19 @@ mutate pte_not_present \
 # M2: corrupt the runtime SLOT computation (shr eax,10 -> shr eax,11), so the store lands at
 # the wrong PTE slot; vaddr 0x300000 stays unmapped -> access #PFs -> triple-fault. Caught by
 # boot AND the head gate. Proves the computed-address arithmetic is load-bearing.
+# (Anchor disambiguated to the store head's `mov eax,ebx; shr eax,10` -- the bare shr eax,10
+#  byte triple [193,232,10] is now SHARED with link22's demand-paging #PF handler, so the
+#  `mov eax,ebx` [137,216] prefix keeps this anchor unique to nc32_store_emit_head -- the same
+#  cross-link mutation-anchor disambiguation chosen applied to zonday and liberi to chosen.)
 mutate wrong_shift \
-'    do append(buf, 193)
+'    do append(buf, 137)
+    do append(buf, 216)
+    do append(buf, 193)
     do append(buf, 232)
     do append(buf, 10)' \
-'    do append(buf, 193)
+'    do append(buf, 137)
+    do append(buf, 216)
+    do append(buf, 193)
     do append(buf, 232)
     do append(buf, 11)'
 
