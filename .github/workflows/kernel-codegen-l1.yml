@@ -14,6 +14,9 @@ name: kernel-codegen-l1
 #   L1 = lingo  (link17): "boot and emit a byte" (literal * literal).
 #   L2 = toakie (link18): first data-dependent branch on bare metal (control
 #        flow + locals), plus a mutation proof that the dual-substrate gate bites.
+#   L3 = zonday (link19): installs its own GDT+IDT and catches the CPU's own #DE
+#        divide-error fault, vectoring to a compiled-Herbert handler, plus a
+#        mutation proof that the fault-catch gate bites.
 
 on:
   push:
@@ -49,3 +52,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L2_BOCHS_PROBES="merge_then merge_else return_then return_else" bash bootstrap/tests/run_native_codegen_link18.sh
       - name: L2 mutation proof (the dual-substrate gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link18_mutation.sh
+      - name: L3 dual-substrate gate (zonday -- install GDT+IDT, catch the CPU's own #DE)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L3_BOCHS_PROBES="idt_then idt_else idt_lit" bash bootstrap/tests/run_native_codegen_link19.sh
+      - name: L3 mutation proof (the fault-catch gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link19_mutation.sh
