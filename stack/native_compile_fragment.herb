@@ -10447,6 +10447,23 @@ func nc_is_multiboot32_idt(source):
     return index(source, mlen) == 10
 end
 
+-- chosen (fourth kernel-arc link): the FOURTH freestanding emit mode. Detects the
+-- anchored first-line directive "-- emit: multiboot32-page". The "-page" suffix means
+-- nc_is_multiboot32 (which requires the marker be followed immediately by a newline)
+-- does NOT match it (source[20] is '-', not 10), so the three existing modes stay
+-- byte-identical and the self-host fixpoint is trivially preserved.
+func nc_is_multiboot32_page(source):
+    let marker = "-- emit: multiboot32-page"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
 -- The toakie freestanding subset (widens lingo's {PUSH_INT, MUL, RET}): adds
 -- LOAD_LOCAL (3), STORE_LOCAL (4), ADD (5), SUB (6), EQ (11), BR (16),
 -- BR_IF_FALSE (17) -- a single acyclic function that makes a data-dependent
@@ -11221,8 +11238,307 @@ func nc_emit_multiboot32_idt_program(source):
     return 0
 end
 
+func nc32_roundup_4k(v):
+    let r = v % 4096
+    if r == 0:
+        return v
+    end
+    return v + 4096 - r
+end
+
+-- chosen: the fixed 118-byte STRUCTURAL head (prologue 92 + #PF wrapper 26). Extends
+-- zonday's GDT+IDT head with paging-enable. Only five le32 fields vary with the body
+-- length (gdtr_vaddr, esp_top, idtr_vaddr, pd_vaddr, sentinel_rel32); everything else --
+-- incl. the CR4 clear, the CR0.PG-enable, BOTH touch addresses, and the whole wrapper --
+-- is a fixed byte sequence the white-box gate pins exactly.
+--   cli; lgdt; far-jmp CS=0x08; reload DS/ES/FS/GS/SS=0x10; mov esp; lidt;
+--   mov eax,cr4; and eax,0xFFFFFF4F (clear PAE/PSE/PGE -- Multiboot leaves CR4 UNDEFINED,
+--     so PAE-set would reinterpret PD as a PDPT and triple-fault; SDM-mandated robustness);
+--   mov eax,PD; mov cr3,eax; mov eax,cr0; or eax,0x80000000; mov cr0,eax (PAGING ON);
+--   jmp $+2 (prefetch flush); TOUCH-A [0x2ff000] (mapped, must NOT fault);
+--   TOUCH-B [0x300000] (the UNMAPPED neighbor, MUST #PF -> its EIP=0x10005b is the proof);
+--   SENTINEL mov al,0xBB; jmp epilogue (reached only if B did NOT fault).
+-- WRAPPER (the IDT vector-14 / #PF gate target): mov eax,cr2; cmp eax,0x300000; jne sentinel;
+--   cmp dword [esp],0 (the #PF error code: not-present supervisor read == 0); jne sentinel;
+--   cmp dword [esp+4],0x10005b (the saved EIP == TOUCH-B, proving WHICH access faulted);
+--   jne sentinel -- then falls into the compiled handler body. CR2 alone is forgeable
+--   (cr2 is ring-0-writable), so the proof rests on this wrapper + the white-box head pin.
+func nc32_page_emit_head(buf, gdtr_vaddr, esp_top, idtr_vaddr, pd_vaddr, sentinel_rel32):
+    do append(buf, 250)
+    do append(buf, 15)
+    do append(buf, 1)
+    do append(buf, 21)
+    buf = nc_append_le32(buf, gdtr_vaddr)
+    do append(buf, 234)
+    buf = nc_append_le32(buf, 1048603)
+    do append(buf, 8)
+    do append(buf, 0)
+    do append(buf, 102)
+    do append(buf, 184)
+    do append(buf, 16)
+    do append(buf, 0)
+    do append(buf, 142)
+    do append(buf, 216)
+    do append(buf, 142)
+    do append(buf, 192)
+    do append(buf, 142)
+    do append(buf, 224)
+    do append(buf, 142)
+    do append(buf, 232)
+    do append(buf, 142)
+    do append(buf, 208)
+    do append(buf, 188)
+    buf = nc_append_le32(buf, esp_top)
+    do append(buf, 15)
+    do append(buf, 1)
+    do append(buf, 29)
+    buf = nc_append_le32(buf, idtr_vaddr)
+    do append(buf, 15)
+    do append(buf, 32)
+    do append(buf, 224)
+    do append(buf, 37)
+    do append(buf, 79)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 224)
+    do append(buf, 184)
+    buf = nc_append_le32(buf, pd_vaddr)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 216)
+    do append(buf, 15)
+    do append(buf, 32)
+    do append(buf, 192)
+    do append(buf, 13)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 128)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 192)
+    do append(buf, 235)
+    do append(buf, 0)
+    do append(buf, 139)
+    do append(buf, 5)
+    buf = nc_append_le32(buf, 3141632)
+    do append(buf, 139)
+    do append(buf, 5)
+    buf = nc_append_le32(buf, 3145728)
+    do append(buf, 176)
+    do append(buf, 187)
+    do append(buf, 233)
+    buf = nc_append_le32(buf, sentinel_rel32)
+    do append(buf, 15)
+    do append(buf, 32)
+    do append(buf, 208)
+    do append(buf, 61)
+    buf = nc_append_le32(buf, 3145728)
+    do append(buf, 117)
+    do append(buf, 239)
+    do append(buf, 131)
+    do append(buf, 60)
+    do append(buf, 36)
+    do append(buf, 0)
+    do append(buf, 117)
+    do append(buf, 233)
+    do append(buf, 129)
+    do append(buf, 124)
+    do append(buf, 36)
+    do append(buf, 4)
+    buf = nc_append_le32(buf, 1048667)
+    do append(buf, 117)
+    do append(buf, 223)
+    return buf
+end
+
+-- chosen: GDT (null + flat 32-bit code 0x08 + data 0x10) + GDTR (limit 23), then a
+-- FIFTEEN-entry IDT (vectors 0..13 NOT present -> any other exception triple-faults =
+-- correct fail-closed RED; vector 14 = the #PF gate, offset=wrapper vaddr / selector
+-- 0x0008 / attr 0x8E) + IDTR (limit 0x77 = 15*8-1). Emitter-laid-out at fixed vaddrs
+-- (no runtime store-to-arbitrary-address -> typed-memory candidate (d) stays deferred).
+func nc32_page_emit_tables(buf, gdt_vaddr, idt_vaddr, gate_vaddr):
+    buf = nc_emit_zeroes_loop(buf, 8)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 154)
+    do append(buf, 207)
+    do append(buf, 0)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 146)
+    do append(buf, 207)
+    do append(buf, 0)
+    do append(buf, 23)
+    do append(buf, 0)
+    buf = nc_append_le32(buf, gdt_vaddr)
+    buf = nc_emit_zeroes_loop(buf, 112)
+    let glo = gate_vaddr % 65536
+    let ghi_full = gate_vaddr / 65536
+    let ghi = ghi_full % 65536
+    do append(buf, glo % 256)
+    do append(buf, glo / 256)
+    do append(buf, 8)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 142)
+    do append(buf, ghi % 256)
+    do append(buf, ghi / 256)
+    do append(buf, 119)
+    do append(buf, 0)
+    buf = nc_append_le32(buf, idt_vaddr)
+    return buf
+end
+
+-- chosen: the page directory (4 KiB). PDE[0] -> the page table (present+RW); the rest
+-- are zero (not present). pt_vaddr is 4 KiB-aligned so +3 == |0x003.
+func nc32_page_emit_pd(buf, pt_vaddr):
+    buf = nc_append_le32(buf, pt_vaddr + 3)
+    buf = nc_emit_zeroes_loop(buf, 4092)
+    return buf
+end
+
+-- chosen: the page table (4 KiB, 1024 entries) identity-mapping 0..4 MiB as
+-- (i*4096)|present|RW, EXCEPT entry 768 (linear 0x300000 = the neighbor B) left zero
+-- (not present) -- the single hole that forces the #PF. i*4096 (tonka's `*`) avoids any
+-- bit-shift; +3 sets present+RW since i*4096 is 4 KiB-aligned.
+func nc32_page_emit_pt_loop(buf, i):
+    if i >= 1024:
+        return buf
+    end
+    if i == 768:
+        buf = nc_append_le32(buf, 0)
+    else:
+        buf = nc_append_le32(buf, i * 4096 + 3)
+    end
+    return nc32_page_emit_pt_loop(buf, i + 1)
+end
+
+-- chosen driver. Layout (vaddr V0=0x10000c): [HEAD 118 (prologue+wrapper)]
+-- [ebp-frame(0|5) + compiled toakie body] [shared 58-byte epilogue] [GDT/GDTR/IDT/IDTR 156]
+-- [pad to 4 KiB] [PD 4096] [PT 4096]. The handler IS the compiled main() body (toakie
+-- subset) reached via the #PF wrapper -- the anti-ceremony guard: the proof byte is normal
+-- compiled lowering, not a canned blob. No `mov esp` in the body (the head set it; the
+-- wrapper validated the fault frame first); it does NOT iret (a #PF re-faults on return
+-- with the mapping unfixed; iret-resumption is a deferred later link). Reuses lingo's
+-- ehdr/phdr/mbheader and toakie's verifier + 2-pass layout/lowering + epilogue verbatim.
+func nc_emit_multiboot32_page_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let f1 = nc_fail(460, 0, "multiboot32-page: handler main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let f2 = nc_fail(461, 0, "multiboot32-page: handler main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if not nc32_body_ok(code, n):
+        let f3 = nc_fail(462, 0, "multiboot32-page: handler body not in the control-flow+locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let f4 = nc_fail(463, 0, "multiboot32-page: too many locals (max 31)")
+        return 0
+    end
+    let ebp_prefix = 0
+    if nlocals > 0:
+        ebp_prefix = 5
+    end
+    let lay = nc32_layout_loop(code, 0, n, ebp_prefix, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - ebp_prefix:
+        let f5 = nc_fail(464, 0, "multiboot32-page: body length invariant")
+        return 0
+    end
+    let head_len = 118
+    let hb = epi + 58
+    let gdt_off = head_len + hb
+    let gdt_vaddr = 1048588 + gdt_off
+    let gdtr_vaddr = gdt_vaddr + 24
+    let idt_vaddr = gdtr_vaddr + 6
+    let idtr_vaddr = idt_vaddr + 120
+    let tables_end = idtr_vaddr + 6
+    let pd_vaddr = nc32_roundup_4k(tables_end)
+    let pt_vaddr = pd_vaddr + 4096
+    let load_end = pt_vaddr + 4096
+    let esp_top = load_end + 16384
+    if esp_top > 3141632:
+        let f7 = nc_fail(465, 0, "multiboot32-page: image collides with the mapped/unmapped test region")
+        return 0
+    end
+    let gate_vaddr = 1048680
+    let sentinel_rel32 = 26 + epi
+    let cbuf = new_buffer()
+    cbuf = nc32_page_emit_head(cbuf, gdtr_vaddr, esp_top, idtr_vaddr, pd_vaddr, sentinel_rel32)
+    if nlocals > 0:
+        do append(cbuf, 137)
+        do append(cbuf, 229)
+        do append(cbuf, 131)
+        do append(cbuf, 236)
+        do append(cbuf, 4 * nlocals)
+    end
+    cbuf = append_str(cbuf, freeze(bodybuf))
+    cbuf = nc32_emit_epilogue(cbuf)
+    cbuf = nc32_page_emit_tables(cbuf, gdt_vaddr, idt_vaddr, gate_vaddr)
+    let pre_pd_len = length(freeze(cbuf))
+    let pad_to_pd = pd_vaddr - 1048588 - pre_pd_len
+    cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pd)
+    cbuf = nc32_page_emit_pd(cbuf, pt_vaddr)
+    cbuf = nc32_page_emit_pt_loop(cbuf, 0)
+    let frozen_code = freeze(cbuf)
+    let code_len = length(frozen_code)
+    if code_len != load_end - 1048588:
+        let f6 = nc_fail(466, 0, "multiboot32-page: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let memsz = filesz + 16384
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
+end
+
 func main():
     let source = clogger()
+    if nc_is_multiboot32_page(source):
+        let pg = nc_emit_multiboot32_page_program(source)
+        return 0
+    end
     if nc_is_multiboot32_idt(source):
         let z = nc_emit_multiboot32_idt_program(source)
         return 0

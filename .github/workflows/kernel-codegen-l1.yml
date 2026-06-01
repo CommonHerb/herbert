@@ -17,6 +17,10 @@ name: kernel-codegen-l1
 #   L3 = zonday (link19): installs its own GDT+IDT and catches the CPU's own #DE
 #        divide-error fault, vectoring to a compiled-Herbert handler, plus a
 #        mutation proof that the fault-catch gate bites.
+#   L4 = chosen (link20): turns on paging and proves a mapping by catching the
+#        CPU's own #PF (page-fault, vector 14) on the deliberately-unmapped
+#        neighbor, vectoring to a compiled-Herbert handler, plus a mutation
+#        proof that the paging / #PF-catch gate bites.
 
 on:
   push:
@@ -56,3 +60,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L3_BOCHS_PROBES="idt_then idt_else idt_lit" bash bootstrap/tests/run_native_codegen_link19.sh
       - name: L3 mutation proof (the fault-catch gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link19_mutation.sh
+      - name: L4 dual-substrate gate (chosen -- turn on paging, catch the CPU's own #PF on the unmapped neighbor)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L4_BOCHS_PROBES="page_then page_else page_lit" bash bootstrap/tests/run_native_codegen_link20.sh
+      - name: L4 mutation proof (the paging / #PF-catch gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link20_mutation.sh
