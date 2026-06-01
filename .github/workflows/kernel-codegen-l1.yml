@@ -21,6 +21,11 @@ name: kernel-codegen-l1
 #        CPU's own #PF (page-fault, vector 14) on the deliberately-unmapped
 #        neighbor, vectoring to a compiled-Herbert handler, plus a mutation
 #        proof that the paging / #PF-catch gate bites.
+#   L5 = link21 (fifth kernel-arc link): writes a page-table entry at a
+#        RUNTIME-COMPUTED address (candidate (d), the first computed store),
+#        mapping a build-time-unmapped page, then accesses it and the MMU
+#        honors it; a broken store #PFs into a fail-closed IDT -> triple-fault.
+#        Plus a mutation proof that the runtime-store / MMU-judge gate bites.
 
 on:
   push:
@@ -64,3 +69,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L4_BOCHS_PROBES="page_then page_else page_lit" bash bootstrap/tests/run_native_codegen_link20.sh
       - name: L4 mutation proof (the paging / #PF-catch gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link20_mutation.sh
+      - name: L5 dual-substrate gate (write a PTE at a runtime-computed address; the MMU honors it)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L5_BOCHS_PROBES="store_then store_else store_lit" bash bootstrap/tests/run_native_codegen_link21.sh
+      - name: L5 mutation proof (the runtime-store / MMU-judge gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link21_mutation.sh

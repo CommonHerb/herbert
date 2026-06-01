@@ -106,34 +106,95 @@ mutate hole_off_neighbor \
 # M2: do not enable CR0.PG (the 0x80 high byte of `or eax,0x80000000` -> 0). Paging never
 # turns on, neither touch faults -> SENTINEL -> wrong byte. Caught by the head gate AND
 # boot. Proves the paging-enable is load-bearing (not the bootloader's state).
+# (Anchor extended through mov cr0,eax + jmp $+2 + TOUCH-A's `139`=8b so it stays unique:
+# the multiboot32-store head shares this CR0.PG-enable block but is followed by `187`=mov ebx.)
 mutate no_paging_enable \
 '    do append(buf, 13)
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    do append(buf, 128)' \
+    do append(buf, 128)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 192)
+    do append(buf, 235)
+    do append(buf, 0)
+    do append(buf, 139)' \
 '    do append(buf, 13)
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    do append(buf, 0)'
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 192)
+    do append(buf, 235)
+    do append(buf, 0)
+    do append(buf, 139)'
 
 # M3: neuter the CR4 clear (`and eax,0xFFFFFF4F` -> `and eax,0xFFFFFFFF`, a no-op AND).
 # BEHAVIORALLY INVISIBLE on both tested emulators (they hand off CR4.PAE=0, so paging
 # still works and the golden byte still emits) -- caught ONLY by the exact-head white-box
 # gate. This is the boot-invisible case that proves the head pin (and the CR4-clear
 # robustness against an undefined-CR4 substrate) is load-bearing, not dead defensive code.
+# (Anchor extended from the `and 0xFFFFFF4F` through the shared paging-enable block to
+# TOUCH-A's `139`=8b so it stays unique vs the multiboot32-store head, which shares the
+# identical CR4-clear + CR3 + CR0.PG block but is followed by `187`=mov ebx, not TOUCH-A.)
 mutate cr4_clear_noop \
 '    do append(buf, 37)
     do append(buf, 79)
     do append(buf, 255)
     do append(buf, 255)
-    do append(buf, 255)' \
+    do append(buf, 255)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 224)
+    do append(buf, 184)
+    buf = nc_append_le32(buf, pd_vaddr)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 216)
+    do append(buf, 15)
+    do append(buf, 32)
+    do append(buf, 192)
+    do append(buf, 13)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 128)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 192)
+    do append(buf, 235)
+    do append(buf, 0)
+    do append(buf, 139)' \
 '    do append(buf, 37)
     do append(buf, 255)
     do append(buf, 255)
     do append(buf, 255)
-    do append(buf, 255)'
+    do append(buf, 255)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 224)
+    do append(buf, 184)
+    buf = nc_append_le32(buf, pd_vaddr)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 216)
+    do append(buf, 15)
+    do append(buf, 32)
+    do append(buf, 192)
+    do append(buf, 13)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 128)
+    do append(buf, 15)
+    do append(buf, 34)
+    do append(buf, 192)
+    do append(buf, 235)
+    do append(buf, 0)
+    do append(buf, 139)'
 
 # M4: shrink the IDTR limit (0x77=119 -> 100), so vector 14 (#PF, bytes 112..119) is no
 # longer covered. The #PF cannot be delivered -> #GP -> double -> triple fault -> no byte.
