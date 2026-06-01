@@ -93,9 +93,15 @@ PY
 
 # M1: corrupt the IDTR base (the IDT can no longer be located). The #DE finds no
 # valid gate -> #GP during delivery -> double -> triple fault -> no byte.
+# (Anchor includes zonday's IDTR limit `7` prefix so it stays unique: chosen's
+# multiboot32-page mode also emits `nc_append_le32(buf, idt_vaddr)`, but with limit 119.)
 mutate idtr_base \
-'    buf = nc_append_le32(buf, idt_vaddr)' \
-'    buf = nc_append_le32(buf, idt_vaddr + 4096)'
+'    do append(buf, 7)
+    do append(buf, 0)
+    buf = nc_append_le32(buf, idt_vaddr)' \
+'    do append(buf, 7)
+    do append(buf, 0)
+    buf = nc_append_le32(buf, idt_vaddr + 4096)'
 
 # M2: point the IDT gate offset one byte off the handler (wrapper) vaddr. The CPU
 # vectors mid-instruction -> wrong/no byte.
@@ -122,19 +128,27 @@ mutate remove_trigger \
 
 # M4: corrupt the gate code selector (0x08 -> 0x18, outside the 3-entry GDT). The
 # CPU raises #GP while delivering the #DE -> triple fault -> no byte.
+# (Anchor extended through the ghi bytes + zonday's IDTR limit `7` so it stays unique:
+# chosen's multiboot32-page mode emits the same gate block but with IDTR limit 119.)
 mutate bad_gate_selector \
 '    do append(buf, glo % 256)
     do append(buf, glo / 256)
     do append(buf, 8)
     do append(buf, 0)
     do append(buf, 0)
-    do append(buf, 142)' \
+    do append(buf, 142)
+    do append(buf, ghi % 256)
+    do append(buf, ghi / 256)
+    do append(buf, 7)' \
 '    do append(buf, glo % 256)
     do append(buf, glo / 256)
     do append(buf, 24)
     do append(buf, 0)
     do append(buf, 0)
-    do append(buf, 142)'
+    do append(buf, 142)
+    do append(buf, ghi % 256)
+    do append(buf, ghi / 256)
+    do append(buf, 7)'
 
 # M5: corrupt the wrapper's faulting-EIP check (expect div EIP+1). A genuine #DE
 # pushes the real div EIP, so the check now MISMATCHES -> jne sentinel -> 0xBB.
@@ -149,11 +163,16 @@ mutate wrapper_eip_check \
 # golden byte still emits -- and caught ONLY by the exact-head white-box gate. This
 # is the boot-invisible case that closes the "byte came via the #DE path" proof gap
 # the cross-model pre-land review found.
+# (Anchor includes the div's `241`=0xF1 prefix so it stays unique: chosen's
+# multiboot32-page head emits the same `mov al,0xBB; jmp` sentinel, but preceded by the
+# TOUCH-B address, not the div.)
 mutate flip_sentinel \
-'    do append(buf, 176)
+'    do append(buf, 241)
+    do append(buf, 176)
     do append(buf, 187)
     do append(buf, 233)' \
-'    do append(buf, 176)
+'    do append(buf, 241)
+    do append(buf, 176)
     do append(buf, 66)
     do append(buf, 233)'
 
