@@ -82,3 +82,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L6_BOCHS_PROBES="demand_then demand_else demand_lit" bash bootstrap/tests/run_native_codegen_link22.sh
       - name: L6 mutation proof (the iret-resume / demand-paging gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link22_mutation.sh
+      - name: L7 dual-substrate gate (first ASYNCHRONOUS interrupt -- remap PIC, program PIT, take the timer IRQ0 to a compiled-body handler)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L7_BOCHS_PROBES="timer_then timer_else timer_lit" bash bootstrap/tests/run_native_codegen_link23.sh
+      - name: L7 mutation proof (the asynchronous-timer-IRQ gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link23_mutation.sh

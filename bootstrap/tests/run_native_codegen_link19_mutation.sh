@@ -128,8 +128,10 @@ mutate remove_trigger \
 
 # M4: corrupt the gate code selector (0x08 -> 0x18, outside the 3-entry GDT). The
 # CPU raises #GP while delivering the #DE -> triple fault -> no byte.
-# (Anchor extended through the ghi bytes + zonday's IDTR limit `7` so it stays unique:
-# chosen's multiboot32-page mode emits the same gate block but with IDTR limit 119.)
+# (Anchor extended through the ghi bytes + zonday's IDTR limit `7, 0` (0x0007) so it stays
+# unique: chosen's multiboot32-page mode emits the same gate block but with IDTR limit 119, and
+# timer's multiboot32-timer mode emits it with IDTR limit 0x0107 = `7, 1` -- the trailing `0`
+# (the limit HIGH byte) distinguishes zonday's single-entry IDT from both.)
 mutate bad_gate_selector \
 '    do append(buf, glo % 256)
     do append(buf, glo / 256)
@@ -139,7 +141,8 @@ mutate bad_gate_selector \
     do append(buf, 142)
     do append(buf, ghi % 256)
     do append(buf, ghi / 256)
-    do append(buf, 7)' \
+    do append(buf, 7)
+    do append(buf, 0)' \
 '    do append(buf, glo % 256)
     do append(buf, glo / 256)
     do append(buf, 24)
@@ -148,7 +151,8 @@ mutate bad_gate_selector \
     do append(buf, 142)
     do append(buf, ghi % 256)
     do append(buf, ghi / 256)
-    do append(buf, 7)'
+    do append(buf, 7)
+    do append(buf, 0)'
 
 # M5: corrupt the wrapper's faulting-EIP check (expect div EIP+1). A genuine #DE
 # pushes the real div EIP, so the check now MISMATCHES -> jne sentinel -> 0xBB.
