@@ -86,7 +86,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L7_BOCHS_PROBES="timer_then timer_else timer_lit" bash bootstrap/tests/run_native_codegen_link23.sh
       - name: L7 mutation proof (the asynchronous-timer-IRQ gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link23_mutation.sh
-      - name: L8 dual-substrate gate (talkert -- periodic timer: survive+repeat the async IRQ0 via EOI + iret-resume + count-to-N)
+      - name: L8 dual-substrate gate (talkert -- periodic timer, survive+repeat the async IRQ0 via EOI + iret-resume + count-to-N)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L8_BOCHS_PROBES="tick_then tick_else tick_lit" bash bootstrap/tests/run_native_codegen_link24.sh
       - name: L8 mutation proof (the periodic-timer / async-survival gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link24_mutation.sh
