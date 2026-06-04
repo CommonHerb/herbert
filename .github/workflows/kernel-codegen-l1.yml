@@ -94,3 +94,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L9_BOCHS_PROBES="long_then long_else long_lit" bash bootstrap/tests/run_native_codegen_link25.sh
       - name: L9 mutation proof (the long-mode-entry gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link25_mutation.sh
+      - name: L10 dual-substrate gate (toggler -- run a genuinely 64-bit COMPILED body, proof byte = the high dword of the body's own 64-bit result)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L10_BOCHS_PROBES="mul_add mul_big" bash bootstrap/tests/run_native_codegen_link26.sh
+      - name: L10 mutation proof (the 64-bit-compiled-body gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link26_mutation.sh

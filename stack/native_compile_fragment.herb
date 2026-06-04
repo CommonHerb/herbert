@@ -12769,8 +12769,255 @@ func nc_emit_multiboot32_long_program(source):
     return 0
 end
 
+-- toggler (TENTH kernel-arc link): "-- emit: multiboot32-long64" selects the freestanding image
+-- that crosses into 64-bit long mode and runs a GENUINELY 64-bit COMPILED body -- the x86-64
+-- BACKEND REUNIFICATION. hoopteeter (multiboot32-long) computes V in a 32-bit body and a canned
+-- 16-byte observable derives the proof byte; toggler instead lowers the body through the SAME
+-- near-axis 64-bit leaf emitters the Linux-ELF64 path uses (nc_emit_push_int/add/sub/mul -- REX.W),
+-- AFTER entering long mode, so the proof byte = high dword of the body's OWN 64-bit result (a
+-- multiply whose product exceeds 2^32: wrong under 32-bit-width arithmetic). One 64-bit lowering
+-- table, both targets. Minimal slice -- straight-line arithmetic {PUSH_INT, ADD, SUB, MUL, RET},
+-- single main(), no params/locals/branches (64-bit locals/branches widen a later link). With no
+-- branches there are no body rel32s, so no layout pass is needed (emit the body, then measure).
+-- The "-long64" suffix means nc_is_multiboot32 / _idt / _page / _store / _demand / _timer / _tick /
+-- _long do NOT match (each requires its own marker followed by a newline; here source[mlen]='6').
+func nc_is_multiboot32_long64(source):
+    let marker = "-- emit: multiboot32-long64"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- The toggler 64-bit subset: PUSH_INT (0), ADD (5), SUB (6), MUL (42), RET (21). LOAD_LOCAL/
+-- STORE_LOCAL/EQ/BR/BR_IF_FALSE are NOT admitted -- 64-bit locals need 8-byte frame slots
+-- (disp/imm widths the 32-bit toakie gate's 4-byte assumptions do not cover) and branches need a
+-- 64-bit layout pass; both are deferred to a later "widen the 64-bit subset" link.
+func nc64_op_allowed(op):
+    if op == 0:
+        return true
+    end
+    if op == 5:
+        return true
+    end
+    if op == 6:
+        return true
+    end
+    if op == 42:
+        return true
+    end
+    if op == 21:
+        return true
+    end
+    return false
+end
+
+-- Subset gate: a single acyclic straight line that ends in exactly one RET. Linear stack-depth
+-- walk (no branches, so no merge points): PUSH_INT +1; ADD/SUB/MUL pop 2 push 1 (need depth >= 2);
+-- RET must be the LAST op and pop the single result at depth exactly 1, leaving depth 0. A 1500
+-- ceiling (64-bit pushes are 8 bytes: 1500*8 = 12 KiB < the 16 KiB stack reserve above load_end,
+-- so a push run can never walk rsp into the image/page tables). Rejects calls, locals, branches.
+func nc64_depths_ok(code, i, n, cur):
+    if i >= n:
+        return cur == 0
+    end
+    let op = get(code, i).0
+    if not nc64_op_allowed(op):
+        return false
+    end
+    if cur > 1500:
+        return false
+    end
+    if op == 0:
+        return nc64_depths_ok(code, i + 1, n, cur + 1)
+    end
+    if op == 5 or op == 6 or op == 42:
+        if cur < 2:
+            return false
+        end
+        return nc64_depths_ok(code, i + 1, n, cur - 1)
+    end
+    if i != n - 1:
+        return false
+    end
+    if cur != 1:
+        return false
+    end
+    return nc64_depths_ok(code, i + 1, n, cur - 1)
+end
+
+func nc64_body_ok(code, n):
+    if n == 0:
+        return false
+    end
+    if get(code, n - 1).0 != 21:
+        return false
+    end
+    return nc64_depths_ok(code, 0, n, 0)
+end
+
+-- Byte size each op lowers to (matching the near-axis leaf emitters nc64_lower_loop calls): PUSH_INT
+-- 11 (48 B8 imm64; push), ADD/SUB 6 (REX.W), MUL 7 (REX.W imul), RET 1 (pop rax). Drives the driver's
+-- body-length invariant: a future op admitted to nc64_op_allowed but missing from the lowerer OR this
+-- size table makes the emitted body length disagree with the computed sum -- caught, never silently
+-- mis-emitted (the no-silent-drop guard; the other freestanding drivers carry the analogous invariant).
+func nc64_op_size(op):
+    if op == 0:
+        return 11
+    end
+    if op == 5:
+        return 6
+    end
+    if op == 6:
+        return 6
+    end
+    if op == 42:
+        return 7
+    end
+    if op == 21:
+        return 1
+    end
+    return 0
+end
+
+func nc64_body_size_loop(code, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    return nc64_body_size_loop(code, i + 1, n, acc + nc64_op_size(get(code, i).0))
+end
+
+-- PASS lowering: REUSE the near-axis 64-bit leaf emitters (the reunification -- one source of
+-- truth for how a 64-bit op encodes; each carries REX.W 0x48). RET (always terminal here) lowers
+-- to a single `pop rax` (0x58) leaving the result in rax; the driver then appends the grading
+-- tail. No mid-body RET (no branches), so RET never needs a jmp-to-epilogue.
+func nc64_lower_loop(buf, code, i, n):
+    if i >= n:
+        return buf
+    end
+    let op = get(code, i).0
+    if op == 0:
+        buf = nc_emit_push_int(buf, get(code, i).1)
+    elif op == 5:
+        buf = nc_emit_add(buf)
+    elif op == 6:
+        buf = nc_emit_sub(buf)
+    elif op == 42:
+        buf = nc_emit_mul(buf)
+    elif op == 21:
+        do append(buf, 88)
+    end
+    return nc64_lower_loop(buf, code, i + 1, n)
+end
+
+-- toggler driver. Layout (vaddr V0=0x10000c): [56-byte transition head -> ljmp 0x08:long_entry]
+-- [@long_entry (64-bit): mov esp,esp_val (BC imm32 -- in 64-bit mode this ZERO-EXTENDS rsp, the
+-- one extra instruction long mode needs because the 32-bit handoff leaves rsp[63:32] undefined)]
+-- [the compiled body lowered through the near-axis 64-bit leaves -- ...; pop rax (RET)] [shr
+-- rax,0x20 -- the grading tail: high dword of the body's 64-bit result into al] [shared 58-byte
+-- epilogue: frame 0xDE<byte>0xAD on 0xE9 + result-dependent isa-debug-exit] [GDT/GDTR 30] [pad to
+-- 4 KiB] [PML4][PDPT][PD]. Reuses hoopteeter's transition head/GDT/PAE tables and lingo's ehdr/
+-- phdr/mbheader + the shared epilogue verbatim, so the nine prior modes are byte-identical and the
+-- self-host fixpoint is preserved. The proof byte tracks NORMAL 64-bit lowering, not a canned blob.
+func nc_emit_multiboot32_long64_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let f1 = nc_fail(500, 0, "multiboot32-long64: main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let f2 = nc_fail(501, 0, "multiboot32-long64: main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if not nc64_body_ok(code, n):
+        let f3 = nc_fail(502, 0, "multiboot32-long64: body not in the straight-line 64-bit arithmetic subset")
+        return 0
+    end
+    let bodybuf = new_buffer()
+    bodybuf = nc64_lower_loop(bodybuf, code, 0, n)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != nc64_body_size_loop(code, 0, n, 0):
+        let f5 = nc_fail(505, 0, "multiboot32-long64: body length invariant (a lowered op was dropped or mis-sized)")
+        return 0
+    end
+    let v0 = 1048588
+    let long_entry_vaddr = v0 + 56
+    let region_len = 5 + bodylen + 4
+    let epi_off = 56 + region_len
+    let gdt_off = epi_off + 58
+    let gdt_vaddr = v0 + gdt_off
+    let gdtr_vaddr = gdt_vaddr + 24
+    let tables_end = gdtr_vaddr + 6
+    let pml4_vaddr = nc32_roundup_4k(tables_end)
+    let pdpt_vaddr = pml4_vaddr + 4096
+    let pd_vaddr = pdpt_vaddr + 4096
+    let load_end = pd_vaddr + 4096
+    let esp_val = load_end + 16384
+    if esp_val > 1073741824:
+        let f7 = nc_fail(503, 0, "multiboot32-long64: image exceeds the identity-mapped low 1 GiB")
+        return 0
+    end
+    let cbuf = new_buffer()
+    cbuf = nc32_long_emit_head(cbuf, gdtr_vaddr, pml4_vaddr, long_entry_vaddr)
+    do append(cbuf, 188)
+    cbuf = nc_append_le32(cbuf, esp_val)
+    cbuf = append_str(cbuf, freeze(bodybuf))
+    do append(cbuf, 72)
+    do append(cbuf, 193)
+    do append(cbuf, 232)
+    do append(cbuf, 32)
+    cbuf = nc32_emit_epilogue(cbuf)
+    cbuf = nc32_long_emit_gdt(cbuf, gdt_vaddr)
+    let pre_pml4_len = length(freeze(cbuf))
+    let pad_to_pml4 = pml4_vaddr - v0 - pre_pml4_len
+    cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pml4)
+    cbuf = nc32_long_emit_pml4(cbuf, pdpt_vaddr)
+    cbuf = nc32_long_emit_pdpt(cbuf, pd_vaddr)
+    cbuf = nc32_long_emit_pd_loop(cbuf, 0)
+    let frozen_code = freeze(cbuf)
+    let code_len = length(frozen_code)
+    if code_len != load_end - v0:
+        let f6 = nc_fail(504, 0, "multiboot32-long64: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let memsz = filesz + 16384
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
+end
+
 func main():
     let source = clogger()
+    if nc_is_multiboot32_long64(source):
+        let l6 = nc_emit_multiboot32_long64_program(source)
+        return 0
+    end
     if nc_is_multiboot32_long(source):
         let lm = nc_emit_multiboot32_long_program(source)
         return 0

@@ -52,6 +52,8 @@ bootstrap/tests/run_native_codegen_link24.sh
 bootstrap/tests/run_native_codegen_link24_mutation.sh
 bootstrap/tests/run_native_codegen_link25.sh
 bootstrap/tests/run_native_codegen_link25_mutation.sh
+bootstrap/tests/run_native_codegen_link26.sh
+bootstrap/tests/run_native_codegen_link26_mutation.sh
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/capture_native_goldens.sh
