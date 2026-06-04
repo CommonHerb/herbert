@@ -90,3 +90,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L8_BOCHS_PROBES="tick_then tick_else tick_lit" bash bootstrap/tests/run_native_codegen_link24.sh
       - name: L8 mutation proof (the periodic-timer / async-survival gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link24_mutation.sh
+      - name: L9 dual-substrate gate (hoopteeter -- cross into 64-bit long mode and emit a 64-bit-only high-dword proof byte)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L9_BOCHS_PROBES="long_then long_else long_lit" bash bootstrap/tests/run_native_codegen_link25.sh
+      - name: L9 mutation proof (the long-mode-entry gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link25_mutation.sh
