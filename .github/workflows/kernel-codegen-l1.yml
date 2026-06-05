@@ -98,3 +98,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L10_BOCHS_PROBES="mul_add mul_big" bash bootstrap/tests/run_native_codegen_link26.sh
       - name: L10 mutation proof (the 64-bit-compiled-body gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link26_mutation.sh
+      - name: L11 dual-substrate gate (rizzing -- a mainline task spins on a shared memory word the timer ISR bumps and emits only after surviving N async ticks)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L11_BOCHS_PROBES="rizz_then rizz_else" bash bootstrap/tests/run_native_codegen_link27.sh
+      - name: L11 mutation proof (the shared-memory-tick synchronization gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link27_mutation.sh
