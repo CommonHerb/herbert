@@ -11914,6 +11914,268 @@ func nc_is_multiboot32_rizzing(source):
     return index(source, mlen) == 10
 end
 
+-- bluefield (the TWELFTH kernel-arc link): the freestanding image's first PREEMPTIVE
+-- CONTEXT SWITCH between two tasks. Reuses talkert/rizzing's 32-bit substrate (GDT-install,
+-- PIC remap, PIT program, the flat tables) but the IRQ0 ISR is no longer pure glue: it is a
+-- SCHEDULER that saves the running task's full GP+esp context into its TCB slot and restores
+-- the other task's (pusha; save esp -> [tcb+cur*4]; flip cur; load esp <- [tcb+cur*4]; EOI;
+-- popa; iret). Task B is started "from cold" via a pre-laid 44-byte SEEDED stack block (8 GP
+-- dwords in popa order + an iret frame eip=B_entry, cs=0x08, eflags=0x202). The forcing
+-- observable is count-deterministic (a two-flag aready/bran handshake, NOT wall-time): task A's
+-- compiled body computes vA, A CARRIES it in edx (a register the toakie/rizzing lowering never
+-- writes), sets aready, then SPINS on bran; the timer preempts A, the scheduler switches to B,
+-- B writes its marker vB to [shared], waits on aready, CLOBBERS edx (mov edx,0xB7B7B7B7), sets
+-- bran, and spins; the timer preempts B, the scheduler restores A's edx=vA, and A recovers
+-- (mov eax,edx; add eax,[shared]) and emits the proof byte = (vA + vB) mod 256 via the shared
+-- 58-byte epilogue. The byte is correct ONLY if the switch genuinely SAVED A's edx (pusha onto
+-- A's stack) across B's clobber and RESTORED it (popa) -- a fake/absent switch yields a wrong
+-- byte or no frame. Task A's compiled body uses the EXISTING control-flow+locals subset
+-- UNCHANGED (no widen); task B is hand-emitted glue (lower_program_poly prunes from main, so a
+-- second compiled task would be dead-pruned -- the non-proof task is glue, like rizzing's ISR),
+-- so the eleven prior emit modes stay byte-identical and the self-host fixpoint gen2==gen1 holds.
+-- Graded on the far-axis DUAL-SUBSTRATE oracle (QEMU + Bochs vs a host-derived golden), not C.
+-- HONEST SCOPE: this is a preemptive ring-0 GP+esp+eip+eflags context switch, NOT a full
+-- architectural one (no segment regs / CR3 / FPU / per-task address space).
+func nc32_bf_emit_head(bfh, gdtr_vaddr, esp_top, idtr_vaddr, cur_vaddr, tcb1_vaddr, seed_vaddr):
+    do append(bfh, 250)
+    do append(bfh, 15)
+    do append(bfh, 1)
+    do append(bfh, 21)
+    bfh = nc_append_le32(bfh, gdtr_vaddr)
+    do append(bfh, 234)
+    bfh = nc_append_le32(bfh, 1048603)
+    do append(bfh, 8)
+    do append(bfh, 0)
+    do append(bfh, 102)
+    do append(bfh, 184)
+    do append(bfh, 16)
+    do append(bfh, 0)
+    do append(bfh, 142)
+    do append(bfh, 216)
+    do append(bfh, 142)
+    do append(bfh, 192)
+    do append(bfh, 142)
+    do append(bfh, 224)
+    do append(bfh, 142)
+    do append(bfh, 232)
+    do append(bfh, 142)
+    do append(bfh, 208)
+    do append(bfh, 188)
+    bfh = nc_append_le32(bfh, esp_top)
+    do append(bfh, 15)
+    do append(bfh, 1)
+    do append(bfh, 29)
+    bfh = nc_append_le32(bfh, idtr_vaddr)
+    bfh = nc32_timer_out_imm(bfh, 17, 32)
+    bfh = nc32_timer_out_imm(bfh, 17, 160)
+    bfh = nc32_timer_out_imm(bfh, 32, 33)
+    bfh = nc32_timer_out_imm(bfh, 40, 161)
+    bfh = nc32_timer_out_imm(bfh, 4, 33)
+    bfh = nc32_timer_out_imm(bfh, 2, 161)
+    bfh = nc32_timer_out_imm(bfh, 1, 33)
+    bfh = nc32_timer_out_imm(bfh, 1, 161)
+    bfh = nc32_timer_out_imm(bfh, 254, 33)
+    bfh = nc32_timer_out_imm(bfh, 255, 161)
+    bfh = nc32_timer_out_imm(bfh, 52, 67)
+    bfh = nc32_timer_out_imm(bfh, 255, 64)
+    bfh = nc32_timer_out_imm(bfh, 255, 64)
+    do append(bfh, 199)
+    do append(bfh, 5)
+    bfh = nc_append_le32(bfh, cur_vaddr)
+    bfh = nc_append_le32(bfh, 0)
+    do append(bfh, 199)
+    do append(bfh, 5)
+    bfh = nc_append_le32(bfh, tcb1_vaddr)
+    bfh = nc_append_le32(bfh, seed_vaddr)
+    do append(bfh, 251)
+    return bfh
+end
+
+func nc_emit_multiboot32_bluefield_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let f1 = nc_fail(498, 0, "multiboot32-bluefield: task A main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let f2 = nc_fail(499, 0, "multiboot32-bluefield: task A main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if not nc32_body_ok(code, n):
+        let f3 = nc_fail(500, 0, "multiboot32-bluefield: task A body not in the control-flow+locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let f4 = nc_fail(501, 0, "multiboot32-bluefield: too many locals (max 31)")
+        return 0
+    end
+    let ebp_prefix = 0
+    if nlocals > 0:
+        ebp_prefix = 5
+    end
+    let lay = nc32_layout_loop(code, 0, n, ebp_prefix, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - ebp_prefix:
+        let f5 = nc_fail(502, 0, "multiboot32-bluefield: body length invariant")
+        return 0
+    end
+    -- task A = ebp_prefix + body + a_glue(31: carry 2 + ready 10 + spin 11 + recover 2 + add 6) + epilogue 58
+    let a_len = ebp_prefix + bodylen + 31 + 58
+    let off_A = 114
+    let off_B = off_A + a_len
+    let off_sched = off_B + 37
+    let off_tables = off_sched + 34
+    let off_after = off_tables + 300
+    let off_data = nc32_roundup4(off_after)
+    let cur_vaddr = 1048588 + off_data
+    let tcb_vaddr = 1048588 + off_data + 4
+    let tcb1_vaddr = tcb_vaddr + 4
+    let aready_vaddr = 1048588 + off_data + 12
+    let bran_vaddr = 1048588 + off_data + 16
+    let shared_vaddr = 1048588 + off_data + 20
+    let off_seed = off_data + 24 + 256
+    let seed_vaddr = 1048588 + off_seed
+    let code_len = off_seed + 44 + 16
+    let memsz = 12 + code_len + 16384
+    let esp_top = 1048576 + memsz
+    let gate_vaddr = 1048588 + off_sched
+    let gdt_vaddr = 1048588 + off_tables
+    let gdtr_vaddr = gdt_vaddr + 24
+    let idt_vaddr = gdtr_vaddr + 6
+    let idtr_vaddr = idt_vaddr + 264
+    let b_entry = 1048588 + off_B
+    let bfm = new_buffer()
+    bfm = nc32_bf_emit_head(bfm, gdtr_vaddr, esp_top, idtr_vaddr, cur_vaddr, tcb1_vaddr, seed_vaddr)
+    if nlocals > 0:
+        do append(bfm, 137)
+        do append(bfm, 229)
+        do append(bfm, 131)
+        do append(bfm, 236)
+        do append(bfm, 4 * nlocals)
+    end
+    bfm = append_str(bfm, freeze(bodybuf))
+    do append(bfm, 137)
+    do append(bfm, 194)
+    do append(bfm, 199)
+    do append(bfm, 5)
+    bfm = nc_append_le32(bfm, aready_vaddr)
+    bfm = nc_append_le32(bfm, 1)
+    do append(bfm, 161)
+    bfm = nc_append_le32(bfm, bran_vaddr)
+    do append(bfm, 131)
+    do append(bfm, 248)
+    do append(bfm, 1)
+    do append(bfm, 117)
+    do append(bfm, 246)
+    do append(bfm, 250)
+    do append(bfm, 137)
+    do append(bfm, 208)
+    do append(bfm, 3)
+    do append(bfm, 5)
+    bfm = nc_append_le32(bfm, shared_vaddr)
+    bfm = nc32_emit_epilogue(bfm)
+    do append(bfm, 184)
+    bfm = nc_append_le32(bfm, 46)
+    do append(bfm, 163)
+    bfm = nc_append_le32(bfm, shared_vaddr)
+    do append(bfm, 161)
+    bfm = nc_append_le32(bfm, aready_vaddr)
+    do append(bfm, 131)
+    do append(bfm, 248)
+    do append(bfm, 1)
+    do append(bfm, 117)
+    do append(bfm, 246)
+    do append(bfm, 186)
+    do append(bfm, 183)
+    do append(bfm, 183)
+    do append(bfm, 183)
+    do append(bfm, 183)
+    do append(bfm, 199)
+    do append(bfm, 5)
+    bfm = nc_append_le32(bfm, bran_vaddr)
+    bfm = nc_append_le32(bfm, 1)
+    do append(bfm, 235)
+    do append(bfm, 254)
+    do append(bfm, 96)
+    do append(bfm, 161)
+    bfm = nc_append_le32(bfm, cur_vaddr)
+    do append(bfm, 137)
+    do append(bfm, 36)
+    do append(bfm, 133)
+    bfm = nc_append_le32(bfm, tcb_vaddr)
+    do append(bfm, 131)
+    do append(bfm, 240)
+    do append(bfm, 1)
+    do append(bfm, 163)
+    bfm = nc_append_le32(bfm, cur_vaddr)
+    do append(bfm, 139)
+    do append(bfm, 36)
+    do append(bfm, 133)
+    bfm = nc_append_le32(bfm, tcb_vaddr)
+    do append(bfm, 176)
+    do append(bfm, 32)
+    do append(bfm, 230)
+    do append(bfm, 32)
+    do append(bfm, 97)
+    do append(bfm, 207)
+    bfm = nc32_timer_emit_tables(bfm, gdt_vaddr, idt_vaddr, gate_vaddr)
+    bfm = nc_emit_zeroes_loop(bfm, off_data - off_after)
+    bfm = nc_emit_zeroes_loop(bfm, 24)
+    bfm = nc_emit_zeroes_loop(bfm, 256)
+    bfm = nc_emit_zeroes_loop(bfm, 32)
+    bfm = nc_append_le32(bfm, b_entry)
+    bfm = nc_append_le32(bfm, 8)
+    bfm = nc_append_le32(bfm, 514)
+    bfm = nc_emit_zeroes_loop(bfm, 16)
+    let frozen_code = freeze(bfm)
+    if length(frozen_code) != code_len:
+        let f6 = nc_fail(503, 0, "multiboot32-bluefield: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
+end
+
+func nc_is_multiboot32_bluefield(source):
+    let marker = "-- emit: multiboot32-bluefield"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
 func nc32_roundup_4k(v):
     let r = v % 4096
     if r == 0:
@@ -13207,6 +13469,10 @@ func main():
     end
     if nc_is_multiboot32_long(source):
         let lm = nc_emit_multiboot32_long_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_bluefield(source):
+        let bf = nc_emit_multiboot32_bluefield_program(source)
         return 0
     end
     if nc_is_multiboot32_rizzing(source):
