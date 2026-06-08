@@ -110,3 +110,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L13_BOCHS_PROBES="f2_else f2_then" bash bootstrap/tests/run_native_codegen_link29.sh
       - name: L13 mutation proof (the widened-64-bit-subset gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link29_mutation.sh
+      - name: L14 dual-substrate gate (trukfit / f3 -- device input; a freestanding image reads one late-bound byte from COM1 via in al,dx and emits f(byte), same image fed X vs Y emits f(X) vs f(Y))
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L14_BOCHS_PROBES="f3_echo f3_inc" bash bootstrap/tests/run_native_codegen_link30.sh
+      - name: L14 mutation proof (the device-input value-flow gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link30_mutation.sh

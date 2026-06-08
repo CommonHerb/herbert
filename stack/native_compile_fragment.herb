@@ -1361,6 +1361,15 @@ func op_mod():
     return 44
 end
 
+-- trukfit (f3, device input): a 0-arg value builtin that reads ONE byte from the
+-- COM1 RBR. Lowered ONLY by the multiboot32-input emit mode (nc32_lower_loop op 45);
+-- it is deliberately absent from nc32_op_allowed/nc32_pops/nc32_pushes so every
+-- OTHER mode and the near-axis path reject it (a body carrying op 45 fails the depth
+-- gate / is rejected explicitly), keeping the device read isolated to the input mode.
+func op_input_byte():
+    return 45
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1664,6 +1673,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "count"):
         return emit_instr(ir, op_count(), 0, 0)
+    end
+    if equal(name, "input_byte"):
+        return emit_instr(ir, op_input_byte(), 0, 0)
     end
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger"):
         return fault("void builtin in expression")
@@ -3133,7 +3145,7 @@ func err_is_builtin_name(name):
     if equal(name, "new_array") or equal(name, "get") or equal(name, "count"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter")
+    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte")
 end
 
 func err_is_void_builtin(name):
@@ -3147,7 +3159,7 @@ func err_is_value_builtin(name):
     if equal(name, "equal") or equal(name, "new_buffer") or equal(name, "freeze"):
         return true
     end
-    return equal(name, "get") or equal(name, "count") or equal(name, "clogger")
+    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte")
 end
 
 func err_value_builtin_arity(name):
@@ -5979,6 +5991,9 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         let name = get(node.1, 0)
         if equal(name, "clogger"):
             return (0, nc_type_string(), env, sig, 0)
+        end
+        if equal(name, "input_byte"):
+            return (0, nc_type_int(), env, sig, 0)
         end
         if equal(name, "length"):
             let r = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
@@ -10793,6 +10808,9 @@ func nc32_op_size(op, is_last):
     if op == 42:
         return 6
     end
+    if op == 45:
+        return 18
+    end
     if op == 21:
         if is_last == 1:
             return 1
@@ -10902,6 +10920,28 @@ func nc32_lower_loop(buf, code, i, n, offs, epi):
             toff2 = get(offs, t2)
         end
         buf = nc_append_le32(buf, toff2 - endoff)
+    elif op == 45:
+        -- trukfit op_input_byte: poll COM1 LSR (0x3FD) for Data-Ready, then read the
+        -- RBR (0x3F8) and push the byte zero-extended. 18 bytes, self-contained (the
+        -- jz back-edge is an internal rel8); the value provably traces to the RBR read.
+        do append(buf, 102)   -- 66
+        do append(buf, 186)   -- BA  mov dx, 0x03FD (LSR)
+        do append(buf, 253)   -- FD
+        do append(buf, 3)     -- 03
+        do append(buf, 236)   -- EC  in al, dx
+        do append(buf, 168)   -- A8  test al,
+        do append(buf, 1)     -- 01     1 (Data-Ready)
+        do append(buf, 116)   -- 74  jz
+        do append(buf, 247)   -- F7     rel8 -9 -> back to the mov dx,0x3FD
+        do append(buf, 102)   -- 66
+        do append(buf, 186)   -- BA  mov dx, 0x03F8 (RBR)
+        do append(buf, 248)   -- F8
+        do append(buf, 3)     -- 03
+        do append(buf, 236)   -- EC  in al, dx  (the live byte)
+        do append(buf, 15)    -- 0F
+        do append(buf, 182)   -- B6  movzx eax, al
+        do append(buf, 192)   -- C0
+        do append(buf, 80)    -- 50  push eax
     elif op == 21:
         if il == 1:
             do append(buf, 88)
@@ -11047,6 +11087,196 @@ func nc32_emit_mbheader(buf):
     do append(buf, 82)
     do append(buf, 228)
     return buf
+end
+
+-- trukfit (f3 device input) helpers ----------------------------------------------
+-- One UART register write: mov dx,port (66 BA pp pp) ; mov al,val (B0 vv) ; out dx,al (EE).
+func nc32_uart_out(buf, port, val):
+    do append(buf, 102)
+    do append(buf, 186)
+    do append(buf, port % 256)
+    do append(buf, port / 256)
+    do append(buf, 176)
+    do append(buf, val)
+    do append(buf, 238)
+    return buf
+end
+
+-- COM1 init, ROBUST order (force LCR/DLAB=0 FIRST so IER=0 lands on IER, not DLM):
+-- 8N1; IER=0; DLAB=1; DLL=1; DLM=0; 8N1(DLAB=0); FCR off (FIFO off); DTR|RTS. 56 bytes.
+func nc32_uart_init(buf):
+    buf = nc32_uart_out(buf, 1019, 3)
+    buf = nc32_uart_out(buf, 1017, 0)
+    buf = nc32_uart_out(buf, 1019, 128)
+    buf = nc32_uart_out(buf, 1016, 1)
+    buf = nc32_uart_out(buf, 1017, 0)
+    buf = nc32_uart_out(buf, 1019, 3)
+    buf = nc32_uart_out(buf, 1018, 0)
+    buf = nc32_uart_out(buf, 1020, 3)
+    return buf
+end
+
+func nc32_count_input_loop(code, i, n, cnt):
+    if i >= n:
+        return cnt
+    end
+    let c = cnt
+    if get(code, i).0 == 45:
+        c = c + 1
+    end
+    return nc32_count_input_loop(code, i + 1, n, c)
+end
+
+func nc32_count_input(code, n):
+    return nc32_count_input_loop(code, 0, n, 0)
+end
+
+-- The input mode is STRAIGHT-LINE (no branches): with no op 16/17, the single static
+-- input_byte (nc32_count_input == 1) is provably the single DYNAMIC read on the only path
+-- -- there is no dead-read-in-a-branch. Control flow is f2/trikea's domain; the device-read
+-- capability needs none. (Codex diff-review hardening.)
+func nc32_has_branch_loop(code, i, n):
+    if i >= n:
+        return false
+    end
+    let op = get(code, i).0
+    if op == 16 or op == 17:
+        return true
+    end
+    return nc32_has_branch_loop(code, i + 1, n)
+end
+
+func nc32_has_branch(code, n):
+    return nc32_has_branch_loop(code, 0, n)
+end
+
+-- Structural-validation proxy: op 45 (input_byte) has the SAME stack effect as a
+-- push_int (op 0), so map it to op 0 for nc32_body_ok's depth/branch walk. The REAL
+-- code (with op 45) is what gets laid out and lowered; build_depths never sees op 45,
+-- so every other mode (which lacks the proxy) auto-rejects an input body.
+func nc32_input_proxy_loop(out, code, i, n):
+    if i >= n:
+        return out
+    end
+    let e = get(code, i)
+    if e.0 == 45:
+        do add(out, (0, 0, 0))
+    else:
+        do add(out, e)
+    end
+    return nc32_input_proxy_loop(out, code, i + 1, n)
+end
+
+func nc32_input_proxy(code, n):
+    return nc32_input_proxy_loop(new_array((int, int, int)), code, 0, n)
+end
+
+func nc_is_multiboot32_input(source):
+    let marker = "-- emit: multiboot32-input"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- The trukfit emit driver: a freestanding 32-bit image whose compiled body READS one
+-- late-bound byte from COM1 (input_byte/op 45), transforms it via the toakie subset,
+-- and emits the result through the proven epilogue. UART init is emitted ONCE in the
+-- prologue (after mov esp, before the rbp frame). prefix_len = 5 (mov esp) + 56 (uart)
+-- [+ 5 rbp frame]. Reuses nc32_layout/lower/epilogue verbatim (op 45 added to
+-- size/lower only) so all prior modes stay byte-identical.
+func nc_emit_multiboot32_input_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let fa = nc_fail(506, 0, "multiboot32-input: main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let fb = nc_fail(507, 0, "multiboot32-input: main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if nc32_count_input(code, n) != 1:
+        let fi = nc_fail(508, 0, "multiboot32-input: main must read input_byte() exactly once")
+        return 0
+    end
+    if nc32_has_branch(code, n):
+        let fh = nc_fail(513, 0, "multiboot32-input: control flow (if/branch) not in the straight-line input subset")
+        return 0
+    end
+    let proxy = nc32_input_proxy(code, n)
+    if not nc32_body_ok(proxy, n):
+        let fc = nc_fail(509, 0, "multiboot32-input: body not in the input/control-flow+locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let fd = nc_fail(510, 0, "multiboot32-input: too many locals (max 31)")
+        return 0
+    end
+    let prefix_len = 61
+    if nlocals > 0:
+        prefix_len = 66
+    end
+    let lay = nc32_layout_loop(code, 0, n, prefix_len, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - prefix_len:
+        let fe = nc_fail(511, 0, "multiboot32-input: body length invariant")
+        return 0
+    end
+    let code_len = prefix_len + bodylen + 58
+    let memsz = 12 + code_len + 16384
+    let esp_val = 1048576 + memsz
+    let cbuf = new_buffer()
+    do append(cbuf, 188)
+    cbuf = nc_append_le32(cbuf, esp_val)
+    cbuf = nc32_uart_init(cbuf)
+    if nlocals > 0:
+        do append(cbuf, 137)
+        do append(cbuf, 229)
+        do append(cbuf, 131)
+        do append(cbuf, 236)
+        do append(cbuf, 4 * nlocals)
+    end
+    cbuf = append_str(cbuf, freeze(bodybuf))
+    cbuf = nc32_emit_epilogue(cbuf)
+    let frozen_code = freeze(cbuf)
+    if length(frozen_code) != code_len:
+        let fg = nc_fail(512, 0, "multiboot32-input: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
 end
 
 func nc_emit_multiboot32_program(source):
@@ -13693,6 +13923,10 @@ func main():
     end
     if nc_is_multiboot32_idt(source):
         let z = nc_emit_multiboot32_idt_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_input(source):
+        let mi = nc_emit_multiboot32_input_program(source)
         return 0
     end
     if nc_is_multiboot32(source):
