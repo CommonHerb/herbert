@@ -185,13 +185,29 @@ mutate add_opcode \
 # M6: mis-resolve the BR_IF_FALSE target by +1 (length-preserving). The jcc then
 # lands one byte into an instruction -- invisible to the length invariant, caught
 # by the white-box target-on-boundary check (the Codex off-by-one demand).
+# Anchor includes the 32-bit BR_IF_FALSE prologue bytes (58 85 c0 0f 84: pop;test
+# eax,eax;je) so it pins the nc32_lower_loop op-17 site EXACTLY -- trikea/f2's
+# nc64_lower_loop op-17 has the identical toff2-endoff block but emits 58 48 85...
+# (the REX.W do-append-72 between 88 and 133), so this anchor stays nc32-unique.
 mutate brif_target_off_by_one \
-'        let toff2 = epi
+'        do append(buf, 88)
+        do append(buf, 133)
+        do append(buf, 192)
+        do append(buf, 15)
+        do append(buf, 132)
+        let t2 = get(code, i).1
+        let toff2 = epi
         if t2 < n:
             toff2 = get(offs, t2)
         end
         buf = nc_append_le32(buf, toff2 - endoff)' \
-'        let toff2 = epi
+'        do append(buf, 88)
+        do append(buf, 133)
+        do append(buf, 192)
+        do append(buf, 15)
+        do append(buf, 132)
+        let t2 = get(code, i).1
+        let toff2 = epi
         if t2 < n:
             toff2 = get(offs, t2)
         end

@@ -13242,18 +13242,37 @@ func nc_is_multiboot32_long64(source):
     return index(source, mlen) == 10
 end
 
--- The toggler 64-bit subset: PUSH_INT (0), ADD (5), SUB (6), MUL (42), RET (21). LOAD_LOCAL/
--- STORE_LOCAL/EQ/BR/BR_IF_FALSE are NOT admitted -- 64-bit locals need 8-byte frame slots
--- (disp/imm widths the 32-bit toakie gate's 4-byte assumptions do not cover) and branches need a
--- 64-bit layout pass; both are deferred to a later "widen the 64-bit subset" link.
+-- The widened 64-bit subset (trikea/f2): PUSH_INT (0), LOAD_LOCAL (3), STORE_LOCAL (4), ADD (5),
+-- SUB (6), EQ (11), NE (12), BR (16), BR_IF_FALSE (17), MUL (42), RET (21). Mirrors the proven
+-- 32-bit toakie control-flow+locals subset but at 64-bit width: locals are 8-byte rbp-frame slots
+-- ([rbp - 8*(slot+1)]) and branches resolve through a 64-bit layout pass. Still rejects call (20),
+-- bitwise (36/37), div/mod (43/44), and anything else -- those remain deferred.
 func nc64_op_allowed(op):
     if op == 0:
+        return true
+    end
+    if op == 3:
+        return true
+    end
+    if op == 4:
         return true
     end
     if op == 5:
         return true
     end
     if op == 6:
+        return true
+    end
+    if op == 11:
+        return true
+    end
+    if op == 12:
+        return true
+    end
+    if op == 16:
+        return true
+    end
+    if op == 17:
         return true
     end
     if op == 42:
@@ -13265,40 +13284,57 @@ func nc64_op_allowed(op):
     return false
 end
 
--- Subset gate: a single acyclic straight line that ends in exactly one RET. Linear stack-depth
--- walk (no branches, so no merge points): PUSH_INT +1; ADD/SUB/MUL pop 2 push 1 (need depth >= 2);
--- RET must be the LAST op and pop the single result at depth exactly 1, leaving depth 0. A 1500
--- ceiling (64-bit pushes are 8 bytes: 1500*8 = 12 KiB < the 16 KiB stack reserve above load_end,
--- so a push run can never walk rsp into the image/page tables). Rejects calls, locals, branches.
-func nc64_depths_ok(code, i, n, cur):
+-- Stack effect of each admitted 64-bit op (pops then pushes). REUSES the width-agnostic nc32_pops/
+-- nc32_pushes (stack semantics are width-independent), but adds NE (op 12), which nc32 never admitted
+-- and so leaves at 0/0: NE has the SAME stack effect as EQ (op 11) -- pop 2 operands, push 1 result.
+-- Without this, an NE in a 64-bit body would be tracked as a no-op in the depth walk and mis-verify.
+func nc64_pops(op):
+    if op == 12:
+        return 2
+    end
+    return nc32_pops(op)
+end
+
+func nc64_pushes(op):
+    if op == 12:
+        return 1
+    end
+    return nc32_pushes(op)
+end
+
+-- Two-pass CFG verifier mirroring nc32 (PASS A: forward depth walk; PASS B: nc32_check_branches for
+-- forward-only + merge-point depth agreement). A COPY of nc32_build_depths with the depth cap at 1500
+-- (NOT 3000) -- 64-bit pushes are 8 bytes (1500*8 = 12 KiB < the 16 KiB stack reserve above load_end),
+-- and using nc64_pops/nc64_pushes so NE (op 12) is accounted. Records the depth BEFORE each instr;
+-- rejects any unknown opcode, any underflow, any RET not at depth exactly 1. Returns (ok, depths).
+func nc64_build_depths(code, i, n, cur, depths):
     if i >= n:
-        return cur == 0
+        return (1, depths)
     end
     let op = get(code, i).0
     if not nc64_op_allowed(op):
-        return false
+        return (0, depths)
     end
     if cur > 1500:
-        return false
+        return (0, depths)
     end
-    if op == 0:
-        return nc64_depths_ok(code, i + 1, n, cur + 1)
+    let pops = nc64_pops(op)
+    if cur < pops:
+        return (0, depths)
     end
-    if op == 5 or op == 6 or op == 42:
-        if cur < 2:
-            return false
+    do add(depths, cur)
+    if op == 21:
+        if cur != 1:
+            return (0, depths)
         end
-        return nc64_depths_ok(code, i + 1, n, cur - 1)
     end
-    if i != n - 1:
-        return false
-    end
-    if cur != 1:
-        return false
-    end
-    return nc64_depths_ok(code, i + 1, n, cur - 1)
+    return nc64_build_depths(code, i + 1, n, cur - pops + nc64_pushes(op), depths)
 end
 
+-- The full 64-bit subset gate (mirrors nc32_body_ok): ends in RET, all opcodes admitted +
+-- stack-balanced (PASS A), all branches forward + depth-agreeing (PASS B, reusing the width-agnostic
+-- nc32_check_branches). Defense-in-depth: the far-axis oracle has no C reference, so the gate proves
+-- the body's well-formedness itself before the 64-bit layout pass resolves branch rel32s.
 func nc64_body_ok(code, n):
     if n == 0:
         return false
@@ -13306,17 +13342,29 @@ func nc64_body_ok(code, n):
     if get(code, n - 1).0 != 21:
         return false
     end
-    return nc64_depths_ok(code, 0, n, 0)
+    let bd = nc64_build_depths(code, 0, n, 0, new_array(int))
+    if bd.0 == 0:
+        return false
+    end
+    return nc32_check_branches(code, 0, n, bd.1)
 end
 
--- Byte size each op lowers to (matching the near-axis leaf emitters nc64_lower_loop calls): PUSH_INT
--- 11 (48 B8 imm64; push), ADD/SUB 6 (REX.W), MUL 7 (REX.W imul), RET 1 (pop rax). Drives the driver's
--- body-length invariant: a future op admitted to nc64_op_allowed but missing from the lowerer OR this
--- size table makes the emitted body length disagree with the computed sum -- caught, never silently
--- mis-emitted (the no-silent-drop guard; the other freestanding drivers carry the analogous invariant).
-func nc64_op_size(op):
+-- Byte size each op lowers to (matching the EXACT 64-bit lowering in nc64_lower_loop): PUSH_INT 11
+-- (48 B8 imm64; push), LOAD_LOCAL 5 (48 8B 45 disp8; push), STORE_LOCAL 5 (pop; 48 89 45 disp8),
+-- ADD/SUB 6 (REX.W), EQ/NE 13 (pop;pop; REX.W cmp; setcc; movzx; push), BR 5 (e9 rel32),
+-- BR_IF_FALSE 10 (pop; test; je rel32), MUL 7 (REX.W imul), RET 1 if last (pop rax; fall through to
+-- the grading tail) else 6 (pop rax; jmp epilogue). Drives the two-pass layout that resolves branch
+-- rel32s AND the driver's body-length invariant (a mis-sized/dropped op is caught, never silently
+-- mis-emitted -- the no-silent-drop guard the other freestanding drivers carry).
+func nc64_op_size(op, is_last):
     if op == 0:
         return 11
+    end
+    if op == 3:
+        return 5
+    end
+    if op == 4:
+        return 5
     end
     if op == 5:
         return 6
@@ -13324,11 +13372,26 @@ func nc64_op_size(op):
     if op == 6:
         return 6
     end
+    if op == 11:
+        return 13
+    end
+    if op == 12:
+        return 13
+    end
+    if op == 16:
+        return 5
+    end
+    if op == 17:
+        return 10
+    end
     if op == 42:
         return 7
     end
     if op == 21:
-        return 1
+        if is_last == 1:
+            return 1
+        end
+        return 6
     end
     return 0
 end
@@ -13337,41 +13400,149 @@ func nc64_body_size_loop(code, i, n, acc):
     if i >= n:
         return acc
     end
-    return nc64_body_size_loop(code, i + 1, n, acc + nc64_op_size(get(code, i).0))
+    let il = 0
+    if i == n - 1:
+        il = 1
+    end
+    return nc64_body_size_loop(code, i + 1, n, acc + nc64_op_size(get(code, i).0, il))
 end
 
--- PASS lowering: REUSE the near-axis 64-bit leaf emitters (the reunification -- one source of
--- truth for how a 64-bit op encodes; each carries REX.W 0x48). RET (always terminal here) lowers
--- to a single `pop rax` (0x58) leaving the result in rax; the driver then appends the grading
--- tail. No mid-body RET (no branches), so RET never needs a jmp-to-epilogue.
-func nc64_lower_loop(buf, code, i, n):
+-- PASS 1 layout (mirrors nc32_layout_loop at 64-bit width): byte offset of each instr from code start
+-- (offsets INCLUDE the prefix, so a branch rel cancels the prefix). Returns (offs, epilogue_off); a
+-- branch target == n resolves to epilogue_off.
+func nc64_layout_loop(code, i, n, cur, offs):
+    if i >= n:
+        return (offs, cur)
+    end
+    do add(offs, cur)
+    let il = 0
+    if i == n - 1:
+        il = 1
+    end
+    return nc64_layout_loop(code, i + 1, n, cur + nc64_op_size(get(code, i).0, il), offs)
+end
+
+-- Frame-local displacement as a disp8 byte: [rbp - 8*(slot+1)]. nlocals is capped at 15 upstream
+-- (max slot 14), so 8*(slot+1) <= 120 fits a signed byte. The cap is 15 not 16 because the frame
+-- prologue is `sub rsp, imm8` (48 83 EC ib), which SIGN-EXTENDS: frame = 8*16 = 128 would encode as
+-- 0x80 = -128 and ADD to rsp. So 15 locals (frame 120, 0x78) is the true boundary, not the disp8 limit.
+func nc64_emit_local_disp(buf, slot):
+    do append(buf, 256 - 8 * (slot + 1))
+    return buf
+end
+
+-- PASS 2 lowering (mirrors nc32_lower_loop at 64-bit width): emit each instr's bytes, resolving
+-- BR/BR_IF_FALSE/mid-RET rel32 from the layout. REUSES the near-axis 64-bit leaf emitters for
+-- PUSH_INT/ADD/SUB/MUL (the reunification -- each carries REX.W 0x48); locals use 8-byte rbp-frame
+-- slots ([rbp - 8*(slot+1)]); EQ/NE lower to REX.W cmp + setcc + movzx; branches use the same forward
+-- rel32 machinery as nc32 (gated forward-only, so every rel32 is non-negative). Terminal RET lowers to
+-- a single `pop rax` (0x58, the driver appends the grading tail); a mid-body RET lowers to pop rax;
+-- jmp epilogue.
+func nc64_lower_loop(buf, code, i, n, offs, epi):
     if i >= n:
         return buf
     end
     let op = get(code, i).0
+    let il = 0
+    if i == n - 1:
+        il = 1
+    end
+    let endoff = get(offs, i) + nc64_op_size(op, il)
     if op == 0:
         buf = nc_emit_push_int(buf, get(code, i).1)
+    elif op == 3:
+        do append(buf, 72)
+        do append(buf, 139)
+        do append(buf, 69)
+        buf = nc64_emit_local_disp(buf, get(code, i).1)
+        do append(buf, 80)
+    elif op == 4:
+        do append(buf, 88)
+        do append(buf, 72)
+        do append(buf, 137)
+        do append(buf, 69)
+        buf = nc64_emit_local_disp(buf, get(code, i).1)
     elif op == 5:
         buf = nc_emit_add(buf)
     elif op == 6:
         buf = nc_emit_sub(buf)
+    elif op == 11:
+        do append(buf, 89)
+        do append(buf, 88)
+        do append(buf, 72)
+        do append(buf, 57)
+        do append(buf, 200)
+        do append(buf, 15)
+        do append(buf, 148)
+        do append(buf, 194)
+        do append(buf, 72)
+        do append(buf, 15)
+        do append(buf, 182)
+        do append(buf, 194)
+        do append(buf, 80)
+    elif op == 12:
+        do append(buf, 89)
+        do append(buf, 88)
+        do append(buf, 72)
+        do append(buf, 57)
+        do append(buf, 200)
+        do append(buf, 15)
+        do append(buf, 149)
+        do append(buf, 194)
+        do append(buf, 72)
+        do append(buf, 15)
+        do append(buf, 182)
+        do append(buf, 194)
+        do append(buf, 80)
+    elif op == 16:
+        do append(buf, 233)
+        let t = get(code, i).1
+        let toff = epi
+        if t < n:
+            toff = get(offs, t)
+        end
+        buf = nc_append_le32(buf, toff - endoff)
+    elif op == 17:
+        do append(buf, 88)
+        do append(buf, 72)
+        do append(buf, 133)
+        do append(buf, 192)
+        do append(buf, 15)
+        do append(buf, 132)
+        let t2 = get(code, i).1
+        let toff2 = epi
+        if t2 < n:
+            toff2 = get(offs, t2)
+        end
+        buf = nc_append_le32(buf, toff2 - endoff)
     elif op == 42:
         buf = nc_emit_mul(buf)
     elif op == 21:
-        do append(buf, 88)
+        if il == 1:
+            do append(buf, 88)
+        else:
+            do append(buf, 88)
+            do append(buf, 233)
+            buf = nc_append_le32(buf, epi - endoff)
+        end
     end
-    return nc64_lower_loop(buf, code, i + 1, n)
+    return nc64_lower_loop(buf, code, i + 1, n, offs, epi)
 end
 
--- toggler driver. Layout (vaddr V0=0x10000c): [56-byte transition head -> ljmp 0x08:long_entry]
--- [@long_entry (64-bit): mov esp,esp_val (BC imm32 -- in 64-bit mode this ZERO-EXTENDS rsp, the
--- one extra instruction long mode needs because the 32-bit handoff leaves rsp[63:32] undefined)]
--- [the compiled body lowered through the near-axis 64-bit leaves -- ...; pop rax (RET)] [shr
+-- trikea/f2 driver (widened toggler). Layout (vaddr V0=0x10000c): [56-byte transition head -> ljmp
+-- 0x08:long_entry] [@long_entry (64-bit): mov esp,esp_val (BC imm32 -- zero-extends rsp; the one extra
+-- instruction long mode needs because the 32-bit handoff leaves rsp[63:32] undefined)] [optional rbp
+-- frame: mov rbp,rsp (48 89 E5) + sub rsp,8*nlocals (48 83 EC imm8) -- present iff the body uses
+-- locals] [the compiled body lowered via nc64_lower_loop -- if/else + rbp-frame locals + 64-bit
+-- arithmetic; mid-body RET jmps to the grading tail, terminal RET (pop rax) falls through] [shr
 -- rax,0x20 -- the grading tail: high dword of the body's 64-bit result into al] [shared 58-byte
 -- epilogue: frame 0xDE<byte>0xAD on 0xE9 + result-dependent isa-debug-exit] [GDT/GDTR 30] [pad to
--- 4 KiB] [PML4][PDPT][PD]. Reuses hoopteeter's transition head/GDT/PAE tables and lingo's ehdr/
+-- 4 KiB] [PML4][PDPT][PD]. The prefix is 5 bytes (mov esp) with no locals, 12 (mov esp + mov rbp,rsp +
+-- sub rsp,imm8) with locals; branch rel32s resolve through nc64_layout_loop (the prefix is the layout
+-- origin, so rel32s cancel it). Reuses hoopteeter's transition head/GDT/PAE tables and lingo's ehdr/
 -- phdr/mbheader + the shared epilogue verbatim, so the nine prior modes are byte-identical and the
--- self-host fixpoint is preserved. The proof byte tracks NORMAL 64-bit lowering, not a canned blob.
+-- self-host fixpoint is preserved. For a straight-line no-locals body, prefix_len=5 and the layout/lower
+-- produce IDENTICAL bytes to the pre-widen path -> byte-identical image (the f2 byte-identity guarantee).
 func nc_emit_multiboot32_long64_program(source):
     let tokens = lex_source(source)
     let nodes = pool_new()
@@ -13395,19 +13566,31 @@ func nc_emit_multiboot32_long64_program(source):
     let code = mainfn.4
     let n = count(code)
     if not nc64_body_ok(code, n):
-        let f3 = nc_fail(502, 0, "multiboot32-long64: body not in the straight-line 64-bit arithmetic subset")
+        let f3 = nc_fail(502, 0, "multiboot32-long64: body not in the control-flow+locals 64-bit subset")
         return 0
     end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 15:
+        let f4 = nc_fail(504, 0, "multiboot32-long64: too many locals (max 15)")
+        return 0
+    end
+    let prefix_len = 5
+    if nlocals > 0:
+        prefix_len = 12
+    end
+    let lay = nc64_layout_loop(code, 0, n, prefix_len, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
     let bodybuf = new_buffer()
-    bodybuf = nc64_lower_loop(bodybuf, code, 0, n)
+    bodybuf = nc64_lower_loop(bodybuf, code, 0, n, offs, epi)
     let bodylen = length(freeze(bodybuf))
-    if bodylen != nc64_body_size_loop(code, 0, n, 0):
+    if bodylen != epi - prefix_len:
         let f5 = nc_fail(505, 0, "multiboot32-long64: body length invariant (a lowered op was dropped or mis-sized)")
         return 0
     end
     let v0 = 1048588
     let long_entry_vaddr = v0 + 56
-    let region_len = 5 + bodylen + 4
+    let region_len = prefix_len + bodylen + 4
     let epi_off = 56 + region_len
     let gdt_off = epi_off + 58
     let gdt_vaddr = v0 + gdt_off
@@ -13426,6 +13609,15 @@ func nc_emit_multiboot32_long64_program(source):
     cbuf = nc32_long_emit_head(cbuf, gdtr_vaddr, pml4_vaddr, long_entry_vaddr)
     do append(cbuf, 188)
     cbuf = nc_append_le32(cbuf, esp_val)
+    if nlocals > 0:
+        do append(cbuf, 72)
+        do append(cbuf, 137)
+        do append(cbuf, 229)
+        do append(cbuf, 72)
+        do append(cbuf, 131)
+        do append(cbuf, 236)
+        do append(cbuf, 8 * nlocals)
+    end
     cbuf = append_str(cbuf, freeze(bodybuf))
     do append(cbuf, 72)
     do append(cbuf, 193)

@@ -106,3 +106,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L12_BOCHS_PROBES="bf_then bf_else" bash bootstrap/tests/run_native_codegen_link28.sh
       - name: L12 mutation proof (the preemptive-context-switch gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link28_mutation.sh
+      - name: L13 dual-substrate gate (trikea / f2 -- widen the 64-bit subset to if/else + let rbp-frame locals; proof byte = high dword of the arm a genuine 64-bit cmp selects)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L13_BOCHS_PROBES="f2_else f2_then" bash bootstrap/tests/run_native_codegen_link29.sh
+      - name: L13 mutation proof (the widened-64-bit-subset gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link29_mutation.sh

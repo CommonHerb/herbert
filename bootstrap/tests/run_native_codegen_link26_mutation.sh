@@ -148,13 +148,20 @@ mutate shrrexw \
 # M-movesp: mov esp,esp_val (bc) -> mov ebp,esp_val (bd). esp is then never set, so rsp keeps the
 # UNDEFINED high half the 32-bit handoff left; the body's first push addresses outside the low-1-GiB map
 # -> #PF -> triple-fault. Also: no `bc` at long_entry -> the mov-esp white-box pin fires.
+# Anchor extends through the long64 driver's 64-bit rbp prologue (`if nlocals > 0:` then do-append-72,
+# the REX.W mov rbp,rsp) so it pins THIS driver's mov esp EXACTLY: trikea/f2 inserted that prologue
+# between the mov esp and the body append (so the old append_str anchor drifted to 0), and the toakie
+# driver shares `188 / esp_val / if nlocals>0:` but follows it with do-append-137 (32-bit mov ebp,esp),
+# not 72 -- so this stays long64-unique.
 mutate movesp \
 '    do append(cbuf, 188)
     cbuf = nc_append_le32(cbuf, esp_val)
-    cbuf = append_str(cbuf, freeze(bodybuf))' \
+    if nlocals > 0:
+        do append(cbuf, 72)' \
 '    do append(cbuf, 189)
     cbuf = nc_append_le32(cbuf, esp_val)
-    cbuf = append_str(cbuf, freeze(bodybuf))'
+    if nlocals > 0:
+        do append(cbuf, 72)'
 
 # M-Lbit: clear the GDT 64-bit code descriptor L-bit (flags 0xAF -> 0xCF) in the SHARED nc32_long_emit_gdt.
 # The far-jmp then loads a 32-bit (L=0,D=1) descriptor -> COMPATIBILITY mode; the identical REX.W body

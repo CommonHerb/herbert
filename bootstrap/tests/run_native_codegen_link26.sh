@@ -70,8 +70,10 @@
 #     frame; Bochs one host-golden frame + clean-shutdown evidence.
 #   PROBE VECTORS: mul_add + mul_big + mul_add2 + mul_sub (mul/add/sub, distinct nonzero high-dword
 #     bytes 0x01/0xE8/0xE9/0xD1, each a product exceeding 2^32 so the byte is 64-bit-only).
-#   REJECTS (+ twins): out-of-(64-bit-)subset bodies (locals, if/else branch, == comparator, div/mod,
-#     bitwise, 2-function call, parameterised main) emit NO valid image (ERR 500/501/502).
+#   REJECTS (+ twins): out-of-(64-bit-)subset bodies (div/mod, bitwise, 2-function call, parameterised
+#     main) emit NO valid image (ERR 500/501/502). The locals + if/else-branch rejects were RETIRED at
+#     native-codegen link29 (trikea / f2), which deliberately WIDENS the multiboot32-long64 subset to
+#     admit them; they are now ACCEPTED probes in run_native_codegen_link29.sh.
 #
 # Honest scope: proves "crosses into 64-bit long mode and runs a COMPILED body whose proof byte is the
 # 64-bit-only high dword of the body's own result, as a freestanding Multiboot image under QEMU +
@@ -401,10 +403,11 @@ for label in $ALL_PROBES; do
     fi
 done
 
-reject_probe locals      'func main(): let x = 70000  return x * x end'
-reject_probe locals_twin 'func main(): let y = 60000  return y * y end'
-reject_probe branch      'func main(): if 1000000 * 1000000 == 0: return 7 else: return 1000000 * 1000000 end end'
-reject_probe branch_twin 'func main(): if 2000000 * 1000000 == 1: return 5 else: return 2000000 * 1000000 end end'
+# NOTE: the `locals` and `branch` reject_probes (+ twins) were RETIRED at native-codegen link29
+# (trikea / f2): that link deliberately WIDENS the multiboot32-long64 subset to admit if/else +
+# let rbp-frame locals, so those bodies now COMPILE (proven obsolete by the widen, migrated to
+# ACCEPTED probes in run_native_codegen_link29.sh with a 64-bit-distinguishing predicate). The
+# remaining rejects (div/mod, bitwise, call, mainarg) stay -- they are still out of subset.
 reject_probe divmod      'func main(): return 1000000 * 1000000 % 7 end'
 reject_probe divmod_twin 'func main(): return 2000000 * 1000000 / 3 end'
 reject_probe bitor       'func main(): return 1000000 * 1000000 | 1 end'
@@ -413,12 +416,12 @@ reject_probe call        'func h(): return 1000000 end\nfunc main(): return h() 
 reject_probe call_twin   'func g(): return 2000000 end\nfunc main(): return g() * 1000000 end'
 reject_probe mainarg     'func main(p): return p * 1000000 end'
 reject_probe mainarg_twin 'func main(k): return k * 2000000 end'
-[[ "$fail" -eq 0 ]] && pass=$((pass + 12))
+[[ "$fail" -eq 0 ]] && pass=$((pass + 8))
 
 echo ""
 if [[ "$run_bochs" -eq 0 ]] && have_qemu; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link26 sub-test(s) failed."; exit 1; fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link26 / toggler / tenth kernel-arc link: the x86-64 BACKEND REUNIFICATION -- the freestanding image crosses into 64-bit long mode and runs a GENUINELY 64-bit COMPILED body lowered through the SAME near-axis 64-bit leaf emitters the Linux-ELF64 path uses, so the proof byte = the HIGH dword of the body's OWN 64-bit result [a product exceeding 2^32, wrong under 32-bit-width arithmetic]; $pass checks: static + white-box [code BEGINS with the exact 56-byte transition head exactly-once; ljmp target == long_entry V0+56; mov esp,esp_val (the rsp zero-extension) bound by value to the derived stack top; the 64-bit BODY bytes PINNED to the EXACT genuine 64-bit lowering of each probe's source (provenance: a forged/mutated body that reaches a nonzero high dword some other way is rejected) AND a {movabs/push/pop/imul/add/sub} whitelist with rax/rcx ONLY -- any 32-bit GPR rejected, pinning REX.W on every arithmetic op -- free of I/O/privileged/branch/call/memory/segment; the proof-byte data-flow 58 48c1e820 88c3 (pop rax; shr rax,0x20; mov bl,al) exactly-once so the byte IS the lowered body's high dword; GDT L=1 exactly-once + no non-L=1 code descriptor + GDTR base bound; the full PAE page-walk bound BY VALUE (CR3==PML4; PML4/PDPT entry0 + rest 0; all 512 PDEs == i*0x200000+0x83 -- virtual 0x10000c -> physical 0x10000c); the ENTRY+LOAD frame bound so the scanned bytes are the bytes that run; golden byte nonzero; single 0xE9 emit], QEMU substrate (4 probes: mul_add/mul_big/mul_add2/mul_sub, distinct nonzero 64-bit high-dword bytes), Bochs substrate ($BOCHS_PROBES, unique frame + clean shutdown), 12 out-of-subset rejects with twins (locals/branch/==/div/bitwise/call/mainarg -> ERR 500/501/502); graded vs host-derived golden on the dual-substrate oracle)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link26 / toggler / tenth kernel-arc link: the x86-64 BACKEND REUNIFICATION -- the freestanding image crosses into 64-bit long mode and runs a GENUINELY 64-bit COMPILED body lowered through the SAME near-axis 64-bit leaf emitters the Linux-ELF64 path uses, so the proof byte = the HIGH dword of the body's OWN 64-bit result [a product exceeding 2^32, wrong under 32-bit-width arithmetic]; $pass checks: static + white-box [code BEGINS with the exact 56-byte transition head exactly-once; ljmp target == long_entry V0+56; mov esp,esp_val (the rsp zero-extension) bound by value to the derived stack top; the 64-bit BODY bytes PINNED to the EXACT genuine 64-bit lowering of each probe's source (provenance: a forged/mutated body that reaches a nonzero high dword some other way is rejected) AND a {movabs/push/pop/imul/add/sub} whitelist with rax/rcx ONLY -- any 32-bit GPR rejected, pinning REX.W on every arithmetic op -- free of I/O/privileged/branch/call/memory/segment; the proof-byte data-flow 58 48c1e820 88c3 (pop rax; shr rax,0x20; mov bl,al) exactly-once so the byte IS the lowered body's high dword; GDT L=1 exactly-once + no non-L=1 code descriptor + GDTR base bound; the full PAE page-walk bound BY VALUE (CR3==PML4; PML4/PDPT entry0 + rest 0; all 512 PDEs == i*0x200000+0x83 -- virtual 0x10000c -> physical 0x10000c); the ENTRY+LOAD frame bound so the scanned bytes are the bytes that run; golden byte nonzero; single 0xE9 emit], QEMU substrate (4 probes: mul_add/mul_big/mul_add2/mul_sub, distinct nonzero 64-bit high-dword bytes), Bochs substrate ($BOCHS_PROBES, unique frame + clean shutdown), 8 out-of-subset rejects with twins (div/bitwise/call/mainarg -> ERR 500/501/502; the locals + if/else-branch rejects were RETIRED at link29 trikea/f2, which widens the 64-bit subset to admit them -> migrated to ACCEPTED probes there); graded vs host-derived golden on the dual-substrate oracle)"
 exit 0
