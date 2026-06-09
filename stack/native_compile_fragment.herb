@@ -12658,37 +12658,37 @@ end
 -- QEMU and Bochs regardless of tick timing); next=(inq>>pos)&1 reads [inq] each
 -- quantum; exit (isa-debug-exit + Bochs power-off) when pos>=K AND [done]==1.
 -- ============================================================================
--- 15-byte framed emit: al -> "DE al AD" on 0xE9 (the epilogue's frame prefix).
-func nc32_clog_frame(buf):
-    do append(buf, 136)
-    do append(buf, 195)
-    do append(buf, 102)
-    do append(buf, 186)
-    do append(buf, 233)
-    do append(buf, 0)
-    do append(buf, 176)
-    do append(buf, 222)
-    do append(buf, 238)
-    do append(buf, 136)
-    do append(buf, 216)
-    do append(buf, 238)
-    do append(buf, 176)
-    do append(buf, 173)
-    do append(buf, 238)
-    return buf
+-- 15-byte framed emit: al -> "DE al AD" on 0xE9. Buffer `clf` not `buf` (anchor-collision: link25/26).
+func nc32_clog_frame(clf):
+    do append(clf, 136)
+    do append(clf, 195)
+    do append(clf, 102)
+    do append(clf, 186)
+    do append(clf, 233)
+    do append(clf, 0)
+    do append(clf, 176)
+    do append(clf, 222)
+    do append(clf, 238)
+    do append(clf, 136)
+    do append(clf, 216)
+    do append(clf, 238)
+    do append(clf, 176)
+    do append(clf, 173)
+    do append(clf, 238)
+    return clf
 end
 
 -- one task tail: framed emit + mov [done],1 + hlt + jmp <rel8 back to the loop head>.
-func nc32_clog_task_tail(buf, done_vaddr, jmprel):
-    buf = nc32_clog_frame(buf)
-    do append(buf, 199)
-    do append(buf, 5)
-    buf = nc_append_le32(buf, done_vaddr)
-    buf = nc_append_le32(buf, 1)
-    do append(buf, 244)
-    do append(buf, 235)
-    do append(buf, jmprel)
-    return buf
+func nc32_clog_task_tail(clf, done_vaddr, jmprel):
+    clf = nc32_clog_frame(clf)
+    do append(clf, 199)
+    do append(clf, 5)
+    clf = nc_append_le32(clf, done_vaddr)
+    clf = nc_append_le32(clf, 1)
+    do append(clf, 244)
+    do append(clf, 235)
+    do append(clf, jmprel)
+    return clf
 end
 
 func nc32_clog_emit_head(clh, gdtr_vaddr, esp_top, idtr_vaddr, inq_vaddr, pos_vaddr, done_vaddr, cur_vaddr, tcb0_vaddr, tcb1_vaddr, seedA_vaddr, seedB_vaddr):
