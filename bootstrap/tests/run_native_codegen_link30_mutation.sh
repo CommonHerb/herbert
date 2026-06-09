@@ -21,6 +21,7 @@ set -u
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
+backend="$repo_root/stack/native_compile_fragment.herb"
 feeder="$script_dir/kernel_input_feed.py"
 source "$script_dir/native_codegen_oracle.sh"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
