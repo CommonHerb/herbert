@@ -62,6 +62,8 @@ bootstrap/tests/run_native_codegen_link29.sh
 bootstrap/tests/run_native_codegen_link29_mutation.sh
 bootstrap/tests/run_native_codegen_link30.sh
 bootstrap/tests/run_native_codegen_link30_mutation.sh
+bootstrap/tests/run_native_codegen_link31.sh
+bootstrap/tests/run_native_codegen_link31_mutation.sh
 bootstrap/tests/kernel_input_feed.py
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh

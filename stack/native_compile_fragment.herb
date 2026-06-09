@@ -12406,6 +12406,241 @@ func nc_is_multiboot32_bluefield(source):
     return index(source, mlen) == 10
 end
 
+-- ============================================================================
+-- contigo (fifteenth kernel-arc link / f1): the first DATA-DEPENDENT scheduling
+-- decision. The timer-IRQ0 scheduler READS an input-derived state cell (inq, set
+-- by the mainline from a late-bound COM1 byte) and takes a cmp;jcc to SELECT which
+-- of two seeded tasks to dispatch via iret. Selected by "-- emit: multiboot32-contigo".
+-- Layout (V0=0x10000c): [HEAD' 174: GDT-install + UART init + PIC-remap + PIT-program
+-- + input read->inq + sti + jmp$ idle] [TASK A: ebp? + compiled body + epilogue 58]
+-- [TASK B: mov eax,46 + epilogue 58] [SCHEDULER 30] [TABLES 300] [inq 8] [seedA 44]
+-- [seedB 44] [guard 16]. Seed eflags = 0x002 (IF=0): one-shot cold dispatch (the task
+-- runs uninterrupted to hlt, so no re-preemption / double-emit). The mainline idles
+-- (jmp $) and NEVER emits; both tasks are reached ONLY via the scheduler's iret.
+-- ============================================================================
+func nc32_co_emit_head(coh, gdtr_vaddr, esp_top, idtr_vaddr, inq_vaddr):
+    do append(coh, 250)
+    do append(coh, 15)
+    do append(coh, 1)
+    do append(coh, 21)
+    coh = nc_append_le32(coh, gdtr_vaddr)
+    do append(coh, 234)
+    coh = nc_append_le32(coh, 1048603)
+    do append(coh, 8)
+    do append(coh, 0)
+    do append(coh, 102)
+    do append(coh, 184)
+    do append(coh, 16)
+    do append(coh, 0)
+    do append(coh, 142)
+    do append(coh, 216)
+    do append(coh, 142)
+    do append(coh, 192)
+    do append(coh, 142)
+    do append(coh, 224)
+    do append(coh, 142)
+    do append(coh, 232)
+    do append(coh, 142)
+    do append(coh, 208)
+    do append(coh, 188)
+    coh = nc_append_le32(coh, esp_top)
+    do append(coh, 15)
+    do append(coh, 1)
+    do append(coh, 29)
+    coh = nc_append_le32(coh, idtr_vaddr)
+    coh = nc32_uart_init(coh)
+    coh = nc32_timer_out_imm(coh, 17, 32)
+    coh = nc32_timer_out_imm(coh, 17, 160)
+    coh = nc32_timer_out_imm(coh, 32, 33)
+    coh = nc32_timer_out_imm(coh, 40, 161)
+    coh = nc32_timer_out_imm(coh, 4, 33)
+    coh = nc32_timer_out_imm(coh, 2, 161)
+    coh = nc32_timer_out_imm(coh, 1, 33)
+    coh = nc32_timer_out_imm(coh, 1, 161)
+    coh = nc32_timer_out_imm(coh, 254, 33)
+    coh = nc32_timer_out_imm(coh, 255, 161)
+    coh = nc32_timer_out_imm(coh, 52, 67)
+    coh = nc32_timer_out_imm(coh, 255, 64)
+    coh = nc32_timer_out_imm(coh, 255, 64)
+    do append(coh, 102)
+    do append(coh, 186)
+    do append(coh, 253)
+    do append(coh, 3)
+    do append(coh, 236)
+    do append(coh, 168)
+    do append(coh, 1)
+    do append(coh, 116)
+    do append(coh, 247)
+    do append(coh, 102)
+    do append(coh, 186)
+    do append(coh, 248)
+    do append(coh, 3)
+    do append(coh, 236)
+    do append(coh, 15)
+    do append(coh, 182)
+    do append(coh, 192)
+    do append(coh, 163)
+    coh = nc_append_le32(coh, inq_vaddr)
+    do append(coh, 251)
+    do append(coh, 235)
+    do append(coh, 254)
+    return coh
+end
+
+func nc_emit_multiboot32_contigo_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let f1 = nc_fail(514, 0, "multiboot32-contigo: task A main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let f2 = nc_fail(515, 0, "multiboot32-contigo: task A main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if not nc32_body_ok(code, n):
+        let f3 = nc_fail(516, 0, "multiboot32-contigo: task A body not in the control-flow+locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let f4 = nc_fail(517, 0, "multiboot32-contigo: too many locals (max 31)")
+        return 0
+    end
+    let ebp_prefix = 0
+    if nlocals > 0:
+        ebp_prefix = 5
+    end
+    let lay = nc32_layout_loop(code, 0, n, ebp_prefix, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - ebp_prefix:
+        let f5 = nc_fail(518, 0, "multiboot32-contigo: body length invariant")
+        return 0
+    end
+    let off_A = 174
+    let a_len = ebp_prefix + bodylen + 58
+    let off_B = off_A + a_len
+    let off_sched = off_B + 63
+    let off_tables = off_sched + 30
+    let off_after = off_tables + 300
+    let off_data = nc32_roundup4(off_after)
+    let inq_vaddr = 1048588 + off_data
+    -- each task runs on its OWN 256-byte stack laid BELOW its seed (the seed's iret frame sits at the
+    -- TOP): after `mov esp,seed; popa; iret` esp = seed+44 and the body's rbp frame + pushes grow DOWN
+    -- through the dead seed into the 256-byte reserve -- so even a 31-local body never reaches inq /
+    -- the tables / live code (closes the cross-model seed-stack-clobber flag; bluefield ran task A on
+    -- the big mainline stack, but contigo dispatches BOTH tasks onto seeds, so each needs real headroom).
+    let off_stackA = off_data + 8
+    let off_seedA = off_stackA + 256
+    let off_stackB = off_seedA + 44
+    let off_seedB = off_stackB + 256
+    let off_guard = off_seedB + 44
+    let code_len = off_guard + 16
+    let memsz = 12 + code_len + 16384
+    let esp_top = 1048576 + memsz
+    let gate_vaddr = 1048588 + off_sched
+    let gdt_vaddr = 1048588 + off_tables
+    let gdtr_vaddr = gdt_vaddr + 24
+    let idt_vaddr = gdtr_vaddr + 6
+    let idtr_vaddr = idt_vaddr + 264
+    let seedA_vaddr = 1048588 + off_seedA
+    let seedB_vaddr = 1048588 + off_seedB
+    let a_entry = 1048588 + off_A
+    let b_entry = 1048588 + off_B
+    let com = new_buffer()
+    com = nc32_co_emit_head(com, gdtr_vaddr, esp_top, idtr_vaddr, inq_vaddr)
+    if nlocals > 0:
+        do append(com, 137)
+        do append(com, 229)
+        do append(com, 131)
+        do append(com, 236)
+        do append(com, 4 * nlocals)
+    end
+    com = append_str(com, freeze(bodybuf))
+    com = nc32_emit_epilogue(com)
+    do append(com, 184)
+    com = nc_append_le32(com, 46)
+    com = nc32_emit_epilogue(com)
+    do append(com, 176)
+    do append(com, 32)
+    do append(com, 230)
+    do append(com, 32)
+    do append(com, 161)
+    com = nc_append_le32(com, inq_vaddr)
+    do append(com, 61)
+    com = nc_append_le32(com, 128)
+    do append(com, 115)
+    do append(com, 7)
+    do append(com, 188)
+    com = nc_append_le32(com, seedA_vaddr)
+    do append(com, 235)
+    do append(com, 5)
+    do append(com, 188)
+    com = nc_append_le32(com, seedB_vaddr)
+    do append(com, 97)
+    do append(com, 207)
+    com = nc32_timer_emit_tables(com, gdt_vaddr, idt_vaddr, gate_vaddr)
+    com = nc_emit_zeroes_loop(com, off_data - off_after)
+    com = nc_append_le32(com, 0)
+    com = nc_emit_zeroes_loop(com, 4)
+    com = nc_emit_zeroes_loop(com, 256)
+    com = nc_emit_zeroes_loop(com, 32)
+    com = nc_append_le32(com, a_entry)
+    com = nc_append_le32(com, 8)
+    com = nc_append_le32(com, 2)
+    com = nc_emit_zeroes_loop(com, 256)
+    com = nc_emit_zeroes_loop(com, 32)
+    com = nc_append_le32(com, b_entry)
+    com = nc_append_le32(com, 8)
+    com = nc_append_le32(com, 2)
+    com = nc_emit_zeroes_loop(com, 16)
+    let frozen_code = freeze(com)
+    if length(frozen_code) != code_len:
+        let f6 = nc_fail(519, 0, "multiboot32-contigo: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
+end
+
+func nc_is_multiboot32_contigo(source):
+    let marker = "-- emit: multiboot32-contigo"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
 func nc32_roundup_4k(v):
     let r = v % 4096
     if r == 0:
@@ -13895,6 +14130,10 @@ func main():
     end
     if nc_is_multiboot32_bluefield(source):
         let bf = nc_emit_multiboot32_bluefield_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_contigo(source):
+        let co = nc_emit_multiboot32_contigo_program(source)
         return 0
     end
     if nc_is_multiboot32_rizzing(source):

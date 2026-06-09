@@ -114,3 +114,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L14_BOCHS_PROBES="f3_echo f3_inc" bash bootstrap/tests/run_native_codegen_link30.sh
       - name: L14 mutation proof (the device-input value-flow gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link30_mutation.sh
+      - name: L15 dual-substrate gate (contigo / f1 -- first data-dependent scheduling decision; a freestanding image reads a late-bound COM1 byte into state and the timer-IRQ0 scheduler branches on it to dispatch one of two seeded tasks)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L15_BOCHS_PROBES="co_lit co_then" bash bootstrap/tests/run_native_codegen_link31.sh
+      - name: L15 mutation proof (the data-dependent-scheduling value-flow gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link31_mutation.sh
