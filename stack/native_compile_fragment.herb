@@ -12641,6 +12641,389 @@ func nc_is_multiboot32_contigo(source):
     return index(source, mlen) == 10
 end
 
+-- ============================================================================
+-- cloggard (sixteenth kernel-arc link / f1-deepening): the first DATA-DEPENDENT
+-- MULTI-QUANTUM scheduler -- a timer-IRQ0 run-queue that dispatches a SEQUENCE of
+-- K=4 WARM tasks (bluefield save/restore sustained across quanta) and emits an
+-- ordered TRACE on 0xE9, the schedule being a function of runtime input recomputed
+-- EACH quantum (contigo's input-select, made a sequence). Selected by the directive
+-- "-- emit: multiboot32-cloggard". Layout (V0=0x10000c): [HEAD 224: GDT-install +
+-- UART + PIC/PIT + input read->inq + init {pos,done,cur,tcb0,tcb1} + sti + jmp$ idle]
+-- [TASK A: mov esp,stackA + ebp? + body (->edi=vA) + accumulate/emit glue 37] [TASK B:
+-- mov esp,stackB + marker glue 38] [SCHEDULER 128] [TABLES 300] [cells 24][seedA 44]
+-- [seedB 44][stackA 256][stackB 256][guard 16]. Seeds eflags=0x202 (IF=1). Each
+-- task per grant: inc acc; emit "DE (base+acc) AD"; mov [done],1; hlt (park); loop.
+-- The scheduler advances ONLY on [done]==1 (DONE-FLAG INTERLOCK -- the per-grant unit
+-- is bounded by the hlt and gated by done, so the K-byte trace is bit-identical on
+-- QEMU and Bochs regardless of tick timing); next=(inq>>pos)&1 reads [inq] each
+-- quantum; exit (isa-debug-exit + Bochs power-off) when pos>=K AND [done]==1.
+-- ============================================================================
+-- 15-byte framed emit: al -> "DE al AD" on 0xE9 (the epilogue's frame prefix).
+func nc32_clog_frame(buf):
+    do append(buf, 136)
+    do append(buf, 195)
+    do append(buf, 102)
+    do append(buf, 186)
+    do append(buf, 233)
+    do append(buf, 0)
+    do append(buf, 176)
+    do append(buf, 222)
+    do append(buf, 238)
+    do append(buf, 136)
+    do append(buf, 216)
+    do append(buf, 238)
+    do append(buf, 176)
+    do append(buf, 173)
+    do append(buf, 238)
+    return buf
+end
+
+-- one task tail: framed emit + mov [done],1 + hlt + jmp <rel8 back to the loop head>.
+func nc32_clog_task_tail(buf, done_vaddr, jmprel):
+    buf = nc32_clog_frame(buf)
+    do append(buf, 199)
+    do append(buf, 5)
+    buf = nc_append_le32(buf, done_vaddr)
+    buf = nc_append_le32(buf, 1)
+    do append(buf, 244)
+    do append(buf, 235)
+    do append(buf, jmprel)
+    return buf
+end
+
+func nc32_clog_emit_head(clh, gdtr_vaddr, esp_top, idtr_vaddr, inq_vaddr, pos_vaddr, done_vaddr, cur_vaddr, tcb0_vaddr, tcb1_vaddr, seedA_vaddr, seedB_vaddr):
+    do append(clh, 250)
+    do append(clh, 15)
+    do append(clh, 1)
+    do append(clh, 21)
+    clh = nc_append_le32(clh, gdtr_vaddr)
+    do append(clh, 234)
+    clh = nc_append_le32(clh, 1048603)
+    do append(clh, 8)
+    do append(clh, 0)
+    do append(clh, 102)
+    do append(clh, 184)
+    do append(clh, 16)
+    do append(clh, 0)
+    do append(clh, 142)
+    do append(clh, 216)
+    do append(clh, 142)
+    do append(clh, 192)
+    do append(clh, 142)
+    do append(clh, 224)
+    do append(clh, 142)
+    do append(clh, 232)
+    do append(clh, 142)
+    do append(clh, 208)
+    do append(clh, 188)
+    clh = nc_append_le32(clh, esp_top)
+    do append(clh, 15)
+    do append(clh, 1)
+    do append(clh, 29)
+    clh = nc_append_le32(clh, idtr_vaddr)
+    clh = nc32_uart_init(clh)
+    clh = nc32_timer_out_imm(clh, 17, 32)
+    clh = nc32_timer_out_imm(clh, 17, 160)
+    clh = nc32_timer_out_imm(clh, 32, 33)
+    clh = nc32_timer_out_imm(clh, 40, 161)
+    clh = nc32_timer_out_imm(clh, 4, 33)
+    clh = nc32_timer_out_imm(clh, 2, 161)
+    clh = nc32_timer_out_imm(clh, 1, 33)
+    clh = nc32_timer_out_imm(clh, 1, 161)
+    clh = nc32_timer_out_imm(clh, 254, 33)
+    clh = nc32_timer_out_imm(clh, 255, 161)
+    clh = nc32_timer_out_imm(clh, 52, 67)
+    clh = nc32_timer_out_imm(clh, 255, 64)
+    clh = nc32_timer_out_imm(clh, 255, 64)
+    do append(clh, 102)
+    do append(clh, 186)
+    do append(clh, 253)
+    do append(clh, 3)
+    do append(clh, 236)
+    do append(clh, 168)
+    do append(clh, 1)
+    do append(clh, 116)
+    do append(clh, 247)
+    do append(clh, 102)
+    do append(clh, 186)
+    do append(clh, 248)
+    do append(clh, 3)
+    do append(clh, 236)
+    do append(clh, 15)
+    do append(clh, 182)
+    do append(clh, 192)
+    do append(clh, 163)
+    clh = nc_append_le32(clh, inq_vaddr)
+    do append(clh, 199)
+    do append(clh, 5)
+    clh = nc_append_le32(clh, pos_vaddr)
+    clh = nc_append_le32(clh, 0)
+    do append(clh, 199)
+    do append(clh, 5)
+    clh = nc_append_le32(clh, done_vaddr)
+    clh = nc_append_le32(clh, 1)
+    do append(clh, 199)
+    do append(clh, 5)
+    clh = nc_append_le32(clh, cur_vaddr)
+    clh = nc_append_le32(clh, 2)
+    do append(clh, 199)
+    do append(clh, 5)
+    clh = nc_append_le32(clh, tcb0_vaddr)
+    clh = nc_append_le32(clh, seedA_vaddr)
+    do append(clh, 199)
+    do append(clh, 5)
+    clh = nc_append_le32(clh, tcb1_vaddr)
+    clh = nc_append_le32(clh, seedB_vaddr)
+    do append(clh, 251)
+    do append(clh, 235)
+    do append(clh, 254)
+    return clh
+end
+
+func nc_emit_multiboot32_cloggard_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let f1 = nc_fail(520, 0, "multiboot32-cloggard: task A main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let f2 = nc_fail(521, 0, "multiboot32-cloggard: task A main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if not nc32_body_ok(code, n):
+        let f3 = nc_fail(522, 0, "multiboot32-cloggard: task A body not in the control-flow+locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let f4 = nc_fail(523, 0, "multiboot32-cloggard: too many locals (max 31)")
+        return 0
+    end
+    let ebp_prefix = 0
+    if nlocals > 0:
+        ebp_prefix = 5
+    end
+    let lay = nc32_layout_loop(code, 0, n, ebp_prefix, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - ebp_prefix:
+        let f5 = nc_fail(524, 0, "multiboot32-cloggard: body length invariant")
+        return 0
+    end
+    let off_A = 224
+    let a_len = 5 + ebp_prefix + bodylen + 37
+    let off_B = off_A + a_len
+    let off_sched = off_B + 43
+    let off_tables = off_sched + 128
+    let off_after = off_tables + 300
+    let off_data = nc32_roundup4(off_after)
+    let inq_vaddr = 1048588 + off_data
+    let pos_vaddr = inq_vaddr + 4
+    let done_vaddr = inq_vaddr + 8
+    let cur_vaddr = inq_vaddr + 12
+    let tcb0_vaddr = inq_vaddr + 16
+    let tcb1_vaddr = inq_vaddr + 20
+    -- seeds (cold contexts, used once) come FIRST; each task runs on its OWN dedicated 256-byte
+    -- stack (its entry does `mov esp,stackX_top`), so the running esp differs from the seed and the
+    -- per-task warm save (mov [tcb+cur*4],esp) is LOAD-BEARING (NOP it -> tcb stays the seed ->
+    -- cold re-dispatch -> the accumulation is lost). A 31-local body never reaches the cells.
+    let off_seedA = off_data + 24
+    let off_seedB = off_seedA + 44
+    let off_stackA = off_seedB + 44
+    let off_stackB = off_stackA + 256
+    let off_guard = off_stackB + 256
+    let code_len = off_guard + 16
+    let stackA_top = 1048588 + off_stackA + 256
+    let stackB_top = 1048588 + off_stackB + 256
+    let memsz = 12 + code_len + 16384
+    let esp_top = 1048576 + memsz
+    let gate_vaddr = 1048588 + off_sched
+    let gdt_vaddr = 1048588 + off_tables
+    let gdtr_vaddr = gdt_vaddr + 24
+    let idt_vaddr = gdtr_vaddr + 6
+    let idtr_vaddr = idt_vaddr + 264
+    let seedA_vaddr = 1048588 + off_seedA
+    let seedB_vaddr = 1048588 + off_seedB
+    let a_entry = 1048588 + off_A
+    let b_entry = 1048588 + off_B
+    let com = new_buffer()
+    com = nc32_clog_emit_head(com, gdtr_vaddr, esp_top, idtr_vaddr, inq_vaddr, pos_vaddr, done_vaddr, cur_vaddr, tcb0_vaddr, tcb1_vaddr, seedA_vaddr, seedB_vaddr)
+    -- TASK A: mov esp,stackA_top (dedicated stack) + optional ebp frame + compiled body (-> eax=vA)
+    -- + warm accumulate/emit glue.
+    do append(com, 188)
+    com = nc_append_le32(com, stackA_top)
+    if nlocals > 0:
+        do append(com, 137)
+        do append(com, 229)
+        do append(com, 131)
+        do append(com, 236)
+        do append(com, 4 * nlocals)
+    end
+    com = append_str(com, freeze(bodybuf))
+    do append(com, 137)
+    do append(com, 199)
+    do append(com, 49)
+    do append(com, 246)
+    do append(com, 70)
+    do append(com, 137)
+    do append(com, 248)
+    do append(com, 1)
+    do append(com, 240)
+    com = nc32_clog_task_tail(com, done_vaddr, 223)
+    -- TASK B: mov esp,stackB_top (dedicated stack) + marker accumulate/emit glue.
+    do append(com, 188)
+    com = nc_append_le32(com, stackB_top)
+    do append(com, 49)
+    do append(com, 255)
+    do append(com, 71)
+    do append(com, 184)
+    com = nc_append_le32(com, 176)
+    do append(com, 1)
+    do append(com, 248)
+    com = nc32_clog_task_tail(com, done_vaddr, 220)
+    -- SCHEDULER (128 bytes): completion-driven run-queue dispatcher.
+    do append(com, 176)
+    do append(com, 32)
+    do append(com, 230)
+    do append(com, 32)
+    do append(com, 96)
+    do append(com, 161)
+    com = nc_append_le32(com, done_vaddr)
+    do append(com, 133)
+    do append(com, 192)
+    do append(com, 116)
+    do append(com, 73)
+    do append(com, 161)
+    com = nc_append_le32(com, pos_vaddr)
+    do append(com, 131)
+    do append(com, 248)
+    do append(com, 4)
+    do append(com, 115)
+    do append(com, 65)
+    do append(com, 161)
+    com = nc_append_le32(com, cur_vaddr)
+    do append(com, 131)
+    do append(com, 248)
+    do append(com, 2)
+    do append(com, 116)
+    do append(com, 7)
+    do append(com, 137)
+    do append(com, 36)
+    do append(com, 133)
+    com = nc_append_le32(com, tcb0_vaddr)
+    do append(com, 139)
+    do append(com, 13)
+    com = nc_append_le32(com, pos_vaddr)
+    do append(com, 161)
+    com = nc_append_le32(com, inq_vaddr)
+    do append(com, 211)
+    do append(com, 232)
+    do append(com, 131)
+    do append(com, 224)
+    do append(com, 1)
+    do append(com, 163)
+    com = nc_append_le32(com, cur_vaddr)
+    do append(com, 255)
+    do append(com, 5)
+    com = nc_append_le32(com, pos_vaddr)
+    do append(com, 199)
+    do append(com, 5)
+    com = nc_append_le32(com, done_vaddr)
+    com = nc_append_le32(com, 0)
+    do append(com, 139)
+    do append(com, 36)
+    do append(com, 133)
+    com = nc_append_le32(com, tcb0_vaddr)
+    do append(com, 97)
+    do append(com, 207)
+    do append(com, 97)
+    do append(com, 207)
+    -- exit: isa-debug-exit (QEMU) + "Shutdown" (Bochs power-off) + halt.
+    do append(com, 102)
+    do append(com, 186)
+    do append(com, 244)
+    do append(com, 0)
+    do append(com, 176)
+    do append(com, 0)
+    do append(com, 238)
+    do append(com, 102)
+    do append(com, 186)
+    do append(com, 0)
+    do append(com, 137)
+    com = nc32_emit_out_char(com, 83)
+    com = nc32_emit_out_char(com, 104)
+    com = nc32_emit_out_char(com, 117)
+    com = nc32_emit_out_char(com, 116)
+    com = nc32_emit_out_char(com, 100)
+    com = nc32_emit_out_char(com, 111)
+    com = nc32_emit_out_char(com, 119)
+    com = nc32_emit_out_char(com, 110)
+    do append(com, 250)
+    do append(com, 244)
+    do append(com, 235)
+    do append(com, 253)
+    -- TABLES (300) + DATA.
+    com = nc32_timer_emit_tables(com, gdt_vaddr, idt_vaddr, gate_vaddr)
+    com = nc_emit_zeroes_loop(com, off_data - off_after)
+    com = nc_emit_zeroes_loop(com, 24)
+    com = nc_emit_zeroes_loop(com, 32)
+    com = nc_append_le32(com, a_entry)
+    com = nc_append_le32(com, 8)
+    com = nc_append_le32(com, 514)
+    com = nc_emit_zeroes_loop(com, 32)
+    com = nc_append_le32(com, b_entry)
+    com = nc_append_le32(com, 8)
+    com = nc_append_le32(com, 514)
+    com = nc_emit_zeroes_loop(com, 256)
+    com = nc_emit_zeroes_loop(com, 256)
+    com = nc_emit_zeroes_loop(com, 16)
+    let frozen_code = freeze(com)
+    if length(frozen_code) != code_len:
+        let f6 = nc_fail(525, 0, "multiboot32-cloggard: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
+end
+
+func nc_is_multiboot32_cloggard(source):
+    let marker = "-- emit: multiboot32-cloggard"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
 func nc32_roundup_4k(v):
     let r = v % 4096
     if r == 0:
@@ -14134,6 +14517,10 @@ func main():
     end
     if nc_is_multiboot32_contigo(source):
         let co = nc_emit_multiboot32_contigo_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_cloggard(source):
+        let cg = nc_emit_multiboot32_cloggard_program(source)
         return 0
     end
     if nc_is_multiboot32_rizzing(source):

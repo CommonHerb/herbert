@@ -118,3 +118,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L15_BOCHS_PROBES="co_lit co_then" bash bootstrap/tests/run_native_codegen_link31.sh
       - name: L15 mutation proof (the data-dependent-scheduling value-flow gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link31_mutation.sh
+      - name: L16 dual-substrate gate (cloggard -- first data-dependent MULTI-QUANTUM scheduler; a freestanding timer-IRQ0 run-queue dispatches K=4 WARM tasks over multiple quanta, recomputing next=(inq>>pos)&1 each quantum, so the same image fed X=0x0A emits schedule A,B,A,B and Y=0x05 emits B,A,B,A -- a different ordered trace)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L16_BOCHS_PROBES="cg_lit cg_then" bash bootstrap/tests/run_native_codegen_link32.sh
+      - name: L16 mutation proof (the multi-quantum schedule + warmth-provenance gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link32_mutation.sh
