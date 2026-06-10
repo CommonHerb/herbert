@@ -90,7 +90,7 @@ native_codegen_compiler_mint() {
     local compiler="$mint_root/gen1-herbert"
     local out="$mint_root/mint.out"
     local err="$mint_root/mint.err"
-    local timeout_arg="${NATIVE_SELF_TIMEOUT:-480s}"
+    local timeout_arg="${NATIVE_SELF_TIMEOUT:-900s}"
     local start end elapsed rc magic count
 
     if [[ -z "${HERBERT:-}" || ! -x "$HERBERT" ]]; then

@@ -132,3 +132,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link33.sh
       - name: L17 mutation proof (the program-lifecycle + bump-allocator + module-witness gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link33_mutation.sh
+      - name: L18 dual-substrate gate (trikonderoga -- the RING-3 PRIVILEGE BOUNDARY on the build-unknown module; the kernel runs the discovered module at CPL 3 on the bump-allocated page, a benign module exits via the DPL-3 int 0x30 syscall gate and the compiled body emits f(status), a hostile out 0xE9 faults a general-protection fault at CPL3 and the kernel dumps the CPU-authored ring-cross frame; same kernel fed X vs Y emits f(X) != f(Y))
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link34.sh
+      - name: L18 mutation proof (ring-entry + syscall-exit-gate + privileged-op-isolation + resume-order + allocator-recompute gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link34_mutation.sh
