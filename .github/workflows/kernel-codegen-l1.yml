@@ -53,11 +53,17 @@ jobs:
             xvfb \
             grub-pc-bin grub-common \
             parted dosfstools
-      - name: tool versions
+      - name: assert pinned emulator versions (far-axis -- a silent runner bump must go RED, not silently reshape the spec)
         run: |
+          set -e
+          q=$(dpkg-query -W -f='${Version}' qemu-system-x86)
+          b=$(dpkg-query -W -f='${Version}' bochs)
+          echo "qemu-system-x86=$q bochs=$b"
           qemu-system-x86_64 --version | head -1
           bochs --help 2>&1 | head -1 || true
           grub-install --version | head -1
+          test "$q" = "1:8.2.2+ds-0ubuntu1.16" || { echo "QEMU version drift: got $q, pinned 1:8.2.2+ds-0ubuntu1.16 -- update the pin deliberately after re-validating the goldens"; exit 1; }
+          test "$b" = "2.7+dfsg-4build5" || { echo "Bochs version drift: got $b, pinned 2.7+dfsg-4build5 -- update the pin deliberately after re-validating the goldens"; exit 1; }
       - name: build the C bootstrap (build/herbert)
         run: make build/herbert
       - name: L1 dual-substrate gate (lingo -- boot and emit a byte)
@@ -122,3 +128,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 L16_BOCHS_PROBES="cg_lit cg_then" bash bootstrap/tests/run_native_codegen_link32.sh
       - name: L16 mutation proof (the multi-quantum schedule + warmth-provenance gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link32_mutation.sh
+      - name: L17 dual-substrate gate (lodger -- the PROGRAM-LIFECYCLE GERM; the kernel runs ONE build-unknown Multiboot module, discovers it via mbinfo, bump-allocates a stack page from the parsed memory map, indirect-calls its runtime entry, collects the answer; same kernel fed module X vs Y emits f(X) != f(Y), module at a DIFFERENT physical address on QEMU vs Bochs)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link33.sh
+      - name: L17 mutation proof (the program-lifecycle + bump-allocator + module-witness gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link33_mutation.sh
