@@ -72,6 +72,9 @@ bootstrap/tests/lodger_ref.py
 bootstrap/tests/run_native_codegen_link34.sh
 bootstrap/tests/run_native_codegen_link34_mutation.sh
 bootstrap/tests/trikon_ref.py
+bootstrap/tests/run_native_codegen_link35.sh
+bootstrap/tests/run_native_codegen_link35_mutation.sh
+bootstrap/tests/nokta_ref.py
 bootstrap/tests/kernel_input_feed.py
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh

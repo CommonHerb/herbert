@@ -136,3 +136,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link34.sh
       - name: L18 mutation proof (ring-entry + syscall-exit-gate + privileged-op-isolation + resume-order + allocator-recompute gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link34_mutation.sh
+      - name: L19 dual-substrate gate (nokta -- MEMORY ISOLATION via paging U S; the kernel runs the build-unknown module at CPL 3 UNDER PAGING with kernel pages Supervisor and the module pages User, so a hostile CPL3 write into kernel RAM faults a page fault errcode 7 CR2 the exact target CS RPL 3 and the write never lands, a hostile read faults errcode 5 confidentiality, a hostile page-table write faults tamper closure, a hostile out still general-protection-faults; benign wrote its own User page and exited via int 0x30, f(X) != f(Y))
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link35.sh
+      - name: L19 mutation proof (the U S partition write/read/fetch/PDE/PT-page plus ring boundary under paging plus allocator gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link35_mutation.sh
