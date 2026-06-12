@@ -144,3 +144,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link36.sh
       - name: L20 mutation proof (the round-trip re-entry plus the two-byte differential vs a dead module plus the disasm body-scan plus the carried ring and paging isolation gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link36_mutation.sh
+      - name: L21 dual-substrate gate (geeking -- THE KERNEL OUTLIVES ITS MODULE; with IF=1 at CPL3 a one-shot PIT plus a stale-IRR drain plus an RPL-keyed timer handler async-KILLS a runaway EB FE module via the first CPU-authored async ring-cross frame and CONTINUES to emit f(kill), and fault-to-continue names any CPL3 fault -- general-protection, page-fault, or the generalized debug, divide, invalid-opcode -- so the kernel survives instead of shutdown; a genuine no-errcode kernel fault still panics)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link37.sh
+      - name: L21 mutation proof (the async-kill watchdog with stale-IRR drain plus the RPL-keyed handler plus the seeded IF plus the generalized fault-to-continue plus the carried round-trip ring and paging isolation gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link37_mutation.sh

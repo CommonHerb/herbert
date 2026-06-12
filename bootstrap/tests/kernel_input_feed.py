@@ -11,17 +11,27 @@
 # having read nothing (or the byte is still queued unread), it prints DRAINED=0.
 # The mutation proof uses this to PROVE a literal-baked image never reads the RBR.
 #
-#   usage: kernel_input_feed.py <port> <byte0> [<byte1> ...] [--hold S] [--drained-probe]
+#   usage: kernel_input_feed.py <port> <byte0> [<byte1> ...] [--hold S] [--delay S] [--drained-probe]
+#
+# --delay S (default 0): wait S seconds AFTER the guest connects before sending the byte. The byte VALUE is
+# decoupled from RX timing (the guest busy-polls LSR.DR), so a delay does NOT change WHICH byte arrives -- it
+# only makes the guest's COM1 poll spin longer. The geeking (link 37) mutation harness uses --delay so the
+# IF=0 SYS_READ poll outlasts the ~55ms one-shot PIT period, latching a stale tick in the 8259 IRR -- exactly
+# the pending-tick condition the stale-IRR drain + RPL-keyed handler exist to absorb. A backward-compatible
+# default of 0 leaves every prior link's gate unchanged.
 import socket, sys, time
 
 args = sys.argv[1:]
 hold = 8.0
+delay = 0.0
 drained_probe = False
 rest = []
 i = 0
 while i < len(args):
     if args[i] == "--hold":
         hold = float(args[i + 1]); i += 2
+    elif args[i] == "--delay":
+        delay = float(args[i + 1]); i += 2
     elif args[i] == "--drained-probe":
         drained_probe = True; i += 1
     else:
@@ -41,6 +51,8 @@ try:
 except socket.timeout:
     print("NOCONN", flush=True)
     sys.exit(2)
+if delay > 0:
+    time.sleep(delay)
 conn.sendall(payload)
 print("SENT " + " ".join(str(b) for b in payload), flush=True)
 time.sleep(hold)
