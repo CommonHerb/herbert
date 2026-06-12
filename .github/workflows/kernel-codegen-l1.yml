@@ -140,3 +140,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link35.sh
       - name: L19 mutation proof (the U S partition write/read/fetch/PDE/PT-page plus ring boundary under paging plus allocator gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link35_mutation.sh
+      - name: L20 dual-substrate gate (sitopia -- the SYSCALL ROUND TRIP; the sandboxed module issues int 0x30 SYS_READ, the kernel at CPL0 polls and reads a late-bound COM1 byte the module cannot read itself (a module in al,dx general-protection-faults), irets back to CPL3 with the byte in eax (the first kernel to module re-entry), the module transforms it in its own code and SYS_EXITs, and the pure-conduit kernel body emits f(byte); same image fed X vs Y emits T(X) != T(Y))
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link36.sh
+      - name: L20 mutation proof (the round-trip re-entry plus the two-byte differential vs a dead module plus the disasm body-scan plus the carried ring and paging isolation gate must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link36_mutation.sh
