@@ -1374,6 +1374,15 @@ func op_module_byte():
     return 46
 end
 
+-- coalgate (link 22) op_sys_read: the MODULE-SIDE syscall builtin. Unlike op_module_byte (op 46, which
+-- reads the kernel's absolute [answer] cell -- a kernel-only primitive), sys_read() lowers to the
+-- position-independent SYS_READ syscall (int 0x30, eax=0): the kernel delivers a late-bound byte the
+-- CPL3 module cannot read itself, and irets back with it in eax. Absent from nc32_op_allowed/pops/pushes
+-- (like op 45/46), so only the coalgate mode's sysread_proxy admits it; every other mode rejects it.
+func op_sys_read():
+    return 47
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1683,6 +1692,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "module_byte"):
         return emit_instr(ir, op_module_byte(), 0, 0)
+    end
+    if equal(name, "sys_read"):
+        return emit_instr(ir, op_sys_read(), 0, 0)
     end
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger"):
         return fault("void builtin in expression")
@@ -3152,7 +3164,7 @@ func err_is_builtin_name(name):
     if equal(name, "new_array") or equal(name, "get") or equal(name, "count"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte")
+    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read")
 end
 
 func err_is_void_builtin(name):
@@ -3166,7 +3178,7 @@ func err_is_value_builtin(name):
     if equal(name, "equal") or equal(name, "new_buffer") or equal(name, "freeze"):
         return true
     end
-    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte")
+    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read")
 end
 
 func err_value_builtin_arity(name):
@@ -6003,6 +6015,9 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
             return (0, nc_type_int(), env, sig, 0)
         end
         if equal(name, "module_byte"):
+            return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "sys_read"):
             return (0, nc_type_int(), env, sig, 0)
         end
         if equal(name, "length"):
@@ -10824,6 +10839,9 @@ func nc32_op_size(op, is_last):
     if op == 46:
         return 8
     end
+    if op == 47:
+        return 8
+    end
     if op == 21:
         if is_last == 1:
             return 1
@@ -10962,6 +10980,17 @@ func nc32_lower_loop(buf, code, i, n, offs, epi):
         do append(buf, 182)   -- B6
         do append(buf, 5)     -- 05  movzx eax, byte [imm32]
         buf = nc_append_le32(buf, 1048648)
+        do append(buf, 80)    -- 50  push eax
+    elif op == 47:
+        -- coalgate op_sys_read: mov eax,SYS_READ(0); int 0x30; push eax. 8 bytes, POSITION-INDEPENDENT.
+        -- A CPL3 module asks the kernel for the late-bound byte via the int 0x30 syscall ABI (eax=0); the
+        -- kernel reads COM1 on its behalf and irets back to CPL3 with the byte in eax. Same stack effect as
+        -- op 46 (push one byte) but sourced from the syscall, never an absolute cell -- the only input path
+        -- a sandboxed module is permitted (a module's own in/out faults #GP).
+        do append(buf, 184)   -- B8  mov eax,
+        buf = nc_append_le32(buf, 0)   -- imm32 = SYS_READ (0)
+        do append(buf, 205)   -- CD
+        do append(buf, 48)    -- 30  int 0x30
         do append(buf, 80)    -- 50  push eax
     elif op == 21:
         if il == 1:
@@ -12713,6 +12742,41 @@ func nc32_module_proxy(code, n):
     return nc32_module_proxy_loop(new_array((int, int, int)), code, 0, n)
 end
 
+-- coalgate: count op 47 (sys_read) occurrences -- the module's single input read must be present exactly once.
+func nc32_count_sysread_loop(code, i, n, cnt):
+    if i >= n:
+        return cnt
+    end
+    let c = cnt
+    if get(code, i).0 == 47:
+        c = cnt + 1
+    end
+    return nc32_count_sysread_loop(code, i + 1, n, c)
+end
+
+func nc32_count_sysread(code, n):
+    return nc32_count_sysread_loop(code, 0, n, 0)
+end
+
+-- op 47 (sys_read) has the SAME stack effect as push_int (op 0); map it to op 0 for nc32_body_ok's
+-- depth/branch walk (the module/input proxy pattern). The REAL code keeps op 47 for the lowering.
+func nc32_sysread_proxy_loop(out, code, i, n):
+    if i >= n:
+        return out
+    end
+    let e = get(code, i)
+    if e.0 == 47:
+        do add(out, (0, 0, 0))
+    else:
+        do add(out, e)
+    end
+    return nc32_sysread_proxy_loop(out, code, i + 1, n)
+end
+
+func nc32_sysread_proxy(code, n):
+    return nc32_sysread_proxy_loop(new_array((int, int, int)), code, 0, n)
+end
+
 func nc_is_multiboot32_lodger(source):
     let marker = "-- emit: multiboot32-lodger"
     let mlen = length(marker)
@@ -13447,6 +13511,111 @@ func nc_emit_multiboot32_geeking_program(source):
     img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
     img = nc_emit_zeroes_loop(img, 40)
     do fwriter(freeze(img))
+    return 0
+end
+
+func nc_is_multiboot32_coalgate(source):
+    let marker = "-- emit: multiboot32-coalgate"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- coalgate (link 22): THE KERNEL RUNS ITS FIRST HERBERT-COMPILED MODULE. A NEW emit KIND -- not a kernel
+-- ELF but a raw, POSITION-INDEPENDENT i386 MODULE (entry byte 0) the FROZEN geeking kernel runs at ring 3.
+-- The transform body reuses nc32_lower_loop wholesale; the module-side glue is op 47 sys_read (the only
+-- input path a CPL3 module has -- module_byte/op46 reads an absolute kernel cell, input_byte/op45 #GPs at
+-- CPL3, both BANNED) plus an IMPLICIT sys_exit appended after the body (main's return value, left in eax
+-- by the final op 21 pop eax, becomes the one-byte exit status: mov bl,al; mov eax,1; int 0x30). v1 = the
+-- straight-line + locals subset (no branches), exactly one sys_read. The byte convention is the named ABI
+-- in audits/link22-coalgate/00-module-abi.md, proven byte-identical to coalgate_ref.target_module (STEP-0).
+func nc_emit_multiboot32_coalgate_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let fa = nc_fail(580, 0, "multiboot32-coalgate: main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let fb = nc_fail(581, 0, "multiboot32-coalgate: main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if nc32_count_sysread(code, n) != 1:
+        let fi = nc_fail(582, 0, "multiboot32-coalgate: main must read sys_read() exactly once")
+        return 0
+    end
+    if nc32_count_module(code, n) != 0:
+        let fj = nc_fail(583, 0, "multiboot32-coalgate: module_byte() is kernel-only; a module reads via sys_read()")
+        return 0
+    end
+    if nc32_count_input(code, n) != 0:
+        let fk = nc_fail(584, 0, "multiboot32-coalgate: input_byte() faults at CPL3; a module reads via sys_read()")
+        return 0
+    end
+    if nc32_has_branch(code, n):
+        let fh = nc_fail(585, 0, "multiboot32-coalgate: control flow (if/branch) not in the v1 straight-line subset")
+        return 0
+    end
+    let proxy = nc32_sysread_proxy(code, n)
+    if not nc32_body_ok(proxy, n):
+        let fc = nc_fail(586, 0, "multiboot32-coalgate: body not in the module/locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let fd = nc_fail(587, 0, "multiboot32-coalgate: too many locals (max 31)")
+        return 0
+    end
+    -- the module is its own base: lay the body at the frame-prologue length (0, or 5 for mov ebp,esp;
+    -- sub esp,imm8), so the rel32 layout (epi = offset just past the body, where the sys_exit glue begins)
+    -- is self-relative and the blob is position-independent regardless of load base.
+    let prefix_len = 0
+    if nlocals > 0:
+        prefix_len = 5
+    end
+    let lay = nc32_layout_loop(code, 0, n, prefix_len, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - prefix_len:
+        let fe = nc_fail(588, 0, "multiboot32-coalgate: body length invariant")
+        return 0
+    end
+    let mbuf = new_buffer()
+    if nlocals > 0:
+        do append(mbuf, 137)   -- 89
+        do append(mbuf, 229)   -- E5  mov ebp,esp
+        do append(mbuf, 131)   -- 83
+        do append(mbuf, 236)   -- EC  sub esp,
+        do append(mbuf, 4 * nlocals)
+    end
+    mbuf = append_str(mbuf, freeze(bodybuf))
+    -- implicit sys_exit: mov bl,al; mov eax,SYS_EXIT(1); int 0x30. The kernel stores bl and never returns.
+    do append(mbuf, 136)   -- 88
+    do append(mbuf, 195)   -- C3  mov bl,al
+    do append(mbuf, 184)   -- B8  mov eax,
+    mbuf = nc_append_le32(mbuf, 1)   -- SYS_EXIT = 1
+    do append(mbuf, 205)   -- CD
+    do append(mbuf, 48)    -- 30  int 0x30
+    do fwriter(freeze(mbuf))
     return 0
 end
 
@@ -16736,6 +16905,10 @@ func main():
     end
     if nc_is_multiboot32_geeking(source):
         let gk = nc_emit_multiboot32_geeking_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_coalgate(source):
+        let cg = nc_emit_multiboot32_coalgate_program(source)
         return 0
     end
     if nc_is_multiboot32_lodger(source):

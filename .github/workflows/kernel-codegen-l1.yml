@@ -148,3 +148,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link37.sh
       - name: L21 mutation proof (the async-kill watchdog with stale-IRR drain plus the RPL-keyed handler plus the seeded IF plus the generalized fault-to-continue plus the carried round-trip ring and paging isolation gate must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link37_mutation.sh
+      - name: L22 dual-substrate gate (coalgate -- THE KERNEL RUNS ITS FIRST HERBERT-COMPILED MODULE; a new emit mode compiles a Herbert source into a raw position-independent i386 module the frozen geeking kernel runs at ring 3, issuing int 0x30 SYS_READ for a late-bound byte and SYS_EXIT for its compiled transform; the same frozen kernel fed two different compiled modules emits different output, one module fed X vs Y emits T(X) != T(Y), and each emitted module is byte-identical to the STEP-0 target proven on QEMU plus Bochs plus KVM)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link38.sh
+      - name: L22 mutation proof (the white-box byte-pin plus the answer-equals-transform check plus the two-byte X to Y differential plus the sys_read-exactly-once and module_byte-banned verifier rules must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link38_mutation.sh

@@ -81,6 +81,9 @@ bootstrap/tests/run_native_codegen_link37.sh
 bootstrap/tests/run_native_codegen_link37_mutation.sh
 bootstrap/tests/sitopia_ref.py
 bootstrap/tests/geeking_ref.py
+bootstrap/tests/run_native_codegen_link38.sh
+bootstrap/tests/run_native_codegen_link38_mutation.sh
+bootstrap/tests/coalgate_ref.py
 bootstrap/tests/kernel_input_feed.py
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
