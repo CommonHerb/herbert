@@ -446,8 +446,9 @@ if [[ $gate_ok -eq 1 ]]; then grep -q '48 c7 c0 09 00 00 00' "$hex" || { fail_te
 if [[ $gate_ok -eq 1 ]]; then grep -q '49 c7 c2 22 00 00 00' "$hex" || { fail_test "disasm gate no r10 MAP_PRIVATE|ANON"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -q '49 c7 c0 ff ff ff ff' "$hex" || { fail_test "disasm gate no r8 -1 fd"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -q '49 89 c6' "$hex" || { fail_test "disasm gate no r14 heap bump"; gate_ok=0; }; fi
-if [[ $gate_ok -eq 1 ]]; then grep -q '48 c7 c6 00 f0 ff 7f' "$hex" || { fail_test "disasm gate no rsi 2GiB mmap size (tito)"; gate_ok=0; }; fi
-if [[ $gate_ok -eq 1 ]]; then grep -q '4c 8d b8 00 f0 ff 7f' "$hex" || { fail_test "disasm gate no r15 heap limit (tito 2GiB cap)"; gate_ok=0; }; fi
+if [[ $gate_ok -eq 1 ]]; then grep -q 'be 00 00 00 e0' "$hex" || { fail_test "disasm gate no esi 3.5GiB mmap size (ouroboros cap, zero-extended)"; gate_ok=0; }; fi
+if [[ $gate_ok -eq 1 ]]; then grep -q '41 bf 00 00 00 e0' "$hex" || { fail_test "disasm gate no r15d 3.5GiB heap limit (ouroboros cap, zero-extended)"; gate_ok=0; }; fi
+if [[ $gate_ok -eq 1 ]]; then grep -q '49 01 c7' "$hex" || { fail_test "disasm gate no add r15,rax (heap end = base + reserve)"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -q '49 89 40 10' "$hex" || { fail_test "disasm gate no grow backing rewrite"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -q '48 8b 34 ca' "$hex" || { fail_test "disasm gate no array qword copy load"; gate_ok=0; }; fi
 if [[ $gate_ok -eq 1 ]]; then grep -q '48 89 34 c8' "$hex" || { fail_test "disasm gate no array qword copy store"; gate_ok=0; }; fi

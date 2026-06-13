@@ -152,3 +152,7 @@ jobs:
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link38.sh
       - name: L22 mutation proof (the white-box byte-pin plus the answer-equals-transform check plus the two-byte X to Y differential plus the sys_read-exactly-once and module_byte-banned verifier rules must bite)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link38_mutation.sh
+      - name: L23 dual-substrate gate (ouroboros -- THE KERNEL RUNS A COMPILED RECURSIVE ALGORITHM; a new emit mode compiles a recursive multi-function Herbert program into a position-independent i386 module the frozen geeking kernel runs at ring 3, the module reads one byte via int 0x30 SYS_READ and returns its compiled recursive transform via SYS_EXIT through a backward recursive call rel32, the same frozen kernel fed different compiled algorithms tri and dbl and fact and chain emits different output, and each module is byte-identical to the STEP-0 target proven on QEMU plus Bochs plus KVM)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 L23_BOCHS_PROBES="tri fact" bash bootstrap/tests/run_native_codegen_link39.sh
+      - name: L23 mutation proof (the white-box byte-pin plus the recursion-is-load-bearing checks echo-instead-of-recurse and base-case-flip and corrupted-backward-call-rel32 and const-bake plus the X to Y differential must bite)
+        run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link39_mutation.sh

@@ -127,12 +127,13 @@ check_runtime_frontier_cap() {
     local elf="$tmp/${label}.elf"
     compile_probe "$label" "$probe" "$elf" || return
     # beaver lifted the 64 KiB stack-arena cap; tito lifted the 16 MiB heap cap to
-    # ~2 GiB (0x7ffff000). All three historical frontier sizes now SUCCEED == C:
-    # 64 KiB, the old exact-16 MiB cap, and old-16 MiB+1 all fit the 2 GiB heap.
-    # Pre-tito, old-16 MiB+1 faulted native (nonzero, empty stdout); that boundary
-    # MOVED, it did not vanish — the new ~2 GiB cap is proven structurally by the
-    # link6 disasm gate (asserts the 2 GiB mmap-size + cap bytes), since a runtime
-    # over-2-GiB probe is impractical per-push.
+    # ~2 GiB, and ouroboros raised it to ~3.5 GiB (0xe0000000) when the self-compile
+    # outgrew 2 GiB. All three historical frontier sizes now SUCCEED == C: 64 KiB,
+    # the old exact-16 MiB cap, and old-16 MiB+1 all fit the heap. Pre-tito, old-16
+    # MiB+1 faulted native (nonzero, empty stdout); that boundary MOVED, it did not
+    # vanish — the current ~3.5 GiB cap is proven structurally by the link6 disasm
+    # gate (asserts the zero-extended mmap-size + cap bytes), since a runtime
+    # over-cap probe is impractical per-push.
     local sizes=(65537 16777216 16777217)
     local kinds=(obsolete_64k old_exact_16M old_over_16M)
     local i=0

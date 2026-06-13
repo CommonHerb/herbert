@@ -71,8 +71,15 @@ func is_two_byte_op_start(c):
     return c == '=' or c == '!' or c == '<' or c == '>'
 end
 
+-- `<<` and `>>` are two-byte operators (a doubled `<`/`>`). They must be lexed
+-- before the single-byte `<`/`>` (longest match), so the scanner checks this
+-- before is_one_byte_op below.
+func is_shift_op_start(c):
+    return c == '<' or c == '>'
+end
+
 func is_one_byte_op(c):
-    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>'
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
 end
 
 func end_of_ident(src, i, n):
@@ -166,6 +173,9 @@ func scan(src, i, n, line, out):
         do add(out, (3, slice_text(src, i, j), line))
         return scan(src, j, n, line, out)
     elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2), line))
+        return scan(src, i + 2, n, line, out)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
         do add(out, (5, slice_text(src, i, i + 2), line))
         return scan(src, i + 2, n, line, out)
     elif is_one_byte_op(c):
@@ -407,7 +417,70 @@ end
 -- ====================================================================
 
 func parse_expr(tokens, pos, pool):
-    return parse_or(tokens, pos, pool)
+    return parse_bitwise(tokens, pos, pool)
+end
+
+-- Bitwise/shift level (settled precedence c). Sits above the classless ladder:
+-- parse a classless expression; if a bitwise/shift operator follows, the left
+-- operand must be a single parenthesised/atomic primary (not a bare classless
+-- chain) and the whole chain must stay within one class. A mix plants an
+-- `nc_class_mix` poison node that nc_verify_ast rejects with ERR 442. This makes
+-- `a & b | c`, `a << 2 + 3`, `x & 1 == 0`, and `1 + 2 << 1` all reject while
+-- their fully-parenthesised forms parse. The existing ladder is unchanged.
+
+-- Plant the `nc_class_mix` poison node and STOP the parser cleanly. The node is
+-- added to the pool (so the post-parse all-functions scan in nc_verify_ast finds
+-- it and rejects with ERR 442, regardless of reachability), and the returned
+-- position is end-of-input so the enclosing body/func/program parse terminates
+-- immediately instead of misparsing the leftover tokens (which, in a function
+-- followed by more `func`s, runs parse_atom off the token stream -> a `get: out
+-- of range` crash). A class-mix is always a reject, so discarding any trailing
+-- tokens is correct -- the program will be rejected whole.
+func plant_class_mix(tokens, pool, line):
+    return (add_node(pool, "nc_class_mix", atoms0(), kids0(), line), count(tokens))
+end
+
+func parse_bitwise(tokens, pos, pool):
+    let start = pos
+    let r = parse_or(tokens, pos, pool)
+    let cls = 0
+    if r.1 < count(tokens):
+        cls = bit_class(get(tokens, r.1).1)
+        if get(tokens, r.1).0 != 5:
+            cls = 0
+        end
+    end
+    if cls == 0:
+        return r
+    end
+    -- A bitwise/shift op follows. Verify the left operand is a single primary by
+    -- re-parsing one prefix-unary primary from `start`: if it ends where parse_or
+    -- stopped, parse_or added nothing (the operand is parenthesised/atomic);
+    -- otherwise parse_or consumed an unparenthesised classless op -> mix.
+    let primary = parse_not(tokens, start, pool)
+    if primary.1 != r.1:
+        return plant_class_mix(tokens, pool, get(tokens, r.1).2)
+    end
+    return parse_bitwise_loop(tokens, r.1, pool, r.0, cls)
+end
+
+func parse_bitwise_loop(tokens, pos, pool, lidx, cls):
+    let oc = bin_op_class(tokens, pos)
+    if oc == 0:
+        -- End of the expression (`)`, `,`, `:`, `.`, `end`, EOF, ...).
+        return (lidx, pos)
+    end
+    if oc == 5:
+        -- A classless binary op after a committed bitwise chain: mix.
+        return plant_class_mix(tokens, pool, get(tokens, pos).2)
+    end
+    if oc != cls:
+        -- A different bitwise class without parentheses: mix.
+        return plant_class_mix(tokens, pool, get(tokens, pos).2)
+    end
+    let op_tok = get(tokens, pos)
+    let r = parse_not(tokens, pos + 1, pool)
+    return parse_bitwise_loop(tokens, r.1, pool, make_binop(pool, bit_tag(op_tok.1), lidx, r.0, op_tok.2), cls)
 end
 
 func parse_or(tokens, pos, pool):
@@ -490,8 +563,101 @@ func add_tag(text):
     return ""
 end
 
+-- Multiplicative operator -> AST tag. `*` `/` `%` bind tighter than `+ -`. They
+-- are ordinary arithmetic (same operator class as add/sub), so no class-mix
+-- poison applies to them; they just join the arithmetic ladder a tier tighter.
+func mul_tag(text):
+    if equal(text, "*"):
+        return "mul"
+    end
+    if equal(text, "/"):
+        return "div"
+    end
+    if equal(text, "%"):
+        return "mod"
+    end
+    return ""
+end
+
+-- The bitwise/shift operators split into mutually-exclusive classes:
+-- 1 = AND (&), 2 = OR (|), 3 = XOR (^), 4 = SHIFT (<< >>). 0 = not a
+-- bitwise/shift op. Mirrors the C bootstrap's bit_class. Same-class chaining is
+-- allowed and left-associative; mixing classes (or mixing with the classless
+-- ladder) without parentheses is a parse-time reject (settled precedence c).
+func bit_class(text):
+    if equal(text, "&"):
+        return 1
+    end
+    if equal(text, "|"):
+        return 2
+    end
+    if equal(text, "^"):
+        return 3
+    end
+    if equal(text, "<<"):
+        return 4
+    end
+    if equal(text, ">>"):
+        return 4
+    end
+    return 0
+end
+
+-- AST tag for a bitwise/shift operator token (only called when bit_class != 0).
+func bit_tag(text):
+    if equal(text, "&"):
+        return "band"
+    end
+    if equal(text, "|"):
+        return "bor"
+    end
+    if equal(text, "^"):
+        return "bxor"
+    end
+    if equal(text, "<<"):
+        return "shl"
+    end
+    return "shr"
+end
+
+-- Class id of the binary operator token at `pos` (kind-5 op or `and`/`or`
+-- ident), for the require-parens mix check. Returns:
+--   0  not a binary operator (ends the expression: ) , : . end EOF etc.)
+--   1..4  a bitwise/shift class (see bit_class)
+--   5  a classless binary op (+ - cmp and or) -- mixing one of these with a
+--      committed bitwise chain (without parens) is a reject.
+func bin_op_class(tokens, pos):
+    if pos >= count(tokens):
+        return 0
+    end
+    let t = get(tokens, pos)
+    if t.0 == 0:
+        if equal(t.1, "and") or equal(t.1, "or"):
+            return 5
+        end
+        return 0
+    end
+    if t.0 != 5:
+        return 0
+    end
+    let bc = bit_class(t.1)
+    if bc != 0:
+        return bc
+    end
+    if not equal(add_tag(t.1), ""):
+        return 5
+    end
+    if not equal(mul_tag(t.1), ""):
+        return 5
+    end
+    if not equal(cmp_tag(t.1), ""):
+        return 5
+    end
+    return 0
+end
+
 func parse_add(tokens, pos, pool):
-    let r = parse_not(tokens, pos, pool)
+    let r = parse_mul(tokens, pos, pool)
     return parse_add_loop(tokens, r.1, pool, r.0)
 end
 
@@ -503,8 +669,31 @@ func parse_add_loop(tokens, pos, pool, lidx):
     if t.0 == 5:
         let tag = add_tag(t.1)
         if not equal(tag, ""):
-            let r = parse_not(tokens, pos + 1, pool)
+            let r = parse_mul(tokens, pos + 1, pool)
             return parse_add_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
+        end
+    end
+    return (lidx, pos)
+end
+
+-- Multiplicative tier (`*` `/` `%`): one precedence level tighter than additive
+-- `+ -`, looser than the prefix-unary level (parse_not). Left-associative.
+-- Mirrors parse_add, calling parse_not for its operands.
+func parse_mul(tokens, pos, pool):
+    let r = parse_not(tokens, pos, pool)
+    return parse_mul_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_mul_loop(tokens, pos, pool, lidx):
+    if pos >= count(tokens):
+        return (lidx, pos)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5:
+        let tag = mul_tag(t.1)
+        if not equal(tag, ""):
+            let r = parse_not(tokens, pos + 1, pool)
+            return parse_mul_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
         end
     end
     return (lidx, pos)
@@ -515,6 +704,14 @@ func parse_not(tokens, pos, pool):
         let t = get(tokens, pos)
         let r = parse_not(tokens, pos + 1, pool)
         return (add_node(pool, "not", atoms0(), kids1(r.0), t.2), r.1)
+    end
+    -- `~` is the bitwise one's-complement unary: a distinct AST kind ("bnot")
+    -- from boolean `not`, with an int (not bool) type rule, at the same prefix
+    -- precedence level.
+    if tok_is_op_text(tokens, pos, "~"):
+        let t = get(tokens, pos)
+        let r = parse_not(tokens, pos + 1, pool)
+        return (add_node(pool, "bnot", atoms0(), kids1(r.0), t.2), r.1)
     end
     return parse_dot(tokens, pos, pool)
 end
@@ -730,11 +927,23 @@ func parse_elifs(tokens, pos, pool, if_kids):
     return pos
 end
 
+-- Safe token line lookup: the token's line, or 0 if pos is out of range. Used on
+-- error-recovery paths where a class-mix has made parse_expr stop at end-of-input
+-- (plant_class_mix), so `pos` can sit past the last token; a bare get(tokens, pos)
+-- would then fault. The line is only cosmetic here (the program is rejected via
+-- the nc_class_mix scan), so 0 is fine.
+func tok_line_or0(tokens, pos):
+    if pos >= count(tokens):
+        return 0
+    end
+    return get(tokens, pos).2
+end
+
 func parse_clause_into(tokens, pos, pool, if_kids):
     let cr = parse_expr(tokens, pos, pool)
     pos = cr.1 + 1
     let br = parse_body(tokens, pos, pool)
-    let cidx = add_node(pool, "clause", atoms0(), kids2(cr.0, br.0), get(tokens, pos).2)
+    let cidx = add_node(pool, "clause", atoms0(), kids2(cr.0, br.0), tok_line_or0(tokens, pos))
     do add(if_kids, cidx)
     return br.1
 end
@@ -1107,6 +1316,73 @@ func op_fwriter():
     return 35
 end
 
+-- Bitwise / shift opcodes. Appended at 36-41 (the dense 0-35 space is full and
+-- the VM range-checks binops; never renumber an existing opcode). band/bor/bxor/
+-- shl/shr are int x int -> int binops; bnot is the int -> int one's-complement
+-- unary (a distinct opcode from boolean `not` at 13).
+func op_band():
+    return 36
+end
+
+func op_bor():
+    return 37
+end
+
+func op_bxor():
+    return 38
+end
+
+func op_shl():
+    return 39
+end
+
+func op_shr():
+    return 40
+end
+
+func op_bnot():
+    return 41
+end
+
+-- Multiplicative opcodes. Appended at 42-44 after the current max (op_bnot=41);
+-- NEVER renumber an existing opcode (the VM range-checks binops and pass-1 sizes
+-- by op number). mul/div/mod are int x int -> int binops. div/mod also fault on a
+-- zero divisor (a located runtime fault, exit-status parity with the C oracle),
+-- so they are "faultable" (see nc_code_has_faultable_loop); mul never faults.
+func op_mul():
+    return 42
+end
+
+func op_div():
+    return 43
+end
+
+func op_mod():
+    return 44
+end
+
+-- trukfit (f3, device input): a 0-arg value builtin that reads ONE byte from the
+-- COM1 RBR. Lowered ONLY by the multiboot32-input emit mode (nc32_lower_loop op 45);
+-- it is deliberately absent from nc32_op_allowed/nc32_pops/nc32_pushes so every
+-- OTHER mode and the near-axis path reject it (a body carrying op 45 fails the depth
+-- gate / is rejected explicitly), keeping the device read isolated to the input mode.
+func op_input_byte():
+    return 45
+end
+
+func op_module_byte():
+    return 46
+end
+
+-- coalgate (link 22) op_sys_read: the MODULE-SIDE syscall builtin. Unlike op_module_byte (op 46, which
+-- reads the kernel's absolute [answer] cell -- a kernel-only primitive), sys_read() lowers to the
+-- position-independent SYS_READ syscall (int 0x30, eax=0): the kernel delivers a late-bound byte the
+-- CPL3 module cannot read itself, and irets back with it in eax. Absent from nc32_op_allowed/pops/pushes
+-- (like op 45/46), so only the coalgate mode's sysread_proxy admits it; every other mode rejects it.
+func op_sys_read():
+    return 47
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1324,6 +1600,15 @@ func opcode_for_binop(tag):
     if equal(tag, "sub"):
         return op_sub()
     end
+    if equal(tag, "mul"):
+        return op_mul()
+    end
+    if equal(tag, "div"):
+        return op_div()
+    end
+    if equal(tag, "mod"):
+        return op_mod()
+    end
     if equal(tag, "eq"):
         return op_eq()
     end
@@ -1339,7 +1624,22 @@ func opcode_for_binop(tag):
     if equal(tag, "gt"):
         return op_gt()
     end
-    return op_ge()
+    if equal(tag, "ge"):
+        return op_ge()
+    end
+    if equal(tag, "band"):
+        return op_band()
+    end
+    if equal(tag, "bor"):
+        return op_bor()
+    end
+    if equal(tag, "bxor"):
+        return op_bxor()
+    end
+    if equal(tag, "shl"):
+        return op_shl()
+    end
+    return op_shr()
 end
 
 func emit_exprs(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -1386,6 +1686,15 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "count"):
         return emit_instr(ir, op_count(), 0, 0)
+    end
+    if equal(name, "input_byte"):
+        return emit_instr(ir, op_input_byte(), 0, 0)
+    end
+    if equal(name, "module_byte"):
+        return emit_instr(ir, op_module_byte(), 0, 0)
+    end
+    if equal(name, "sys_read"):
+        return emit_instr(ir, op_sys_read(), 0, 0)
     end
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger"):
         return fault("void builtin in expression")
@@ -1435,7 +1744,11 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, op_not(), 0, 0)
     end
-    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+    if equal(tag, "bnot"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_bnot(), 0, 0)
+    end
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, opcode_for_binop(tag), 0, 0)
@@ -1725,6 +2038,33 @@ func opcode_name(op):
     end
     if op == op_flogger():
         return "FLOGGER"
+    end
+    if op == op_band():
+        return "BAND"
+    end
+    if op == op_bor():
+        return "BOR"
+    end
+    if op == op_bxor():
+        return "BXOR"
+    end
+    if op == op_shl():
+        return "SHL"
+    end
+    if op == op_shr():
+        return "SHR"
+    end
+    if op == op_bnot():
+        return "BNOT"
+    end
+    if op == op_mul():
+        return "MUL"
+    end
+    if op == op_div():
+        return "DIV"
+    end
+    if op == op_mod():
+        return "MOD"
     end
     return "ARR_ADD"
 end
@@ -2408,7 +2748,7 @@ func err_parse_cmp_loop(tokens, pos, eof_line, root_kind):
 end
 
 func err_parse_add(tokens, pos, eof_line):
-    let r = err_parse_not(tokens, pos, eof_line)
+    let r = err_parse_mul(tokens, pos, eof_line)
     if r.0 == err_err_tag():
         return r
     end
@@ -2421,11 +2761,36 @@ func err_parse_add_loop(tokens, pos, eof_line, root_kind):
     end
     let t = get(tokens, pos)
     if t.0 == 5 and not equal(add_tag(t.1), ""):
-        let r = err_parse_not(tokens, pos + 1, eof_line)
+        let r = err_parse_mul(tokens, pos + 1, eof_line)
         if r.0 == err_err_tag():
             return r
         end
         return err_parse_add_loop(tokens, r.2, eof_line, err_expr_other())
+    end
+    return err_parse_ok_extra(pos, root_kind)
+end
+
+-- Multiplicative tier in the structural err-parse mirror (`*` `/` `%`), one
+-- level tighter than additive. Mirrors err_parse_add, calling err_parse_not.
+func err_parse_mul(tokens, pos, eof_line):
+    let r = err_parse_not(tokens, pos, eof_line)
+    if r.0 == err_err_tag():
+        return r
+    end
+    return err_parse_mul_loop(tokens, r.2, eof_line, r.3)
+end
+
+func err_parse_mul_loop(tokens, pos, eof_line, root_kind):
+    if pos >= count(tokens):
+        return err_parse_ok_extra(pos, root_kind)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5 and not equal(mul_tag(t.1), ""):
+        let r = err_parse_not(tokens, pos + 1, eof_line)
+        if r.0 == err_err_tag():
+            return r
+        end
+        return err_parse_mul_loop(tokens, r.2, eof_line, err_expr_other())
     end
     return err_parse_ok_extra(pos, root_kind)
 end
@@ -2799,7 +3164,7 @@ func err_is_builtin_name(name):
     if equal(name, "new_array") or equal(name, "get") or equal(name, "count"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter")
+    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read")
 end
 
 func err_is_void_builtin(name):
@@ -2813,7 +3178,7 @@ func err_is_value_builtin(name):
     if equal(name, "equal") or equal(name, "new_buffer") or equal(name, "freeze"):
         return true
     end
-    return equal(name, "get") or equal(name, "count") or equal(name, "clogger")
+    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read")
 end
 
 func err_value_builtin_arity(name):
@@ -3005,7 +3370,7 @@ func err_sem_expr(node_idx, env, nodes, prog_idx):
     if equal(tag, "tuple"):
         return err_sem_exprs(kids, 0, count(kids), env, nodes, prog_idx)
     end
-    if equal(tag, "and") or equal(tag, "or") or equal(tag, "add") or equal(tag, "sub") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+    if equal(tag, "and") or equal(tag, "or") or equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
         let left = err_sem_expr(get(kids, 0), env, nodes, prog_idx)
         if left.0 == err_err_tag():
             return left
@@ -3088,508 +3453,4 @@ func err_sem_stmt(stmt_idx, env, scope_mark, nodes, prog_idx):
         let name = get(atoms, 0)
         if err_name_seen_loop(env, scope_mark, count(env), name):
             return err_env_fail_at(301, line, name)
-        end
-        do add(env, name)
-        return err_env_ok(env)
-    end
-    if equal(tag, "assign"):
-        let expr = err_sem_expr(get(kids, 0), env, nodes, prog_idx)
-        if expr.0 == err_err_tag():
-            return err_env_fail(expr.1)
-        end
-        if not err_env_lookup(env, get(atoms, 0)):
-            return err_env_fail_at(303, line, get(atoms, 0))
-        end
-        return err_env_ok(env)
-    end
-    if equal(tag, "return"):
-        let expr = err_sem_expr(get(kids, 0), env, nodes, prog_idx)
-        if expr.0 == err_err_tag():
-            return err_env_fail(expr.1)
-        end
-        return err_env_ok(env)
-    end
-    if equal(tag, "do"):
-        let d = err_sem_do_call(get(kids, 0), line, env, nodes, prog_idx)
-        if d.0 == err_err_tag():
-            return err_env_fail(d.1)
-        end
-        return err_env_ok(env)
-    end
-    if equal(tag, "if"):
-        return err_sem_if_arms(kids, 0, count(kids), env, nodes, prog_idx)
-    end
-    return err_env_ok(env)
-end
-
-func err_body_returns(body_idx, nodes):
-    let body = get(nodes, body_idx)
-    return err_body_returns_loop(body.2, 0, count(body.2), nodes)
-end
-
-func err_body_returns_loop(stmts, i, n, nodes):
-    if i >= n:
-        return false
-    end
-    let stmt = get(nodes, get(stmts, i))
-    if equal(stmt.0, "return"):
-        return true
-    end
-    if equal(stmt.0, "if") and err_if_returns(stmt.2, nodes):
-        return true
-    end
-    return err_body_returns_loop(stmts, i + 1, n, nodes)
-end
-
-func err_if_returns(kids, nodes):
-    if count(kids) == 0:
-        return false
-    end
-    let last = get(nodes, get(kids, count(kids) - 1))
-    if not equal(last.0, "else"):
-        return false
-    end
-    return err_if_arms_return_loop(kids, 0, count(kids), nodes)
-end
-
-func err_if_arms_return_loop(kids, i, n, nodes):
-    if i >= n:
-        return true
-    end
-    let arm = get(nodes, get(kids, i))
-    let body_idx = 0
-    if equal(arm.0, "else"):
-        body_idx = get(arm.2, 0)
-    else:
-        body_idx = get(arm.2, 1)
-    end
-    if not err_body_returns(body_idx, nodes):
-        return false
-    end
-    return err_if_arms_return_loop(kids, i + 1, n, nodes)
-end
-
-func err_sem_func(func_idx, nodes, prog_idx):
-    let fn = get(nodes, func_idx)
-    let params_node = get(nodes, get(fn.2, 0))
-    let body_node = get(nodes, get(fn.2, 1))
-    let env = err_env_from_params(params_node.1)
-    let body_result = err_sem_body(body_node.2, 0, count(body_node.2), env, 0, nodes, prog_idx)
-    if body_result.0 == err_err_tag():
-        return err_check_fail(body_result.1)
-    end
-    if not err_body_returns(get(fn.2, 1), nodes):
-        return err_check_fail_at(316, fn.3, get(fn.1, 0))
-    end
-    return err_check_ok()
-end
-
-func err_sem_funcs_loop(func_kids, i, n, nodes, prog_idx):
-    if i >= n:
-        return err_check_ok()
-    end
-    let r = err_sem_func(get(func_kids, i), nodes, prog_idx)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_sem_funcs_loop(func_kids, i + 1, n, nodes, prog_idx)
-end
-
-func err_semantic_check(nodes, prog_idx):
-    let prog = get(nodes, prog_idx)
-    let pre = err_prepass(nodes, prog_idx)
-    if pre.0 == err_err_tag():
-        return err_check_fail(pre.1)
-    end
-    return err_sem_funcs_loop(prog.2, 0, count(prog.2), nodes, prog_idx)
-end
-
--- ====================================================================
--- VM RUNTIME
--- ====================================================================
-
-func tag_int():
-    return 0
-end
-
-func tag_bool():
-    return 1
-end
-
-func tag_string():
-    return 2
-end
-
-func tag_buffer():
-    return 3
-end
-
-func tag_tuple():
-    return 4
-end
-
-func tag_array():
-    return 5
-end
-
-func make_int_value(n):
-    return (tag_int(), n)
-end
-
-func make_bool_value(b):
-    if b:
-        return (tag_bool(), 1)
-    end
-    return (tag_bool(), 0)
-end
-
-func make_string_value(i):
-    return (tag_string(), i)
-end
-
-func make_buffer_value(i):
-    return (tag_buffer(), i)
-end
-
-func make_tuple_value(i):
-    return (tag_tuple(), i)
-end
-
-func make_array_value(i):
-    return (tag_array(), i)
-end
-
-func require_int_payload(v):
-    if v.0 != tag_int():
-        return fault("expected int")
-    end
-    return v.1
-end
-
-func require_bool_test(v):
-    if v.0 != tag_bool():
-        return fault("expected bool")
-    end
-    return v.1 != 0
-end
-
-func builtin_length(args, pools):
-    if count(args) != 1:
-        return fault("length arity")
-    end
-    let v = get(args, 0)
-    if v.0 != tag_string():
-        return fault("length type")
-    end
-    return make_int_value(length(get(pools.0, v.1)))
-end
-
-func builtin_index(args, pools):
-    if count(args) != 2:
-        return fault("index arity")
-    end
-    let sv = get(args, 0)
-    let pos = require_int_payload(get(args, 1))
-    if sv.0 != tag_string():
-        return fault("index type")
-    end
-    let s = get(pools.0, sv.1)
-    if pos >= length(s):
-        return fault("index range")
-    end
-    return make_int_value(index(s, pos))
-end
-
-func builtin_equal(args, pools):
-    if count(args) != 2:
-        return fault("equal arity")
-    end
-    let a = get(args, 0)
-    let b = get(args, 1)
-    if a.0 != tag_string():
-        return fault("equal type")
-    end
-    if b.0 != tag_string():
-        return fault("equal type")
-    end
-    return make_bool_value(equal(get(pools.0, a.1), get(pools.0, b.1)))
-end
-
-func builtin_new_buffer(args, pools):
-    if count(args) != 0:
-        return fault("new_buffer arity")
-    end
-    do add(pools.1, new_buffer())
-    return make_buffer_value(count(pools.1) - 1)
-end
-
-func builtin_freeze(args, pools):
-    if count(args) != 1:
-        return fault("freeze arity")
-    end
-    let v = get(args, 0)
-    if v.0 != tag_buffer():
-        return fault("freeze type")
-    end
-    do add(pools.0, freeze(get(pools.1, v.1)))
-    return make_string_value(count(pools.0) - 1)
-end
-
-func builtin_clogger(pools):
-    let cell = pools.4
-    if count(cell) >= 2:
-        do add(pools.0, slice_text("", 0, 0))
-        return make_string_value(count(pools.0) - 1)
-    end
-    do add(cell, 1)
-    return make_string_value(get(cell, 0))
-end
-
-func builtin_get(args, pools):
-    if count(args) != 2:
-        return fault("get arity")
-    end
-    let av = get(args, 0)
-    let pos = require_int_payload(get(args, 1))
-    if av.0 != tag_array():
-        return fault("get type")
-    end
-    let arr = get(pools.3, av.1)
-    if pos >= count(arr):
-        return fault("get range")
-    end
-    return get(arr, pos)
-end
-
-func builtin_count(args, pools):
-    if count(args) != 1:
-        return fault("count arity")
-    end
-    let av = get(args, 0)
-    if av.0 != tag_array():
-        return fault("count type")
-    end
-    return make_int_value(count(get(pools.3, av.1)))
-end
-
-func eval_do_append(args, pools):
-    if count(args) != 2:
-        return fault("append arity")
-    end
-    let bv = get(args, 0)
-    let byte = require_int_payload(get(args, 1))
-    if bv.0 != tag_buffer():
-        return fault("append type")
-    end
-    if byte > 255:
-        return fault("append byte")
-    end
-    do append(get(pools.1, bv.1), byte)
-    return make_int_value(0)
-end
-
-func eval_do_add(args, pools):
-    if count(args) != 2:
-        return fault("add arity")
-    end
-    let av = get(args, 0)
-    if av.0 != tag_array():
-        return fault("add type")
-    end
-    do add(get(pools.3, av.1), get(args, 1))
-    return make_int_value(0)
-end
-
-func eval_do_flogger(args, pools):
-    if count(args) != 1:
-        return fault("flogger arity")
-    end
-    let v = get(args, 0)
-    if v.0 != tag_string():
-        return fault("flogger type")
-    end
-    do flogger(get(pools.0, v.1))
-    return make_int_value(0)
-end
-
-func serialize_tuple_items(buf, items, i, n, pools):
-    if i >= n:
-        return buf
-    end
-    if i > 0:
-        do append(buf, ' ')
-    end
-    buf = serialize_value_into(buf, get(items, i), pools)
-    return serialize_tuple_items(buf, items, i + 1, n, pools)
-end
-
-func serialize_value_into(buf, v, pools):
-    if v.0 == tag_int():
-        return emit_decimal(buf, v.1)
-    end
-    if v.0 == tag_tuple():
-        do append(buf, '(')
-        let items = get(pools.2, v.1)
-        buf = serialize_tuple_items(buf, items, 0, count(items), pools)
-        do append(buf, ')')
-        return buf
-    end
-    if v.0 == tag_string():
-        return append_str(buf, get(pools.0, v.1))
-    end
-    return fault("serialize value")
-end
-
-func serialize_value(v, pools):
-    return freeze(serialize_value_into(new_buffer(), v, pools))
-end
-
--- ====================================================================
--- VM STACK / FRAME HELPERS
--- ====================================================================
-
-func value_array_prefix_loop(src, i, n, out):
-    if i >= n:
-        return out
-    end
-    do add(out, get(src, i))
-    return value_array_prefix_loop(src, i + 1, n, out)
-end
-
-func value_array_prefix(src, n):
-    return value_array_prefix_loop(src, 0, n, new_array((int, int)))
-end
-
-func value_array_slice_loop(src, i, n, out):
-    if i >= n:
-        return out
-    end
-    do add(out, get(src, i))
-    return value_array_slice_loop(src, i + 1, n, out)
-end
-
-func stack_pop(stack):
-    let n = count(stack)
-    let v = get(stack, n - 1)
-    return (value_array_prefix(stack, n - 1), v)
-end
-
-func stack_pop_n(stack, n):
-    let live = count(stack) - n
-    let args = value_array_slice_loop(stack, live, count(stack), new_array((int, int)))
-    return (value_array_prefix(stack, live), args)
-end
-
-func locals_store_loop(old, k, v, i, n, out):
-    if i >= n:
-        return out
-    end
-    if i == k:
-        do add(out, v)
-    else:
-        do add(out, get(old, i))
-    end
-    return locals_store_loop(old, k, v, i + 1, n, out)
-end
-
-func locals_store(old, k, v):
-    return locals_store_loop(old, k, v, 0, count(old), new_array((int, int)))
-end
-
-func zero_locals_loop(i, n, out):
-    if i >= n:
-        return out
-    end
-    do add(out, make_int_value(0))
-    return zero_locals_loop(i + 1, n, out)
-end
-
-func zero_locals(n):
-    return zero_locals_loop(0, n, new_array((int, int)))
-end
-
-func callee_locals_loop(args, i, n_locals, out):
-    if i >= n_locals:
-        return out
-    end
-    if i < count(args):
-        do add(out, get(args, i))
-    else:
-        do add(out, make_int_value(0))
-    end
-    return callee_locals_loop(args, i + 1, n_locals, out)
-end
-
-func callee_locals(args, n_params, n_locals):
-    if count(args) != n_params:
-        return fault("call arity")
-    end
-    return callee_locals_loop(args, 0, n_locals, new_array((int, int)))
-end
-
-func frame_array_prefix_loop(src, i, n, out):
-    if i >= n:
-        return out
-    end
-    do add(out, get(src, i))
-    return frame_array_prefix_loop(src, i + 1, n, out)
-end
-
-func frame_array_prefix(src, n):
-    return frame_array_prefix_loop(src, 0, n, new_array((int, int, array((int, int)), array((int, int)))))
-end
-
-func frame_stack_pop(frames):
-    let n = count(frames)
-    let f = get(frames, n - 1)
-    return (frame_array_prefix(frames, n - 1), f)
-end
-
-func boot_strings_loop(src, i, n, out):
-    if i >= n:
-        return out
-    end
-    do add(out, get(src, i))
-    return boot_strings_loop(src, i + 1, n, out)
-end
-
-func boot_strings(src):
-    return boot_strings_loop(src, 0, count(src), new_array(string))
-end
-
-func args_empty():
-    return new_array((int, int))
-end
-
-func builtin_new_array(pools):
-    do add(pools.3, new_array((int, int)))
-    return make_array_value(count(pools.3) - 1)
-end
-
--- ====================================================================
--- VM EXECUTION
--- ====================================================================
-
-func int_binop(op, lhs_v, rhs_v):
-    let lhs = require_int_payload(lhs_v)
-    let rhs = require_int_payload(rhs_v)
-    if op == 5:
-        return make_int_value(lhs + rhs)
-    end
-    if op == 6:
-        return make_int_value(lhs - rhs)
-    end
-    if op == 7:
-        return make_bool_value(lhs < rhs)
-    end
-    if op == 8:
-        return make_bool_value(lhs <= rhs)
-    end
-    if op == 9:
-        return make_bool_value(lhs > rhs)
-    end
-    if op == 10:
-        return make_bool_value(lhs >= rhs)
-    end
-    if op == 11:
-        return make
+   

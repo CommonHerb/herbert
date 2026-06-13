@@ -71,8 +71,15 @@ func is_two_byte_op_start(c):
     return c == '=' or c == '!' or c == '<' or c == '>'
 end
 
+-- `<<` and `>>` are two-byte operators (a doubled `<`/`>`). They must be lexed
+-- before the single-byte `<`/`>` (longest match), so the scanner checks this
+-- before is_one_byte_op below.
+func is_shift_op_start(c):
+    return c == '<' or c == '>'
+end
+
 func is_one_byte_op(c):
-    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>'
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
 end
 
 func end_of_ident(src, i, n):
@@ -166,6 +173,9 @@ func scan(src, i, n, line, out):
         do add(out, (3, slice_text(src, i, j), line))
         return scan(src, j, n, line, out)
     elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2), line))
+        return scan(src, i + 2, n, line, out)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
         do add(out, (5, slice_text(src, i, i + 2), line))
         return scan(src, i + 2, n, line, out)
     elif is_one_byte_op(c):
@@ -407,7 +417,70 @@ end
 -- ====================================================================
 
 func parse_expr(tokens, pos, pool):
-    return parse_or(tokens, pos, pool)
+    return parse_bitwise(tokens, pos, pool)
+end
+
+-- Bitwise/shift level (settled precedence c). Sits above the classless ladder:
+-- parse a classless expression; if a bitwise/shift operator follows, the left
+-- operand must be a single parenthesised/atomic primary (not a bare classless
+-- chain) and the whole chain must stay within one class. A mix plants an
+-- `nc_class_mix` poison node that nc_verify_ast rejects with ERR 442. This makes
+-- `a & b | c`, `a << 2 + 3`, `x & 1 == 0`, and `1 + 2 << 1` all reject while
+-- their fully-parenthesised forms parse. The existing ladder is unchanged.
+
+-- Plant the `nc_class_mix` poison node and STOP the parser cleanly. The node is
+-- added to the pool (so the post-parse all-functions scan in nc_verify_ast finds
+-- it and rejects with ERR 442, regardless of reachability), and the returned
+-- position is end-of-input so the enclosing body/func/program parse terminates
+-- immediately instead of misparsing the leftover tokens (which, in a function
+-- followed by more `func`s, runs parse_atom off the token stream -> a `get: out
+-- of range` crash). A class-mix is always a reject, so discarding any trailing
+-- tokens is correct -- the program will be rejected whole.
+func plant_class_mix(tokens, pool, line):
+    return (add_node(pool, "nc_class_mix", atoms0(), kids0(), line), count(tokens))
+end
+
+func parse_bitwise(tokens, pos, pool):
+    let start = pos
+    let r = parse_or(tokens, pos, pool)
+    let cls = 0
+    if r.1 < count(tokens):
+        cls = bit_class(get(tokens, r.1).1)
+        if get(tokens, r.1).0 != 5:
+            cls = 0
+        end
+    end
+    if cls == 0:
+        return r
+    end
+    -- A bitwise/shift op follows. Verify the left operand is a single primary by
+    -- re-parsing one prefix-unary primary from `start`: if it ends where parse_or
+    -- stopped, parse_or added nothing (the operand is parenthesised/atomic);
+    -- otherwise parse_or consumed an unparenthesised classless op -> mix.
+    let primary = parse_not(tokens, start, pool)
+    if primary.1 != r.1:
+        return plant_class_mix(tokens, pool, get(tokens, r.1).2)
+    end
+    return parse_bitwise_loop(tokens, r.1, pool, r.0, cls)
+end
+
+func parse_bitwise_loop(tokens, pos, pool, lidx, cls):
+    let oc = bin_op_class(tokens, pos)
+    if oc == 0:
+        -- End of the expression (`)`, `,`, `:`, `.`, `end`, EOF, ...).
+        return (lidx, pos)
+    end
+    if oc == 5:
+        -- A classless binary op after a committed bitwise chain: mix.
+        return plant_class_mix(tokens, pool, get(tokens, pos).2)
+    end
+    if oc != cls:
+        -- A different bitwise class without parentheses: mix.
+        return plant_class_mix(tokens, pool, get(tokens, pos).2)
+    end
+    let op_tok = get(tokens, pos)
+    let r = parse_not(tokens, pos + 1, pool)
+    return parse_bitwise_loop(tokens, r.1, pool, make_binop(pool, bit_tag(op_tok.1), lidx, r.0, op_tok.2), cls)
 end
 
 func parse_or(tokens, pos, pool):
@@ -490,8 +563,101 @@ func add_tag(text):
     return ""
 end
 
+-- Multiplicative operator -> AST tag. `*` `/` `%` bind tighter than `+ -`. They
+-- are ordinary arithmetic (same operator class as add/sub), so no class-mix
+-- poison applies to them; they just join the arithmetic ladder a tier tighter.
+func mul_tag(text):
+    if equal(text, "*"):
+        return "mul"
+    end
+    if equal(text, "/"):
+        return "div"
+    end
+    if equal(text, "%"):
+        return "mod"
+    end
+    return ""
+end
+
+-- The bitwise/shift operators split into mutually-exclusive classes:
+-- 1 = AND (&), 2 = OR (|), 3 = XOR (^), 4 = SHIFT (<< >>). 0 = not a
+-- bitwise/shift op. Mirrors the C bootstrap's bit_class. Same-class chaining is
+-- allowed and left-associative; mixing classes (or mixing with the classless
+-- ladder) without parentheses is a parse-time reject (settled precedence c).
+func bit_class(text):
+    if equal(text, "&"):
+        return 1
+    end
+    if equal(text, "|"):
+        return 2
+    end
+    if equal(text, "^"):
+        return 3
+    end
+    if equal(text, "<<"):
+        return 4
+    end
+    if equal(text, ">>"):
+        return 4
+    end
+    return 0
+end
+
+-- AST tag for a bitwise/shift operator token (only called when bit_class != 0).
+func bit_tag(text):
+    if equal(text, "&"):
+        return "band"
+    end
+    if equal(text, "|"):
+        return "bor"
+    end
+    if equal(text, "^"):
+        return "bxor"
+    end
+    if equal(text, "<<"):
+        return "shl"
+    end
+    return "shr"
+end
+
+-- Class id of the binary operator token at `pos` (kind-5 op or `and`/`or`
+-- ident), for the require-parens mix check. Returns:
+--   0  not a binary operator (ends the expression: ) , : . end EOF etc.)
+--   1..4  a bitwise/shift class (see bit_class)
+--   5  a classless binary op (+ - cmp and or) -- mixing one of these with a
+--      committed bitwise chain (without parens) is a reject.
+func bin_op_class(tokens, pos):
+    if pos >= count(tokens):
+        return 0
+    end
+    let t = get(tokens, pos)
+    if t.0 == 0:
+        if equal(t.1, "and") or equal(t.1, "or"):
+            return 5
+        end
+        return 0
+    end
+    if t.0 != 5:
+        return 0
+    end
+    let bc = bit_class(t.1)
+    if bc != 0:
+        return bc
+    end
+    if not equal(add_tag(t.1), ""):
+        return 5
+    end
+    if not equal(mul_tag(t.1), ""):
+        return 5
+    end
+    if not equal(cmp_tag(t.1), ""):
+        return 5
+    end
+    return 0
+end
+
 func parse_add(tokens, pos, pool):
-    let r = parse_not(tokens, pos, pool)
+    let r = parse_mul(tokens, pos, pool)
     return parse_add_loop(tokens, r.1, pool, r.0)
 end
 
@@ -503,8 +669,31 @@ func parse_add_loop(tokens, pos, pool, lidx):
     if t.0 == 5:
         let tag = add_tag(t.1)
         if not equal(tag, ""):
-            let r = parse_not(tokens, pos + 1, pool)
+            let r = parse_mul(tokens, pos + 1, pool)
             return parse_add_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
+        end
+    end
+    return (lidx, pos)
+end
+
+-- Multiplicative tier (`*` `/` `%`): one precedence level tighter than additive
+-- `+ -`, looser than the prefix-unary level (parse_not). Left-associative.
+-- Mirrors parse_add, calling parse_not for its operands.
+func parse_mul(tokens, pos, pool):
+    let r = parse_not(tokens, pos, pool)
+    return parse_mul_loop(tokens, r.1, pool, r.0)
+end
+
+func parse_mul_loop(tokens, pos, pool, lidx):
+    if pos >= count(tokens):
+        return (lidx, pos)
+    end
+    let t = get(tokens, pos)
+    if t.0 == 5:
+        let tag = mul_tag(t.1)
+        if not equal(tag, ""):
+            let r = parse_not(tokens, pos + 1, pool)
+            return parse_mul_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
         end
     end
     return (lidx, pos)
@@ -515,6 +704,14 @@ func parse_not(tokens, pos, pool):
         let t = get(tokens, pos)
         let r = parse_not(tokens, pos + 1, pool)
         return (add_node(pool, "not", atoms0(), kids1(r.0), t.2), r.1)
+    end
+    -- `~` is the bitwise one's-complement unary: a distinct AST kind ("bnot")
+    -- from boolean `not`, with an int (not bool) type rule, at the same prefix
+    -- precedence level.
+    if tok_is_op_text(tokens, pos, "~"):
+        let t = get(tokens, pos)
+        let r = parse_not(tokens, pos + 1, pool)
+        return (add_node(pool, "bnot", atoms0(), kids1(r.0), t.2), r.1)
     end
     return parse_dot(tokens, pos, pool)
 end
@@ -730,11 +927,23 @@ func parse_elifs(tokens, pos, pool, if_kids):
     return pos
 end
 
+-- Safe token line lookup: the token's line, or 0 if pos is out of range. Used on
+-- error-recovery paths where a class-mix has made parse_expr stop at end-of-input
+-- (plant_class_mix), so `pos` can sit past the last token; a bare get(tokens, pos)
+-- would then fault. The line is only cosmetic here (the program is rejected via
+-- the nc_class_mix scan), so 0 is fine.
+func tok_line_or0(tokens, pos):
+    if pos >= count(tokens):
+        return 0
+    end
+    return get(tokens, pos).2
+end
+
 func parse_clause_into(tokens, pos, pool, if_kids):
     let cr = parse_expr(tokens, pos, pool)
     pos = cr.1 + 1
     let br = parse_body(tokens, pos, pool)
-    let cidx = add_node(pool, "clause", atoms0(), kids2(cr.0, br.0), get(tokens, pos).2)
+    let cidx = add_node(pool, "clause", atoms0(), kids2(cr.0, br.0), tok_line_or0(tokens, pos))
     do add(if_kids, cidx)
     return br.1
 end
@@ -1107,6 +1316,73 @@ func op_fwriter():
     return 35
 end
 
+-- Bitwise / shift opcodes. Appended at 36-41 (the dense 0-35 space is full and
+-- the VM range-checks binops; never renumber an existing opcode). band/bor/bxor/
+-- shl/shr are int x int -> int binops; bnot is the int -> int one's-complement
+-- unary (a distinct opcode from boolean `not` at 13).
+func op_band():
+    return 36
+end
+
+func op_bor():
+    return 37
+end
+
+func op_bxor():
+    return 38
+end
+
+func op_shl():
+    return 39
+end
+
+func op_shr():
+    return 40
+end
+
+func op_bnot():
+    return 41
+end
+
+-- Multiplicative opcodes. Appended at 42-44 after the current max (op_bnot=41);
+-- NEVER renumber an existing opcode (the VM range-checks binops and pass-1 sizes
+-- by op number). mul/div/mod are int x int -> int binops. div/mod also fault on a
+-- zero divisor (a located runtime fault, exit-status parity with the C oracle),
+-- so they are "faultable" (see nc_code_has_faultable_loop); mul never faults.
+func op_mul():
+    return 42
+end
+
+func op_div():
+    return 43
+end
+
+func op_mod():
+    return 44
+end
+
+-- trukfit (f3, device input): a 0-arg value builtin that reads ONE byte from the
+-- COM1 RBR. Lowered ONLY by the multiboot32-input emit mode (nc32_lower_loop op 45);
+-- it is deliberately absent from nc32_op_allowed/nc32_pops/nc32_pushes so every
+-- OTHER mode and the near-axis path reject it (a body carrying op 45 fails the depth
+-- gate / is rejected explicitly), keeping the device read isolated to the input mode.
+func op_input_byte():
+    return 45
+end
+
+func op_module_byte():
+    return 46
+end
+
+-- coalgate (link 22) op_sys_read: the MODULE-SIDE syscall builtin. Unlike op_module_byte (op 46, which
+-- reads the kernel's absolute [answer] cell -- a kernel-only primitive), sys_read() lowers to the
+-- position-independent SYS_READ syscall (int 0x30, eax=0): the kernel delivers a late-bound byte the
+-- CPL3 module cannot read itself, and irets back with it in eax. Absent from nc32_op_allowed/pops/pushes
+-- (like op 45/46), so only the coalgate mode's sysread_proxy admits it; every other mode rejects it.
+func op_sys_read():
+    return 47
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1324,6 +1600,15 @@ func opcode_for_binop(tag):
     if equal(tag, "sub"):
         return op_sub()
     end
+    if equal(tag, "mul"):
+        return op_mul()
+    end
+    if equal(tag, "div"):
+        return op_div()
+    end
+    if equal(tag, "mod"):
+        return op_mod()
+    end
     if equal(tag, "eq"):
         return op_eq()
     end
@@ -1339,7 +1624,22 @@ func opcode_for_binop(tag):
     if equal(tag, "gt"):
         return op_gt()
     end
-    return op_ge()
+    if equal(tag, "ge"):
+        return op_ge()
+    end
+    if equal(tag, "band"):
+        return op_band()
+    end
+    if equal(tag, "bor"):
+        return op_bor()
+    end
+    if equal(tag, "bxor"):
+        return op_bxor()
+    end
+    if equal(tag, "shl"):
+        return op_shl()
+    end
+    return op_shr()
 end
 
 func emit_exprs(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -1386,6 +1686,15 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "count"):
         return emit_instr(ir, op_count(), 0, 0)
+    end
+    if equal(name, "input_byte"):
+        return emit_instr(ir, op_input_byte(), 0, 0)
+    end
+    if equal(name, "module_byte"):
+        return emit_instr(ir, op_module_byte(), 0, 0)
+    end
+    if equal(name, "sys_read"):
+        return emit_instr(ir, op_sys_read(), 0, 0)
     end
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger"):
         return fault("void builtin in expression")
@@ -1435,7 +1744,11 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, op_not(), 0, 0)
     end
-    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+    if equal(tag, "bnot"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_bnot(), 0, 0)
+    end
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, opcode_for_binop(tag), 0, 0)
@@ -1726,6 +2039,33 @@ func opcode_name(op):
     if op == op_flogger():
         return "FLOGGER"
     end
+    if op == op_band():
+        return "BAND"
+    end
+    if op == op_bor():
+        return "BOR"
+    end
+    if op == op_bxor():
+        return "BXOR"
+    end
+    if op == op_shl():
+        return "SHL"
+    end
+    if op == op_shr():
+        return "SHR"
+    end
+    if op == op_bnot():
+        return "BNOT"
+    end
+    if op == op_mul():
+        return "MUL"
+    end
+    if op == op_div():
+        return "DIV"
+    end
+    if op == op_mod():
+        return "MOD"
+    end
     return "ARR_ADD"
 end
 
@@ -1965,399 +2305,4 @@ func diagnostic_message(code, payload):
         return diagnostic_with_payload("wrong number of arguments to '", payload, "'")
     end
     if code == 308:
-        return diagnostic_with_payload("builtin '", payload, "' has no value")
-    end
-    if code == 310:
-        return diagnostic_with_payload("'do' requires a value-less call, got '", payload, "'")
-    end
-    if code == 311:
-        return diagnostic_with_payload("duplicate parameter '", payload, "'")
-    end
-    if code == 312:
-        return diagnostic_with_payload("duplicate function '", payload, "'")
-    end
-    if code == 313:
-        return diagnostic_with_payload("function reuses built-in name '", payload, "'")
-    end
-    if code == 314:
-        return "no main function defined"
-    end
-    if code == 315:
-        return diagnostic_with_payload("function '", payload, "' must take zero parameters")
-    end
-    if code == 316:
-        return diagnostic_with_payload("function '", payload, "' may complete without returning")
-    end
-    return "unknown error"
-end
-
-func serialize_diagnostic(diag):
-    let code = diag.0
-    let line = diag.1
-    let payload = diag.2
-    let buf = new_buffer()
-    if line > 0:
-        buf = append_str(buf, "line ")
-        buf = append_str(buf, int_to_str(line))
-        buf = append_str(buf, ": ")
-    else:
-        buf = append_str(buf, "program: ")
-    end
-    buf = append_str(buf, diagnostic_message(code, payload))
-    buf = append_str(buf, " (ERR ")
-    buf = append_str(buf, int_to_str(code))
-    buf = append_str(buf, ")")
-    return freeze(buf)
-end
-
-func serialize_error(code):
-    return serialize_diagnostic(err_diag(code, 0, ""))
-end
-
-func err_empty_tokens():
-    return new_array((int, string, int))
-end
-
-func err_lex_ok(tokens, eof_line):
-    return (err_ok_tag(), err_no_diag(), tokens, eof_line)
-end
-
-func err_lex_fail(diag):
-    return (err_err_tag(), diag, err_empty_tokens(), 0)
-end
-
-func err_pos_ok(pos):
-    return (err_ok_tag(), err_no_diag(), pos)
-end
-
-func err_pos_fail(diag):
-    return (err_err_tag(), diag, 0)
-end
-
-func err_parse_ok(pos):
-    return (err_ok_tag(), err_no_diag(), pos, 0)
-end
-
-func err_parse_ok_extra(pos, extra):
-    return (err_ok_tag(), err_no_diag(), pos, extra)
-end
-
-func err_parse_fail(diag):
-    return (err_err_tag(), diag, 0, 0)
-end
-
-func err_parse_fail_at(code, line):
-    return err_parse_fail(err_diag(code, line, ""))
-end
-
-func err_parse_fail_payload(code, line, payload):
-    return err_parse_fail(err_diag(code, line, payload))
-end
-
-func err_token_line(tokens, pos, eof_line):
-    if pos >= count(tokens):
-        return eof_line
-    end
-    let t = get(tokens, pos)
-    return t.2
-end
-
-func err_parse_fail_current(code, tokens, pos, eof_line):
-    return err_parse_fail_at(code, err_token_line(tokens, pos, eof_line))
-end
-
-func err_check_ok():
-    return (err_ok_tag(), err_no_diag())
-end
-
-func err_check_fail(diag):
-    return (err_err_tag(), diag)
-end
-
-func err_check_fail_at(code, line, payload):
-    return err_check_fail(err_diag(code, line, payload))
-end
-
-func err_empty_env():
-    return new_array(string)
-end
-
-func err_env_ok(env):
-    return (err_ok_tag(), err_no_diag(), env)
-end
-
-func err_env_fail(diag):
-    return (err_err_tag(), diag, err_empty_env())
-end
-
-func err_env_fail_at(code, line, payload):
-    return err_env_fail(err_diag(code, line, payload))
-end
-
-func err_expr_other():
-    return 0
-end
-
-func err_expr_call():
-    return 1
-end
-
-func err_expr_new_array():
-    return 2
-end
-
-func err_is_valid_punct(c):
-    return c == '(' or c == ')' or c == ',' or c == '.' or c == ':'
-end
-
-func err_end_of_int(src, i, n, line, acc):
-    if i >= n:
-        return err_pos_ok(i)
-    end
-    let c = index(src, i)
-    if not is_digit(c):
-        return err_pos_ok(i)
-    end
-    let d = c - '0'
-    if acc > 1844674407370955161:
-        return err_pos_fail(err_diag(103, line, ""))
-    end
-    if acc == 1844674407370955161 and d > 5:
-        return err_pos_fail(err_diag(103, line, ""))
-    end
-    return err_end_of_int(src, i + 1, n, line, times10(acc) + d)
-end
-
-func err_string_escape_ok(c):
-    return c == 'n' or c == '\\' or c == '"'
-end
-
-func err_char_escape_ok(c):
-    return c == 'n' or c == '\\' or c == '\''
-end
-
-func err_end_of_string(src, i, n, line):
-    if i >= n:
-        return err_pos_fail(err_diag(107, line, ""))
-    end
-    let c = index(src, i)
-    if c == '"':
-        return err_pos_ok(i + 1)
-    end
-    if c == '\n':
-        return err_pos_fail(err_diag(106, line, ""))
-    end
-    if c == '\\':
-        if i + 1 >= n:
-            return err_pos_fail(err_diag(105, line, ""))
-        end
-        if not err_string_escape_ok(index(src, i + 1)):
-            return err_pos_fail(err_diag(104, line, ""))
-        end
-        return err_end_of_string(src, i + 2, n, line)
-    end
-    return err_end_of_string(src, i + 1, n, line)
-end
-
-func err_check_char_close(src, pos, n, line):
-    if pos >= n:
-        return err_pos_fail(err_diag(109, line, ""))
-    end
-    if index(src, pos) == '\n':
-        return err_pos_fail(err_diag(110, line, ""))
-    end
-    if index(src, pos) != '\'':
-        return err_pos_fail(err_diag(109, line, ""))
-    end
-    return err_pos_ok(pos + 1)
-end
-
-func err_end_of_char(src, i, n, line):
-    if i >= n:
-        return err_pos_fail(err_diag(109, line, ""))
-    end
-    let c = index(src, i)
-    if c == '\n':
-        return err_pos_fail(err_diag(110, line, ""))
-    end
-    if c == '\'':
-        return err_pos_fail(err_diag(108, line, ""))
-    end
-    if c == '\\':
-        if i + 1 >= n:
-            return err_pos_fail(err_diag(105, line, ""))
-        end
-        if not err_char_escape_ok(index(src, i + 1)):
-            return err_pos_fail(err_diag(104, line, ""))
-        end
-        return err_check_char_close(src, i + 2, n, line)
-    end
-    return err_check_char_close(src, i + 1, n, line)
-end
-
-func err_scan(src, i, n, line, out):
-    if i >= n:
-        return err_lex_ok(out, line)
-    end
-    let c = index(src, i)
-    if is_ws(c):
-        if c == '\n':
-            return err_scan(src, i + 1, n, line + 1, out)
-        end
-        return err_scan(src, i + 1, n, line, out)
-    elif c == '-' and i + 1 < n and index(src, i + 1) == '-':
-        return err_scan(src, end_of_line(src, i + 2, n), n, line, out)
-    elif is_ident_start(c):
-        let j = end_of_ident(src, i + 1, n)
-        do add(out, (0, slice_text(src, i, j), line))
-        return err_scan(src, j, n, line, out)
-    elif is_digit(c):
-        let r = err_end_of_int(src, i, n, line, 0)
-        if r.0 == err_err_tag():
-            return err_lex_fail(r.1)
-        end
-        do add(out, (1, slice_text(src, i, r.2), line))
-        return err_scan(src, r.2, n, line, out)
-    elif c == '"':
-        let r = err_end_of_string(src, i + 1, n, line)
-        if r.0 == err_err_tag():
-            return err_lex_fail(r.1)
-        end
-        do add(out, (2, slice_text(src, i, r.2), line))
-        return err_scan(src, r.2, n, line, out)
-    elif c == '\'':
-        let r = err_end_of_char(src, i + 1, n, line)
-        if r.0 == err_err_tag():
-            return err_lex_fail(r.1)
-        end
-        do add(out, (3, slice_text(src, i, r.2), line))
-        return err_scan(src, r.2, n, line, out)
-    elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
-        do add(out, (5, slice_text(src, i, i + 2), line))
-        return err_scan(src, i + 2, n, line, out)
-    elif is_one_byte_op(c):
-        do add(out, (5, slice_text(src, i, i + 1), line))
-        return err_scan(src, i + 1, n, line, out)
-    elif err_is_valid_punct(c):
-        do add(out, (4, slice_text(src, i, i + 1), line))
-        return err_scan(src, i + 1, n, line, out)
-    end
-    return err_lex_fail(err_diag(101, line, slice_text(src, i, i + 1)))
-end
-
-func err_lex_source(src):
-    return err_scan(src, 0, length(src), 1, new_array((int, string, int)))
-end
-
-func err_is_reserved_word(s):
-    if equal(s, "func") or equal(s, "let") or equal(s, "return") or equal(s, "do"):
-        return true
-    end
-    if equal(s, "if") or equal(s, "elif") or equal(s, "else") or equal(s, "end"):
-        return true
-    end
-    if equal(s, "and") or equal(s, "or") or equal(s, "not"):
-        return true
-    end
-    if equal(s, "true") or equal(s, "false"):
-        return true
-    end
-    if equal(s, "int") or equal(s, "bool") or equal(s, "string"):
-        return true
-    end
-    return equal(s, "buffer") or equal(s, "array")
-end
-
-func err_is_valid_name_token(tokens, pos):
-    if pos >= count(tokens):
-        return false
-    end
-    let t = get(tokens, pos)
-    return t.0 == 0 and not err_is_reserved_word(t.1)
-end
-
-func err_name_seen_loop(names, start, n, name):
-    if start >= n:
-        return false
-    end
-    if equal(get(names, start), name):
-        return true
-    end
-    return err_name_seen_loop(names, start + 1, n, name)
-end
-
-func err_name_seen(names, name):
-    return err_name_seen_loop(names, 0, count(names), name)
-end
-
-func err_parse_type(tokens, pos, eof_line):
-    let line = err_token_line(tokens, pos, eof_line)
-    if pos >= count(tokens):
-        return err_parse_fail_at(211, line)
-    end
-    let t = get(tokens, pos)
-    if t.0 == 0:
-        if equal(t.1, "int") or equal(t.1, "bool") or equal(t.1, "string") or equal(t.1, "buffer"):
-            return err_parse_ok(pos + 1)
-        end
-        if equal(t.1, "array"):
-            if not tok_is_punct_text(tokens, pos + 1, "("):
-                return err_parse_fail_current(211, tokens, pos + 1, eof_line)
-            end
-            let r = err_parse_type(tokens, pos + 2, eof_line)
-            if r.0 == err_err_tag():
-                return r
-            end
-            if not tok_is_punct_text(tokens, r.2, ")"):
-                return err_parse_fail_current(211, tokens, r.2, eof_line)
-            end
-            return err_parse_ok(r.2 + 1)
-        end
-        return err_parse_fail_at(211, line)
-    end
-    if tok_is_punct_text(tokens, pos, "("):
-        let r = err_parse_type(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return err_parse_type_tuple_tail(tokens, r.2, eof_line, 1, line)
-    end
-    return err_parse_fail_at(211, line)
-end
-
-func err_parse_type_tuple_tail(tokens, pos, eof_line, n_items, tuple_line):
-    if tok_is_punct_text(tokens, pos, ","):
-        let r = err_parse_type(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return err_parse_type_tuple_tail(tokens, r.2, eof_line, n_items + 1, tuple_line)
-    end
-    if not tok_is_punct_text(tokens, pos, ")"):
-        return err_parse_fail_current(211, tokens, pos, eof_line)
-    end
-    if n_items < 2:
-        return err_parse_fail_at(211, tuple_line)
-    end
-    return err_parse_ok(pos + 1)
-end
-
-func err_parse_expr(tokens, pos, eof_line):
-    return err_parse_or(tokens, pos, eof_line)
-end
-
-func err_parse_or(tokens, pos, eof_line):
-    let r = err_parse_and(tokens, pos, eof_line)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_or_loop(tokens, r.2, eof_line, r.3)
-end
-
-func err_parse_or_loop(tokens, pos, eof_line, root_kind):
-    if tok_is_ident_text(tokens, pos, "or"):
-        let r = err_parse_and(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return
+        return diagnostic_with_payload("builtin '", payload, "' has no value"
