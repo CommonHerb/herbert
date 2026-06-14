@@ -14004,19 +14004,29 @@ func nc_ouro_op_allowed(op):
     if op == 42:
         return true
     end
+    if op == 48:
+        return true
+    end
     return false
 end
 
--- stack effect with op 20 (a call pops its nargs args, pushes one result).
+-- stack effect with op 20 (a call pops its nargs args, pushes one result). op 48 (mmj sys_write) is net 0:
+-- it pops the operand (the value to emit, at TOS) and pushes the syscall result (0) into the same slot.
 func nc_ouro_pops(op, nargs):
     if op == 20:
         return nargs
+    end
+    if op == 48:
+        return 1
     end
     return nc32_pops(op)
 end
 
 func nc_ouro_pushes(op, nargs):
     if op == 20:
+        return 1
+    end
+    if op == 48:
         return 1
     end
     return nc32_pushes(op)
@@ -14299,6 +14309,23 @@ func nc_ouro_lower_body(obuf, code, i, n, offs, epi, bases):
         do append(obuf, 205)   -- CD
         do append(obuf, 48)    -- 30  int 0x30
         do append(obuf, 80)    -- 50  push eax
+    elif op == 48:
+        -- mmj (link 25): op 48 sys_write -- emit le32 of the TOS operand via the bounds-checked int 0x30 eax=2.
+        -- Same 18 bytes as holler's nc32_lower_loop op-48 arm (the kernel access_ok's [ecx,ecx+4) BY VALUE
+        -- against the module's User page). Reached from INSIDE a recursion frame: ecx = the live operand-stack
+        -- TOS, which descends per recursion level -- the new silicon surface, proven safe at STEP-0. Net stack 0.
+        do append(obuf, 141)   -- 8D
+        do append(obuf, 12)    -- 0C
+        do append(obuf, 36)    -- 24  lea ecx,[esp]
+        do append(obuf, 186)   -- BA  mov edx,
+        obuf = nc_append_le32(obuf, 4)   -- len = 4 (le32)
+        do append(obuf, 184)   -- B8  mov eax,
+        obuf = nc_append_le32(obuf, 2)   -- SYS_WRITE = 2
+        do append(obuf, 205)   -- CD
+        do append(obuf, 48)    -- 30  int 0x30
+        do append(obuf, 137)   -- 89
+        do append(obuf, 4)     -- 04
+        do append(obuf, 36)    -- 24  mov [esp],eax
     elif op == 20:
         let callee = get(code, i).1
         let nargs = get(code, i).2
@@ -14468,6 +14495,120 @@ func nc_emit_multiboot32_ouroboros_program(source):
     end
     if nc_ouro_total_input(funcs, 0, nf, 0) != 0:
         let e4 = nc_fail(594, 0, "multiboot32-ouroboros: input_byte() faults at CPL3; a module reads via sys_read()")
+        return 0
+    end
+    if not nc_ouro_all_funcs_ok(funcs, 0, nf):
+        return 0
+    end
+    let bases = nc_ouro_bases_loop(funcs, 0, nf, 0, new_array(int))
+    let mbuf = new_buffer()
+    mbuf = nc_ouro_emit_funcs(mbuf, funcs, 0, nf, bases)
+    do fwriter(freeze(mbuf))
+    return 0
+end
+
+-- ===== mmj (link 25 / native-codegen Link 41): THE UNION. The first compiled ring-3 module that BOTH computes
+-- with control flow/recursion (ouroboros) AND emits its OWN multi-byte output (holler's op 48 sys_write). It
+-- REUSES the entire nc_ouro_* emitter (which now admits op 48) and adds, at the whole-program gate, the two
+-- requirements that make a module the union (not a holler re-skin): >= 1 sys_write AND genuine RECURSION (a
+-- backward call). Variable-LENGTH output (e.g. down(N) emits N words) is the make-or-break -- unfakeable by
+-- ouroboros (no op 48) or holler (straight-line => fixed count). Runs on the FROZEN holler kernel; byte-identical
+-- to mmj_ref.target_module('down'), proven on QEMU+Bochs+KVM. =====
+
+-- whole-program sys_write count (op 48): the union module must emit its OWN output at least once.
+func nc_mmj_total_syswrite(funcs, i, nf, acc):
+    if i >= nf:
+        return acc
+    end
+    let code = get(funcs, i).4
+    return nc_mmj_total_syswrite(funcs, i + 1, nf, acc + nc32_count_syswrite(code, count(code)))
+end
+
+-- does function fi contain a BACKWARD call (callee index <= fi)? Functions are laid out [main, f1, f2, ...] in
+-- index order, so a call to a function whose index <= the caller's emits a backward E8 rel32 -- a self-call
+-- (callee==fi) or a back-edge of a recursion cycle. This is the ONLY way to ITERATE in Herbert (no while; ouro
+-- branches are forward-only), hence the only way to emit variable-LENGTH output. A forward-only call chain
+-- (coalgate/ouroboros 'chain') has none.
+func nc_mmj_func_backcall(code, i, n, fi):
+    if i >= n:
+        return false
+    end
+    if get(code, i).0 == 20:
+        if get(code, i).1 <= fi:
+            return true
+        end
+    end
+    return nc_mmj_func_backcall(code, i + 1, n, fi)
+end
+
+func nc_mmj_has_backcall(funcs, i, nf):
+    if i >= nf:
+        return false
+    end
+    let code = get(funcs, i).4
+    if nc_mmj_func_backcall(code, 0, count(code), i):
+        return true
+    end
+    return nc_mmj_has_backcall(funcs, i + 1, nf)
+end
+
+-- anchored first-line directive "-- emit: module-mmj" (newline at mlen; the "-mmj" suffix is distinct from
+-- "module-holler" / "multiboot32-ouroboros").
+func nc_is_module_mmj(source):
+    let marker = "-- emit: module-mmj"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+func nc_emit_module_mmj_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    let nf = count(funcs)
+    if prog.2 != 0:
+        let e0 = nc_fail(630, 0, "module-mmj: main not the entry (index 0)")
+        return 0
+    end
+    let mainfn = get(funcs, 0)
+    if not equal(mainfn.0, "main"):
+        let e0b = nc_fail(630, 0, "module-mmj: entry function is not main")
+        return 0
+    end
+    if mainfn.2 != 0:
+        let e1 = nc_fail(631, 0, "module-mmj: main must take no parameters")
+        return 0
+    end
+    if nc_ouro_total_sysread(funcs, 0, nf, 0) != 1:
+        let e2 = nc_fail(632, 0, "module-mmj: program must read sys_read() exactly once")
+        return 0
+    end
+    if nc_mmj_total_syswrite(funcs, 0, nf, 0) < 1:
+        let e3 = nc_fail(633, 0, "module-mmj: program must sys_write() at least once (it emits its OWN output)")
+        return 0
+    end
+    if nc_ouro_total_module(funcs, 0, nf, 0) != 0:
+        let e4 = nc_fail(634, 0, "module-mmj: module_byte() is kernel-only; a module reads via sys_read()")
+        return 0
+    end
+    if nc_ouro_total_input(funcs, 0, nf, 0) != 0:
+        let e5 = nc_fail(635, 0, "module-mmj: input_byte() faults at CPL3; a module reads via sys_read()")
+        return 0
+    end
+    if not nc_mmj_has_backcall(funcs, 0, nf):
+        let e6 = nc_fail(636, 0, "module-mmj: requires genuine recursion (a backward call) -- the union, not a holler re-skin")
         return 0
     end
     if not nc_ouro_all_funcs_ok(funcs, 0, nf):
@@ -17774,6 +17915,10 @@ func main():
     end
     if nc_is_module_holler(source):
         let hm = nc_emit_module_holler_program(source)
+        return 0
+    end
+    if nc_is_module_mmj(source):
+        let mj = nc_emit_module_mmj_program(source)
         return 0
     end
     if nc_is_multiboot32_coalgate(source):
