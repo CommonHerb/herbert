@@ -1383,6 +1383,16 @@ func op_sys_read():
     return 47
 end
 
+-- holler (link 24) op_sys_write: the MODULE-SIDE output syscall builtin. sys_write(v) emits le32(v) (4 bytes)
+-- via the bounds-checked SYS_WRITE syscall (int 0x30, eax=2): the CPL3 module hands the kernel a pointer to v
+-- on its OWN operand stack (ecx=esp, edx=4); the kernel relays the 4 bytes ONLY if [ecx,ecx+4) lies in the
+-- module's User page [alloc_lo,alloc_hi) (the access_ok confused-deputy check). A VALUE builtin returning 0.
+-- Absent from nc32_op_allowed/pops/pushes (like op 45/46/47): only the holler module mode's holler_proxy
+-- admits it (net 0: pop the arg, push the result); every other mode rejects a body carrying op 48.
+func op_sys_write():
+    return 48
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1695,6 +1705,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "sys_read"):
         return emit_instr(ir, op_sys_read(), 0, 0)
+    end
+    if equal(name, "sys_write"):
+        return emit_instr(ir, op_sys_write(), 0, 0)
     end
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger"):
         return fault("void builtin in expression")
@@ -3164,7 +3177,7 @@ func err_is_builtin_name(name):
     if equal(name, "new_array") or equal(name, "get") or equal(name, "count"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read")
+    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write")
 end
 
 func err_is_void_builtin(name):
@@ -3178,7 +3191,7 @@ func err_is_value_builtin(name):
     if equal(name, "equal") or equal(name, "new_buffer") or equal(name, "freeze"):
         return true
     end
-    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read")
+    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write")
 end
 
 func err_value_builtin_arity(name):
@@ -3201,6 +3214,9 @@ func err_value_builtin_arity(name):
         return 2
     end
     if equal(name, "count"):
+        return 1
+    end
+    if equal(name, "sys_write"):
         return 1
     end
     return 0
@@ -6019,6 +6035,13 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         end
         if equal(name, "sys_read"):
             return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "sys_write"):
+            let sw = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if sw.0 != 0:
+                return (sw.0, 0, sw.1, sw.2, sw.3)
+            end
+            return (0, nc_type_int(), sw.1, sw.2, sw.3)
         end
         if equal(name, "length"):
             let r = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
@@ -10842,6 +10865,9 @@ func nc32_op_size(op, is_last):
     if op == 47:
         return 8
     end
+    if op == 48:
+        return 18
+    end
     if op == 21:
         if is_last == 1:
             return 1
@@ -10992,6 +11018,24 @@ func nc32_lower_loop(buf, code, i, n, offs, epi):
         do append(buf, 205)   -- CD
         do append(buf, 48)    -- 30  int 0x30
         do append(buf, 80)    -- 50  push eax
+    elif op == 48:
+        -- holler op_sys_write: emit le32 of the TOS operand via the bounds-checked SYS_WRITE syscall. The
+        -- operand v sits at [esp] (pushed by the arg eval); ecx=&v, edx=4, eax=2 (SYS_WRITE); the kernel
+        -- access_ok's [ecx,ecx+4) against the module's User page, relays the 4 bytes, returns eax=0; the result
+        -- replaces v on the stack (net 0). 18 bytes, POSITION-INDEPENDENT. SYS_WRITE clobbers eax/ecx/edx/esi/edi
+        -- but the pure stack machine re-pops every subsequent operand, so the clobbers are invisible.
+        do append(buf, 141)   -- 8D
+        do append(buf, 12)    -- 0C
+        do append(buf, 36)    -- 24  lea ecx,[esp]
+        do append(buf, 186)   -- BA  mov edx,
+        buf = nc_append_le32(buf, 4)   -- len = 4 (le32)
+        do append(buf, 184)   -- B8  mov eax,
+        buf = nc_append_le32(buf, 2)   -- SYS_WRITE = 2
+        do append(buf, 205)   -- CD
+        do append(buf, 48)    -- 30  int 0x30
+        do append(buf, 137)   -- 89
+        do append(buf, 4)     -- 04
+        do append(buf, 36)    -- 24  mov [esp],eax
     elif op == 21:
         if il == 1:
             do append(buf, 88)
@@ -12777,6 +12821,48 @@ func nc32_sysread_proxy(code, n):
     return nc32_sysread_proxy_loop(new_array((int, int, int)), code, 0, n)
 end
 
+-- holler (link 24): count op 48 (sys_write) occurrences -- the compiled module must emit >= 1 (else it is just
+-- a coalgate module; the headline capability is the module emitting its OWN output).
+func nc32_count_syswrite_loop(code, i, n, cnt):
+    if i >= n:
+        return cnt
+    end
+    let c = cnt
+    if get(code, i).0 == 48:
+        c = cnt + 1
+    end
+    return nc32_count_syswrite_loop(code, i + 1, n, c)
+end
+
+func nc32_count_syswrite(code, n):
+    return nc32_count_syswrite_loop(code, 0, n, 0)
+end
+
+-- holler module proxy for nc32_body_ok's depth walk: op 47 (sys_read) -> op 0 (push, +1, like coalgate);
+-- op 48 (sys_write) -> op 4 (store_local, pop 1) THEN op 0 (push, +1) = NET 0 (pop the arg, push the result).
+-- The 48->two-op expansion makes the proxy LONGER than the code, which is safe ONLY because the holler module
+-- is straight-line (nc32_has_branch rejects branches), so nc32_check_branches has nothing to align; the depth
+-- walk just needs the net stack effect right. body_ok is called with count(proxy), not count(code).
+func nc32_holler_proxy_loop(out, code, i, n):
+    if i >= n:
+        return out
+    end
+    let e = get(code, i)
+    if e.0 == 47:
+        do add(out, (0, 0, 0))
+    elif e.0 == 48:
+        do add(out, (4, 0, 0))
+        do add(out, (0, 0, 0))
+    else:
+        do add(out, e)
+    end
+    return nc32_holler_proxy_loop(out, code, i + 1, n)
+end
+
+func nc32_holler_proxy(code, n):
+    return nc32_holler_proxy_loop(new_array((int, int, int)), code, 0, n)
+end
+
 func nc_is_multiboot32_lodger(source):
     let marker = "-- emit: multiboot32-lodger"
     let mlen = length(marker)
@@ -13511,6 +13597,245 @@ func nc_emit_multiboot32_geeking_program(source):
     img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
     img = nc_emit_zeroes_loop(img, 40)
     do fwriter(freeze(img))
+    return 0
+end
+
+-- holler (link 24 / native-codegen Link 40) KERNEL emit mode: the geeking kernel + a do_write (SYS_WRITE,
+-- int 0x30 eax=2) arm -- the FIRST confused-deputy kernel-contract surface. Machine-generated from
+-- holler_ref.py (do not hand-edit). HEAD-portion is hex-data with esp_top substitution at the 10 holler
+-- offsets; the PD+PT identity map REUSES geeking's loops (identical -- no dup, avoids a cloggard anchor
+-- collision). Output == holler_ref.build_code prefix; prefix_len 24564 (the do_write arm was absorbed by the
+-- align-pad before the page-aligned PD/PT, so it is byte-identical in length to geeking/sitopia).
+func nc32_holler_data():
+    return "891d18001000e9c1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b031e6e9e93f000000b032e6e9e936000000b033e6e9e92d000000b034e6e9e924000000b035e6e9e91b000000b036e6e9e912000000b037e6e9e909000000b038e6e9e90000000066baf400ee66ba0089b053eeb068eeb075eeb074eeb064eeb06feeb077eeb06eeefaf4ebfd3d02b0ad2b0f8588ffffffbc0000000031c00f22e068020000009d8b35180010008b06a31c001000a8080f846cffffffa8400f846dffffffa8040f840d0000008b4610a32c001000e90a000000c7052c00100000000000f706200000000f841c0000008b4624a3300010008b461c0faf4620034624a334001000e914000000c7053000100000000000c70534001000000000008b461483f8010f850fffffff8b6e188b4500a3200010008b4504a3240010008b4508a328001000a1200010003b05240010000f83ecfeffffa11800100085c00f84190000002500f0ffffa34c0010000500200000a350001000e914000000c7054c00100000000000c7055000100000000000a12800100085c00f84190000002500f0ffffa3540010000500200000a358001000e914000000c7055400100000000000c7055800100000000000a12c00100085c00f84190000002500f0ffffa35c0010000500200000a360001000e914000000c7055c00100000000000c70560001000000000008b46302500f0ffffa3640010008b463003462c05ff0f00002500f0ffffa368001000c7053800100000000000c7053c001000000000008b4e308b562c01cabf4000000039d10f83e20000004f0f84f5fdffffb09ce6e98b01e6e9c1e808e6e9c1e808e6e9c1e808e6e98b4104e6e9c1e808e6e9c1e808e6e9c1e808e6e98b4108e6e9c1e808e6e9c1e808e6e9c1e808e6e98b410ce6e9c1e808e6e9c1e808e6e9c1e808e6e98b4110e6e9c1e808e6e9c1e808e6e9c1e808e6e98b4114e6e9c1e808e6e9c1e808e6e9c1e808e6e9a13c00100085c00f85470000008b411483f8010f853b0000008b410885c00f85300000008b41048b590c01d88b591085db0f8405000000b800f0ffff3d000010000f860d000000a33c0010008b4104a3380010008b0183c00401c1e916ffffffa13c00100085c00f8416fdffffa1380010003d000010000f8305000000b80000100005ff0f00002500f0ffff89c1bf100000004f0f84f2fcffff31db81f9000000000f83270000008d81001000003d000010000f8616000000b80000000005ff0f00002500f0ffff89c1bb010000003b0d240010000f83280000008d81001000003b05200010000f8616000000a12400100005ff0f00002500f0ffff89c1bb010000003b0d500010000f83280000008d81001000003b054c0010000f8616000000a15000100005ff0f00002500f0ffff89c1bb010000003b0d580010000f83280000008d81001000003b05540010000f8616000000a15800100005ff0f00002500f0ffff89c1bb010000003b0d600010000f83280000008d81001000003b055c0010000f8616000000a16000100005ff0f00002500f0ffff89c1bb010000003b0d340010000f83280000008d81001000003b05300010000f8616000000a13400100005ff0f00002500f0ffff89c1bb010000003b0d680010000f83280000008d81001000003b05640010000f8616000000a16800100005ff0f00002500f0ffff89c1bb0100000085db0f8584feffff8d81001000003b053c0010000f876bfbffff890d400010008d8100100000a344001000b09ae6e9b800001000e6e9c1e808e6e9c1e808e6e9c1e808e6e9b800000000e6e9c1e808e6e9c1e808e6e9c1e808e6e98b4630e6e9c1e808e6e9c1e808e6e9c1e808e6e98b462ce6e9c1e808e6e9c1e808e6e9c1e808e6e9be18001000b9150000008a06e6e98a4601e6e98a4602e6e98a4603e6e983c6044985c90f85e1ffffffb09be6e90f0115310c1000eae30510000800b8100000008ed88ec08ed08ee08ee80f011d370c100066b828000f00d8b8001010000f22d80f20c00d000000800f22c0eb00a120001000c1e80a25fcffffff0500201000830804a140001000c1e80a25fcffffff0500201000830804b8001010000f22d866bafb03b003ee66baf903b000ee66bafb03b080ee66baf803b001ee66baf903b000ee66bafb03b003ee66bafa03b000ee66bafc03b003eeb011e620b011e6a0b020e621b028e6a1b004e621b002e6a1b001e621b001e6a1b0fee621b0ffe6a1b8230000008ed88ec08ee08ee8fb9090fab00ae620e420a8010f8436000000fb9090fab00ae620e420a8010f8424000000fb9090fab00ae620e420a8010f8412000000fb9090fab00ae620e420a8010f8400000000b030e643b0ffe640b0ffe6406823000000ff35440010006802020000681b000000ff3520001000cf85c00f847200000083f8020f841b010000b8100000008ed88ec08ee08ee888d8a248001000b0e0e6e988d8e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e9b0e1e6e9bc00000000fce96258000066bafd03eca80174f766baf803ec88c3b0c0e6e988d8e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e9b0c1e6e9fb9090fab00ae620e420a8010f8436000000fb9090fab00ae620e420a8010f8424000000fb9090fab00ae620e420a8010f8412000000fb9090fab00ae620e420a8010f8400000000b030e643b0ffe640b0ffe6400fb6c3cfb8100000008ed88ec08ee08ee88b35400010008b3d4400100089c801d00f82d300000039f10f82cb00000039f80f87c3000000b0d4e6e989d0e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e985d20f840b0000008a01e6e9414ae9edffffffb0d5e6e9fb9090fab00ae620e420a8010f8436000000fb9090fab00ae620e420a8010f8424000000fb9090fab00ae620e420a8010f8412000000fb9090fab00ae620e420a8010f8400000000b030e643b0ffe640b0ffe64031c0cfb0d6e6e989d0e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e9b0d7e6e9fb9090fab00ae620e420a8010f8436000000fb9090fab00ae620e420a8010f8424000000fb9090fab00ae620e420a8010f8412000000fb9090fab00ae620e420a8010f8400000000b030e643b0ffe640b0ffe64031c0cfb8100000008ed88ec08ee08ee8b0f0e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442408e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442410e6e9c1e808e6e9c1e808e6e9c1e808e6e9b0f1e6e9f6442408030f8412000000b047a248001000bc00000000fce985550000e933f6ffffb8100000008ed88ec08ee08ee8b0d0e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442408e6e9c1e808e6e9c1e808e6e9c1e808e6e90f20d0e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442410e6e9c1e808e6e9c1e808e6e9c1e808e6e9b0d1e6e9f6442408030f8412000000b050a248001000bc00000000fce9e7540000e995f5fffff6442404030f8505000000b020e620cfb8100000008ed88ec08ee08ee8b020e620b0cae6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e98b442408e6e9c1e808e6e9c1e808e6e9c1e808e6e9b0cbe6e9b04ba248001000bc00000000fce954540000cff6442404030f8450000000b8100000008ed88ec08ee08ee8b0e2e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e9b0e3e6e9b046a248001000bc00000000fce9f8530000b050e6e966baf400ee66ba0089b053eeb068eeb075eeb074eeb064eeb06feeb077eeb06eeefaf4ebfd2f003d0c100087016d0c10000000000000000000ffff0000009acf00ffff00000092cf00ffff000000facf00ffff000000f2cf006700f50d10890000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000f6090800008e1000800a0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e10001e0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ac0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e1000ad0b0800008e10002407080000ee100000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000068000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+end
+
+func nc32_holler_head_loop(buf, hx, hlen, hi, bi, esp_top):
+    if hi >= hlen:
+        return buf
+    end
+    if bi == 216 or bi == 944 or bi == 972 or bi == 1375 or bi == 1928 or bi == 2661 or bi == 2819 or bi == 2966 or bi == 3058 or bi == 3565:
+        buf = nc_append_le32(buf, esp_top)
+        return nc32_holler_head_loop(buf, hx, hlen, hi + 8, bi + 4, esp_top)
+    end
+    let b = nc32_geeking_hexval(index(hx, hi)) * 16 + nc32_geeking_hexval(index(hx, hi + 1))
+    do append(buf, b)
+    return nc32_holler_head_loop(buf, hx, hlen, hi + 2, bi + 1, esp_top)
+end
+
+-- prefix = holler head (with do_write) + the UNCHANGED geeking PD/PT identity map (reused verbatim).
+func nc32_holler_emit_prefix(buf, esp_top):
+    let hx = nc32_holler_data()
+    buf = nc32_holler_head_loop(buf, hx, length(hx), 0, 0, esp_top)
+    buf = nc32_geeking_pd_loop(buf, 0)
+    buf = nc32_geeking_pt_loop(buf, 0, 4096)
+    return buf
+end
+
+func nc_is_multiboot32_holler(source):
+    let marker = "-- emit: multiboot32-holler"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- holler (link 24): C3 / SYS_WRITE. THE COMPILED MODULE EMITS ITS OWN MULTI-BYTE OUTPUT. Same body subset /
+-- layout / epilogue as geeking (the kernel body is a PURE CONDUIT reading module_byte once); the NEW
+-- capability is the do_write arm in the prefix. So this driver == geeking's with nc32_holler_emit_prefix and
+-- the holler marker/fail-codes. Pairs with the `module-holler` emit mode (the compiled SYS_WRITE module).
+func nc_emit_multiboot32_holler_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let fa = nc_fail(600, 0, "multiboot32-holler: main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let fb = nc_fail(601, 0, "multiboot32-holler: main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if nc32_count_module(code, n) != 1:
+        let fi = nc_fail(602, 0, "multiboot32-holler: main must read module_byte() exactly once")
+        return 0
+    end
+    if nc32_has_branch(code, n):
+        let fh = nc_fail(603, 0, "multiboot32-holler: control flow (if/branch) not in the straight-line subset")
+        return 0
+    end
+    let proxy = nc32_module_proxy(code, n)
+    if not nc32_body_ok(proxy, n):
+        let fc = nc_fail(604, 0, "multiboot32-holler: body not in the module/locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let fd = nc_fail(605, 0, "multiboot32-holler: too many locals (max 31)")
+        return 0
+    end
+    let prefix_len = 24564
+    if nlocals > 0:
+        prefix_len = 24569
+    end
+    let lay = nc32_layout_loop(code, 0, n, prefix_len, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - prefix_len:
+        let fe = nc_fail(606, 0, "multiboot32-holler: body length invariant")
+        return 0
+    end
+    let code_len = prefix_len + bodylen + 58
+    let memsz = 12 + code_len + 16384
+    let esp_top = 1048576 + memsz
+    let cbuf = new_buffer()
+    cbuf = nc32_holler_emit_prefix(cbuf, esp_top)
+    if nlocals > 0:
+        do append(cbuf, 137)
+        do append(cbuf, 229)
+        do append(cbuf, 131)
+        do append(cbuf, 236)
+        do append(cbuf, 4 * nlocals)
+    end
+    cbuf = append_str(cbuf, freeze(bodybuf))
+    cbuf = nc32_emit_epilogue(cbuf)
+    let frozen_code = freeze(cbuf)
+    if length(frozen_code) != code_len:
+        let fg = nc_fail(607, 0, "multiboot32-holler: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader_pgalign(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
+end
+
+func nc_is_module_holler(source):
+    let marker = "-- emit: module-holler"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- holler (link 24): the COMPILED SYS_WRITE module (coalgate-style: a raw, POSITION-INDEPENDENT i386 MODULE,
+-- entry byte 0, the FROZEN holler kernel runs at ring 3). Like coalgate (exactly one sys_read, no branches,
+-- straight-line + locals, implicit sys_exit) but ALSO emits its OWN output via >= 1 sys_write (op 48 -> the
+-- bounds-checked int 0x30 eax=2). Reuses nc32_lower_loop wholesale; op 48 is admitted ONLY here, via
+-- nc32_holler_proxy (op 47 -> push; op 48 -> pop+push net 0). Proven byte-identical to holler_ref.target_module.
+func nc_emit_module_holler_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let fa = nc_fail(610, 0, "module-holler: main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let fb = nc_fail(611, 0, "module-holler: main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if nc32_count_sysread(code, n) != 1:
+        let fi = nc_fail(612, 0, "module-holler: main must read sys_read() exactly once")
+        return 0
+    end
+    if nc32_count_syswrite(code, n) < 1:
+        let fw = nc_fail(613, 0, "module-holler: main must sys_write() at least once (it emits its OWN output)")
+        return 0
+    end
+    if nc32_count_module(code, n) != 0:
+        let fj = nc_fail(614, 0, "module-holler: module_byte() is kernel-only; a module reads via sys_read()")
+        return 0
+    end
+    if nc32_count_input(code, n) != 0:
+        let fk = nc_fail(615, 0, "module-holler: input_byte() faults at CPL3; a module reads via sys_read()")
+        return 0
+    end
+    if nc32_has_branch(code, n):
+        let fh = nc_fail(616, 0, "module-holler: control flow (if/branch) not in the v1 straight-line subset")
+        return 0
+    end
+    let proxy = nc32_holler_proxy(code, n)
+    if not nc32_body_ok(proxy, count(proxy)):
+        let fc = nc_fail(617, 0, "module-holler: body not in the module/locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let fd = nc_fail(618, 0, "module-holler: too many locals (max 31)")
+        return 0
+    end
+    let prefix_len = 0
+    if nlocals > 0:
+        prefix_len = 5
+    end
+    let lay = nc32_layout_loop(code, 0, n, prefix_len, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - prefix_len:
+        let fe = nc_fail(619, 0, "module-holler: body length invariant")
+        return 0
+    end
+    let mbuf = new_buffer()
+    if nlocals > 0:
+        do append(mbuf, 137)   -- 89
+        do append(mbuf, 229)   -- E5  mov ebp,esp
+        do append(mbuf, 131)   -- 83
+        do append(mbuf, 236)   -- EC  sub esp,
+        do append(mbuf, 4 * nlocals)
+    end
+    mbuf = append_str(mbuf, freeze(bodybuf))
+    -- implicit sys_exit: mov bl,al; mov eax,SYS_EXIT(1); int 0x30. The kernel stores bl and never returns.
+    do append(mbuf, 136)   -- 88
+    do append(mbuf, 195)   -- C3  mov bl,al
+    do append(mbuf, 184)   -- B8  mov eax,
+    mbuf = nc_append_le32(mbuf, 1)   -- SYS_EXIT = 1
+    do append(mbuf, 205)   -- CD
+    do append(mbuf, 48)    -- 30  int 0x30
+    do fwriter(freeze(mbuf))
     return 0
 end
 
@@ -17441,6 +17766,14 @@ func main():
     end
     if nc_is_multiboot32_geeking(source):
         let gk = nc_emit_multiboot32_geeking_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_holler(source):
+        let hk = nc_emit_multiboot32_holler_program(source)
+        return 0
+    end
+    if nc_is_module_holler(source):
+        let hm = nc_emit_module_holler_program(source)
         return 0
     end
     if nc_is_multiboot32_coalgate(source):

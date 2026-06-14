@@ -87,6 +87,9 @@ bootstrap/tests/run_native_codegen_link39.sh
 bootstrap/tests/run_native_codegen_link39_mutation.sh
 bootstrap/tests/coalgate_ref.py
 bootstrap/tests/ouroboros_ref.py
+bootstrap/tests/holler_ref.py
+bootstrap/tests/run_native_codegen_link40.sh
+bootstrap/tests/run_native_codegen_link40_mutation.sh
 bootstrap/tests/kernel_input_feed.py
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
