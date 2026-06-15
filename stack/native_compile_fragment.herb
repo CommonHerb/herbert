@@ -1393,6 +1393,22 @@ func op_sys_write():
     return 48
 end
 
+-- chiefturbo (link 26) runtime-indexed-memory builtins. bufbase() pushes the captured buffer base (alloc_lo,
+-- stashed at [ebp+0] by main's capture prologue); bufget(base,k) is a register-indexed SS-relative load
+-- buf[k]; bufset(base,i,v) is a register-indexed SS-relative store buf[i]=v. Absent from nc32_op_allowed/
+-- pops/pushes (like op 45/46/47/48): only the chiefturbo module mode admits a body carrying op 49/50/51.
+func op_bufbase():
+    return 49
+end
+
+func op_bufget():
+    return 50
+end
+
+func op_bufset():
+    return 51
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1708,6 +1724,15 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "sys_write"):
         return emit_instr(ir, op_sys_write(), 0, 0)
+    end
+    if equal(name, "bufbase"):
+        return emit_instr(ir, op_bufbase(), 0, 0)
+    end
+    if equal(name, "bufget"):
+        return emit_instr(ir, op_bufget(), 0, 0)
+    end
+    if equal(name, "bufset"):
+        return emit_instr(ir, op_bufset(), 0, 0)
     end
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger"):
         return fault("void builtin in expression")
@@ -3177,6 +3202,9 @@ func err_is_builtin_name(name):
     if equal(name, "new_array") or equal(name, "get") or equal(name, "count"):
         return true
     end
+    if equal(name, "bufbase") or equal(name, "bufget") or equal(name, "bufset"):
+        return true
+    end
     return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write")
 end
 
@@ -3189,6 +3217,9 @@ func err_is_value_builtin(name):
         return true
     end
     if equal(name, "equal") or equal(name, "new_buffer") or equal(name, "freeze"):
+        return true
+    end
+    if equal(name, "bufbase") or equal(name, "bufget") or equal(name, "bufset"):
         return true
     end
     return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write")
@@ -3218,6 +3249,12 @@ func err_value_builtin_arity(name):
     end
     if equal(name, "sys_write"):
         return 1
+    end
+    if equal(name, "bufget"):
+        return 2
+    end
+    if equal(name, "bufset"):
+        return 3
     end
     return 0
 end
@@ -6042,6 +6079,38 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
                 return (sw.0, 0, sw.1, sw.2, sw.3)
             end
             return (0, nc_type_int(), sw.1, sw.2, sw.3)
+        end
+        if equal(name, "bufbase"):
+            -- chiefturbo: bufbase() takes no args, returns the buffer base (int).
+            return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "bufget"):
+            -- chiefturbo: bufget(base, k) -- both int, returns the loaded word (int).
+            let bg0 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if bg0.0 != 0:
+                return (bg0.0, 0, bg0.1, bg0.2, bg0.3)
+            end
+            let bg1 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), bg0.1, nc_type_int(), bg0.2, fn_idx, funcs, n_params)
+            if bg1.0 != 0:
+                return (bg1.0, 0, bg1.1, bg1.2, nc_or_changed(bg0.3, bg1.3))
+            end
+            return (0, nc_type_int(), bg1.1, bg1.2, nc_or_changed(bg0.3, bg1.3))
+        end
+        if equal(name, "bufset"):
+            -- chiefturbo: bufset(base, i, v) -- all int, returns the stored value v (int).
+            let bs0 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if bs0.0 != 0:
+                return (bs0.0, 0, bs0.1, bs0.2, bs0.3)
+            end
+            let bs1 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), bs0.1, nc_type_int(), bs0.2, fn_idx, funcs, n_params)
+            if bs1.0 != 0:
+                return (bs1.0, 0, bs1.1, bs1.2, nc_or_changed(bs0.3, bs1.3))
+            end
+            let bs2 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 2), bs1.1, nc_type_int(), bs1.2, fn_idx, funcs, n_params)
+            if bs2.0 != 0:
+                return (bs2.0, 0, bs2.1, bs2.2, nc_or_changed(nc_or_changed(bs0.3, bs1.3), bs2.3))
+            end
+            return (0, nc_type_int(), bs2.1, bs2.2, nc_or_changed(nc_or_changed(bs0.3, bs1.3), bs2.3))
         end
         if equal(name, "length"):
             let r = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
@@ -14007,6 +14076,15 @@ func nc_ouro_op_allowed(op):
     if op == 48:
         return true
     end
+    if op == 49:
+        return true
+    end
+    if op == 50:
+        return true
+    end
+    if op == 51:
+        return true
+    end
     return false
 end
 
@@ -14019,6 +14097,12 @@ func nc_ouro_pops(op, nargs):
     if op == 48:
         return 1
     end
+    if op == 50:
+        return 2
+    end
+    if op == 51:
+        return 3
+    end
     return nc32_pops(op)
 end
 
@@ -14027,6 +14111,15 @@ func nc_ouro_pushes(op, nargs):
         return 1
     end
     if op == 48:
+        return 1
+    end
+    if op == 49:
+        return 1
+    end
+    if op == 50:
+        return 1
+    end
+    if op == 51:
         return 1
     end
     return nc32_pushes(op)
@@ -14091,6 +14184,15 @@ func nc_ouro_op_size(op, nargs, is_last):
             end
         end
         return 5 + cl + 1
+    end
+    if op == 49:
+        return 3
+    end
+    if op == 50:
+        return 7
+    end
+    if op == 51:
+        return 8
     end
     return nc32_op_size(op, is_last)
 end
@@ -14326,6 +14428,34 @@ func nc_ouro_lower_body(obuf, code, i, n, offs, epi, bases):
         do append(obuf, 137)   -- 89
         do append(obuf, 4)     -- 04
         do append(obuf, 36)    -- 24  mov [esp],eax
+    elif op == 49:
+        -- chiefturbo op 49 bufbase(): push DWORD [ebp+0] -- the buffer base alloc_lo that main's capture
+        -- prologue stashed at [ebp+0]. 3 bytes.
+        do append(obuf, 255)   -- FF
+        do append(obuf, 117)   -- 75
+        do append(obuf, 0)     -- 00  push [ebp+0]
+    elif op == 50:
+        -- chiefturbo op 50 bufget(base,k): TOS=k, next=base. pop ecx(k); pop edx(base); SS: mov eax,[edx+ecx*4];
+        -- push eax. The 0x36 SS-override is LOAD-BEARING (the buffer is in the module STACK SEGMENT; iret-to-CPL3
+        -- NULLs DS on real silicon -> a DS-relative load #GPs; SS is restored flat by every iret). 7 bytes.
+        do append(obuf, 89)    -- 59  pop ecx
+        do append(obuf, 90)    -- 5A  pop edx
+        do append(obuf, 54)    -- 36  SS override
+        do append(obuf, 139)   -- 8B
+        do append(obuf, 4)     -- 04
+        do append(obuf, 138)   -- 8A  mov eax,SS:[edx+ecx*4]
+        do append(obuf, 80)    -- 50  push eax
+    elif op == 51:
+        -- chiefturbo op 51 bufset(base,i,v): TOS=v, next=i, next=base. pop edx(v); pop ecx(i); pop eax(base);
+        -- SS: mov [eax+ecx*4],edx; push edx. 0x36 SS-override LOAD-BEARING (same reason as bufget). 8 bytes.
+        do append(obuf, 90)    -- 5A  pop edx
+        do append(obuf, 89)    -- 59  pop ecx
+        do append(obuf, 88)    -- 58  pop eax
+        do append(obuf, 54)    -- 36  SS override
+        do append(obuf, 137)   -- 89
+        do append(obuf, 20)    -- 14
+        do append(obuf, 136)   -- 88  mov SS:[eax+ecx*4],edx
+        do append(obuf, 82)    -- 52  push edx
     elif op == 20:
         let callee = get(code, i).1
         let nargs = get(code, i).2
@@ -14617,6 +14747,194 @@ func nc_emit_module_mmj_program(source):
     let bases = nc_ouro_bases_loop(funcs, 0, nf, 0, new_array(int))
     let mbuf = new_buffer()
     mbuf = nc_ouro_emit_funcs(mbuf, funcs, 0, nf, bases)
+    do fwriter(freeze(mbuf))
+    return 0
+end
+
+-- ===== chiefturbo (link 26 / native-codegen Link 42): RUNTIME-INDEXED MEMORY. The compiled ring-3 module gains
+-- a register-indexed load/store ([base+index*4]) into a runtime-filled buffer on its OWN User page, so it can
+-- HOLD a stream of input it cannot fit in named slots and read any element back by a RUNTIME-COMPUTED index. It
+-- REUSES the entire nc_ouro_* emitter (which now admits ops 49/50/51 in nc_ouro_op_allowed/pops/pushes/op_size/
+-- lower_body -- NOT a duplicated op-emit, so toakie's pushint anchor + every prior op stay exactly-once) and adds
+-- one main-only CAPTURE prologue (mov eax,esp; sub eax,0x1000; push eax -> alloc_lo at [ebp+0], which bufbase
+-- reads). That +8-byte main prologue is the ONLY layout difference, so chiefturbo gets its own thin layout/emit
+-- wrappers (arithmetic-only scaffolding; the op-byte lowering stays single-source in nc_ouro_lower_body). The
+-- whole-program gate REPLACES mmj's recursion requirement with an INDEXED-OP requirement: >= 1 op 50/51. Runs on
+-- the FROZEN holler kernel; byte-identical to chiefturbo_ref.target_module(), proven on QEMU+Bochs+KVM. =====
+
+-- whole-program count of indexed memory ops (op 50 bufget / op 51 bufset). The module must carry >= 1, else it
+-- is just an ouroboros/mmj re-skin (the headline capability is runtime-indexed memory, not a fixed slot).
+func nc_chiefturbo_func_indexed(code, i, n, cnt):
+    if i >= n:
+        return cnt
+    end
+    let c = cnt
+    if get(code, i).0 == 50:
+        c = cnt + 1
+    end
+    if get(code, i).0 == 51:
+        c = cnt + 1
+    end
+    return nc_chiefturbo_func_indexed(code, i + 1, n, c)
+end
+
+func nc_chiefturbo_total_indexed(funcs, i, nf, acc):
+    if i >= nf:
+        return acc
+    end
+    let code = get(funcs, i).4
+    return nc_chiefturbo_total_indexed(funcs, i + 1, nf, acc + nc_chiefturbo_func_indexed(code, 0, count(code), 0))
+end
+
+func nc_chiefturbo_has_indexed_op(funcs, nf):
+    return nc_chiefturbo_total_indexed(funcs, 0, nf, 0) >= 1
+end
+
+-- chiefturbo prologue length. IDENTICAL to nc_ouro_prologue_len EXCEPT main (frame>0) is 8 (MAIN_CAPTURE) + 5
+-- (mov ebp,esp; sub esp,4S) = 13, because main stashes alloc_lo at [ebp+0] before its frame.
+func nc_ct_prologue_len(is_main, nparams, frame):
+    if frame == 0:
+        return 0
+    end
+    if is_main == 1:
+        return 13
+    end
+    return 6 + nparams * 6
+end
+
+func nc_ct_func_total(fn, is_main, frame):
+    let code = fn.4
+    let n = count(code)
+    return nc_ct_prologue_len(is_main, fn.2, frame) + nc_ouro_body_size(code, 0, n, 0) + nc_ouro_epilogue_len(is_main, frame)
+end
+
+func nc_ct_bases_loop(funcs, i, nf, cur, bases):
+    if i >= nf:
+        return bases
+    end
+    do add(bases, cur)
+    let fn = get(funcs, i)
+    let is_main = 0
+    if i == 0:
+        is_main = 1
+    end
+    let frame = nc_ouro_frame_size(fn)
+    return nc_ct_bases_loop(funcs, i + 1, nf, cur + nc_ct_func_total(fn, is_main, frame), bases)
+end
+
+-- main capture prologue: mov eax,esp (89 E0); sub eax,0x1000 (2D 00 10 00 00); push eax (50) -- captures
+-- alloc_lo (=esp-0x1000, since esp==alloc_hi at module entry) at [ebp+0] for bufbase(). Then the normal main
+-- frame (mov ebp,esp; sub esp,4S). Non-main prologues are IDENTICAL to nc_ouro_emit_prologue.
+func nc_ct_emit_prologue(obuf, is_main, nparams, frame):
+    if is_main == 1:
+        do append(obuf, 137)   -- 89
+        do append(obuf, 224)   -- E0  mov eax,esp
+        do append(obuf, 45)    -- 2D  sub eax,
+        obuf = nc_append_le32(obuf, 4096)   -- 0x1000
+        do append(obuf, 80)    -- 50  push eax  (alloc_lo -> [ebp+0])
+        do append(obuf, 137)   -- 89
+        do append(obuf, 229)   -- E5  mov ebp,esp
+        do append(obuf, 131)   -- 83
+        do append(obuf, 236)   -- EC  sub esp,
+        do append(obuf, 4 * frame)
+        return obuf
+    end
+    do append(obuf, 85)    -- 55  push ebp
+    do append(obuf, 137)   -- 89
+    do append(obuf, 229)   -- E5  mov ebp,esp
+    do append(obuf, 131)   -- 83
+    do append(obuf, 236)   -- EC  sub esp,
+    do append(obuf, 4 * frame)
+    return nc_ouro_emit_param_copies(obuf, 0, nparams)
+end
+
+func nc_ct_emit_funcs(buf, funcs, i, nf, bases):
+    if i >= nf:
+        return buf
+    end
+    let fn = get(funcs, i)
+    let code = fn.4
+    let n = count(code)
+    let is_main = 0
+    if i == 0:
+        is_main = 1
+    end
+    let frame = nc_ouro_frame_size(fn)
+    if frame > 0:
+        buf = nc_ct_emit_prologue(buf, is_main, fn.2, frame)
+    end
+    let pbase = get(bases, i) + nc_ct_prologue_len(is_main, fn.2, frame)
+    let lay = nc_ouro_offsets_loop(code, 0, n, pbase, new_array(int))
+    buf = nc_ouro_lower_body(buf, code, 0, n, lay.0, lay.1, bases)
+    buf = nc_ouro_emit_epilogue(buf, is_main, frame)
+    return nc_ct_emit_funcs(buf, funcs, i + 1, nf, bases)
+end
+
+-- anchored first-line directive "-- emit: module-chiefturbo" (newline at mlen; the "-chiefturbo" suffix is
+-- distinct from "module-mmj" / "module-holler" / "multiboot32-ouroboros").
+func nc_is_module_chiefturbo(source):
+    let marker = "-- emit: module-chiefturbo"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+func nc_emit_module_chiefturbo_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    let nf = count(funcs)
+    if prog.2 != 0:
+        let e0 = nc_fail(630, 0, "module-chiefturbo: main not the entry (index 0)")
+        return 0
+    end
+    let mainfn = get(funcs, 0)
+    if not equal(mainfn.0, "main"):
+        let e0b = nc_fail(630, 0, "module-chiefturbo: entry function is not main")
+        return 0
+    end
+    if mainfn.2 != 0:
+        let e1 = nc_fail(631, 0, "module-chiefturbo: main must take no parameters")
+        return 0
+    end
+    if nc_ouro_total_sysread(funcs, 0, nf, 0) < 1:
+        let e2 = nc_fail(632, 0, "module-chiefturbo: program must read sys_read() at least once")
+        return 0
+    end
+    if nc_mmj_total_syswrite(funcs, 0, nf, 0) < 1:
+        let e3 = nc_fail(633, 0, "module-chiefturbo: program must sys_write() at least once (it emits its OWN output)")
+        return 0
+    end
+    if nc_ouro_total_module(funcs, 0, nf, 0) != 0:
+        let e4 = nc_fail(634, 0, "module-chiefturbo: module_byte() is kernel-only; a module reads via sys_read()")
+        return 0
+    end
+    if nc_ouro_total_input(funcs, 0, nf, 0) != 0:
+        let e5 = nc_fail(635, 0, "module-chiefturbo: input_byte() faults at CPL3; a module reads via sys_read()")
+        return 0
+    end
+    if not nc_chiefturbo_has_indexed_op(funcs, nf):
+        let e6 = nc_fail(637, 0, "module-chiefturbo: requires an indexed memory op (bufget/bufset)")
+        return 0
+    end
+    if not nc_ouro_all_funcs_ok(funcs, 0, nf):
+        return 0
+    end
+    let bases = nc_ct_bases_loop(funcs, 0, nf, 0, new_array(int))
+    let mbuf = new_buffer()
+    mbuf = nc_ct_emit_funcs(mbuf, funcs, 0, nf, bases)
     do fwriter(freeze(mbuf))
     return 0
 end
@@ -17919,6 +18237,10 @@ func main():
     end
     if nc_is_module_mmj(source):
         let mj = nc_emit_module_mmj_program(source)
+        return 0
+    end
+    if nc_is_module_chiefturbo(source):
+        let ct = nc_emit_module_chiefturbo_program(source)
         return 0
     end
     if nc_is_multiboot32_coalgate(source):
