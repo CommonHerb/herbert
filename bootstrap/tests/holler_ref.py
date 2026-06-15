@@ -109,7 +109,12 @@ def idt_gate(off, sel, typ):
 KILL_STATUS=0x4B   # 'K' -- stored into [answer] on a CPL3-keyed timer kill; body emits DE 4B AD = f(kill)
 PIT_COUNT=0xFFFF   # one-shot / periodic reload count ~= 55ms at 1.193182 MHz
 
-def build_code(kstack, kend, mut=None, design='oneshot'):
+def build_code(kstack, kend, mut=None, design='oneshot', npages=1, flip_pages=None):
+    # mumbani (link 27): npages = the number of CONTIGUOUS 4 KiB frames the bump allocator hands the module
+    # (its multi-page User stack/arena; D20's second installment). flip_pages = how many of them are User-mapped
+    # (defaults to npages; flip_pages<npages is the M-flip1 mutation). npages=1/flip_pages=1 is BYTE-IDENTICAL to
+    # holler (the frozen 1-page kernel), so build_elf() with no args is unchanged.
+    if flip_pages is None: flip_pages = npages
     a=Asm()
     a._dctr=0
     def mmi(addr,imm): a.raw(0xC7,0x05); a.blob(le32(addr)); a.blob(le32(imm))
@@ -234,7 +239,7 @@ def build_code(kstack, kend, mut=None, design='oneshot'):
         if hi[0]=='lit': a.raw(0x81,0xF9); a.blob(le32(hi[1]))
         else: a.raw(0x3B,0x0D); a.blob(le32(hi[1]))
         a.j(JAE,sk)
-        a.raw(0x8D,0x81); a.blob(le32(0x1000))
+        a.raw(0x8D,0x81); a.blob(le32(npages*0x1000))
         if lo[0]=='lit': a.raw(0x3D); a.blob(le32(lo[1]))
         else: a.raw(0x3B,0x05); a.blob(le32(lo[1]))
         a.j(JBE,sk)
@@ -252,12 +257,12 @@ def build_code(kstack, kend, mut=None, design='oneshot'):
             excl(('cell',cell('elflo')), ('cell',cell('elfhi')))
             excl(('cell',cell('mm_lo')), ('cell',cell('mm_hi')))
     a.raw(0x85,0xDB); a.j(JNE,'rescan')
-    a.raw(0x8D,0x81); a.blob(le32(0x1000))
+    a.raw(0x8D,0x81); a.blob(le32(npages*0x1000))
     a.raw(0x3B,0x05); a.blob(le32(cell('region_hi'))); a.j(JA,'F10')
     if mut=='hardcodeaddr':
         a.raw(0xB9); a.blob(le32(0x300000))
     a.raw(0x89,0x0D); a.blob(le32(cell('alloc_lo')))
-    a.raw(0x8D,0x81); a.blob(le32(0x1000)); mme(cell('alloc_hi'))
+    a.raw(0x8D,0x81); a.blob(le32(npages*0x1000)); mme(cell('alloc_hi'))
     outi(0x9A)
     a.raw(0xB8); a.blob(le32(LOAD)); dr_eax()
     a.raw(0xB8); a.blob(le32(kend)); dr_eax()
@@ -297,8 +302,21 @@ def build_code(kstack, kend, mut=None, design='oneshot'):
             a.raw(0x25); a.blob(le32(0xFFFFFFFC))
             a.raw(0x05); a.absR('pt')
             a.raw(0x83,0x08,0x04)
+        # mumbani (link 27): flip the TOP `flip_pages` of the module's `npages`-page User stack/arena region
+        # (alloc_lo + j*0x1000 for j in [npages-flip_pages, npages)). At npages=1/flip_pages=1 (j=0, no add)
+        # this is BYTE-IDENTICAL to holler's single flip_user(alloc_lo). For npages>1 it User-maps the
+        # multi-page region the bump allocator now hands out; flip_pages<npages is the M-flip1 mutation (an
+        # uncovered lower page -> a CPL3 stack push that descends into it #PFs cleanly).
+        def flip_user_pages(srccell, np, fp):
+            for j in range(np - fp, np):
+                a.raw(0xA1); a.blob(le32(srccell))
+                if j > 0: a.raw(0x05); a.blob(le32(j*0x1000))
+                a.raw(0xC1,0xE8,0x0A)
+                a.raw(0x25); a.blob(le32(0xFFFFFFFC))
+                a.raw(0x05); a.absR('pt')
+                a.raw(0x83,0x08,0x04)
         if mut!='nomodflip':   flip_user(cell('modstart'))
-        if mut!='nostackflip': flip_user(cell('alloc_lo'))
+        if mut!='nostackflip': flip_user_pages(cell('alloc_lo'), npages, flip_pages)
         if mut=='canaryuser':
             a.raw(0xB8); a.blob(le32(CANARY_VADDR))
             a.raw(0xC1,0xE8,0x0A); a.raw(0x25); a.blob(le32(0xFFFFFFFC)); a.raw(0x05); a.absR('pt'); a.raw(0x83,0x08,0x04)
@@ -637,11 +655,11 @@ EPI=bytes([136,195, 102,186,233,0, 176,222,238, 136,216,238, 176,173,238,
            102,186,244,0,238, 102,186,0,137]) \
     + b''.join(bytes([176,c,238]) for c in b'Shutdown') + bytes([250,244,235,253])
 
-def build_elf(mut=None, design='oneshot'):
-    code0,_=build_code(0,0,mut,design); clen=len(code0)
+def build_elf(mut=None, design='oneshot', npages=1, flip_pages=None):
+    code0,_=build_code(0,0,mut,design,npages,flip_pages); clen=len(code0)
     memsz=12+clen+16384
     kstack=LOAD+memsz; kend=LOAD+memsz
-    code,labels=build_code(kstack,kend,mut,design); assert len(code)==clen,(len(code),clen)
+    code,labels=build_code(kstack,kend,mut,design,npages,flip_pages); assert len(code)==clen,(len(code),clen)
     filesz=12+len(code); pad4=(4-(filesz%4))%4
     shoff=4096+filesz+pad4
     ehdr=(b'\x7fELF\x01\x01\x01\x00'+b'\x00'*8+struct.pack('<HHI',2,3,1)+le32(ENTRY)+le32(52)+le32(shoff)+le32(0)

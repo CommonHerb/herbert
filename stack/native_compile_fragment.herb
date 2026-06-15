@@ -14939,6 +14939,222 @@ func nc_emit_module_chiefturbo_program(source):
     return 0
 end
 
+-- ===== mumbani (link 27 / native-codegen Link 43): MULTI-PAGE WORKING MEMORY. The kernel hands the compiled
+-- module a working set LARGER THAN ONE PAGE (D20's second installment). TWO additive modes, NO change to any
+-- existing mode: (1) module-mumbani = module-mmj with sys_read relaxed ==1 -> >=1 (the reverse forcing program
+-- reads n + N words), reusing the ENTIRE nc_ouro_* emitter unchanged; (2) multiboot32-mumbani = the holler kernel
+-- with npages=4 (3 alloc-size immediates 0x1000->0x4000 + the alloc_lo User-flip widened 1 PTE -> 4 PTEs). The
+-- head blob is machine-generated from holler_ref.build_code(npages=4) (collision-proof diff recipe); PD/PT REUSE
+-- geeking's loops verbatim (the 4-page User map is a RUNTIME flip in the head, not a PD/PT change); prefix_len is
+-- UNCHANGED at 24564 (the extra flip bytes are absorbed by the pre-PD align-pad, like holler's do_write arm). =====
+
+func nc_is_module_mumbani(source):
+    let marker = "-- emit: module-mumbani"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- module-mumbani: the compiled recursive REVERSE module (reads n + N held-back words via readword, holds them in
+-- the recursion stack, emits them reversed on unwind). IDENTICAL to module-mmj EXCEPT sys_read is relaxed from
+-- exactly-once to at-least-once (reverse reads many). Reuses nc_ouro_emit_funcs wholesale -- no new op, no new
+-- emit machinery. The genuinely-new capability is the KERNEL's multi-page region (multiboot32-mumbani), not the
+-- module ISA. Byte-identical to mumbani_ref.target_module().
+func nc_emit_module_mumbani_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    let nf = count(funcs)
+    if prog.2 != 0:
+        let e0 = nc_fail(640, 0, "module-mumbani: main not the entry (index 0)")
+        return 0
+    end
+    let mainfn = get(funcs, 0)
+    if not equal(mainfn.0, "main"):
+        let e0b = nc_fail(640, 0, "module-mumbani: entry function is not main")
+        return 0
+    end
+    if mainfn.2 != 0:
+        let e1 = nc_fail(641, 0, "module-mumbani: main must take no parameters")
+        return 0
+    end
+    if nc_ouro_total_sysread(funcs, 0, nf, 0) < 1:
+        let e2 = nc_fail(642, 0, "module-mumbani: program must read sys_read() at least once")
+        return 0
+    end
+    if nc_mmj_total_syswrite(funcs, 0, nf, 0) < 1:
+        let e3 = nc_fail(643, 0, "module-mumbani: program must sys_write() at least once (it emits its OWN output)")
+        return 0
+    end
+    if nc_ouro_total_module(funcs, 0, nf, 0) != 0:
+        let e4 = nc_fail(644, 0, "module-mumbani: module_byte() is kernel-only; a module reads via sys_read()")
+        return 0
+    end
+    if nc_ouro_total_input(funcs, 0, nf, 0) != 0:
+        let e5 = nc_fail(645, 0, "module-mumbani: input_byte() faults at CPL3; a module reads via sys_read()")
+        return 0
+    end
+    if not nc_mmj_has_backcall(funcs, 0, nf):
+        let e6 = nc_fail(646, 0, "module-mumbani: requires genuine recursion (a backward call) -- reverse holds the words in the call stack")
+        return 0
+    end
+    if not nc_ouro_all_funcs_ok(funcs, 0, nf):
+        return 0
+    end
+    let bases = nc_ouro_bases_loop(funcs, 0, nf, 0, new_array(int))
+    let mbuf = new_buffer()
+    mbuf = nc_ouro_emit_funcs(mbuf, funcs, 0, nf, bases)
+    do fwriter(freeze(mbuf))
+    return 0
+end
+
+-- multiboot32-mumbani KERNEL emit mode: the holler kernel with the bump allocator widened to npages=4 (a 4-page
+-- contiguous User region) + the alloc_lo User-flip widened 1 PTE -> 4 PTEs. Machine-generated from
+-- holler_ref.build_code(npages=4); do NOT hand-edit. esp_top substitution at the 4-page offsets; PD+PT REUSE
+-- geeking's identity-map loops (no dup -- avoids a cloggard anchor collision). Output == holler_ref.build_elf(
+-- npages=4) prefix; prefix_len 24564 (the +78 flip bytes absorbed by the align-pad, byte-identical in length).
+func nc32_mumbani_data():
+    return "891d18001000e9c1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b031e6e9e93f000000b032e6e9e936000000b033e6e9e92d000000b034e6e9e924000000b035e6e9e91b000000b036e6e9e912000000b037e6e9e909000000b038e6e9e90000000066baf400ee66ba0089b053eeb068eeb075eeb074eeb064eeb06feeb077eeb06eeefaf4ebfd3d02b0ad2b0f8588ffffffbc0000000031c00f22e068020000009d8b35180010008b06a31c001000a8080f846cffffffa8400f846dffffffa8040f840d0000008b4610a32c001000e90a000000c7052c00100000000000f706200000000f841c0000008b4624a3300010008b461c0faf4620034624a334001000e914000000c7053000100000000000c70534001000000000008b461483f8010f850fffffff8b6e188b4500a3200010008b4504a3240010008b4508a328001000a1200010003b05240010000f83ecfeffffa11800100085c00f84190000002500f0ffffa34c0010000500200000a350001000e914000000c7054c00100000000000c7055000100000000000a12800100085c00f84190000002500f0ffffa3540010000500200000a358001000e914000000c7055400100000000000c7055800100000000000a12c00100085c00f84190000002500f0ffffa35c0010000500200000a360001000e914000000c7055c00100000000000c70560001000000000008b46302500f0ffffa3640010008b463003462c05ff0f00002500f0ffffa368001000c7053800100000000000c7053c001000000000008b4e308b562c01cabf4000000039d10f83e20000004f0f84f5fdffffb09ce6e98b01e6e9c1e808e6e9c1e808e6e9c1e808e6e98b4104e6e9c1e808e6e9c1e808e6e9c1e808e6e98b4108e6e9c1e808e6e9c1e808e6e9c1e808e6e98b410ce6e9c1e808e6e9c1e808e6e9c1e808e6e98b4110e6e9c1e808e6e9c1e808e6e9c1e808e6e98b4114e6e9c1e808e6e9c1e808e6e9c1e808e6e9a13c00100085c00f85470000008b411483f8010f853b0000008b410885c00f85300000008b41048b590c01d88b591085db0f8405000000b800f0ffff3d000010000f860d000000a33c0010008b4104a3380010008b0183c00401c1e916ffffffa13c00100085c00f8416fdffffa1380010003d000010000f8305000000b80000100005ff0f00002500f0ffff89c1bf100000004f0f84f2fcffff31db81f9000000000f83270000008d81004000003d000010000f8616000000b80000000005ff0f00002500f0ffff89c1bb010000003b0d240010000f83280000008d81004000003b05200010000f8616000000a12400100005ff0f00002500f0ffff89c1bb010000003b0d500010000f83280000008d81004000003b054c0010000f8616000000a15000100005ff0f00002500f0ffff89c1bb010000003b0d580010000f83280000008d81004000003b05540010000f8616000000a15800100005ff0f00002500f0ffff89c1bb010000003b0d600010000f83280000008d81004000003b055c0010000f8616000000a16000100005ff0f00002500f0ffff89c1bb010000003b0d340010000f83280000008d81004000003b05300010000f8616000000a13400100005ff0f00002500f0ffff89c1bb010000003b0d680010000f83280000008d81004000003b05640010000f8616000000a16800100005ff0f00002500f0ffff89c1bb0100000085db0f8584feffff8d81004000003b053c0010000f876bfbffff890d400010008d8100400000a344001000b09ae6e9b800001000e6e9c1e808e6e9c1e808e6e9c1e808e6e9b800000000e6e9c1e808e6e9c1e808e6e9c1e808e6e98b4630e6e9c1e808e6e9c1e808e6e9c1e808e6e98b462ce6e9c1e808e6e9c1e808e6e9c1e808e6e9be18001000b9150000008a06e6e98a4601e6e98a4602e6e98a4603e6e983c6044985c90f85e1ffffffb09be6e90f01157f0c1000eae30510000800b8100000008ed88ec08ed08ee08ee80f011d850c100066b828000f00d8b8001010000f22d80f20c00d000000800f22c0eb00a120001000c1e80a25fcffffff0500201000830804a140001000c1e80a25fcffffff0500201000830804a1400010000500100000c1e80a25fcffffff0500201000830804a1400010000500200000c1e80a25fcffffff0500201000830804a1400010000500300000c1e80a25fcffffff0500201000830804b8001010000f22d866bafb03b003ee66baf903b000ee66bafb03b080ee66baf803b001ee66baf903b000ee66bafb03b003ee66bafa03b000ee66bafc03b003eeb011e620b011e6a0b020e621b028e6a1b004e621b002e6a1b001e621b001e6a1b0fee621b0ffe6a1b8230000008ed88ec08ee08ee8fb9090fab00ae620e420a8010f8436000000fb9090fab00ae620e420a8010f8424000000fb9090fab00ae620e420a8010f8412000000fb9090fab00ae620e420a8010f8400000000b030e643b0ffe640b0ffe6406823000000ff35440010006802020000681b000000ff3520001000cf85c00f847200000083f8020f841b010000b8100000008ed88ec08ee08ee888d8a248001000b0e0e6e988d8e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e9b0e1e6e9bc00000000fce91458000066bafd03eca80174f766baf803ec88c3b0c0e6e988d8e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e9b0c1e6e9fb9090fab00ae620e420a8010f8436000000fb9090fab00ae620e420a8010f8424000000fb9090fab00ae620e420a8010f8412000000fb9090fab00ae620e420a8010f8400000000b030e643b0ffe640b0ffe6400fb6c3cfb8100000008ed88ec08ee08ee88b35400010008b3d4400100089c801d00f82d300000039f10f82cb00000039f80f87c3000000b0d4e6e989d0e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e985d20f840b0000008a01e6e9414ae9edffffffb0d5e6e9fb9090fab00ae620e420a8010f8436000000fb9090fab00ae620e420a8010f8424000000fb9090fab00ae620e420a8010f8412000000fb9090fab00ae620e420a8010f8400000000b030e643b0ffe640b0ffe64031c0cfb0d6e6e989d0e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e9b0d7e6e9fb9090fab00ae620e420a8010f8436000000fb9090fab00ae620e420a8010f8424000000fb9090fab00ae620e420a8010f8412000000fb9090fab00ae620e420a8010f8400000000b030e643b0ffe640b0ffe64031c0cfb8100000008ed88ec08ee08ee8b0f0e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442408e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442410e6e9c1e808e6e9c1e808e6e9c1e808e6e9b0f1e6e9f6442408030f8412000000b047a248001000bc00000000fce937550000e9e5f5ffffb8100000008ed88ec08ee08ee8b0d0e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442408e6e9c1e808e6e9c1e808e6e9c1e808e6e90f20d0e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442410e6e9c1e808e6e9c1e808e6e9c1e808e6e9b0d1e6e9f6442408030f8412000000b050a248001000bc00000000fce999540000e947f5fffff6442404030f8505000000b020e620cfb8100000008ed88ec08ee08ee8b020e620b0cae6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e98b44240ce6e9c1e808e6e9c1e808e6e9c1e808e6e98b442408e6e9c1e808e6e9c1e808e6e9c1e808e6e9b0cbe6e9b04ba248001000bc00000000fce906540000cff6442404030f8450000000b8100000008ed88ec08ee08ee8b0e2e6e98b0424e6e9c1e808e6e9c1e808e6e9c1e808e6e98b442404e6e9c1e808e6e9c1e808e6e9c1e808e6e9b0e3e6e9b046a248001000bc00000000fce9aa530000b050e6e966baf400ee66ba0089b053eeb068eeb075eeb074eeb064eeb06feeb077eeb06eeefaf4ebfd2f008b0c10008701bb0c10000000000000000000ffff0000009acf00ffff00000092cf00ffff000000facf00ffff000000f2cf006700430e10890000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000440a0800008e1000ce0a0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e10006c0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fa0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e1000fb0b0800008e10007207080000ee100000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000068000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+end
+
+func nc32_mumbani_head_loop(buf, hx, hlen, hi, bi, esp_top):
+    if hi >= hlen:
+        return buf
+    end
+    if bi == 216 or bi == 944 or bi == 972 or bi == 1375 or bi == 2006 or bi == 2739 or bi == 2897 or bi == 3044 or bi == 3136 or bi == 3643:
+        buf = nc_append_le32(buf, esp_top)
+        return nc32_mumbani_head_loop(buf, hx, hlen, hi + 8, bi + 4, esp_top)
+    end
+    let b = nc32_geeking_hexval(index(hx, hi)) * 16 + nc32_geeking_hexval(index(hx, hi + 1))
+    do append(buf, b)
+    return nc32_mumbani_head_loop(buf, hx, hlen, hi + 2, bi + 1, esp_top)
+end
+
+-- prefix = mumbani head (4-page alloc + 4-PTE flip) + the UNCHANGED geeking PD/PT identity map (reused verbatim).
+func nc32_mumbani_emit_prefix(buf, esp_top):
+    let hx = nc32_mumbani_data()
+    buf = nc32_mumbani_head_loop(buf, hx, length(hx), 0, 0, esp_top)
+    buf = nc32_geeking_pd_loop(buf, 0)
+    buf = nc32_geeking_pt_loop(buf, 0, 4096)
+    return buf
+end
+
+func nc_is_multiboot32_mumbani(source):
+    let marker = "-- emit: multiboot32-mumbani"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- mumbani (link 27): MULTI-PAGE WORKING MEMORY. Same body subset / layout / epilogue as holler (the kernel body
+-- is a PURE CONDUIT reading module_byte once); the NEW capability is the 4-page allocator + 4-PTE User-flip in
+-- the prefix. So this driver == holler's with nc32_mumbani_emit_prefix and the mumbani marker/fail-codes. Pairs
+-- with the `module-mumbani` emit mode (the compiled recursive-reverse module).
+func nc_emit_multiboot32_mumbani_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let funcs = prog.0
+    if count(funcs) != 1:
+        let fa = nc_fail(620, 0, "multiboot32-mumbani: main may not call other functions")
+        return 0
+    end
+    let mainfn = get(funcs, prog.2)
+    if mainfn.2 != 0:
+        let fb = nc_fail(621, 0, "multiboot32-mumbani: main must take no parameters")
+        return 0
+    end
+    let code = mainfn.4
+    let n = count(code)
+    if nc32_count_module(code, n) != 1:
+        let fi = nc_fail(622, 0, "multiboot32-mumbani: main must read module_byte() exactly once")
+        return 0
+    end
+    if nc32_has_branch(code, n):
+        let fh = nc_fail(623, 0, "multiboot32-mumbani: control flow (if/branch) not in the straight-line subset")
+        return 0
+    end
+    let proxy = nc32_module_proxy(code, n)
+    if not nc32_body_ok(proxy, n):
+        let fc = nc_fail(624, 0, "multiboot32-mumbani: body not in the module/locals subset")
+        return 0
+    end
+    let nlocals = nc32_nlocals_loop(code, 0, n, 0)
+    if nlocals > 31:
+        let fd = nc_fail(625, 0, "multiboot32-mumbani: too many locals (max 31)")
+        return 0
+    end
+    let prefix_len = 24564
+    if nlocals > 0:
+        prefix_len = 24569
+    end
+    let lay = nc32_layout_loop(code, 0, n, prefix_len, new_array(int))
+    let offs = lay.0
+    let epi = lay.1
+    let bodybuf = new_buffer()
+    bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
+    let bodylen = length(freeze(bodybuf))
+    if bodylen != epi - prefix_len:
+        let fe = nc_fail(626, 0, "multiboot32-mumbani: body length invariant")
+        return 0
+    end
+    let code_len = prefix_len + bodylen + 58
+    let memsz = 12 + code_len + 16384
+    let esp_top = 1048576 + memsz
+    let cbuf = new_buffer()
+    cbuf = nc32_mumbani_emit_prefix(cbuf, esp_top)
+    if nlocals > 0:
+        do append(cbuf, 137)
+        do append(cbuf, 229)
+        do append(cbuf, 131)
+        do append(cbuf, 236)
+        do append(cbuf, 4 * nlocals)
+    end
+    cbuf = append_str(cbuf, freeze(bodybuf))
+    cbuf = nc32_emit_epilogue(cbuf)
+    let frozen_code = freeze(cbuf)
+    if length(frozen_code) != code_len:
+        let fg = nc_fail(627, 0, "multiboot32-mumbani: code length invariant")
+        return 0
+    end
+    let filesz = 12 + code_len
+    let shoff = nc32_roundup4(4096 + 12 + code_len)
+    let entry = 1048588
+    let img = new_buffer()
+    img = nc32_emit_ehdr(img, entry, shoff)
+    img = nc32_emit_phdr(img, filesz, memsz)
+    img = nc_emit_zeroes_loop(img, 4096 - 84)
+    img = nc32_emit_mbheader_pgalign(img)
+    img = append_str(img, frozen_code)
+    img = nc_emit_zeroes_loop(img, shoff - 4096 - 12 - code_len)
+    img = nc_emit_zeroes_loop(img, 40)
+    do fwriter(freeze(img))
+    return 0
+end
+
 func nc_emit_multiboot32_program(source):
     let tokens = lex_source(source)
     let nodes = pool_new()
@@ -18241,6 +18457,14 @@ func main():
     end
     if nc_is_module_chiefturbo(source):
         let ct = nc_emit_module_chiefturbo_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_mumbani(source):
+        let mbk = nc_emit_multiboot32_mumbani_program(source)
+        return 0
+    end
+    if nc_is_module_mumbani(source):
+        let mbm = nc_emit_module_mumbani_program(source)
         return 0
     end
     if nc_is_multiboot32_coalgate(source):
