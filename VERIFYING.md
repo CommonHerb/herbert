@@ -46,6 +46,11 @@ make beta-full
 
 Runs the dedicated deeper metacircular driver in `bootstrap/tests/run_beta_full.sh`.
 
+This runner expects GNU `/usr/bin/time -v` and a host capable of the deeper
+metacircular workload. On macOS, treat it like `make test`: use Linux CI or an
+equivalent Linux/x86_64 environment unless GNU time and enough resources are
+installed deliberately.
+
 ## Kernel/Module Gate
 
 The heavy kernel/module proof chain lives in `.github/workflows/kernel-codegen-l1.yml`.

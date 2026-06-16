@@ -18,7 +18,7 @@ Prefer executable verification over claims. If a statement about Herbert cannot 
 
 Start with `VERIFYING.md` before changing behavior.
 
-Use `CODEX-ROADMAP.md` as the living branch map for what is proven,
-aspirational, unknown, and next on the CODEX review lane.
+Use `ROADMAP.md` as the living map for what is proven, aspirational, unknown,
+and next.
 Use `BOOTSTRAP-RESPONSIBILITIES.md` to choose the next host-bootstrap
 replacement proof.

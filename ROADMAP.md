@@ -1,8 +1,7 @@
-# CODEX Roadmap
+# Herbert Roadmap
 
-This branch is the review lane for making Herbert easier to verify while moving
-it toward a self-owned language/runtime/OS path. Keep claims tied to code,
-tests, goldens, runners, or workflow logs.
+This map keeps Herbert's verification and self-ownership path tied to code,
+tests, goldens, runners, and workflow logs.
 
 ## Current Map
 
