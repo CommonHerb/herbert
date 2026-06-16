@@ -12,9 +12,10 @@ tests, goldens, runners, or workflow logs.
 - `make check` enforces the visible non-`.herb` bootstrap boundary in
   `BOOTSTRAP-ALLOWLIST`.
 - `make verify-local` includes a C-vs-Herbert accepted-source lexer
-  equivalence check for a small fixture corpus via
-  `stack/lexer_stdin_driver.herb`, plus lexer ERR code, line, and message
-  parity for the existing `stack/error_probes/lex_*.herb` malformed probes via
+  equivalence check for a small fixture corpus, including a focused
+  native/operator-surface fixture, via `stack/lexer_stdin_driver.herb`, plus
+  lexer ERR code, line, and message parity for the existing
+  `stack/error_probes/lex_*.herb` malformed probes via
   `stack/lexer_error_driver.herb`.
 - `make verify-local` also checks that the accepted-token lexer copies in
   `stack/lexer_stdin_driver.herb`, parser/evaluator/emitter fragments, and
@@ -101,6 +102,7 @@ tests, goldens, runners, or workflow logs.
 
 ## Next Small Real Step
 
-Grow the accepted-source lexer equivalence corpus with focused fixtures from
-native/compiler syntax that historically drifted across copies. Keep this as
-proof-building only; no C lexer deletion is justified yet.
+Continue expanding lexer equivalence with focused fixtures for real parser,
+compiler, and native-codegen source shapes, then start the parser replacement
+proof with a C-AST-to-Herbert-AST comparison. Keep this as proof-building only;
+no C lexer deletion is justified yet.

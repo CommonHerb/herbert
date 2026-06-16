@@ -54,6 +54,7 @@ fi
 fixtures=(
     "$repo_root/stack/lexer_probe.herb"
     "$repo_root/stack/lexer_fixtures/ops_and_types.herb"
+    "$repo_root/stack/lexer_fixtures/native_operator_surface.herb"
     "$repo_root/stack/lexer_fixtures/comments_and_literals.herb"
 )
 
