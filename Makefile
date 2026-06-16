@@ -19,7 +19,7 @@ HERBERT_SRCS := \
     bootstrap/main.c
 HERBERT_HDR  := bootstrap/herbert.h
 
-.PHONY: all check smoke test test-timeout lexer-equivalence verify-local beta-full clean
+.PHONY: all check smoke test test-timeout lexer-equivalence native-codegen-diagnostics verify-local beta-full clean
 
 all: $(HERBERT)
 
@@ -41,7 +41,10 @@ test-timeout:
 lexer-equivalence: $(HERBERT)
 	@CC="$(CC)" CFLAGS="$(CFLAGS)" bash bootstrap/tests/run_lexer_equivalence.sh
 
-verify-local: check test-timeout smoke lexer-equivalence
+native-codegen-diagnostics:
+	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
+
+verify-local: check test-timeout smoke lexer-equivalence native-codegen-diagnostics
 
 beta-full: $(HERBERT)
 	@PATH=$(abspath tools):$$PATH HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_beta_full.sh
