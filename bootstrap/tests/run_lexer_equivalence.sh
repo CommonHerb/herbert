@@ -103,13 +103,26 @@ while read -r probe_name err_word err_code; do
         echo "FAIL: lexer equivalence ($label C bootstrap accepted malformed lexer probe)"
         exit 1
     fi
-    printf '"ERR %s"\n' "$err_code" >"$expected_error"
+    python3 - "$err_code" "$c_err" >"$expected_error" <<'PY'
+import json
+import re
+import sys
+
+code = sys.argv[1]
+err_path = sys.argv[2]
+text = open(err_path, encoding="utf-8").read().strip()
+match = re.fullmatch(r"herbert: line ([0-9]+): (.*)", text)
+if not match:
+    raise SystemExit(f"cannot normalize C lexer diagnostic: {text!r}")
+line, msg = match.groups()
+print(f"({code}, {line}, {json.dumps(msg)})")
+PY
     if ! "$HERBERT" "$error_driver" <"$probe" >"$herbert_actual"; then
         echo "FAIL: lexer equivalence ($label Herbert error driver exited nonzero)"
         exit 1
     fi
     if ! diff -u "$expected_error" "$herbert_actual"; then
-        echo "FAIL: lexer equivalence ($label lexer ERR class differs from manifest)"
+        echo "FAIL: lexer equivalence ($label lexer diagnostic differs from C bootstrap)"
         exit 1
     fi
     error_count=$((error_count + 1))

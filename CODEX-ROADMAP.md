@@ -13,8 +13,8 @@ tests, goldens, runners, or workflow logs.
   `BOOTSTRAP-ALLOWLIST`.
 - `make verify-local` includes a C-vs-Herbert accepted-source lexer
   equivalence check for a small fixture corpus via
-  `stack/lexer_stdin_driver.herb`, plus lexer ERR-class parity for the existing
-  `stack/error_probes/lex_*.herb` malformed probes via
+  `stack/lexer_stdin_driver.herb`, plus lexer ERR code, line, and message
+  parity for the existing `stack/error_probes/lex_*.herb` malformed probes via
   `stack/lexer_error_driver.herb`.
 - `make test` is the Linux/x86_64 full non-emulator suite and refuses early on
   other hosts.
@@ -95,6 +95,6 @@ tests, goldens, runners, or workflow logs.
 
 ## Next Small Real Step
 
-Extend the lexer equivalence oracle from ERR-class parity to full line/message
-diagnostic parity, then add copied-lexer synchronization coverage. Keep this as
-proof-building only; no C lexer deletion is justified yet.
+Add copied-lexer synchronization coverage for the lexer bodies duplicated across
+the stack fragments. Keep this as proof-building only; no C lexer deletion is
+justified yet.

@@ -1,9 +1,11 @@
--- Herbert lexer diagnostic-class driver for malformed lexical probes.
+-- Herbert lexer diagnostic driver for malformed lexical probes.
 --
 -- This is intentionally narrower than the accepted-token driver: it reads
--- source from stdin and returns the C bootstrap's existing lexical ERR class
--- as a canonical string, e.g. "ERR 101". Parser and semantic diagnostics
--- remain covered by the Klondike error-probe battery.
+-- source from stdin and returns the C bootstrap's lexical ERR code, line, and
+-- message as a canonical tuple, e.g.
+--     (101, 1, "unexpected character '$' (0x24)")
+-- Parser and semantic diagnostics remain covered by the Klondike error-probe
+-- battery.
 
 func is_digit(c):
     return c >= '0' and c <= '9'
@@ -31,6 +33,10 @@ end
 
 func is_ws(c):
     return c == ' ' or c == '\n' or c == 9 or c == 13
+end
+
+func is_inline_ws(c):
+    return c == ' ' or c == 9 or c == 13
 end
 
 func is_two_byte_op_start(c):
@@ -73,6 +79,93 @@ func valid_escape(c, quote):
     return c == 'n' or c == '\\' or c == quote
 end
 
+func mod10(n):
+    return n - (n / 10) * 10
+end
+
+func emit_decimal(buf, n):
+    if n >= 10:
+        buf = emit_decimal(buf, n / 10)
+    end
+    do append(buf, 48 + mod10(n))
+    return buf
+end
+
+func int_to_str(n):
+    return freeze(emit_decimal(new_buffer(), n))
+end
+
+func append_str_loop(buf, s, i, n):
+    if i >= n:
+        return buf
+    end
+    do append(buf, index(s, i))
+    return append_str_loop(buf, s, i + 1, n)
+end
+
+func append_str(buf, s):
+    return append_str_loop(buf, s, 0, length(s))
+end
+
+func hex_digit(n):
+    if n < 10:
+        return 48 + n
+    else:
+        return 87 + n
+    end
+end
+
+func append_hex2(buf, n):
+    do append(buf, hex_digit(n / 16))
+    do append(buf, hex_digit(n - (n / 16) * 16))
+    return buf
+end
+
+func unexpected_msg(c):
+    let b = new_buffer()
+    b = append_str(b, "unexpected character '")
+    do append(b, c)
+    b = append_str(b, "' (0x")
+    b = append_hex2(b, c)
+    do append(b, ')')
+    return freeze(b)
+end
+
+func unknown_escape_msg(c):
+    let b = new_buffer()
+    b = append_str(b, "unknown escape sequence \\")
+    do append(b, c)
+    return freeze(b)
+end
+
+func fixed_msg(code):
+    if code == 103:
+        return "integer literal does not fit in 64 bits"
+    elif code == 105:
+        return "unterminated escape"
+    elif code == 106:
+        return "newline in string literal (use \\n)"
+    elif code == 107:
+        return "unterminated string literal"
+    elif code == 108:
+        return "empty character literal"
+    elif code == 109:
+        return "character literal not closed"
+    elif code == 110:
+        return "newline in character literal"
+    else:
+        return "OK"
+    end
+end
+
+func ok(line):
+    return (0, line, "OK")
+end
+
+func diag(code, line, msg):
+    return (code, line, msg)
+end
+
 func scan_int(src, i, n, acc):
     if i >= n:
         return (0, i)
@@ -93,22 +186,22 @@ end
 
 func scan_string(src, i, n):
     if i >= n:
-        return (107, i)
+        return (107, i, 0)
     end
     let c = index(src, i)
     if c == '"':
-        return (0, i + 1)
+        return (0, i + 1, 0)
     elif c == '\n':
-        return (106, i)
+        return (106, i, 0)
     elif c == '\\':
         if i + 1 >= n:
-            return (105, i + 1)
+            return (105, i + 1, 0)
         end
         let e = index(src, i + 1)
         if valid_escape(e, '"'):
             return scan_string(src, i + 2, n)
         else:
-            return (104, i + 2)
+            return (104, i + 2, e)
         end
     else:
         return scan_string(src, i + 1, n)
@@ -117,108 +210,94 @@ end
 
 func scan_char(src, i, n):
     if i >= n:
-        return (109, i)
+        return (109, i, 0)
     end
     let c = index(src, i)
     if c == '\n':
-        return (110, i)
+        return (110, i, 0)
     elif c == '\'':
-        return (108, i)
+        return (108, i, 0)
     elif c == '\\':
         if i + 1 >= n:
-            return (105, i + 1)
+            return (105, i + 1, 0)
         end
         let e = index(src, i + 1)
         if not valid_escape(e, '\''):
-            return (104, i + 2)
+            return (104, i + 2, e)
         end
         let close = i + 2
         if close >= n or index(src, close) != '\'':
-            return (109, close)
+            return (109, close, 0)
         else:
-            return (0, close + 1)
+            return (0, close + 1, 0)
         end
     else:
         let close = i + 1
         if close >= n or index(src, close) != '\'':
-            return (109, close)
+            return (109, close, 0)
         else:
-            return (0, close + 1)
+            return (0, close + 1, 0)
         end
     end
 end
 
-func scan(src, i, n):
+func scan(src, i, n, line):
     if i >= n:
-        return 0
+        return ok(line)
     end
     let c = index(src, i)
-    if is_ws(c):
-        return scan(src, i + 1, n)
+    if c == '\n':
+        return scan(src, i + 1, n, line + 1)
+    elif is_inline_ws(c):
+        return scan(src, i + 1, n, line)
     elif c == '-' and i + 1 < n and index(src, i + 1) == '-':
-        return scan(src, end_of_line(src, i + 2, n), n)
+        return scan(src, end_of_line(src, i + 2, n), n, line)
     elif is_ident_start(c):
-        return scan(src, end_of_ident(src, i + 1, n), n)
+        return scan(src, end_of_ident(src, i + 1, n), n, line)
     elif is_digit(c):
         let r = scan_int(src, i, n, 0)
         if r.0 != 0:
-            return r.0
+            return diag(r.0, line, fixed_msg(r.0))
         else:
-            return scan(src, r.1, n)
+            return scan(src, r.1, n, line)
         end
     elif c == '"':
         let r = scan_string(src, i + 1, n)
         if r.0 != 0:
-            return r.0
+            if r.0 == 104:
+                return diag(r.0, line, unknown_escape_msg(r.2))
+            else:
+                return diag(r.0, line, fixed_msg(r.0))
+            end
         else:
-            return scan(src, r.1, n)
+            return scan(src, r.1, n, line)
         end
     elif c == '\'':
         let r = scan_char(src, i + 1, n)
         if r.0 != 0:
-            return r.0
+            if r.0 == 104:
+                return diag(r.0, line, unknown_escape_msg(r.2))
+            else:
+                return diag(r.0, line, fixed_msg(r.0))
+            end
         else:
-            return scan(src, r.1, n)
+            return scan(src, r.1, n, line)
         end
     elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
-        return scan(src, i + 2, n)
+        return scan(src, i + 2, n, line)
     elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
-        return scan(src, i + 2, n)
+        return scan(src, i + 2, n, line)
     elif is_one_byte_op(c) or is_punct(c):
-        return scan(src, i + 1, n)
+        return scan(src, i + 1, n, line)
     else:
-        return 101
+        return diag(101, line, unexpected_msg(c))
     end
 end
 
 func classify_source(src):
-    return scan(src, 0, length(src))
-end
-
-func err_label(code):
-    if code == 101:
-        return "ERR 101"
-    elif code == 103:
-        return "ERR 103"
-    elif code == 104:
-        return "ERR 104"
-    elif code == 105:
-        return "ERR 105"
-    elif code == 106:
-        return "ERR 106"
-    elif code == 107:
-        return "ERR 107"
-    elif code == 108:
-        return "ERR 108"
-    elif code == 109:
-        return "ERR 109"
-    elif code == 110:
-        return "ERR 110"
-    else:
-        return "OK"
-    end
+    return scan(src, 0, length(src), 1)
 end
 
 func main():
-    return err_label(classify_source(clogger()))
+    return classify_source(clogger())
 end
