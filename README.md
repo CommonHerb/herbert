@@ -20,3 +20,5 @@ Start with `VERIFYING.md` before changing behavior.
 
 Use `CODEX-ROADMAP.md` as the living branch map for what is proven,
 aspirational, unknown, and next on the CODEX review lane.
+Use `BOOTSTRAP-RESPONSIBILITIES.md` to choose the next host-bootstrap
+replacement proof.

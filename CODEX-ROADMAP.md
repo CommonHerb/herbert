@@ -93,3 +93,5 @@ tests, goldens, runners, or workflow logs.
 Create a bootstrap-responsibility table that names one C component, the closest
 Herbert stack counterpart, the existing tests that compare them, and the missing
 test that would make a replacement candidate reviewable.
+
+That table now lives in `BOOTSTRAP-RESPONSIBILITIES.md`.
