@@ -18,6 +18,9 @@
 .gitignore
 BOOTSTRAP-ALLOWLIST
 Makefile
+README.md
+VERIFYING.md
+bootstrap/tests/run_smoke.sh
 bootstrap/tests/run_beta_full.sh
 bootstrap/tests/run_native_codegen_link1.sh
 bootstrap/tests/run_native_codegen_link2.sh
@@ -299,6 +302,9 @@ stack/evaluator_probe.expected
 stack/lexer_probe.expected
 stack/parser_probe.expected
 tools/scan.c
+tools/check_timeout.py
+tools/check_full_test_host.sh
+tools/timeout
 
 # --- bootstrap (host-language Herbert implementation: shrinks to zero) ---
 bootstrap/eval.c
