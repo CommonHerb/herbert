@@ -14,6 +14,8 @@ Runs:
 - `make test-timeout`: checks the repo-local portable `timeout` shim.
 - `make smoke`: builds the C bootstrap and runs the `bootstrap/tests/test_*.herb` sample suite, including existing scope/heap sidecar limits.
 - `make lexer-equivalence`: normalizes C `lex()` output for the accepted lexer fixture corpus, checks `stack/lexer_probe.expected`, diffs the corpus against `stack/lexer_stdin_driver.herb`, and checks the existing lexer malformed probes against `stack/lexer_error_driver.herb` for ERR code, line, and message parity.
+- `make lexer-copy-sync`: checks that accepted-token lexer copies in the stdin driver, parser/evaluator/emitter fragments, and Suke fragments remain synchronized with `stack/lexer_fragment.herb`.
+- `make native-codegen-diagnostics`: checks the local helper used to enrich Link 38 QEMU mismatch logs.
 
 This is the fast local confidence command. It does not run the full metacircular/native-codegen suite.
 

@@ -16,6 +16,9 @@ tests, goldens, runners, or workflow logs.
   `stack/lexer_stdin_driver.herb`, plus lexer ERR code, line, and message
   parity for the existing `stack/error_probes/lex_*.herb` malformed probes via
   `stack/lexer_error_driver.herb`.
+- `make verify-local` also checks that the accepted-token lexer copies in
+  `stack/lexer_stdin_driver.herb`, parser/evaluator/emitter fragments, and
+  Suke fragments remain synchronized with `stack/lexer_fragment.herb`.
 - `make test` is the Linux/x86_64 full non-emulator suite and refuses early on
   other hosts.
 - `.github/workflows/kernel-codegen-l1.yml` is the authoritative emulator gate
@@ -95,6 +98,7 @@ tests, goldens, runners, or workflow logs.
 
 ## Next Small Real Step
 
-Add copied-lexer synchronization coverage for the lexer bodies duplicated across
-the stack fragments. Keep this as proof-building only; no C lexer deletion is
-justified yet.
+Add an explicit synchronization or documented-divergence contract for the
+line-aware lexer variants in `stack/klondike.herb` and
+`stack/native_compile_fragment.herb`. Keep this as proof-building only; no C
+lexer deletion is justified yet.
