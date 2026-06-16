@@ -71,8 +71,12 @@ func is_two_byte_op_start(c):
     return c == '=' or c == '!' or c == '<' or c == '>'
 end
 
+func is_shift_op_start(c):
+    return c == '<' or c == '>'
+end
+
 func is_one_byte_op(c):
-    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>'
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
 end
 
 func end_of_ident(src, i, n):
@@ -166,6 +170,9 @@ func scan(src, i, n, line, out):
         do add(out, (3, slice_text(src, i, j), line))
         return scan(src, j, n, line, out)
     elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2), line))
+        return scan(src, i + 2, n, line, out)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
         do add(out, (5, slice_text(src, i, i + 2), line))
         return scan(src, i + 2, n, line, out)
     elif is_one_byte_op(c):
