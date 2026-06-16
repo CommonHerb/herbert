@@ -17,8 +17,8 @@
 --                      but not decoded)
 --     3 = CHAR        (`'` one byte or one escape `'`)
 --     4 = PUNCT       (exactly one of `(` `)` `,` `:` `.`)
---     5 = OPERATOR    (one of `=` `+` `-` `*` `/` `%` `<` `>` `==` `!=`
---                      `<=` `>=`)
+--     5 = OPERATOR    (one of `=` `+` `-` `*` `/` `%` `<` `>` `&` `|`
+--                      `^` `~` `==` `!=` `<=` `>=` `<<` `>>`)
 --
 -- Raw rather than decoded text so that the byte length of `text`
 -- equals the number of source bytes consumed for that token, which
@@ -72,9 +72,14 @@ func is_two_byte_op_start(c):
     return c == '=' or c == '!' or c == '<' or c == '>'
 end
 
+func is_shift_op_start(c):
+    -- bytes that may open a doubled two-byte operator (<<, >>)
+    return c == '<' or c == '>'
+end
+
 func is_one_byte_op(c):
-    -- bytes that stand alone as a one-byte operator (=, +, -, *, /, %, <, >)
-    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>'
+    -- bytes that stand alone as a one-byte operator
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
 end
 
 -- ---------- per-token scanners ----------
@@ -189,6 +194,9 @@ func scan(src, i, n, out):
         do add(out, (3, slice_text(src, i, j)))
         return scan(src, j, n, out)
     elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2)))
+        return scan(src, i + 2, n, out)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
         do add(out, (5, slice_text(src, i, i + 2)))
         return scan(src, i + 2, n, out)
     elif is_one_byte_op(c):

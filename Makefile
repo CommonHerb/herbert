@@ -38,7 +38,7 @@ smoke: $(HERBERT)
 test-timeout:
 	@python3 tools/check_timeout.py
 
-lexer-equivalence:
+lexer-equivalence: $(HERBERT)
 	@CC="$(CC)" CFLAGS="$(CFLAGS)" bash bootstrap/tests/run_lexer_equivalence.sh
 
 verify-local: check test-timeout smoke lexer-equivalence

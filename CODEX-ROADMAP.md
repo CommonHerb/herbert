@@ -12,7 +12,8 @@ tests, goldens, runners, or workflow logs.
 - `make check` enforces the visible non-`.herb` bootstrap boundary in
   `BOOTSTRAP-ALLOWLIST`.
 - `make verify-local` includes a C-vs-Herbert accepted-source lexer
-  equivalence check for `stack/lexer_probe.herb`.
+  equivalence check for a small fixture corpus via
+  `stack/lexer_stdin_driver.herb`.
 - `make test` is the Linux/x86_64 full non-emulator suite and refuses early on
   other hosts.
 - `.github/workflows/kernel-codegen-l1.yml` is the authoritative emulator gate
@@ -38,8 +39,8 @@ tests, goldens, runners, or workflow logs.
 - Which C bootstrap component is the safest next deletion candidate.
 - Which Herbert-written stack fragment has enough coverage to become an
   authoritative replacement for a host component.
-- Whether local developer machines should gain an optional Linux/x86_64 runner
-  helper, or whether that should stay CI-only.
+- Which optional Linux/x86_64 runner helper is the least misleading local path
+  for developer machines that need the Linux-only gates.
 - Which kernel/module gates are too expensive for every PR and need scheduled
   or manually dispatched lanes.
 
@@ -92,6 +93,7 @@ tests, goldens, runners, or workflow logs.
 
 ## Next Small Real Step
 
-Broaden the lexer equivalence oracle that now exists for `stack/lexer_probe.herb`:
-add an accepted-source fixture corpus first, then malformed-input diagnostic
-parity. Keep this as proof-building only; no C lexer deletion is justified yet.
+Extend the lexer equivalence oracle from accepted-source tokens to
+malformed-input diagnostic parity. Keep this as proof-building only; no C lexer
+deletion is justified yet, and copied lexer sections still need synchronization
+coverage before `bootstrap/lex.c` can become a deletion candidate.

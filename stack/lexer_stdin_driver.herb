@@ -1,0 +1,164 @@
+-- Herbert lexer stdin driver for the C-vs-Herbert accepted-source
+-- equivalence corpus. This is intentionally the same coarse token
+-- shape as stack/lexer_fragment.herb: each token is (kind, raw_text).
+--
+-- Kind constants:
+--     0 = IDENTIFIER
+--     1 = INTEGER
+--     2 = STRING
+--     3 = CHAR
+--     4 = PUNCT
+--     5 = OPERATOR
+--
+-- Scope: well-formed Herbert source only. Malformed-input diagnostic
+-- parity belongs in a later runner.
+
+func is_digit(c):
+    return c >= '0' and c <= '9'
+end
+
+func is_lower(c):
+    return c >= 'a' and c <= 'z'
+end
+
+func is_upper(c):
+    return c >= 'A' and c <= 'Z'
+end
+
+func is_alpha(c):
+    return is_lower(c) or is_upper(c)
+end
+
+func is_ident_start(c):
+    return is_alpha(c) or c == '_'
+end
+
+func is_ident_cont(c):
+    return is_ident_start(c) or is_digit(c)
+end
+
+func is_ws(c):
+    return c == ' ' or c == '\n' or c == 9 or c == 13
+end
+
+func is_two_byte_op_start(c):
+    return c == '=' or c == '!' or c == '<' or c == '>'
+end
+
+func is_shift_op_start(c):
+    return c == '<' or c == '>'
+end
+
+func is_one_byte_op(c):
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
+end
+
+func end_of_ident(src, i, n):
+    if i >= n:
+        return i
+    elif is_ident_cont(index(src, i)):
+        return end_of_ident(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+func end_of_int(src, i, n):
+    if i >= n:
+        return i
+    elif is_digit(index(src, i)):
+        return end_of_int(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+func end_of_line(src, i, n):
+    if i >= n:
+        return i
+    elif index(src, i) == '\n':
+        return i
+    else:
+        return end_of_line(src, i + 1, n)
+    end
+end
+
+func end_of_string(src, i, n):
+    let c = index(src, i)
+    if c == '"':
+        return i + 1
+    elif c == '\\':
+        return end_of_string(src, i + 2, n)
+    else:
+        return end_of_string(src, i + 1, n)
+    end
+end
+
+func end_of_char(src, i, n):
+    if index(src, i) == '\\':
+        return i + 3
+    else:
+        return i + 2
+    end
+end
+
+func pour(src, from, to, b):
+    if from >= to:
+        return b
+    else:
+        do append(b, index(src, from))
+        return pour(src, from + 1, to, b)
+    end
+end
+
+func slice_text(src, from, to):
+    return freeze(pour(src, from, to, new_buffer()))
+end
+
+func scan(src, i, n, out):
+    if i >= n:
+        return out
+    end
+    let c = index(src, i)
+    if is_ws(c):
+        return scan(src, i + 1, n, out)
+    elif c == '-' and i + 1 < n and index(src, i + 1) == '-':
+        return scan(src, end_of_line(src, i + 2, n), n, out)
+    elif is_ident_start(c):
+        let j = end_of_ident(src, i + 1, n)
+        do add(out, (0, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif is_digit(c):
+        let j = end_of_int(src, i + 1, n)
+        do add(out, (1, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif c == '"':
+        let j = end_of_string(src, i + 1, n)
+        do add(out, (2, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif c == '\'':
+        let j = end_of_char(src, i + 1, n)
+        do add(out, (3, slice_text(src, i, j)))
+        return scan(src, j, n, out)
+    elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2)))
+        return scan(src, i + 2, n, out)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
+        do add(out, (5, slice_text(src, i, i + 2)))
+        return scan(src, i + 2, n, out)
+    elif is_one_byte_op(c):
+        do add(out, (5, slice_text(src, i, i + 1)))
+        return scan(src, i + 1, n, out)
+    else:
+        do add(out, (4, slice_text(src, i, i + 1)))
+        return scan(src, i + 1, n, out)
+    end
+end
+
+func lex_source(src):
+    return scan(src, 0, length(src), new_array((int, string)))
+end
+
+func main():
+    return lex_source(clogger())
+end

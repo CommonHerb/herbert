@@ -1,0 +1,11 @@
+-- Leading comment with punctuation () != <= >= should disappear.
+func main():
+    let label = "a\nb\\c\"d"
+    -- Mid-file comment with -- nested-looking marker.
+    let slash = '/'
+    let quote = '\''
+    let b = new_buffer()
+    do append(b, slash)
+    do append(b, quote)
+    return length(label) + length(freeze(b))
+end
