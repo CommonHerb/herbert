@@ -17,6 +17,7 @@
 .github/workflows/kernel-codegen-l1.yml
 .gitignore
 BOOTSTRAP-ALLOWLIST
+CODEX-ROADMAP.md
 Makefile
 README.md
 VERIFYING.md
