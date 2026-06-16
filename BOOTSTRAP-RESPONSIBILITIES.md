@@ -8,7 +8,7 @@ deletion candidate only after the missing proof is executable and reviewable.
 
 | Host component | Current responsibility | Closest Herbert-owned surface | Current proof | Missing replacement proof |
 | --- | --- | --- | --- | --- |
-| `bootstrap/lex.c` | Tokenize source, comments, literals, operators, and line-sensitive diagnostics. | `stack/lexer_fragment.herb`, `stack/lexer_stdin_driver.herb`, copied lexer sections in parser/evaluator/compiler fragments, `stack/error_probes/*.herb`. | `bootstrap/tests/run_tests.sh` drives `stack/lexer_probe`; `bootstrap/tests/run_lexer_equivalence.sh` normalizes C `lex()` output for an accepted-source corpus and diffs it against the Herbert stdin lexer driver; error probes still run through the C bootstrap. | Add malformed-input diagnostic parity and synchronization coverage for copied lexer sections before considering any C lexer deletion. |
+| `bootstrap/lex.c` | Tokenize source, comments, literals, operators, and line-sensitive diagnostics. | `stack/lexer_fragment.herb`, `stack/lexer_stdin_driver.herb`, `stack/lexer_error_driver.herb`, copied lexer sections in parser/evaluator/compiler fragments, `stack/error_probes/*.herb`. | `bootstrap/tests/run_tests.sh` drives `stack/lexer_probe`; `bootstrap/tests/run_lexer_equivalence.sh` normalizes C `lex()` output for an accepted-source corpus and diffs it against the Herbert stdin lexer driver, then checks the existing `lex_10x` malformed probes against the Herbert lexer ERR-class driver; the full error-probe battery still runs through C bootstrap and Klondike. | Add full lexer line/message diagnostic parity and synchronization coverage for copied lexer sections before considering any C lexer deletion. |
 | `bootstrap/parse.c` | Parse Herbert syntax into the C AST and report parse errors. | `stack/parser_fragment.herb`, parser sections in `stack/klondike.herb`, `stack/native_compile_fragment.herb`, and diagnostic fragments. | Parser probe output is compared against `stack/parser_probe.expected`; parse error probes are compared against `stack/error_probes.expected`. | A C-AST-to-Herbert-AST equivalence check over accepted programs plus parse-error equivalence over rejected programs. |
 | `bootstrap/eval.c` | Execute Herbert programs, builtins, calls, control flow, mutation, and diagnostics. | `stack/vm_fragment.herb`, `stack/evaluator_fragment.herb`, `stack/klondike.herb`, `stack/suke_*_fragment.herb`. | Smoke tests, evaluator/vm probes, Klondike bundled runs, Suke echo/compute probes, and heap/scope caps run through the C interpreter. | A hosted-vs-Herbert VM differential runner over the smoke suite and selected stack probes, including stdout/stderr/exit behavior. |
 | `bootstrap/value.c` | Represent runtime values, strings, arrays, tuples, buffers, and equality. | Herbert value encodings inside `stack/evaluator_fragment.herb`, `stack/vm_fragment.herb`, and `stack/klondike.herb`. | Existing VM/evaluator probes cover value operations indirectly through program output and heap/scope checks. | Focused value-model probes that compare equality, aliasing, mutation, string/buffer conversion, tuple access, array growth, and boundary errors across both implementations. |
@@ -20,15 +20,16 @@ deletion candidate only after the missing proof is executable and reviewable.
 ## Next Reviewable Slice
 
 Continue with lexer equivalence. It is the smallest surface with a clear
-Herbert-owned counterpart and existing probes. The accepted-source
-C-vs-Herbert token-shape oracle now covers a small corpus, but it still needs
-malformed input coverage, diagnostic parity, and copied-fragment
-synchronization before any C lexer code can be retired.
+Herbert-owned counterpart and existing probes. The C-vs-Herbert token-shape
+oracle now covers a small accepted-source corpus plus lexer ERR-class parity
+for the existing malformed lexical probes, but it still needs full diagnostic
+line/message parity and copied-fragment synchronization before any C lexer code
+can be retired.
 
 Candidate next tests:
 
-- Add rejected-source fixtures and compare the current C lexer diagnostics
-  against a Herbert-owned diagnostic surface.
+- Compare the current C lexer diagnostic line/message output against a
+  Herbert-owned diagnostic surface, not only the ERR class.
 - Keep accepted-source corpus growth cheap and focused on lexical constructs
   that have appeared in native/compiler probes.
 - Add a copied-lexer synchronization check or remove unnecessary copied lexer

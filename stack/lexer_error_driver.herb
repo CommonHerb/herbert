@@ -1,0 +1,224 @@
+-- Herbert lexer diagnostic-class driver for malformed lexical probes.
+--
+-- This is intentionally narrower than the accepted-token driver: it reads
+-- source from stdin and returns the C bootstrap's existing lexical ERR class
+-- as a canonical string, e.g. "ERR 101". Parser and semantic diagnostics
+-- remain covered by the Klondike error-probe battery.
+
+func is_digit(c):
+    return c >= '0' and c <= '9'
+end
+
+func is_lower(c):
+    return c >= 'a' and c <= 'z'
+end
+
+func is_upper(c):
+    return c >= 'A' and c <= 'Z'
+end
+
+func is_alpha(c):
+    return is_lower(c) or is_upper(c)
+end
+
+func is_ident_start(c):
+    return is_alpha(c) or c == '_'
+end
+
+func is_ident_cont(c):
+    return is_ident_start(c) or is_digit(c)
+end
+
+func is_ws(c):
+    return c == ' ' or c == '\n' or c == 9 or c == 13
+end
+
+func is_two_byte_op_start(c):
+    return c == '=' or c == '!' or c == '<' or c == '>'
+end
+
+func is_shift_op_start(c):
+    return c == '<' or c == '>'
+end
+
+func is_one_byte_op(c):
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
+end
+
+func is_punct(c):
+    return c == '(' or c == ')' or c == ',' or c == ':' or c == '.'
+end
+
+func end_of_ident(src, i, n):
+    if i >= n:
+        return i
+    elif is_ident_cont(index(src, i)):
+        return end_of_ident(src, i + 1, n)
+    else:
+        return i
+    end
+end
+
+func end_of_line(src, i, n):
+    if i >= n:
+        return i
+    elif index(src, i) == '\n':
+        return i
+    else:
+        return end_of_line(src, i + 1, n)
+    end
+end
+
+func valid_escape(c, quote):
+    return c == 'n' or c == '\\' or c == quote
+end
+
+func scan_int(src, i, n, acc):
+    if i >= n:
+        return (0, i)
+    end
+    let c = index(src, i)
+    if not is_digit(c):
+        return (0, i)
+    end
+    let d = c - '0'
+    if acc > 1844674407370955161:
+        return (103, i)
+    elif acc == 1844674407370955161 and d > 5:
+        return (103, i)
+    else:
+        return scan_int(src, i + 1, n, acc * 10 + d)
+    end
+end
+
+func scan_string(src, i, n):
+    if i >= n:
+        return (107, i)
+    end
+    let c = index(src, i)
+    if c == '"':
+        return (0, i + 1)
+    elif c == '\n':
+        return (106, i)
+    elif c == '\\':
+        if i + 1 >= n:
+            return (105, i + 1)
+        end
+        let e = index(src, i + 1)
+        if valid_escape(e, '"'):
+            return scan_string(src, i + 2, n)
+        else:
+            return (104, i + 2)
+        end
+    else:
+        return scan_string(src, i + 1, n)
+    end
+end
+
+func scan_char(src, i, n):
+    if i >= n:
+        return (109, i)
+    end
+    let c = index(src, i)
+    if c == '\n':
+        return (110, i)
+    elif c == '\'':
+        return (108, i)
+    elif c == '\\':
+        if i + 1 >= n:
+            return (105, i + 1)
+        end
+        let e = index(src, i + 1)
+        if not valid_escape(e, '\''):
+            return (104, i + 2)
+        end
+        let close = i + 2
+        if close >= n or index(src, close) != '\'':
+            return (109, close)
+        else:
+            return (0, close + 1)
+        end
+    else:
+        let close = i + 1
+        if close >= n or index(src, close) != '\'':
+            return (109, close)
+        else:
+            return (0, close + 1)
+        end
+    end
+end
+
+func scan(src, i, n):
+    if i >= n:
+        return 0
+    end
+    let c = index(src, i)
+    if is_ws(c):
+        return scan(src, i + 1, n)
+    elif c == '-' and i + 1 < n and index(src, i + 1) == '-':
+        return scan(src, end_of_line(src, i + 2, n), n)
+    elif is_ident_start(c):
+        return scan(src, end_of_ident(src, i + 1, n), n)
+    elif is_digit(c):
+        let r = scan_int(src, i, n, 0)
+        if r.0 != 0:
+            return r.0
+        else:
+            return scan(src, r.1, n)
+        end
+    elif c == '"':
+        let r = scan_string(src, i + 1, n)
+        if r.0 != 0:
+            return r.0
+        else:
+            return scan(src, r.1, n)
+        end
+    elif c == '\'':
+        let r = scan_char(src, i + 1, n)
+        if r.0 != 0:
+            return r.0
+        else:
+            return scan(src, r.1, n)
+        end
+    elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        return scan(src, i + 2, n)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
+        return scan(src, i + 2, n)
+    elif is_one_byte_op(c) or is_punct(c):
+        return scan(src, i + 1, n)
+    else:
+        return 101
+    end
+end
+
+func classify_source(src):
+    return scan(src, 0, length(src))
+end
+
+func err_label(code):
+    if code == 101:
+        return "ERR 101"
+    elif code == 103:
+        return "ERR 103"
+    elif code == 104:
+        return "ERR 104"
+    elif code == 105:
+        return "ERR 105"
+    elif code == 106:
+        return "ERR 106"
+    elif code == 107:
+        return "ERR 107"
+    elif code == 108:
+        return "ERR 108"
+    elif code == 109:
+        return "ERR 109"
+    elif code == 110:
+        return "ERR 110"
+    else:
+        return "OK"
+    end
+end
+
+func main():
+    return err_label(classify_source(clogger()))
+end

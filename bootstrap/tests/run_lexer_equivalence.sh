@@ -9,6 +9,9 @@ cflags="${CFLAGS:--std=c11 -Wall -Wextra -Wpedantic -O2}"
 src="$repo_root/stack/lexer_probe.herb"
 expected="$repo_root/stack/lexer_probe.expected"
 driver="$repo_root/stack/lexer_stdin_driver.herb"
+error_driver="$repo_root/stack/lexer_error_driver.herb"
+error_manifest="$repo_root/stack/error_probes.expected"
+error_probe_dir="$repo_root/stack/error_probes"
 dumper_src="$script_dir/lexer_equiv_dump.c"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 
@@ -18,6 +21,9 @@ trap 'rm -rf "$tmp"' EXIT
 dump="$tmp/lexer_equiv_dump"
 actual="$tmp/c-lexer-normalized.out"
 herbert_actual="$tmp/herbert-lexer-normalized.out"
+c_actual="$tmp/c-bootstrap.out"
+c_err="$tmp/c-bootstrap.err"
+expected_error="$tmp/lexer-error.expected"
 
 if ! $cc $cflags -I"$repo_root/bootstrap" \
         -o "$dump" \
@@ -71,4 +77,47 @@ for fixture in "${fixtures[@]}"; do
     fi
 done
 
-echo "PASS: lexer equivalence (${#fixtures[@]} accepted fixture(s) match C lex() and Herbert lexer)"
+if [[ ! -f "$error_driver" ]]; then
+    echo "FAIL: lexer equivalence (missing error driver: $error_driver)"
+    exit 1
+fi
+if [[ ! -f "$error_manifest" || ! -d "$error_probe_dir" ]]; then
+    echo "FAIL: lexer equivalence (missing error probe manifest or directory)"
+    exit 1
+fi
+
+error_count=0
+while read -r probe_name err_word err_code; do
+    [[ -n "$probe_name" ]] || continue
+    case "$probe_name" in
+        lex_*) ;;
+        *) continue ;;
+    esac
+    probe="$error_probe_dir/$probe_name.herb"
+    label="${probe#$repo_root/}"
+    if [[ ! -f "$probe" ]]; then
+        echo "FAIL: lexer equivalence (missing error probe: $label)"
+        exit 1
+    fi
+    if "$HERBERT" "$probe" >"$c_actual" 2>"$c_err"; then
+        echo "FAIL: lexer equivalence ($label C bootstrap accepted malformed lexer probe)"
+        exit 1
+    fi
+    printf '"ERR %s"\n' "$err_code" >"$expected_error"
+    if ! "$HERBERT" "$error_driver" <"$probe" >"$herbert_actual"; then
+        echo "FAIL: lexer equivalence ($label Herbert error driver exited nonzero)"
+        exit 1
+    fi
+    if ! diff -u "$expected_error" "$herbert_actual"; then
+        echo "FAIL: lexer equivalence ($label lexer ERR class differs from manifest)"
+        exit 1
+    fi
+    error_count=$((error_count + 1))
+done < "$error_manifest"
+
+if [[ "$error_count" -eq 0 ]]; then
+    echo "FAIL: lexer equivalence (no lexer error probes found in $error_manifest)"
+    exit 1
+fi
+
+echo "PASS: lexer equivalence (${#fixtures[@]} accepted fixture(s), $error_count lexer error fixture(s) match C lex() and Herbert lexer)"
