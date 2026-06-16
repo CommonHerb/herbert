@@ -13,6 +13,7 @@ Runs:
 - `make check`: confirms tracked non-`.herb` files exactly match `BOOTSTRAP-ALLOWLIST`.
 - `make test-timeout`: checks the repo-local portable `timeout` shim.
 - `make smoke`: builds the C bootstrap and runs the `bootstrap/tests/test_*.herb` sample suite, including existing scope/heap sidecar limits.
+- `make lexer-equivalence`: normalizes C `lex()` output for `stack/lexer_probe.herb` and diffs it against the Herbert lexer fragment's hand-authored oracle.
 
 This is the fast local confidence command. It does not run the full metacircular/native-codegen suite.
 

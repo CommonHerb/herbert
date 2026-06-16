@@ -23,6 +23,8 @@ Makefile
 README.md
 VERIFYING.md
 bootstrap/tests/run_smoke.sh
+bootstrap/tests/lexer_equiv_dump.c
+bootstrap/tests/run_lexer_equivalence.sh
 bootstrap/tests/run_beta_full.sh
 bootstrap/tests/run_native_codegen_link1.sh
 bootstrap/tests/run_native_codegen_link2.sh

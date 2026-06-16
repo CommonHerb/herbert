@@ -11,6 +11,8 @@ tests, goldens, runners, or workflow logs.
 - The C bootstrap builds and runs the smoke suite through `make verify-local`.
 - `make check` enforces the visible non-`.herb` bootstrap boundary in
   `BOOTSTRAP-ALLOWLIST`.
+- `make verify-local` includes a C-vs-Herbert accepted-source lexer
+  equivalence check for `stack/lexer_probe.herb`.
 - `make test` is the Linux/x86_64 full non-emulator suite and refuses early on
   other hosts.
 - `.github/workflows/kernel-codegen-l1.yml` is the authoritative emulator gate
@@ -90,8 +92,6 @@ tests, goldens, runners, or workflow logs.
 
 ## Next Small Real Step
 
-Create a bootstrap-responsibility table that names one C component, the closest
-Herbert stack counterpart, the existing tests that compare them, and the missing
-test that would make a replacement candidate reviewable.
-
-That table now lives in `BOOTSTRAP-RESPONSIBILITIES.md`.
+Broaden the lexer equivalence oracle that now exists for `stack/lexer_probe.herb`:
+add an accepted-source fixture corpus first, then malformed-input diagnostic
+parity. Keep this as proof-building only; no C lexer deletion is justified yet.
