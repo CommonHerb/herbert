@@ -51,6 +51,7 @@ def normalized_code(block: str) -> str:
 def line_aware_expected(base: str) -> str:
     expected = []
     skip_next_plain_ws_scan = False
+    hits = {"scan_sig": 0, "is_ws": 0, "init": 0, "do_add": 0}
     for line in base.splitlines():
         if skip_next_plain_ws_scan:
             skip_next_plain_ws_scan = False
@@ -59,6 +60,7 @@ def line_aware_expected(base: str) -> str:
 
         if line == "func scan(src, i, n, out):":
             expected.append("func scan(src, i, n, line, out):")
+            hits["scan_sig"] += 1
         elif line == "if is_ws(c):":
             expected.extend([
                 "if is_ws(c):",
@@ -68,14 +70,33 @@ def line_aware_expected(base: str) -> str:
                 "return scan(src, i + 1, n, line, out)",
             ])
             skip_next_plain_ws_scan = True
+            hits["is_ws"] += 1
         elif line.startswith("do add(out, (") and line.endswith("))"):
             expected.append(line[:-2] + ", line))")
+            hits["do_add"] += 1
         elif line == "return scan(src, 0, length(src), new_array((int, string)))":
             expected.append("return scan(src, 0, length(src), 1, new_array((int, string, int)))")
+            hits["init"] += 1
         elif line.startswith("return scan(src, ") and line.endswith(", n, out)"):
             expected.append(line.replace(", n, out)", ", n, line, out)"))
         else:
             expected.append(line)
+    # The line-aware contract is mechanically derived from the plain lexer by
+    # rewriting a fixed set of anchor lines. If the plain lexer is reworded or
+    # reformatted so an anchor stops matching (e.g. is_ws renamed), the transform
+    # would SILENTLY emit a wrong line-aware contract -- e.g. drop line tracking --
+    # and still pass. Assert every load-bearing anchor fired exactly as expected so
+    # source drift breaks LOUDLY here instead of silently corrupting the contract.
+    required = {"scan_sig": 1, "is_ws": 1, "init": 1}
+    problems = [f"{k} fired {hits[k]}x (expected {n})" for n, k in ((1, "scan_sig"), (1, "is_ws"), (1, "init")) if hits[k] != required[k]]
+    if hits["do_add"] < 1:
+        problems.append("do_add fired 0x (expected >=1)")
+    if problems:
+        raise ValueError(
+            "line_aware_expected: lexer-contract anchors changed in "
+            "stack/lexer_fragment.herb; the line-aware transform is stale -- "
+            + "; ".join(problems)
+        )
     return "\n".join(expected) + "\n"
 
 
