@@ -1053,6 +1053,80 @@ func emit_kids(buf, pool, kids, i, n):
 end
 
 -- ====================================================================
+-- AST-DUMP MODE (parser-equivalence altimeter)
+--
+-- When the source's first line is the directive `-- emit: ast-dump`, the
+-- backend lexes and parses with the SAME production front end it compiles
+-- with (lex_source + parse_program), then serializes the raw parse tree
+-- with the production `ser` and writes it to stdout. No verify, no lower,
+-- no emit -- this is the parser's own tree, observable for the first time.
+-- It exists so an independent C AST-dumper (built from bootstrap/parse.c
+-- structs) can be diffed against the PRODUCTION parser over a corpus while
+-- the C bootstrap still exists (the pre-switchover parser altimeter), and
+-- so gen-1 can dump that tree NATIVELY (removing C from the dump path).
+-- ====================================================================
+
+func nc_is_ast_dump(source):
+    let marker = "-- emit: ast-dump"
+    let mlen = length(marker)
+    if not nc_mb_marker_match(source, marker, 0, mlen):
+        return false
+    end
+    if length(source) <= mlen:
+        return false
+    end
+    return index(source, mlen) == 10
+end
+
+-- Dump serializer: identical to `ser` EXCEPT it canonicalizes the "char" tag
+-- to "int". A Herbert char literal IS an int value (byte_codepoint); the C
+-- bootstrap's lexer stores char literals as TOK_INT_LIT, so parse.c yields an
+-- E_INT node with no char provenance. Canonicalizing only the TAG (never the
+-- value atom) makes the parser-structure comparison meaningful while STILL
+-- surfacing any real value/structure divergence (the value atom is untouched).
+func ser_dump(buf, pool, idx):
+    let node = get(pool, idx)
+    let tag = node.0
+    let atoms = node.1
+    let kids = node.2
+    do append(buf, '(')
+    if equal(tag, "char"):
+        buf = append_str(buf, "int")
+    else:
+        buf = append_str(buf, tag)
+    end
+    if equal(tag, "dot"):
+        buf = emit_kids_dump(buf, pool, kids, 0, count(kids))
+        buf = emit_atoms(buf, atoms, 0, count(atoms))
+    else:
+        buf = emit_atoms(buf, atoms, 0, count(atoms))
+        buf = emit_kids_dump(buf, pool, kids, 0, count(kids))
+    end
+    do append(buf, ')')
+    return buf
+end
+
+func emit_kids_dump(buf, pool, kids, i, n):
+    if i >= n:
+        return buf
+    end
+    do append(buf, ' ')
+    buf = ser_dump(buf, pool, get(kids, i))
+    return emit_kids_dump(buf, pool, kids, i + 1, n)
+end
+
+func nc_emit_ast_dump_program(source):
+    let tokens = lex_source(source)
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let buf = new_buffer()
+    buf = ser_dump(buf, nodes, parsed.0)
+    do flogger(freeze(buf))
+    do flogger("\n")
+    return 0
+end
+
+-- ====================================================================
 -- EMITTER
 -- ====================================================================
 
@@ -18379,6 +18453,10 @@ end
 
 func main():
     let source = clogger()
+    if nc_is_ast_dump(source):
+        let ad = nc_emit_ast_dump_program(source)
+        return 0
+    end
     if nc_is_multiboot32_long64(source):
         let l6 = nc_emit_multiboot32_long64_program(source)
         return 0

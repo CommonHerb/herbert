@@ -858,6 +858,30 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    # C-vs-Herbert PARSER equivalence (sovereignty parser altimeter): diff the
+    # independent C parse.c AST (parser_equiv_dump.c) against the PRODUCTION
+    # Herbert parser's AST (emitted by the backend's `-- emit: ast-dump` mode,
+    # run NATIVELY by the gen-1 seed and by the C interpreter) over a corpus.
+    if [[ -x "$PWD/run_parser_equivalence.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_parser_equivalence.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Prove the parser-equivalence altimeter BITES (RED-first): mutating the C
+    # parser OR the production Herbert parser flips the AST diff to divergent.
+    if [[ -x "$PWD/run_parser_equivalence_mutation.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_parser_equivalence_mutation.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
     # Parser forcing-function test: run the parser fragment, which has
     # an embedded byte-for-byte copy of parser_probe.herb in its main(),
     # and diff its canonical S-expression output against the

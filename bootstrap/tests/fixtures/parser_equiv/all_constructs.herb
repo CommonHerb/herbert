@@ -1,0 +1,95 @@
+-- All-AST-node-kind coverage fixture for the parser-equivalence altimeter.
+-- A single WELL-FORMED program (both front ends accept it at parse time) that
+-- exercises EVERY production/node kind the dump schema can emit, so the corpus
+-- can never silently lose coverage of a node class (the dump is byte-diffed
+-- C-vs-Herbert, and the harness asserts every expected tag appears here).
+-- It need only PARSE (the ast-dump mode does not verify), so semantic shape is
+-- irrelevant -- only the grammar surface matters. Bare bitwise class-mix is
+-- deliberately ABSENT (the C parser rejects it at parse time; Herbert defers it
+-- to the verifier -- out of the accepted-program scope), but every bitwise/shift
+-- op appears parenthesised.
+func unops(a, b):
+    let n = not (a == b)
+    let m = ~a
+    return n
+end
+
+func arith(a, b, c):
+    let s = a + b - c
+    let p = a * b / c % a
+    return s + p
+end
+
+func cmps(a, b):
+    let lt = a < b
+    let le = a <= b
+    let gt = a > b
+    let ge = a >= b
+    let eq = a == b
+    let ne = a != b
+    let combined = lt and le or gt and ge or eq or ne
+    return combined
+end
+
+func bitwise(a, b):
+    let band = (a & b)
+    let bor = (a | b)
+    let bxor = (a ^ b)
+    let shl = (a << b)
+    let shr = (a >> b)
+    return ((band | bor) ^ (bxor & shl)) | shr
+end
+
+func aggregates(a):
+    let pair = (a, a + 1)
+    let triple = (a, a, a)
+    let first = pair.0
+    let second = triple.2
+    let ints = new_array(int)
+    let bools = new_array(bool)
+    let strs = new_array(string)
+    let bufs = new_array(buffer)
+    let tups = new_array((int, bool))
+    let mat = new_array(array(int))
+    let deep = new_array(array((int, (bool, string))))
+    do add(ints, first)
+    do add(ints, second)
+    return ints
+end
+
+func literals():
+    let i = 42
+    let ch = 'A'
+    let nl = '\n'
+    let bs = '\\'
+    let q = '\''
+    let s = "hello\n\\\"world"
+    let empty = ""
+    let yes = true
+    let no = false
+    return i
+end
+
+func control(n, m):
+    let r = 0
+    if n == 0:
+        r = 1
+    elif n == 1:
+        r = arith(n, m, 2)
+    elif n == 2:
+        r = cmps(n, m)
+    else:
+        r = control(n - 1, m)
+    end
+    return r
+end
+
+func main():
+    let a = literals()
+    let b = unops(a, 1)
+    let c = arith(a, 2, 3)
+    let d = control(c, b)
+    let e = aggregates(d)
+    let f = bitwise(a, 2)
+    return d + f
+end
