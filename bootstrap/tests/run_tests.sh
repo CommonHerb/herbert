@@ -653,14 +653,57 @@ run_native_codegen_completeness_grep() {
 }
 
 check_native_codegen_mint_count() {
+    # michoi: the FENCE. In the default (seeded) run the C interpreter must mint
+    # gen-1 ZERO times -- the production compiler comes from the committed C-free
+    # seed. The C mint runs exactly once only when explicitly re-seeding
+    # (NATIVE_CODEGEN_ALLOW_C_MINT=1). The count only ever increments inside
+    # native_codegen_compiler_mint, so 0 here proves C was not in the mint path.
     total=$((total + 1))
-    if [[ "${NATIVE_CODEGEN_COMPILER_MINT_COUNT:-0}" == "1" ]]; then
-        echo "PASS: native-codegen gen-1 mint count: 1 (seconds=${NATIVE_CODEGEN_COMPILER_MINT_SECONDS:-unknown})"
+    local got want
+    got="${NATIVE_CODEGEN_COMPILER_MINT_COUNT:-0}"
+    if [[ "${NATIVE_CODEGEN_ALLOW_C_MINT:-0}" == "1" ]]; then want=1; else want=0; fi
+    if [[ "$got" == "$want" ]]; then
+        if [[ "$want" == "0" ]]; then
+            echo "PASS: native-codegen gen-1 C-mint count: 0 (C-free seed -- the C interpreter did NOT mint the production compiler)"
+        else
+            echo "PASS: native-codegen gen-1 C-mint count: 1 (re-seed mode; seconds=${NATIVE_CODEGEN_COMPILER_MINT_SECONDS:-unknown})"
+        fi
         pass=$((pass + 1))
     else
-        echo "FAIL: native-codegen gen-1 mint count: ${NATIVE_CODEGEN_COMPILER_MINT_COUNT:-0} (expected 1)"
+        echo "FAIL: native-codegen gen-1 C-mint count: $got (expected $want)"
         fail=$((fail + 1))
     fi
+}
+
+run_native_codegen_michoi_seed_check() {
+    # michoi: prove the production compiler this run used IS the committed,
+    # integrity-checked, C-free gen-1 seed. (The seed's C-free SELF-REPRODUCTION
+    # -- seed compiles the backend back into the seed -- is proven by the link10
+    # fixpoint, which runs under make test.)
+    total=$((total + 1))
+    local seed magic want got used
+    seed="$native_codegen_seed_file"
+    if [[ ! -f "$seed" || ! -f "$seed.sha256" ]]; then
+        echo "FAIL: michoi C-free seed (missing $seed)"; fail=$((fail + 1)); return
+    fi
+    magic=$(head -c4 "$seed" | xxd -p | tr -d '\n')
+    want=$(awk '{print $1}' "$seed.sha256")
+    got=$(sha256sum "$seed" | awk '{print $1}')
+    if [[ "$magic" != "7f454c46" || "$got" != "$want" ]]; then
+        echo "FAIL: michoi C-free seed integrity (magic=$magic sha got=$got want=$want)"; fail=$((fail + 1)); return
+    fi
+    if [[ -z "${NATIVE_CODEGEN_COMPILER:-}" || ! -x "$NATIVE_CODEGEN_COMPILER" ]]; then
+        echo "FAIL: michoi C-free seed (no production compiler acquired)"; fail=$((fail + 1)); return
+    fi
+    # In seeded mode the production compiler must be byte-identical to the seed.
+    if [[ "${NATIVE_CODEGEN_ALLOW_C_MINT:-0}" != "1" ]]; then
+        used=$(sha256sum "$NATIVE_CODEGEN_COMPILER" | awk '{print $1}')
+        if [[ "$used" != "$want" ]]; then
+            echo "FAIL: michoi C-free seed (production compiler sha=$used != committed seed sha=$want -- the run did not use the seed)"; fail=$((fail + 1)); return
+        fi
+    fi
+    echo "PASS: michoi C-free gen-1 seed (committed seed integrity OK; production compiler IS the seed; C did not mint it)"
+    pass=$((pass + 1))
 }
 
 run_recursion_depth_guard_check() {
@@ -1234,7 +1277,11 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK1="$PWD/run_native_codegen_link1.sh"
     backend="$STACK_DIR/native_compile_fragment.herb"
     native_codegen_dispatch_tmp="$(mktemp -d)"
-    native_codegen_compiler_mint "$native_codegen_dispatch_tmp/compiler" || exit 1
+    # michoi: source the production gen-1 from the committed C-free seed (the C
+    # interpreter is no longer in the mint path). ensure_compiler reuses a preset
+    # NATIVE_CODEGEN_COMPILER, else acquires the seed, else (only with
+    # NATIVE_CODEGEN_ALLOW_C_MINT=1) re-mints via C; fails closed otherwise.
+    native_codegen_ensure_compiler "$native_codegen_dispatch_tmp/compiler" || exit 1
 
     if [[ -f "$NATIVE_CODEGEN_LINK1" ]]; then
         total=$((total + 1))
@@ -1438,6 +1485,7 @@ if [[ -d ../../stack ]]; then
     run_native_codegen_corrupt_compiler_check
     run_native_codegen_completeness_grep
     check_native_codegen_mint_count
+    run_native_codegen_michoi_seed_check
 
     # Suke codegen forcing-function tests: the C bootstrap runs each probe
     # directly as the oracle, then the Herbert pipeline fragment compiles the

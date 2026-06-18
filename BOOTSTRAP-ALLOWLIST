@@ -104,6 +104,10 @@ bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/capture_native_goldens.sh
 bootstrap/tests/native_codegen_oracle.sh
+bootstrap/tests/reseed_gen1.sh
+bootstrap/seed/gen1.seed
+bootstrap/seed/gen1.seed.sha256
+bootstrap/seed/README.md
 bootstrap/tests/native_codegen_goldens/artifacts/link10/link10_benign_complementary_if.bin
 bootstrap/tests/native_codegen_goldens/artifacts/link11/link11_fanout_chain.bin
 bootstrap/tests/native_codegen_goldens/artifacts/link11/link11_finite_poly.bin

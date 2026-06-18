@@ -19,7 +19,7 @@ HERBERT_SRCS := \
     bootstrap/main.c
 HERBERT_HDR  := bootstrap/herbert.h
 
-.PHONY: all check test beta-full clean
+.PHONY: all check test beta-full reseed clean
 
 all: $(HERBERT)
 
@@ -32,6 +32,12 @@ test: $(HERBERT)
 
 beta-full: $(HERBERT)
 	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_beta_full.sh
+
+# michoi: re-mint the C-free gen-1 seed from the C bootstrap. Run ONLY when
+# stack/native_compile_fragment.herb changes (which shifts gen-1's bytes and
+# makes the committed seed stale). This is the one sanctioned C mint.
+reseed: $(HERBERT)
+	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/reseed_gen1.sh
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

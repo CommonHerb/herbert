@@ -10,6 +10,11 @@ NATIVE_CODEGEN_ORACLE="${NATIVE_CODEGEN_ORACLE:-c}"
 NATIVE_CODEGEN_CAPTURE="${NATIVE_CODEGEN_ORACLE_CAPTURE:-0}"
 NATIVE_CODEGEN_MANIFEST="${NATIVE_CODEGEN_MANIFEST:-$NATIVE_CODEGEN_GOLDENS_DIR/manifest.tsv}"
 NATIVE_CODEGEN_CAPTURE_MANIFEST="${NATIVE_CODEGEN_CAPTURE_MANIFEST:-$NATIVE_CODEGEN_MANIFEST}"
+# michoi: the committed C-free gen-1 seed -- the DEFAULT production compiler.
+# The suite mints gen-1 by running this seed, not the C interpreter. Pinned to
+# the in-repo path (no env override) so the seed + its .sha256 are always the
+# committed, git-tracked pair, never an externally-supplied one.
+native_codegen_seed_file="$native_codegen_oracle__script_dir/../seed/gen1.seed"
 
 native_codegen_oracle_script=
 native_codegen_oracle_consumed=
@@ -137,16 +142,69 @@ native_codegen_compiler_mint() {
     echo "native-codegen: minted gen-1 compiler at $NATIVE_CODEGEN_COMPILER (mint-count=$count, seconds=$elapsed)"
 }
 
+native_codegen_seed_available() {
+    [[ -f "$native_codegen_seed_file" && -f "$native_codegen_seed_file.sha256" ]]
+}
+
+native_codegen_seed_acquire() {
+    # michoi: acquire the committed C-free gen-1 seed as the production
+    # compiler -- WITHOUT invoking the C interpreter. Fail closed (never fall
+    # through to a C mint) on any integrity problem.
+    local mint_root="$1"
+    local seed="$native_codegen_seed_file"
+    local compiler="$mint_root/gen1-herbert"
+    local magic want got
+    if [[ ! -f "$seed" || ! -f "$seed.sha256" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (C-free seed $seed missing)"
+        return 1
+    fi
+    magic=$(head -c4 "$seed" | xxd -p | tr -d '\n')
+    if [[ "$magic" != "7f454c46" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (C-free seed is not an ELF: magic=$magic)"
+        return 1
+    fi
+    want=$(awk '{print $1}' "$seed.sha256")
+    got=$(native_codegen_oracle_sha256 "$seed")
+    if [[ "$got" != "$want" ]]; then
+        echo "FAIL: stack/native_compile_fragment.herb (C-free seed sha256 mismatch: got=$got want=$want -- run 'make reseed' if the backend changed)"
+        return 1
+    fi
+    mkdir -p "$mint_root" || return 1
+    if ! cp "$seed" "$compiler" || ! chmod +x "$compiler"; then
+        rm -f "$compiler"
+        echo "FAIL: stack/native_compile_fragment.herb (could not stage C-free seed)"
+        return 1
+    fi
+    export NATIVE_CODEGEN_COMPILER="$compiler"
+    echo "native-codegen: acquired C-free gen-1 seed at $NATIVE_CODEGEN_COMPILER (sha256=$got; C interpreter NOT invoked)"
+}
+
 native_codegen_ensure_compiler() {
     local mint_root="$1"
     if [[ -n "${NATIVE_CODEGEN_COMPILER:-}" ]]; then
+        # Preset compiler (incl. the deliberately-bad /bin/false and corrupting
+        # wrapper used by the non-vacuity / corrupt-compiler probes) is reused
+        # verbatim -- do NOT seed-validate here, or those probes fail in the
+        # wrong place instead of downstream.
         if [[ ! -x "$NATIVE_CODEGEN_COMPILER" ]]; then
             echo "FAIL: stack/native_compile_fragment.herb (cannot execute NATIVE_CODEGEN_COMPILER=$NATIVE_CODEGEN_COMPILER)"
             return 1
         fi
         return 0
     fi
-    native_codegen_compiler_mint "$mint_root"
+    # michoi: the committed C-free seed is the default production compiler. The
+    # C interpreter mints gen-1 ONLY when explicitly re-seeding
+    # (NATIVE_CODEGEN_ALLOW_C_MINT=1) and no seed is available.
+    if native_codegen_seed_available; then
+        native_codegen_seed_acquire "$mint_root"
+        return $?
+    fi
+    if [[ "${NATIVE_CODEGEN_ALLOW_C_MINT:-0}" == "1" ]]; then
+        native_codegen_compiler_mint "$mint_root"
+        return $?
+    fi
+    echo "FAIL: stack/native_compile_fragment.herb (C-free seed missing and C mint not permitted -- set NATIVE_CODEGEN_ALLOW_C_MINT=1 to re-seed)"
+    return 1
 }
 
 native_codegen_oracle_append_manifest() {
