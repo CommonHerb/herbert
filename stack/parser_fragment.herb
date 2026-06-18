@@ -70,16 +70,26 @@ func is_ident_cont(c):
 end
 
 func is_ws(c):
+    -- space, newline, tab (9), carriage return (13).
     return c == ' ' or c == '\n' or c == 9 or c == 13
 end
 
 func is_two_byte_op_start(c):
+    -- bytes that may open a two-byte operator (==, !=, <=, >=)
     return c == '=' or c == '!' or c == '<' or c == '>'
 end
 
-func is_one_byte_op(c):
-    return c == '=' or c == '+' or c == '-' or c == '<' or c == '>'
+func is_shift_op_start(c):
+    -- bytes that may open a doubled two-byte operator (<<, >>)
+    return c == '<' or c == '>'
 end
+
+func is_one_byte_op(c):
+    -- bytes that stand alone as a one-byte operator
+    return c == '=' or c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '<' or c == '>' or c == '&' or c == '|' or c == '^' or c == '~'
+end
+
+-- ---------- per-token scanners ----------
 
 func end_of_ident(src, i, n):
     if i >= n:
@@ -101,6 +111,9 @@ func end_of_int(src, i, n):
     end
 end
 
+-- Skip to the newline that ends a `--` comment, or to EOF. Returns
+-- the index of the newline byte itself (the main scan eats it on the
+-- next iteration as whitespace).
 func end_of_line(src, i, n):
     if i >= n:
         return i
@@ -111,6 +124,9 @@ func end_of_line(src, i, n):
     end
 end
 
+-- `i` is one past the opening `"`. Returns one past the closing `"`.
+-- A backslash starts a two-byte escape; both bytes are consumed
+-- without decoding.
 func end_of_string(src, i, n):
     let c = index(src, i)
     if c == '"':
@@ -122,6 +138,9 @@ func end_of_string(src, i, n):
     end
 end
 
+-- `i` is one past the opening `'`. Returns one past the closing `'`.
+-- A char literal body is either one ordinary byte or a two-byte
+-- escape; the closing quote follows.
 func end_of_char(src, i, n):
     if index(src, i) == '\\':
         return i + 3
@@ -130,6 +149,8 @@ func end_of_char(src, i, n):
     end
 end
 
+-- Append src[from..to) byte-by-byte into b. Self-recursive in tail
+-- position so a long token does not deepen the C stack.
 func pour(src, from, to, b):
     if from >= to:
         return b
@@ -139,10 +160,21 @@ func pour(src, from, to, b):
     end
 end
 
+-- Cut src[from..to) into a fresh immutable string. `slice` on an
+-- immutable string is deferred in the bootstrap interpreter, so we
+-- build a buffer and freeze it.
 func slice_text(src, from, to):
     return freeze(pour(src, from, to, new_buffer()))
 end
 
+-- ---------- the main scan ----------
+--
+-- `out` is the growable token array; `do add(out, ...)` mutates it
+-- through array reference identity. The function is self-recursive
+-- in tail position on every branch. The two-byte operator check sits
+-- ahead of the one-byte operator check so `==` is one OPERATOR token
+-- (not two `=` tokens), and the comment check stays ahead of all
+-- operator handling so `--` never tokenizes as a minus.
 func scan(src, i, n, out):
     if i >= n:
         return out
@@ -171,15 +203,21 @@ func scan(src, i, n, out):
     elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
         do add(out, (5, slice_text(src, i, i + 2)))
         return scan(src, i + 2, n, out)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
+        do add(out, (5, slice_text(src, i, i + 2)))
+        return scan(src, i + 2, n, out)
     elif is_one_byte_op(c):
         do add(out, (5, slice_text(src, i, i + 1)))
         return scan(src, i + 1, n, out)
     else:
+        -- One of ( ) , : .
         do add(out, (4, slice_text(src, i, i + 1)))
         return scan(src, i + 1, n, out)
     end
 end
 
+-- The fragment's external entry. Takes a Herbert source string and
+-- returns the array of (kind, text) token tuples.
 func lex_source(src):
     return scan(src, 0, length(src), new_array((int, string)))
 end

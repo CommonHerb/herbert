@@ -37,10 +37,16 @@ on:
     branches:
       - main
       - l1-kernel-boot-emit
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   l1-dual-substrate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: install emulators + boot tooling (TEST dependencies)

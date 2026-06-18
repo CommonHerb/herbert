@@ -42,6 +42,7 @@ if [[ ! -f "$GREF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (miss
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_qemu_diag.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -108,7 +109,14 @@ qemu_benign() { # kind byte
     local rc=$?; wait "$fp" 2>/dev/null
     if ! grep -q SENT "$W/feed.log" 2>/dev/null; then fail_test "$kind byte=$byte: FEEDER FLAKE (no SENT) rc=$rc"; return 1; fi
     if [[ "$rc" -eq 124 ]]; then fail_test "$kind byte=$byte: 60s TIMEOUT (rc 124) -- feeder/timeout flake, not a kernel RED"; return 1; fi
-    if [[ "$rc" -ne "$ex" ]]; then fail_test "$kind byte=$byte: exit rc=$rc != host_qemu_exit(T=$f)=$ex"; return 1; fi
+    if [[ "$rc" -ne "$ex" ]]; then
+        local low7 detail e9
+        low7="$(native_codegen_qemu_exit_low7_hex "$rc")"
+        detail="$(native_codegen_grade_detail "$REF" "$out" "$KEND" "$(printf '%x' "$byte")" "$kind")"
+        e9="$(native_codegen_e9_hex "$out")"
+        fail_test "$kind byte=$byte: exit rc=$rc (debug-exit-low7=$low7) != host_qemu_exit(T=$f)=$ex; grade: $detail; e9=$e9"
+        return 1
+    fi
     if python3 "$REF" grade "$out" "$KEND" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1; then return 0; fi
     fail_test "$kind byte=$byte: $(python3 "$REF" grade "$out" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
 }

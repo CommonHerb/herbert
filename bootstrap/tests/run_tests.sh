@@ -846,6 +846,18 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    # C-vs-Herbert lexer equivalence: normalize the bootstrap C token stream
+    # to the Herbert lexer fragment's coarse `(kind, text)` shape and diff it
+    # against the same hand-authored oracle as the Herbert-side lexer test.
+    if [[ -x "$PWD/run_lexer_equivalence.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_lexer_equivalence.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
     # Parser forcing-function test: run the parser fragment, which has
     # an embedded byte-for-byte copy of parser_probe.herb in its main(),
     # and diff its canonical S-expression output against the

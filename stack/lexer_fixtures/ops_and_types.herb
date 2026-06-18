@@ -1,0 +1,12 @@
+func main():
+    let a = new_array(array(int))
+    let b = 1 << 3
+    let c = b >> 1
+    let d = ~c
+    let ok = true or false
+    if ok and d != 0:
+        return length("types")
+    else:
+        return 0
+    end
+end
