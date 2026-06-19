@@ -364,9 +364,11 @@ func main():
     return "x"
 end
 HERB
+# link11: a FLAT int/bool tuple main now renders; a tuple with a non-scalar
+# element (nested tuple) is still out of scope and must ERR432.
 cat >"$tmp/r_main_tuple.herb" <<'HERB'
 func main():
-    return (1, 2)
+    return (1, (2, 3))
 end
 HERB
 

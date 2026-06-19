@@ -155,7 +155,12 @@ func main():
     if analyzed.0 != 0:
         return 2
     end
-    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable)
+    let main_ret = get(analyzed.1, prog.2).1
+    let main_kids = new_array(int)
+    if nc_type_is_flat_int_bool_tuple(type_pool, main_ret):
+        main_kids = nc_type_tuple_children(type_pool, main_ret)
+    end
+    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable, main_kids)
     if pass1.0 != 0:
         return 3
     end

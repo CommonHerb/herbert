@@ -1361,6 +1361,33 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    # link11 (sovereignty axis, D14 aggregate half): the native back end now
+    # canonically renders a `main` returning a FLAT int/bool TUPLE, so the
+    # foundational language tests that return a tuple (test_01/03/07/08/09) run
+    # C-FREE via the gen-1 seed. ENDURING leg = native render == committed key;
+    # RETIREABLE leg = faithfulness vs C (real HERBERT, NOT the fragment shim --
+    # this gate is its own capability gate, under neither the turnstile fragment
+    # fence nor the tollgate native-codegen fence).
+    if [[ -x "$PWD/run_aggregate_render_native.sh" ]]; then
+        total=$((total + 1))
+        if HERBERT="$HERBERT" "$PWD/run_aggregate_render_native.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Prove the aggregate-render gate BITES (RED-first): a mutated renderer still
+    # compiles but makes the rendered tuple diverge from the canonical key.
+    if [[ -x "$PWD/run_aggregate_render_native_mutation.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_aggregate_render_native_mutation.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
     # VM forcing-function test: the VM fragment runs the blessed bytecode for the
     # same evaluator probe and now EMITS the serialized result via flogger (stdout
     # line 1) + returns 0, so it runs identically under the C interpreter AND the

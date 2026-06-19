@@ -4572,6 +4572,39 @@ func nc_type_array_elem(pool, t):
     return get(nc_type_children(pool, t), 0)
 end
 
+-- link11: a FLAT tuple whose every element is int or bool (each width 1), with
+-- 2..15 elements. This is the subset of tuple return types `main` may return and
+-- the native back end canonically renders to stdout (D14's aggregate half). A
+-- 1-tuple does not arise (the parser treats `(x)` as a grouping); nested-tuple /
+-- string / array element types are deferred to a later D14 installment and still
+-- ERR432. The 15-element cap keeps every render disp/imm at the byte-encoding
+-- (disp8/imm8) the layout-length math assumes.
+func nc_flat_int_bool_kids_loop(kids, i, n):
+    if i >= n:
+        return true
+    end
+    let c = get(kids, i)
+    if c != nc_type_int() and c != nc_type_bool():
+        return false
+    end
+    return nc_flat_int_bool_kids_loop(kids, i + 1, n)
+end
+
+func nc_type_is_flat_int_bool_tuple(pool, t):
+    if not nc_type_is_tuple(pool, t):
+        return false
+    end
+    let kids = nc_type_tuple_children(pool, t)
+    let n = count(kids)
+    if n < 2:
+        return false
+    end
+    if n > 15:
+        return false
+    end
+    return nc_flat_int_bool_kids_loop(kids, 0, n)
+end
+
 func nc_type_equal_children(pool, a, b, i, n):
     if i >= n:
         return true
@@ -6726,7 +6759,7 @@ func nc_sig_check_concrete_loop(pool, func_kids, i, n, nodes, sig):
         end
     end
     if equal(get(fn.1, 0), "main"):
-        if ret != nc_type_int() and ret != nc_type_bool():
+        if ret != nc_type_int() and ret != nc_type_bool() and not nc_type_is_flat_int_bool_tuple(pool, ret):
             return nc_fail(432, fn.3, "")
         end
     end
@@ -6756,7 +6789,7 @@ func nc_poly_sig_check_concrete_loop(pool, nodes, prog_idx, funcs, i, sig):
         end
     end
     if i == 0 and equal(get(fn.1, 0), "main"):
-        if ret != nc_type_int() and ret != nc_type_bool():
+        if ret != nc_type_int() and ret != nc_type_bool() and not nc_type_is_flat_int_bool_tuple(pool, ret):
             return nc_fail(432, fn.3, "")
         end
     end
@@ -7892,25 +7925,33 @@ func nc_entry_head_len():
     return 19
 end
 
-func nc_entry_layout(has_heap, has_faultable, main_ret):
+func nc_entry_layout(has_heap, has_faultable, main_ret, kids):
     let heap_len = 0
     if has_heap != 0:
         heap_len = 70
     end
     let head_len = nc_entry_head_len()
+    let render_len = nc_render_len(main_ret)
+    -- link11: a flat int/bool TUPLE main (>= 2 kids) inlines its whole render
+    -- into the entry head and places the int/bool/write helpers in the render
+    -- region; the single-word path keeps the scalar head + body+write.
+    if count(kids) >= 2:
+        let n = count(kids)
+        head_len = nc_render_tuple_head_len(nc_tuple_sret_size(n), n)
+        render_len = nc_render_helpers_len()
+    end
     let fault_len = 0
     if has_faultable != 0:
         fault_len = nc_fault_helper_len()
     end
-    let render_len = nc_render_len(main_ret)
     let fault_start = heap_len + head_len
     let render_start = fault_start + fault_len
     let function_start = render_start + render_len
     return (heap_len, head_len, fault_len, render_len, fault_start, render_start, function_start)
 end
 
-func nc_fault_helper_start(has_heap, has_faultable, main_ret):
-    return nc_entry_layout(has_heap, has_faultable, main_ret).4
+func nc_fault_helper_start(has_heap, has_faultable, main_ret, kids):
+    return nc_entry_layout(has_heap, has_faultable, main_ret, kids).4
 end
 
 func nc_fault_diag_index_rel():
@@ -8336,8 +8377,8 @@ func nc_verify_layout_rels_loop(funcs, metas, layouts, i, n):
     return nc_verify_layout_rels_loop(funcs, metas, layouts, i + 1, n)
 end
 
-func nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret):
-    return nc_entry_layout(has_heap, has_faultable, main_ret).6
+func nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret, kids):
+    return nc_entry_layout(has_heap, has_faultable, main_ret, kids).6
 end
 
 func nc_pass1_program_loop(funcs, metas, i, n, entry, layouts):
@@ -8354,12 +8395,12 @@ func nc_pass1_program_loop(funcs, metas, i, n, entry, layouts):
     return nc_pass1_program_loop(funcs, metas, i + 1, n, entry + fn_len, layouts)
 end
 
-func nc_pass1_program(prog, metas, has_clogger, has_heap, has_faultable):
+func nc_pass1_program(prog, metas, has_clogger, has_heap, has_faultable, kids):
     let funcs = prog.0
     let layouts = new_array((int, array(int), array(int), int, int, int))
     let main_ret = get(metas, prog.2).1
-    let entry_layout = nc_entry_layout(has_heap, has_faultable, main_ret)
-    let stub_len = nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret)
+    let entry_layout = nc_entry_layout(has_heap, has_faultable, main_ret, kids)
+    let stub_len = nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret, kids)
     let r = nc_pass1_program_loop(funcs, metas, 0, count(funcs), stub_len, layouts)
     if r.0 != 0:
         return r
@@ -9106,6 +9147,294 @@ func nc_emit_render_main(buf, main_ret, render_start):
         buf = nc_emit_render_int_fd1(buf, write_off)
     end
     return nc_emit_write_fd(buf, 1)
+end
+
+-- ====================================================================
+-- link11: render a returned FLAT int/bool TUPLE to stdout in Herbert's
+-- canonical form, byte-identical to the C reference v_print_canonical_rec:
+--   "(" + elements joined by ", " + ")" + "\n"
+-- The single-word int/bool render path above (kringle, D14) is unchanged.
+-- The N result words are delivered by the aggregate-return ABI: the entry
+-- stub does `sub rsp,S; lea rdi,[rsp]; call main`, and main stores word k
+-- to [rdi+8k] = [rsp+8k]. The render runs with rsp at that scratch base; the
+-- structural literals are staged at [rsp+8N] (above the N results). Each
+-- element renderer (int/bool, no newline) and the shared write helper are
+-- placed once after the (optional) fault helpers; the inline render body
+-- calls them. Lengths are exact (the ERR-418 sub-boundary check verifies).
+-- Validated on silicon before wiring.
+
+-- sret scratch size: N words rounded up to 16 + 16 (staging+pad), so that
+-- `call main` keeps the rsp%16==0 the single-word path already relies on.
+func nc_tuple_sret_size(n):
+    let base = nc_mul8(n)
+    if nc_mod16(base) != 0:
+        base = base + 8
+    end
+    return base + 16
+end
+
+func nc_imm_rsp_len(s):
+    if s <= 127:
+        return 4
+    end
+    return 7
+end
+
+func nc_emit_sub_rsp_imm(buf, s):
+    do append(buf, 72)
+    if s <= 127:
+        do append(buf, 131)
+        do append(buf, 236)
+        do append(buf, s)
+        return buf
+    end
+    do append(buf, 129)
+    do append(buf, 236)
+    return nc_append_le32(buf, s)
+end
+
+func nc_emit_add_rsp_imm(buf, s):
+    do append(buf, 72)
+    if s <= 127:
+        do append(buf, 131)
+        do append(buf, 196)
+        do append(buf, s)
+        return buf
+    end
+    do append(buf, 129)
+    do append(buf, 196)
+    return nc_append_le32(buf, s)
+end
+
+func nc_render_int_noln_len():
+    return 53
+end
+
+func nc_render_bool_noln_len():
+    return 68
+end
+
+func nc_render_helpers_len():
+    return nc_render_int_noln_len() + nc_render_bool_noln_len() + nc_write_helper_len()
+end
+
+func nc_render_putc_len():
+    return 20
+end
+
+func nc_render_putsep_len():
+    return 22
+end
+
+func nc_render_elem_len():
+    return 10
+end
+
+func nc_render_tuple_body_len(n):
+    return nc_render_putc_len() + n * nc_render_elem_len() + (n - 1) * nc_render_putsep_len() + nc_render_putc_len() + nc_render_putc_len()
+end
+
+func nc_render_sret_head_len(s):
+    return nc_imm_rsp_len(s) + 4 + 5
+end
+
+func nc_render_tuple_tail_len(s):
+    return nc_imm_rsp_len(s) + 9
+end
+
+func nc_render_tuple_head_len(s, n):
+    return nc_render_sret_head_len(s) + nc_render_tuple_body_len(n) + nc_render_tuple_tail_len(s)
+end
+
+-- rax (unsigned 64-bit) -> decimal digits, NO newline, written to fd1 via the
+-- shared write helper at write_off; ends in ret. 53 bytes.
+func nc_emit_render_int_noln(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 32)
+    do append(buf, 76)
+    do append(buf, 141)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, 20)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 214)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 193)
+    do append(buf, 10)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 241)
+    do append(buf, 128)
+    do append(buf, 194)
+    do append(buf, 48)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 206)
+    do append(buf, 136)
+    do append(buf, 22)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 238)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 242)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 32)
+    do append(buf, 195)
+    return buf
+end
+
+-- rax (0/1) -> "false"/"true", NO newline, fd1 via write_off; ends in ret. 68 bytes.
+func nc_emit_render_bool_noln(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 116)
+    do append(buf, 29)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 116)
+    do append(buf, 114)
+    do append(buf, 117)
+    do append(buf, 101)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 4)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 195)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 102)
+    do append(buf, 97)
+    do append(buf, 108)
+    do append(buf, 115)
+    do append(buf, 198)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 4)
+    do append(buf, 101)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 5)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 195)
+    return buf
+end
+
+-- write a single literal byte `ch` to fd1 via the staging slot [rsp+stage]
+-- (rsp = scratch base, unchanged), calling the write helper. 20 bytes.
+func nc_emit_render_putc(buf, ch, stage, write_off):
+    do append(buf, 198)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, stage)
+    do append(buf, ch)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 116)
+    do append(buf, 36)
+    do append(buf, stage)
+    do append(buf, 186)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    return buf
+end
+
+-- write ", " (comma, space) via the staging slot. 22 bytes.
+func nc_emit_render_putsep(buf, stage, write_off):
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, stage)
+    do append(buf, 44)
+    do append(buf, 32)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 116)
+    do append(buf, 36)
+    do append(buf, stage)
+    do append(buf, 186)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    return buf
+end
+
+-- load result word k (at [rsp+8k]) into rax, then call the int/bool renderer. 10 bytes.
+func nc_emit_render_elem(buf, k, kid, int_off, bool_off):
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, nc_mul8(k))
+    if kid == nc_type_bool():
+        buf = nc_emit_call_abs(buf, bool_off)
+    else:
+        buf = nc_emit_call_abs(buf, int_off)
+    end
+    return buf
+end
+
+func nc_emit_render_tuple_elems(buf, kids, i, n, stage, int_off, bool_off, write_off):
+    if i >= n:
+        return buf
+    end
+    if i > 0:
+        buf = nc_emit_render_putsep(buf, stage, write_off)
+    end
+    buf = nc_emit_render_elem(buf, i, get(kids, i), int_off, bool_off)
+    return nc_emit_render_tuple_elems(buf, kids, i + 1, n, stage, int_off, bool_off, write_off)
 end
 
 func nc_emit_fault_exit1(buf):
@@ -10370,8 +10699,8 @@ func nc_emit_entry_check(start_len, buf, want, label):
     return 0
 end
 
-func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, main_ret, code_len, strings):
-    let layout = nc_entry_layout(has_heap, has_faultable, main_ret)
+func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, main_ret, code_len, strings, kids):
+    let layout = nc_entry_layout(has_heap, has_faultable, main_ret, kids)
     let start_len = length(freeze(buf))
     if has_heap != 0:
         buf = nc_emit_heap_stub(buf)
@@ -10379,6 +10708,56 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
     let ck = nc_emit_entry_check(start_len, buf, layout.0, "entry-heap")
     if ck != 0:
         return (ck, buf)
+    end
+    if count(kids) >= 2:
+        -- link11: tuple-returning main. The entry head sets up the sret scratch,
+        -- calls main, then INLINES the canonical render (calling the int/bool/write
+        -- helpers placed in the render region at layout.5), then exits.
+        let n = count(kids)
+        let stage = nc_mul8(n)
+        let int_off = layout.5
+        let bool_off = layout.5 + nc_render_int_noln_len()
+        let write_off = layout.5 + nc_render_int_noln_len() + nc_render_bool_noln_len()
+        buf = nc_emit_sub_rsp_imm(buf, nc_tuple_sret_size(n))
+        do append(buf, 72)
+        do append(buf, 141)
+        do append(buf, 60)
+        do append(buf, 36)
+        buf = nc_emit_call_abs(buf, main_entry)
+        buf = nc_emit_render_putc(buf, 40, stage, write_off)
+        buf = nc_emit_render_tuple_elems(buf, kids, 0, n, stage, int_off, bool_off, write_off)
+        buf = nc_emit_render_putc(buf, 41, stage, write_off)
+        buf = nc_emit_render_putc(buf, 10, stage, write_off)
+        buf = nc_emit_add_rsp_imm(buf, nc_tuple_sret_size(n))
+        do append(buf, 184)
+        do append(buf, 231)
+        do append(buf, 0)
+        do append(buf, 0)
+        do append(buf, 0)
+        do append(buf, 49)
+        do append(buf, 255)
+        do append(buf, 15)
+        do append(buf, 5)
+        ck = nc_emit_entry_check(start_len, buf, layout.4, "entry-head")
+        if ck != 0:
+            return (ck, buf)
+        end
+        if has_faultable != 0:
+            let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
+            buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, kids))
+        end
+        ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
+        if ck != 0:
+            return (ck, buf)
+        end
+        buf = nc_emit_render_int_noln(buf, write_off)
+        buf = nc_emit_render_bool_noln(buf, write_off)
+        buf = nc_emit_write_fd(buf, 1)
+        ck = nc_emit_entry_check(start_len, buf, layout.6, "entry-render")
+        if ck != 0:
+            return (ck, buf)
+        end
+        return (0, buf)
     end
     do append(buf, 232)
     buf = nc_append_rel32(buf, main_entry, layout.0 + 5)
@@ -10399,7 +10778,7 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
     end
     if has_faultable != 0:
         let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
-        buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret))
+        buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, kids))
     end
     ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
     if ck != 0:
@@ -18585,7 +18964,13 @@ func main():
     end
     let metas = analyzed.1
     let main_ret = get(metas, prog.2).1
-    let pass1 = nc_pass1_program(prog, metas, analyzed.2, analyzed.3, has_faultable)
+    -- link11: if main returns a flat int/bool tuple, carry its element type-ids
+    -- (else an empty list = the single-word path) through the entry layout/emit.
+    let main_kids = new_array(int)
+    if nc_type_is_flat_int_bool_tuple(type_pool, main_ret):
+        main_kids = nc_type_tuple_children(type_pool, main_ret)
+    end
+    let pass1 = nc_pass1_program(prog, metas, analyzed.2, analyzed.3, has_faultable, main_kids)
     if pass1.0 != 0:
         return 0
     end
@@ -18594,10 +18979,10 @@ func main():
     let main_layout = get(layouts, prog.2)
     let diag_base = 0
     if has_faultable != 0:
-        diag_base = nc_fault_helper_start(analyzed.3, has_faultable, main_ret)
+        diag_base = nc_fault_helper_start(analyzed.3, has_faultable, main_ret, main_kids)
     end
     let cbuf = new_buffer()
-    let entry = nc_emit_entry_stub(cbuf, main_layout.0, analyzed.2, analyzed.3, has_faultable, main_ret, pass1.2, prog.1)
+    let entry = nc_emit_entry_stub(cbuf, main_layout.0, analyzed.2, analyzed.3, has_faultable, main_ret, pass1.2, prog.1, main_kids)
     if entry.0 != 0:
         return 0
     end

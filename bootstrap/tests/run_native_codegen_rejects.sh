@@ -364,9 +364,12 @@ func main():
     return "x"
 end
 HERB
+# link11: a FLAT int/bool tuple main now renders (D14 aggregate half), so this
+# reject probe tests the remaining boundary -- a tuple with a non-scalar element
+# (here a nested tuple) is still out of scope and must ERR432.
 cat >"$tmp/r_main_tuple.herb" <<'HERB'
 func main():
-    return (1, 2)
+    return (1, (2, 3))
 end
 HERB
 
@@ -611,7 +614,12 @@ func main():
     let prog = lower_program(nodes, parsed.0, type_pool)
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
     let has_faultable = nc_prog_has_faultable(prog)
-    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable)
+    let main_ret = get(analyzed.1, prog.2).1
+    let main_kids = new_array(int)
+    if nc_type_is_flat_int_bool_tuple(type_pool, main_ret):
+        main_kids = nc_type_tuple_children(type_pool, main_ret)
+    end
+    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable, main_kids)
     let layouts = pass1.1
     let main_layout = get(layouts, prog.2)
     let bad_layout = (main_layout.0, main_layout.1, main_layout.2, main_layout.3, main_layout.4, main_layout.5 + 1)
