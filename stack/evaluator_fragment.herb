@@ -1547,5 +1547,15 @@ func main():
     let pools = (string_pool, buffer_pool, tuple_pool, array_pool)
     let argvals = new_array((int, int))
     let result = eval_call("main", argvals, pools, nodes, parsed.0)
-    return serialize_value(result, pools)
+    -- Emit the serialized 12-tuple via flogger (line 1) and return 0, rather
+    -- than RETURNING the string. This makes the fragment runnable BOTH by the C
+    -- interpreter AND by the native gen-1 compiler: the native subset requires
+    -- main to return int/bool (a string-returning main is ERR 432), so the
+    -- result is delivered on stdout, not as the return value. The C interpreter
+    -- and the native ELF then produce identical stdout (the serialized line,
+    -- then "0" from this return on a second line; graded by `head -1`). This is
+    -- the sovereignty advance: the evaluator self-description test runs C-free.
+    do flogger(serialize_value(result, pools))
+    do flogger("\n")
+    return 0
 end

@@ -901,10 +901,11 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
-    # Evaluator forcing-function test: the evaluator fragment returns the
-    # serialized probe result as a Herbert string value, so the bootstrap
-    # prints that value in canonical quoted form. The oracle is the raw
-    # serialized line; strip the canonical wrapper before diffing.
+    # Evaluator forcing-function test: the evaluator fragment EMITS the
+    # serialized probe result via flogger (stdout line 1) and returns 0, so it
+    # runs identically under the C interpreter AND the native gen-1 compiler
+    # (the native execution path is gated by run_evaluator_native.sh below).
+    # Diff stdout line 1 against the hand-authored answer key.
     EVAL_DRIVER="$STACK_DIR/evaluator_fragment.herb"
     EVAL_PROBE_EXPECTED="$STACK_DIR/evaluator_probe.expected"
     if [[ -f "$EVAL_DRIVER" && -f "$EVAL_PROBE_EXPECTED" ]]; then
@@ -922,8 +923,8 @@ if [[ -d ../../stack ]]; then
             cat "$actual"
             fail=$((fail + 1))
             rm -f "$actual" "$raw_actual" "$err"
-        elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-            echo "FAIL: stack/evaluator_probe (driver: evaluator_fragment.herb) (expected canonical string output)"
+        elif ! head -1 "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/evaluator_probe (driver: evaluator_fragment.herb) (expected serialized line-1 output)"
             echo "--- stdout"
             cat "$actual"
             fail=$((fail + 1))
@@ -937,6 +938,34 @@ if [[ -d ../../stack ]]; then
             echo "PASS: stack/evaluator_probe (driver: evaluator_fragment.herb)"
             pass=$((pass + 1))
             rm -f "$actual" "$raw_actual" "$err"
+        fi
+    fi
+
+    # Evaluator NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction): the
+    # C-free gen-1 seed compiles evaluator_fragment.herb to an ELF that runs with
+    # NO C in its execution path; its stdout line 1 must equal the independent
+    # oracle (ENDURING) and -- while a C interpreter still exists -- the
+    # interpreter's output (RETIREABLE faithfulness guard). This is the first
+    # metacircular fragment to gain a committed native execution path, so the
+    # evaluator self-description test now survives C's deletion.
+    if [[ -x "$PWD/run_evaluator_native.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_evaluator_native.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Prove the evaluator native-execution gate BITES (RED-first): a mutated
+    # evaluator rule still compiles natively but makes the C-free ELF diverge
+    # from the oracle.
+    if [[ -x "$PWD/run_evaluator_native_mutation.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_evaluator_native_mutation.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
         fi
     fi
 

@@ -19,7 +19,7 @@ HERBERT_SRCS := \
     bootstrap/main.c
 HERBERT_HDR  := bootstrap/herbert.h
 
-.PHONY: all check smoke test test-timeout lexer-equivalence parser-equivalence lexer-copy-sync native-codegen-diagnostics verify-local beta-full reseed clean
+.PHONY: all check smoke test test-timeout lexer-equivalence parser-equivalence evaluator-native lexer-copy-sync native-codegen-diagnostics verify-local beta-full reseed clean
 
 all: $(HERBERT)
 
@@ -44,13 +44,17 @@ lexer-equivalence: $(HERBERT)
 parser-equivalence: $(HERBERT)
 	@CC="$(CC)" CFLAGS="$(CFLAGS)" HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_parser_equivalence.sh
 
+evaluator-native: $(HERBERT)
+	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_evaluator_native.sh
+	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_evaluator_native_mutation.sh
+
 lexer-copy-sync:
 	@python3 bootstrap/tests/check_lexer_copy_sync.py
 
 native-codegen-diagnostics:
 	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
 
-verify-local: check test-timeout smoke lexer-equivalence parser-equivalence lexer-copy-sync native-codegen-diagnostics
+verify-local: check test-timeout smoke lexer-equivalence parser-equivalence evaluator-native lexer-copy-sync native-codegen-diagnostics
 
 beta-full: $(HERBERT)
 	@PATH=$(abspath tools):$$PATH HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_beta_full.sh
