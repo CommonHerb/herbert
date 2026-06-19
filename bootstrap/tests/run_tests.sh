@@ -828,18 +828,70 @@ if [[ -d ../../stack ]]; then
         fi
     done
 
-    # Lexer forcing-function test: run the lexer fragment, which has an
-    # embedded byte-for-byte copy of lexer_probe.herb in its main(), and
-    # diff its canonical token output against the hand-authored answer
-    # key in lexer_probe.expected. The expected file is independent of
-    # any lexer implementation, so this test pins the fragment against a
-    # genuine oracle.
+    # Lexer forcing-function test: the lexer fragment (embedding lexer_probe.herb
+    # byte-for-byte in its main()) now EMITS its serialized token stream via flogger
+    # (stdout line 1) + returns 0, so it runs identically under the C interpreter AND
+    # the native gen-1 compiler (the native execution path is gated by
+    # run_lexer_native.sh below). Diff stdout line 1 against the hand-authored answer
+    # key (the canonical token stream in lexer_probe.expected, never produced by any
+    # lexer).
     LEX_DRIVER="$STACK_DIR/lexer_fragment.herb"
     LEX_PROBE_EXPECTED="$STACK_DIR/lexer_probe.expected"
     if [[ -f "$LEX_DRIVER" && -f "$LEX_PROBE_EXPECTED" ]]; then
         total=$((total + 1))
-        if run_one "$LEX_DRIVER" "$LEX_PROBE_EXPECTED" \
-                "stack/lexer_probe (driver: lexer_fragment.herb)"; then
+        actual=$(mktemp)
+        raw_actual=$(mktemp)
+        err=$(mktemp)
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$LEX_DRIVER" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/lexer_probe (driver: lexer_fragment.herb) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! head -1 "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/lexer_probe (driver: lexer_fragment.herb) (expected serialized line-1 output)"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! diff -u "$LEX_PROBE_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
+            echo "FAIL: stack/lexer_probe (driver: lexer_fragment.herb) (output mismatch)"
+            cat /tmp/herbert_diff.$$
+            fail=$((fail + 1))
+            rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
+        else
+            echo "PASS: stack/lexer_probe (driver: lexer_fragment.herb)"
+            pass=$((pass + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        fi
+    fi
+
+    # Lexer NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction): the C-free
+    # gen-1 seed compiles lexer_fragment.herb to an ELF that scans+classifies+serializes
+    # with NO C in its execution path; its stdout line 1 must equal the independent
+    # oracle (ENDURING) and -- while a C interpreter still exists -- the interpreter's
+    # output (RETIREABLE faithfulness guard). The FOURTH metacircular fragment to gain a
+    # committed native execution path (after the evaluator, the VM, and the parser); the
+    # lexer self-description test now survives C's deletion (only klondike remains).
+    if [[ -x "$PWD/run_lexer_native.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_lexer_native.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Prove the lexer native-execution gate BITES (RED-first): a mutated lex rule
+    # (a character-class -> token-kind classification) still compiles natively but
+    # makes the C-free ELF emit a divergent token stream.
+    if [[ -x "$PWD/run_lexer_native_mutation.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_lexer_native_mutation.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))

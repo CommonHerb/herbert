@@ -215,6 +215,96 @@ func lex_source(src):
     return scan(src, 0, length(src), new_array((int, string)))
 end
 
+-- ---------- canonical serialization (pahlavi: native C-free execution) ----------
+--
+-- Serialize the token array to the SAME canonical form the bootstrap value
+-- printer produces for `array((int, string))`: `[(kind, "text"), ...]`. String
+-- escaping matches `bootstrap/value.c` exactly: byte 10 -> \n, 92 -> \\,
+-- 34 -> \", every other byte passes through. Emitting the serialized string via
+-- `flogger` (rather than RETURNING the token array) is what lets the fragment run
+-- BOTH under the C interpreter AND as a native gen-1-compiled ELF: the native
+-- subset requires `main` to return int/bool (a value-returning main is ERR 432),
+-- so the result is delivered on stdout. The native ELF and the C interpreter then
+-- produce byte-identical stdout, graded against the hand-authored answer key
+-- `stack/lexer_probe.expected` (an oracle no lexer produced). This is the
+-- sovereignty advance: the lexer self-description test runs C-free.
+
+-- append the decimal text of a non-negative int
+func emit_dec(buf, v):
+    if v < 10:
+        do append(buf, v + 48)
+        return buf
+    end
+    buf = emit_dec(buf, v / 10)
+    do append(buf, (v % 10) + 48)
+    return buf
+end
+
+-- append one token-text byte, canonically escaped (value.c: \n \\ \")
+func emit_text_byte(buf, b):
+    if b == 10:
+        do append(buf, 92)
+        do append(buf, 110)
+        return buf
+    elif b == 92:
+        do append(buf, 92)
+        do append(buf, 92)
+        return buf
+    elif b == 34:
+        do append(buf, 92)
+        do append(buf, 34)
+        return buf
+    else:
+        do append(buf, b)
+        return buf
+    end
+end
+
+-- append a token's text bytes, each canonically escaped
+func emit_text(buf, s, i, n):
+    if i >= n:
+        return buf
+    end
+    buf = emit_text_byte(buf, index(s, i))
+    return emit_text(buf, s, i + 1, n)
+end
+
+-- append one token rendered as `(kind, "text")`
+func emit_token(buf, tok):
+    do append(buf, 40)
+    buf = emit_dec(buf, tok.0)
+    do append(buf, 44)
+    do append(buf, 32)
+    do append(buf, 34)
+    let txt = tok.1
+    buf = emit_text(buf, txt, 0, length(txt))
+    do append(buf, 34)
+    do append(buf, 41)
+    return buf
+end
+
+-- append the token sequence, `, `-separated
+func emit_tokens(buf, toks, i, n):
+    if i >= n:
+        return buf
+    end
+    if i > 0:
+        do append(buf, 44)
+        do append(buf, 32)
+    end
+    buf = emit_token(buf, get(toks, i))
+    return emit_tokens(buf, toks, i + 1, n)
+end
+
+-- serialize the whole token array to `[(kind, "text"), ...]`
+func serialize_tokens(toks):
+    let buf = new_buffer()
+    do append(buf, 91)
+    buf = emit_tokens(buf, toks, 0, count(toks))
+    do append(buf, 93)
+    return freeze(buf)
+end
+
 -- ---------- forcing-function test ----------
 --
 -- `main` runs `lex_source` on a byte-for-byte embedded copy of
@@ -222,12 +312,17 @@ end
 -- expected token sequence lives, in canonical form, in
 -- `stack/lexer_probe.expected`). The embedded literal below, once
 -- Herbert decodes its `\n`, `\\`, and `\"` escapes, is byte-identical
--- to the probe file. The returned token array prints in canonical
--- form (`[(kind, "text"), ...]`) and the harness diffs that against
--- the hand-authored answer key — so the fragment's behavior is
--- pinned against an oracle that was never produced by any lexer.
+-- to the probe file. `main` serializes the resulting token array to its
+-- canonical form (`[(kind, "text"), ...]`) via `serialize_tokens`, emits it
+-- with `flogger` (then a trailing newline), and returns 0 — so the SAME
+-- fragment runs under the C interpreter AND as a native gen-1-compiled ELF,
+-- and the harness diffs stdout line 1 against the hand-authored answer key
+-- `stack/lexer_probe.expected` (an oracle that was never produced by any lexer).
 
 func main():
     let probe = "-- lexer_probe: a small complete Herbert program.\n-- Exercises every token kind for the lexer forcing-function test.\n\nfunc pick(c):\n    if c < '0':\n        return 0\n    elif c >= '0' and c <= '9':\n        return 1\n    elif c == '_':\n        return 2\n    else:\n        return 4\n    end\nend\n\nfunc tally(a, i, n, acc):\n    if i >= n:\n        return acc\n    end\n    let v = get(a, i)\n    if v != 0:\n        return tally(a, i + 1, n, acc + 1)\n    else:\n        return tally(a, i + 1, n, acc)\n    end\nend\n\nfunc build():\n    let b = new_buffer()\n    do append(b, 'h')\n    do append(b, '\\n')\n    let s = freeze(b)\n    let label = \"a\\nb\\\\c\"\n    let pair = (s, length(label))\n    return pair.1\nend\n\nfunc main():\n    let total = build() - 1\n    let ok = total <= 8 and total > 0\n    return ok\nend\n"
-    return lex_source(probe)
+    let toks = lex_source(probe)
+    do flogger(serialize_tokens(toks))
+    do flogger("\n")
+    return 0
 end
