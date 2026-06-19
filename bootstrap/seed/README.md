@@ -29,7 +29,7 @@ bytes) is the deferred Oberon-ideal hardening.
   program header, zero sections, no `PT_INTERP`, raw Linux syscalls. No dynamic
   linker, no libc.
 - Integrity is pinned by `gen1.seed.sha256`
-  (`c5557e23…2a1458`). The suite validates magic + sha256 before use and fails
+  (`4af3dbee…ec7a0`). The suite validates magic + sha256 before use and fails
   closed if either is wrong.
 
 ## Re-seeding (when the backend legitimately changes)

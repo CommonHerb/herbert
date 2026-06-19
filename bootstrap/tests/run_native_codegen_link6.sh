@@ -359,16 +359,19 @@ func main():
     return slice("abc", 0, 1)
 end
 HERB
-cat >"$tmp/r_main_string.herb" <<'HERB'
+# link11 renders flat int/bool tuples; link12 (D14) renders strings + NESTED
+# tuples, so `return "x"` and `return (1, (2, 3))` now COMPILE. The remaining
+# out-of-scope main return types are arrays/buffers and aggregates CONTAINING
+# one: a bare array (here) and a tuple with an array element (below) must ERR432.
+cat >"$tmp/r_main_array.herb" <<'HERB'
 func main():
-    return "x"
+    let xs = new_array(int)
+    return xs
 end
 HERB
-# link11: a FLAT int/bool tuple main now renders; a tuple with a non-scalar
-# element (nested tuple) is still out of scope and must ERR432.
-cat >"$tmp/r_main_tuple.herb" <<'HERB'
+cat >"$tmp/r_main_arr_elem.herb" <<'HERB'
 func main():
-    return (1, (2, 3))
+    return (1, new_array(int))
 end
 HERB
 
@@ -386,8 +389,8 @@ check_reject_code len_buffer 438 "$tmp/r_len_buffer.herb"
 check_reject_code index_buffer 438 "$tmp/r_index_buffer.herb"
 check_reject_code equal_buffer 438 "$tmp/r_equal_buffer.herb"
 check_reject_code slice 438 "$tmp/r_slice.herb"
-check_reject_code main_string 432 "$tmp/r_main_string.herb"
-check_reject_code main_tuple 432 "$tmp/r_main_tuple.herb"
+check_reject_code main_array 432 "$tmp/r_main_array.herb"
+check_reject_code main_arr_elem 432 "$tmp/r_main_arr_elem.herb"
 
 total=$((total + 1))
 awk '/^func main\(\):$/ { exit } { print }' "$backend" >"$tmp/missing_meta_driver.herb"

@@ -294,11 +294,13 @@ check_reject_code() {
 }
 
 # Create rejection probes
-# rj02: handle used outside index() -- returned bare
+# rj02: a bare heap HANDLE returned. (filigree/link12 made a bare STRING render, so
+# `return clogger()` is now valid; a BUFFER is still non-renderable, so returning it
+# bare remains ERR432 -- the bare-handle-escape boundary still bites.)
 cat > "$tmp/rj02.herb" << 'HERB'
 func main():
-    let s = clogger()
-    return s
+    let b = new_buffer()
+    return b
 end
 HERB
 # rj08: flogger-of-int remains illegal after flogger string output support.

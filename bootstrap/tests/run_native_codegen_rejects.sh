@@ -359,17 +359,19 @@ func main():
     return 0
 end
 HERB
-cat >"$tmp/r_main_string.herb" <<'HERB'
+# link11 renders flat int/bool tuples; link12 (D14) renders strings + NESTED
+# tuples, so `return "x"` and `return (1, (2, 3))` now COMPILE. The remaining
+# out-of-scope main return types are arrays/buffers and any aggregate CONTAINING
+# one: a bare array (here) and a tuple with an array element (below) must ERR432.
+cat >"$tmp/r_main_array.herb" <<'HERB'
 func main():
-    return "x"
+    let xs = new_array(int)
+    return xs
 end
 HERB
-# link11: a FLAT int/bool tuple main now renders (D14 aggregate half), so this
-# reject probe tests the remaining boundary -- a tuple with a non-scalar element
-# (here a nested tuple) is still out of scope and must ERR432.
-cat >"$tmp/r_main_tuple.herb" <<'HERB'
+cat >"$tmp/r_main_arr_elem.herb" <<'HERB'
 func main():
-    return (1, (2, 3))
+    return (1, new_array(int))
 end
 HERB
 
@@ -566,8 +568,8 @@ check_source_reject_code_once poly_array_tuple_growth 441 "$tmp/r_poly_array_tup
 check_source_reject_code_once poly_dead_growth 441 "$tmp/r_poly_dead_growth.herb"
 check_source_reject_code_once poly_same_instance_return_conflict 430 "$tmp/r_poly_same_instance_return_conflict.herb"
 check_source_reject_code monomorph 436 "$tmp/r_monomorph.herb"
-check_source_reject_code main_string 432 "$tmp/r_main_string.herb"
-check_source_reject_code main_tuple 432 "$tmp/r_main_tuple.herb"
+check_source_reject_code main_array 432 "$tmp/r_main_array.herb"
+check_source_reject_code main_arr_elem 432 "$tmp/r_main_arr_elem.herb"
 check_source_reject_code zelph_rebind 430 "$tmp/r_zelph_rebind.herb"
 check_source_reject_code zelph_let_shadow 430 "$tmp/r_zelph_let_shadow.herb"
 check_source_reject_code zelph_pure_bottom 424 "$tmp/r_zelph_pure_bottom.herb"
@@ -615,11 +617,8 @@ func main():
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
     let has_faultable = nc_prog_has_faultable(prog)
     let main_ret = get(analyzed.1, prog.2).1
-    let main_kids = new_array(int)
-    if nc_type_is_flat_int_bool_tuple(type_pool, main_ret):
-        main_kids = nc_type_tuple_children(type_pool, main_ret)
-    end
-    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable, main_kids)
+    let main_rplan = nc_build_render_plan(type_pool, main_ret)
+    let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable, main_rplan)
     let layouts = pass1.1
     let main_layout = get(layouts, prog.2)
     let bad_layout = (main_layout.0, main_layout.1, main_layout.2, main_layout.3, main_layout.4, main_layout.5 + 1)

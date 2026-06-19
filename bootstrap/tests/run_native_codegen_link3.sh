@@ -235,10 +235,13 @@ func main(x):
     return x
 end
 HERB
+# filigree/link12 made a bare STRING render, so `return clogger()` is now valid; a
+# BUFFER is still non-renderable, so returning it bare remains ERR432 -- the
+# bare-handle-escape boundary still bites.
 cat >"$tmp/r_handle_escape.herb" <<'HERB'
 func main():
-    let input = clogger()
-    return input
+    let b = new_buffer()
+    return b
 end
 HERB
 cat >"$tmp/r_handle_reassign.herb" <<'HERB'

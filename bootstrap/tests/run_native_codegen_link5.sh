@@ -251,16 +251,19 @@ func main():
     return x
 end
 HERB
-cat >"$tmp/r_main_string.herb" <<'HERB'
+# link11 renders flat int/bool tuples; link12 (D14) renders strings + NESTED
+# tuples, so `return "x"` and `return (1, (2, 3))` now COMPILE. The remaining
+# out-of-scope main return types are arrays/buffers and any aggregate CONTAINING
+# one: a bare array (here) and a tuple with an array element (below) must ERR432.
+cat >"$tmp/r_main_array.herb" <<'HERB'
 func main():
-    return "x"
+    let xs = new_array(int)
+    return xs
 end
 HERB
-# link11: a FLAT int/bool tuple main now renders; a tuple with a non-scalar
-# element (nested tuple) is still out of scope and must ERR432.
-cat >"$tmp/r_main_tuple.herb" <<'HERB'
+cat >"$tmp/r_main_arr_elem.herb" <<'HERB'
 func main():
-    return (1, (2, 3))
+    return (1, new_array(int))
 end
 HERB
 
@@ -271,7 +274,7 @@ for item in \
     "equal_mixed 430 r_equal_mixed" "equal_tuple 430 r_equal_tuple" \
     "dot_range 431 r_dot_range" "dot_non 431 r_dot_non" \
     "rebind_width 433 r_rebind_width" \
-    "main_string 432 r_main_string" "main_tuple 432 r_main_tuple"; do
+    "main_array 432 r_main_array" "main_arr_elem 432 r_main_arr_elem"; do
     set -- $item
     check_reject_code "$1" "$2" "$tmp/$3.herb"
 done
