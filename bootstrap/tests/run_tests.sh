@@ -1169,6 +1169,39 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    # Emitter NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction -- the SIXTH and
+    # FINAL metacircular fragment). The C-free gen-1 seed compiles a one-line main-adapted
+    # emitter_fragment (the standalone AST->bytecode CODE GENERATOR: lower_program /
+    # emit_expr / opcode_for_binop / serialize_bytecode) to an ELF that lowers the embedded
+    # probe to bytecode with NO C in its execution path; its serialized listing must equal
+    # the independent oracle stack/emitter_probe.expected (ENDURING) and -- while a C
+    # interpreter still exists -- the interpreter's listing (RETIREABLE faithfulness guard).
+    # emitter_fragment.herb is byte-identical (the adapter is applied at gate time, so the
+    # existing C emitter_probe test still runs the unmodified fragment -- purely additive).
+    # The emitter is the only fragment that pins the lowering PRODUCT (codegen structure at
+    # the instruction level), invisible to the five value-observing fragments. With this,
+    # ALL SIX metacircular fragments survive C's deletion.
+    if [[ -x "$PWD/run_emitter_native.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_emitter_native.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Prove the emitter native-execution gate BITES (RED-first): a mutated reachable
+    # LOWERING rule (an opcode mapping / a frame-slot allocation / a control-flow branch)
+    # still compiles natively but makes the C-free ELF emit a divergent bytecode listing.
+    if [[ -x "$PWD/run_emitter_native_mutation.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_emitter_native_mutation.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
     # Klondike canonical integration forcing functions. The canonical driver
     # reads source through clogger(), checks the diagnostics front end, lowers
     # to bytecode, adapts, and executes through the VM.
