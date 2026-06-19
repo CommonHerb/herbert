@@ -969,10 +969,11 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
-    # VM forcing-function test: the VM fragment runs the blessed bytecode
-    # for the same evaluator probe and returns the serialized result as a
-    # Herbert string value. Reuse the evaluator oracle and strip the
-    # canonical string wrapper before diffing.
+    # VM forcing-function test: the VM fragment runs the blessed bytecode for the
+    # same evaluator probe and now EMITS the serialized result via flogger (stdout
+    # line 1) + returns 0, so it runs identically under the C interpreter AND the
+    # native gen-1 compiler (the native execution path is gated by run_vm_native.sh
+    # below). Reuse the evaluator oracle; diff stdout line 1.
     VM_DRIVER="$STACK_DIR/vm_fragment.herb"
     VM_PROBE_EXPECTED="$STACK_DIR/evaluator_probe.expected"
     if [[ -f "$VM_DRIVER" && -f "$VM_PROBE_EXPECTED" ]]; then
@@ -990,8 +991,8 @@ if [[ -d ../../stack ]]; then
             cat "$actual"
             fail=$((fail + 1))
             rm -f "$actual" "$raw_actual" "$err"
-        elif ! sed -n 's/^"\(.*\)"$/\1/p' "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
-            echo "FAIL: stack/vm (driver: vm_fragment.herb) (expected canonical string output)"
+        elif ! head -1 "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/vm (driver: vm_fragment.herb) (expected serialized line-1 output)"
             echo "--- stdout"
             cat "$actual"
             fail=$((fail + 1))
@@ -1005,6 +1006,34 @@ if [[ -d ../../stack ]]; then
             echo "PASS: stack/vm (driver: vm_fragment.herb)"
             pass=$((pass + 1))
             rm -f "$actual" "$raw_actual" "$err"
+        fi
+    fi
+
+    # VM NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction): the C-free
+    # gen-1 seed compiles vm_fragment.herb to an ELF that runs the bytecode VM with
+    # NO C in its execution path; its stdout line 1 must equal the independent
+    # oracle (ENDURING) and -- while a C interpreter still exists -- the
+    # interpreter's output (RETIREABLE faithfulness guard). The SECOND metacircular
+    # fragment to gain a committed native execution path (after the evaluator); the
+    # bytecode-VM self-description test now survives C's deletion.
+    if [[ -x "$PWD/run_vm_native.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_vm_native.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Prove the VM native-execution gate BITES (RED-first): a mutated bytecode-VM
+    # opcode handler still compiles natively but makes the C-free ELF diverge from
+    # the oracle.
+    if [[ -x "$PWD/run_vm_native_mutation.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_vm_native_mutation.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
         fi
     fi
 
