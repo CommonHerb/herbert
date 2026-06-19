@@ -902,9 +902,10 @@ end
 
 -- ====================================================================
 -- MAIN — embed parser_probe.herb byte-for-byte, lex it, parse it,
--- serialize the AST, return the canonical S-expression as a string.
--- The harness prints the returned string in canonical form (wrapped in
--- "..."), and stack/parser_probe.expected holds that wrapped form.
+-- serialize the AST, and EMIT the canonical S-expression via flogger
+-- (main returns 0; see the flogger note in main below). The C interpreter
+-- and the native gen-1 compiler both write it to stdout line 1, and
+-- stack/parser_probe.expected holds the RAW (unwrapped) S-expression key.
 -- ====================================================================
 
 func main():
@@ -914,5 +915,15 @@ func main():
     let r = parse_program(tokens, 0, pool)
     let buf = new_buffer()
     buf = ser(buf, pool, r.0)
-    return freeze(buf)
+    -- Emit the serialized S-expression via flogger (line 1) and return 0, rather
+    -- than RETURNING the string. This makes the fragment runnable BOTH by the C
+    -- interpreter AND by the native gen-1 compiler: the native subset requires
+    -- main to return int/bool (a string-returning main is ERR 432), so the
+    -- result is delivered on stdout, not as the return value. The C interpreter
+    -- and the native ELF then produce identical stdout (the serialized line,
+    -- then "0" from this return on a second line; graded by `head -1`). This is
+    -- the sovereignty advance: the parser self-description test runs C-free.
+    do flogger(freeze(buf))
+    do flogger("\n")
+    return 0
 end

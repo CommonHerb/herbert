@@ -882,19 +882,69 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
-    # Parser forcing-function test: run the parser fragment, which has
-    # an embedded byte-for-byte copy of parser_probe.herb in its main(),
-    # and diff its canonical S-expression output against the
-    # hand-derived answer key in parser_probe.expected. The expected
-    # file is the canonical-print form (Herbert's "..."-wrapped string)
-    # of the answer key text, so the test pins the fragment byte-for-byte
-    # against an oracle that was never produced by any parser.
+    # Parser forcing-function test: the parser fragment (embedding parser_probe.herb
+    # byte-for-byte in its main()) now EMITS its serialized S-expression via flogger
+    # (stdout line 1) + returns 0, so it runs identically under the C interpreter AND
+    # the native gen-1 compiler (the native execution path is gated by
+    # run_parser_native.sh below). Diff stdout line 1 against the hand-authored answer
+    # key (the raw S-expression in parser_probe.expected, never produced by any parser).
     PARSE_DRIVER="$STACK_DIR/parser_fragment.herb"
     PARSE_PROBE_EXPECTED="$STACK_DIR/parser_probe.expected"
     if [[ -f "$PARSE_DRIVER" && -f "$PARSE_PROBE_EXPECTED" ]]; then
         total=$((total + 1))
-        if run_one "$PARSE_DRIVER" "$PARSE_PROBE_EXPECTED" \
-                "stack/parser_probe (driver: parser_fragment.herb)"; then
+        actual=$(mktemp)
+        raw_actual=$(mktemp)
+        err=$(mktemp)
+        HERBERT_REPORT_PEAK=1 "$HERBERT" "$PARSE_DRIVER" >"$actual" 2>"$err"
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "FAIL: stack/parser_probe (driver: parser_fragment.herb) (interpreter exit $rc)"
+            echo "--- stderr"
+            cat "$err"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! head -1 "$actual" >"$raw_actual" || [[ ! -s "$raw_actual" ]]; then
+            echo "FAIL: stack/parser_probe (driver: parser_fragment.herb) (expected serialized line-1 output)"
+            echo "--- stdout"
+            cat "$actual"
+            fail=$((fail + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        elif ! diff -u "$PARSE_PROBE_EXPECTED" "$raw_actual" >/tmp/herbert_diff.$$ 2>&1; then
+            echo "FAIL: stack/parser_probe (driver: parser_fragment.herb) (output mismatch)"
+            cat /tmp/herbert_diff.$$
+            fail=$((fail + 1))
+            rm -f /tmp/herbert_diff.$$ "$actual" "$raw_actual" "$err"
+        else
+            echo "PASS: stack/parser_probe (driver: parser_fragment.herb)"
+            pass=$((pass + 1))
+            rm -f "$actual" "$raw_actual" "$err"
+        fi
+    fi
+
+    # Parser NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction): the C-free
+    # gen-1 seed compiles parser_fragment.herb to an ELF that lexes+parses+serializes
+    # with NO C in its execution path; its stdout line 1 must equal the independent
+    # oracle (ENDURING) and -- while a C interpreter still exists -- the interpreter's
+    # output (RETIREABLE faithfulness guard). The THIRD metacircular fragment to gain a
+    # committed native execution path (after the evaluator and the VM); the parser
+    # self-description test now survives C's deletion.
+    if [[ -x "$PWD/run_parser_native.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_parser_native.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Prove the parser native-execution gate BITES (RED-first): a mutated parse rule
+    # (an operator -> AST-tag mapping) still compiles natively but makes the C-free
+    # ELF emit a divergent S-expression.
+    if [[ -x "$PWD/run_parser_native_mutation.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_parser_native_mutation.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))

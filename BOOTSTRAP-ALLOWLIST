@@ -33,6 +33,8 @@ bootstrap/tests/run_evaluator_native.sh
 bootstrap/tests/run_evaluator_native_mutation.sh
 bootstrap/tests/run_vm_native.sh
 bootstrap/tests/run_vm_native_mutation.sh
+bootstrap/tests/run_parser_native.sh
+bootstrap/tests/run_parser_native_mutation.sh
 bootstrap/tests/run_beta_full.sh
 bootstrap/tests/run_native_codegen_link1.sh
 bootstrap/tests/run_native_codegen_link2.sh
