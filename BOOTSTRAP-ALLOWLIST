@@ -37,6 +37,8 @@ bootstrap/tests/run_parser_native.sh
 bootstrap/tests/run_parser_native_mutation.sh
 bootstrap/tests/run_lexer_native.sh
 bootstrap/tests/run_lexer_native_mutation.sh
+bootstrap/tests/run_klondike_native.sh
+bootstrap/tests/run_klondike_native_mutation.sh
 bootstrap/tests/run_beta_full.sh
 bootstrap/tests/run_native_codegen_link1.sh
 bootstrap/tests/run_native_codegen_link2.sh
@@ -323,6 +325,7 @@ stack/error_probes.expected
 stack/evaluator_probe.expected
 stack/lexer_probe.expected
 stack/parser_probe.expected
+stack/klondike_native_probe.expected
 tools/scan.c
 tools/check_timeout.py
 tools/check_full_test_host.sh

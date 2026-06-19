@@ -1139,6 +1139,36 @@ if [[ -d ../../stack ]]; then
         fi
     fi
 
+    # Klondike NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction -- the LAST
+    # and FIFTH metacircular fragment). The C-free gen-1 seed compiles a one-line
+    # main-adapted klondike (the full toolchain: lex+parse+check+lower+VM+serialize)
+    # to an ELF that compiles+runs an embedded probe with NO C in its execution path;
+    # its transcript must equal the independent oracle (ENDURING) and -- while a C
+    # interpreter still exists -- the interpreter's output (RETIREABLE faithfulness
+    # guard). klondike.herb is byte-identical (the adapter is applied at gate time so
+    # its meta-circular-suite role is preserved). With this, ALL FIVE metacircular
+    # fragments survive C's deletion.
+    if [[ -x "$PWD/run_klondike_native.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_klondike_native.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
+    # Prove the klondike native-execution gate BITES (RED-first): a mutated VM rule
+    # (int_binop's + / < / == ) still compiles natively but makes the C-free ELF emit
+    # a divergent result tuple.
+    if [[ -x "$PWD/run_klondike_native_mutation.sh" ]]; then
+        total=$((total + 1))
+        if "$PWD/run_klondike_native_mutation.sh"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+
     # Klondike canonical integration forcing functions. The canonical driver
     # reads source through clogger(), checks the diagnostics front end, lowers
     # to bytecode, adapts, and executes through the VM.
