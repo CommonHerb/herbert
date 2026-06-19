@@ -412,11 +412,23 @@ func main():
     return 0
 end
 HERB
-"$HERBERT" "$tmp/missing_meta_driver.herb" >"$tmp/missing_meta.out" 2>"$tmp/missing_meta.err"
-if grep -q "ERR 439" "$tmp/missing_meta.out"; then
-    pass=$((pass + 1))
-else
+# tollgate: retire C from grading this verifier-diagnostic driver. The driver
+# (backend body + a main that hand-builds a malformed program and calls
+# nc_analyze_program) is COMPILED by the C-free gen-1 seed and RUN -- the SAME
+# verifier path C exercised by interpretation, now exercised natively. C is
+# preserved as an OPT-IN byte-faithfulness cross-check under
+# NATIVE_CODEGEN_ORACLE=c.
+mmd="$tmp/missing_meta_driver.cdir"; rm -rf "$mmd"; mkdir -p "$mmd"
+( cd "$mmd" && "$NATIVE_CODEGEN_COMPILER" <"$tmp/missing_meta_driver.herb" >"$tmp/missing_meta.cc.out" 2>"$tmp/missing_meta.cc.err" )
+[[ -f "$mmd/a.out" ]] && chmod +x "$mmd/a.out"
+if [[ ! -f "$mmd/a.out" ]]; then
+    fail_test "reject missing_new_array_metadata: seed did not compile driver: $(head -1 "$tmp/missing_meta.cc.out") $(head -1 "$tmp/missing_meta.cc.err")"
+elif ! { "$mmd/a.out" >"$tmp/missing_meta.out" 2>"$tmp/missing_meta.err"; grep -q "ERR 439" "$tmp/missing_meta.out"; }; then
     fail_test "reject missing_new_array_metadata: expected ERR 439, stdout=$(head -1 "$tmp/missing_meta.out"), stderr=$(head -1 "$tmp/missing_meta.err")"
+elif [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]] && ! { "$HERBERT" "$tmp/missing_meta_driver.herb" >"$tmp/missing_meta.cref.out" 2>/dev/null; cmp -s "$tmp/missing_meta.out" "$tmp/missing_meta.cref.out"; }; then
+    fail_test "reject missing_new_array_metadata: C cross-check diverged from native (C=$(head -1 "$tmp/missing_meta.cref.out"))"
+else
+    pass=$((pass + 1))
 fi
 
 cat >"$tmp/oob.herb" <<'HERB'

@@ -85,11 +85,23 @@ check_driver_reject_code() {
     total=$((total + 1))
     local out="$tmp/driver_${label}.out"
     local err="$tmp/driver_${label}.err"
-    "$HERBERT" "$driver" >"$out" 2>"$err"
-    if grep -q "ERR $code" "$out"; then
-        pass=$((pass + 1))
-    else
+    # tollgate: retire C from grading these verifier-diagnostic drivers (backend
+    # body + a main that hand-builds a malformed IR and calls the verifier). The
+    # driver is COMPILED by the C-free gen-1 seed and RUN -- the same verifier
+    # path C exercised by interpretation, now native. C is preserved as an OPT-IN
+    # byte-faithfulness cross-check under NATIVE_CODEGEN_ORACLE=c.
+    local cdir="$tmp/driver_${label}.cdir"
+    rm -rf "$cdir"; mkdir -p "$cdir"
+    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$driver" >"$tmp/driver_${label}.cc.out" 2>"$tmp/driver_${label}.cc.err" )
+    [[ -f "$cdir/a.out" ]] && chmod +x "$cdir/a.out"
+    if [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "driver reject $label: seed did not compile driver: $(head -1 "$tmp/driver_${label}.cc.out") $(head -1 "$tmp/driver_${label}.cc.err")"
+    elif ! { "$cdir/a.out" >"$out" 2>"$err"; grep -q "ERR $code" "$out"; }; then
         fail_test "driver reject $label: expected ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+    elif [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]] && ! { "$HERBERT" "$driver" >"$tmp/driver_${label}.cref" 2>/dev/null; cmp -s "$out" "$tmp/driver_${label}.cref"; }; then
+        fail_test "driver reject $label: C cross-check diverged from native (C=$(head -1 "$tmp/driver_${label}.cref"))"
+    else
+        pass=$((pass + 1))
     fi
 }
 

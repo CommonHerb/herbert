@@ -46,6 +46,23 @@ oracle_le64() {
     oracle_expect_le64 "$(native_codegen_oracle_case_id "$out_file")" "$probe_file" "$rt_file" "$out_file"
 }
 
+# tollgate: compile a (possibly MUTATED) backend to a native compiler ELF with
+# the C-free gen-1 seed, cached by content hash, so a mutated-backend probe is
+# graded WITHOUT the C interpreter (the mutant used to be C-INTERPRETED as a
+# compiler). Echoes the ELF path; nonzero rc on compile failure.
+seed_compile_backend() {
+    local be="$1" key be_elf cdir
+    key="$(native_codegen_oracle_sha256 "$be")"
+    be_elf="$tmp/be_compiler.$key.elf"
+    if [[ ! -f "$be_elf" ]]; then
+        cdir="$tmp/be_compiler.$key.cdir"; rm -rf "$cdir"; mkdir -p "$cdir"
+        ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$be" >/dev/null 2>&1 )
+        [[ -f "$cdir/a.out" ]] || return 1
+        cp "$cdir/a.out" "$be_elf"; chmod +x "$be_elf"
+    fi
+    printf '%s\n' "$be_elf"
+}
+
 compile_probe() {
     local label="$1" probe="$2" elf="$3" be="${4:-$backend}"
     local out="$tmp/${label}.out" err="$tmp/${label}.err"
@@ -60,7 +77,22 @@ compile_probe() {
     if [[ "$be" == "$backend" ]]; then
         ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
     else
-        ( cd "$cdir" && "$HERBERT" "$be" <"$probe" >"$out" 2>"$err" )
+        # tollgate: seed-compile the mutated backend, then run it on the probe
+        # (C-free); preserve C-interpretation as an opt-in a.out cross-check.
+        local be_elf
+        if ! be_elf="$(seed_compile_backend "$be")"; then
+            echo "FAIL: stack/native_compile_fragment.herb (compile $label: seed did not compile mutated backend $(basename "$be"))"
+            exit 1
+        fi
+        ( cd "$cdir" && "$be_elf" <"$probe" >"$out" 2>"$err" )
+        if [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]]; then
+            local ccdir="$tmp/${label}.c.cdir"; rm -rf "$ccdir"; mkdir -p "$ccdir"
+            ( cd "$ccdir" && "$HERBERT" "$be" <"$probe" >/dev/null 2>&1 )
+            if [[ -f "$cdir/a.out" && -f "$ccdir/a.out" ]] && ! cmp -s "$cdir/a.out" "$ccdir/a.out"; then
+                echo "FAIL: stack/native_compile_fragment.herb (compile $label: C cross-check a.out diverged from seed-compiled mutant)"
+                exit 1
+            fi
+        fi
     fi
     if [[ ! -f "$cdir/a.out" ]]; then
         echo "FAIL: stack/native_compile_fragment.herb (compile $label rejected/no a.out: $(head -1 "$out"))"
@@ -303,11 +335,22 @@ run_branch_target_ret_probe() {
         return
     fi
     local out="$tmp/branch_target_ret_tail.old.out" err="$tmp/branch_target_ret_tail.old.err"
-    "$HERBERT" "$old_be" <"$tmp/branch_target_ret_tail.herb" >"$out" 2>"$err"
-    if grep -q "ERR 415" "$out"; then
-        pass=$((pass + 1))
-    else
+    # tollgate: seed-compile the old-recognizer backend, then run it on the probe
+    # (C-free) -- the old recognizer rejects the probe with ERR 415 at the
+    # mutant-compiler's runtime, exactly as C-interpretation did. C preserved as
+    # an opt-in byte cross-check under NATIVE_CODEGEN_ORACLE=c.
+    local old_elf
+    if ! old_elf="$(seed_compile_backend "$old_be")"; then
+        fail_test "branch-target RET: seed did not compile old-recognizer backend"
+        return
+    fi
+    "$old_elf" <"$tmp/branch_target_ret_tail.herb" >"$out" 2>"$err"
+    if ! grep -q "ERR 415" "$out"; then
         fail_test "branch-target RET old recognizer should reject ERR 415, stdout=$(head -1 "$out") stderr=$(head -1 "$err")"
+    elif [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]] && ! { "$HERBERT" "$old_be" <"$tmp/branch_target_ret_tail.herb" >"$tmp/btr.cref" 2>/dev/null; cmp -s "$out" "$tmp/btr.cref"; }; then
+        fail_test "branch-target RET old recognizer: C cross-check diverged from native (C=$(head -1 "$tmp/btr.cref"))"
+    else
+        pass=$((pass + 1))
     fi
 }
 

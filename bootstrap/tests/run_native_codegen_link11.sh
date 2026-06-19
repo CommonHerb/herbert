@@ -166,6 +166,41 @@ end
 HERB
 }
 
+# tollgate: retire C from the layout-introspection driver. The driver (backend
+# body + a main that lexes/parses/lowers the probe and prints its function
+# LAY/TARGET layout) used to be C-INTERPRETED. It is now COMPILED by the C-free
+# gen-1 seed and RUN -- the native-derived layout TRACKS the actual native ELF
+# (so a backend codegen change shifts both together, preserving the RED-first
+# byte-slice gate; a golden layout could drift stale and mask it). Compiled once
+# per driver (cached). C is preserved as an OPT-IN byte cross-check under
+# NATIVE_CODEGEN_ORACLE=c. Echoes the layout records to $out; nonzero on failure.
+layout_driver_elf=
+layout_driver_for=
+layout_via() {
+    local driver="$1" input="$2" out="$3"
+    if [[ "$layout_driver_for" != "$driver" ]]; then
+        local cdir="$tmp/layout_driver.cdir"; rm -rf "$cdir"; mkdir -p "$cdir"
+        ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$driver" >/dev/null 2>&1 )
+        if [[ ! -f "$cdir/a.out" ]]; then
+            fail_test "layout driver: seed did not compile the introspection driver"
+            return 1
+        fi
+        layout_driver_elf="$tmp/layout_driver.elf"; cp "$cdir/a.out" "$layout_driver_elf"; chmod +x "$layout_driver_elf"
+        layout_driver_for="$driver"
+    fi
+    "$layout_driver_elf" <"$input" >"$out" 2>/dev/null
+    if [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]]; then
+        local cref; cref="$(mktemp)"
+        "$HERBERT" "$driver" <"$input" >"$cref" 2>/dev/null
+        if ! cmp -s "$out" "$cref"; then
+            fail_test "layout driver: C cross-check diverged from native layout"
+            rm -f "$cref"; return 1
+        fi
+        rm -f "$cref"
+    fi
+    return 0
+}
+
 layout_field() {
     local info="$1" idx="$2" field="$3"
     awk -v idx="$idx" -v field="$field" '$1 == "LAY" && $2 == idx { print $field; exit }' "$info"
@@ -216,8 +251,8 @@ HERB
     compile_probe frozen_generic "$generic" "$gen_elf" || return
     compile_probe frozen_concrete "$concrete" "$con_elf" || return
     make_layout_driver "$driver"
-    "$HERBERT" "$driver" <"$generic" >"$gen_info" 2>"$tmp/frozen_generic.layout.err"
-    "$HERBERT" "$driver" <"$concrete" >"$con_info" 2>"$tmp/frozen_concrete.layout.err"
+    layout_via "$driver" "$generic" "$gen_info" || return
+    layout_via "$driver" "$concrete" "$con_info" || return
 
     local gi_start gi_len gs_start gs_len ci_start ci_len cs_start cs_len
     gi_start=$(layout_field "$gen_info" 1 3)
@@ -234,7 +269,11 @@ HERB
     slice_func_bytes "$gen_elf" "$gs_start" "$gs_len" "$tmp/gen_id_string.bytes"
     slice_func_bytes "$con_elf" "$cs_start" "$cs_len" "$tmp/con_id_string.bytes"
 
-    if cmp -s "$tmp/gen_id_int.bytes" "$tmp/con_id_int.bytes" && cmp -s "$tmp/gen_id_string.bytes" "$tmp/con_id_string.bytes"; then
+    # tollgate: require non-empty leaf slices so a degenerate (len==0) native-
+    # derived layout cannot pass this cmp vacuously (the completeness critic's note).
+    if [[ ! -s "$tmp/gen_id_int.bytes" || ! -s "$tmp/con_id_int.bytes" || ! -s "$tmp/gen_id_string.bytes" || ! -s "$tmp/con_id_string.bytes" ]]; then
+        fail_test "frozen-emitter gate: empty leaf slice (gi=$gi_len ci=$ci_len gs=$gs_len cs=$cs_len) -- layout introspection produced no bytes"
+    elif cmp -s "$tmp/gen_id_int.bytes" "$tmp/con_id_int.bytes" && cmp -s "$tmp/gen_id_string.bytes" "$tmp/con_id_string.bytes"; then
         pass=$((pass + 1))
     else
         fail_test "frozen-emitter gate: stamped id leaf bytes differ from hand-written concrete leaves"
@@ -267,7 +306,7 @@ HERB
 
     compile_probe call_targets "$probe" "$elf" || return
     make_layout_driver "$driver"
-    "$HERBERT" "$driver" <"$probe" >"$info" 2>"$tmp/call_targets.layout.err"
+    layout_via "$driver" "$probe" "$info" || return
 
     if python3 - "$elf" "$info" <<'PY'
 import struct

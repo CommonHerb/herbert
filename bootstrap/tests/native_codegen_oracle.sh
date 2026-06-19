@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Shared Role-1 oracle for the native-codegen tests.
 #
-# Default mode validates live-C-derived native-canonical artifacts against the
-# committed golden. Golden mode loads only the committed artifact.
+# tollgate (sovereignty link 10): the DEFAULT is now `golden` -- the oracle loads
+# the committed C-free golden artifact and the C interpreter is NOT invoked on the
+# grading path. The live-C differential (`c` mode: re-derive the expected by
+# running the C bootstrap, validate it against the committed golden) is preserved
+# as an OPT-IN cross-check (NATIVE_CODEGEN_ORACLE=c), exactly the way `make reseed`
+# preserves the one sanctioned C mint. Golden mode loads only the committed
+# artifact; `c` mode also re-validates it against live C.
 
 native_codegen_oracle__script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NATIVE_CODEGEN_GOLDENS_DIR="${NATIVE_CODEGEN_GOLDENS_DIR:-$native_codegen_oracle__script_dir/native_codegen_goldens}"
-NATIVE_CODEGEN_ORACLE="${NATIVE_CODEGEN_ORACLE:-c}"
+NATIVE_CODEGEN_ORACLE="${NATIVE_CODEGEN_ORACLE:-golden}"
 NATIVE_CODEGEN_CAPTURE="${NATIVE_CODEGEN_ORACLE_CAPTURE:-0}"
 NATIVE_CODEGEN_MANIFEST="${NATIVE_CODEGEN_MANIFEST:-$NATIVE_CODEGEN_GOLDENS_DIR/manifest.tsv}"
 NATIVE_CODEGEN_CAPTURE_MANIFEST="${NATIVE_CODEGEN_CAPTURE_MANIFEST:-$NATIVE_CODEGEN_MANIFEST}"

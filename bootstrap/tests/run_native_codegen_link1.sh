@@ -23,6 +23,21 @@ fail() {
     exit 1
 }
 
+# tollgate: retire C from grading this link. The ELF-emitter fragment used to be
+# EXECUTED by the C interpreter (`$HERBERT $fragment`) to produce the a.out under
+# test. It is now COMPILED by the C-free gen-1 seed to a native ELF, and that ELF
+# is RUN with the same 1-byte stdin -- the fragment runs natively, no C. C is
+# preserved as an OPT-IN byte-faithfulness cross-check under NATIVE_CODEGEN_ORACLE=c.
+source "$script_dir/native_codegen_oracle.sh"
+native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
+frag_native="$tmp/native_elf_fragment.elf"
+frag_cdir="$tmp/frag.cdir"; rm -rf "$frag_cdir"; mkdir -p "$frag_cdir"
+( cd "$frag_cdir" && "$NATIVE_CODEGEN_COMPILER" <"$fragment" >"$tmp/frag.cc.out" 2>"$tmp/frag.cc.err" )
+if [[ ! -f "$frag_cdir/a.out" ]]; then
+    fail "seed did not compile native_elf_fragment.herb: $(head -1 "$tmp/frag.cc.out") $(head -1 "$tmp/frag.cc.err")"
+fi
+cp "$frag_cdir/a.out" "$frag_native"; chmod +x "$frag_native"
+
 write_byte() {
     local hex="$1"
     LC_ALL=C printf '%b' "\\x$hex"
@@ -32,10 +47,17 @@ emit_aout() {
     local hex="$1"
     local aout="$2"
     local err="$tmp/emit-$hex.err"
-    if ! write_byte "$hex" | "$HERBERT" "$fragment" >"$aout" 2>"$err"; then
+    if ! write_byte "$hex" | "$frag_native" >"$aout" 2>"$err"; then
         echo "--- stderr"
         cat "$err"
         fail "emitter exit for param 0x$hex"
+    fi
+    # Opt-in: the C interpreter must emit a byte-identical a.out.
+    if [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]]; then
+        local cref="$tmp/emit-$hex.cref"
+        if ! write_byte "$hex" | "$HERBERT" "$fragment" >"$cref" 2>/dev/null || ! cmp -s "$aout" "$cref"; then
+            fail "C cross-check diverged from native a.out for param 0x$hex"
+        fi
     fi
 }
 

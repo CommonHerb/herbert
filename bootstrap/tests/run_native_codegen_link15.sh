@@ -110,20 +110,13 @@ check_trap() {
     local label="$1" probe="$2" input="$3"
     local elf="$tmp/$label.elf"
     compile_probe "$label" "$probe" "$elf" || return
-    # C oracle: must trap (nonzero exit), empty stdout.
-    "$HERBERT" "$probe" <"$input" >"$tmp/$label.c.out" 2>"$tmp/$label.c.err"
-    local crc=$?
-    if [[ $crc -eq 0 ]]; then
-        fail_test "trap $label: C oracle did NOT trap (rc=0) -- probe is not a runtime fault"
-        return
-    fi
-    if [[ -s "$tmp/$label.c.out" ]]; then
-        fail_test "trap $label: C oracle wrote stdout before faulting (expected empty): $(xxd -p "$tmp/$label.c.out" | tr -d '\n')"
-        return
-    fi
-    # Native: must also trap, empty stdout, SAME exit status, and crucially NOT a
-    # raw SIGFPE/SIGSEGV (those surface as exit 128+signal: 136 for SIGFPE/#DE,
-    # 139 for SIGSEGV).
+    # tollgate: the compiled probe must trap CLEANLY -- nonzero exit, empty
+    # stdout, and crucially NOT a raw SIGFPE/#DE (136) or SIGSEGV (139). The
+    # fixture is a runtime fault BY CONSTRUCTION (e.g. divide-by-zero) and the
+    # exact trap-emitting bytes are pinned white-box by the disasm gate, so the
+    # clean-trap property is intrinsic and graded WITHOUT C. The native trap exits
+    # 1 (herbert's runtime-fault convention). C is preserved as an OPT-IN
+    # exit-status-parity cross-check under NATIVE_CODEGEN_ORACLE=c.
     "$elf" <"$input" >"$tmp/$label.n.out" 2>"$tmp/$label.n.err"
     local nrc=$?
     if [[ $nrc -eq 0 ]]; then
@@ -138,9 +131,21 @@ check_trap() {
         fail_test "trap $label: native wrote stdout before faulting (expected empty): $(xxd -p "$tmp/$label.n.out" | tr -d '\n')"
         return
     fi
-    if [[ $nrc -ne $crc ]]; then
-        fail_test "trap $label: exit-status parity broken (C rc=$crc native rc=$nrc)"
+    if [[ $nrc -ne 1 ]]; then
+        fail_test "trap $label: native trap exit was $nrc, expected 1 (herbert runtime-fault convention)"
         return
+    fi
+    if [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]]; then
+        "$HERBERT" "$probe" <"$input" >"$tmp/$label.c.out" 2>"$tmp/$label.c.err"
+        local crc=$?
+        if [[ $crc -eq 0 || -s "$tmp/$label.c.out" ]]; then
+            fail_test "trap $label: C cross-check did not cleanly trap (rc=$crc) -- probe is not a runtime fault"
+            return
+        fi
+        if [[ $nrc -ne $crc ]]; then
+            fail_test "trap $label: exit-status parity broken (C rc=$crc native rc=$nrc)"
+            return
+        fi
     fi
     pass=$((pass + 1))
 }

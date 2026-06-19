@@ -89,6 +89,38 @@ else
     turnstile_frag_herbert="$turnstile_grade_shim"
 fi
 
+# --- tollgate (sovereignty link 10): the second SUBTRACTIVE link ---------------
+# turnstile retired C from grading the six metacircular fragments. tollgate
+# retires C from grading the NATIVE-CODEGEN differential oracle (the 17 scripts
+# run_native_codegen_link1..16 + rejects). Two moves: (1) the differential
+# oracle's default flips c->golden (native artifacts graded against committed
+# C-free goldens; the live-C re-validation is opt-in NATIVE_CODEGEN_ORACLE=c),
+# retiring ~179 oracle C-grade calls; (2) every BESPOKE per-link C call -- link1
+# (ELF-emitter fragment), link4 (mutated backends), link6/rejects (verifier-
+# diagnostic drivers), link10 (self-host altimeter), link11 (layout introspection),
+# link15 (trap parity) -- is retired by seed-compiling+running the .herb natively
+# or grading an intrinsic property, with the live-C path preserved opt-in under
+# NATIVE_CODEGEN_ORACLE=c. A counting-DELEGATING HERBERT shim (the turnstile
+# writer, reused) wraps the ENTIRE native-codegen dispatch so
+# check_native_codegen_grade_count fences the default at ZERO C grading
+# invocations -- the native-codegen analogue of the turnstile "C did not GRADE"
+# fence. The shim wraps the $HERBERT VARIABLE, so it counts EVERY C-grade idiom
+# ($HERBERT $backend/$driver/$probe/$fragment/$be), not a single grepped pattern.
+tollgate_oracle="${NATIVE_CODEGEN_ORACLE:-golden}"
+tollgate_grade_count="$turnstile_tmp/nc_grade_count"
+: >"$tollgate_grade_count"
+tollgate_grade_shim="$turnstile_tmp/herbert_nc_grade_shim.sh"
+turnstile_write_shim "$tollgate_grade_shim" "$tollgate_grade_count"
+if [[ "$tollgate_oracle" == "golden" ]]; then
+    # Default: C-free grading. The shim is a trip-wire the C-free scripts never
+    # reach; the fence goes RED if a regression re-enters the C grading path.
+    tollgate_nc_herbert="$tollgate_grade_shim"
+else
+    # Opt-in (NATIVE_CODEGEN_ORACLE=c): the live-C differential + per-link
+    # cross-checks run against the real interpreter; the fence is disarmed.
+    tollgate_nc_herbert="$turnstile_real_herbert"
+fi
+
 run_one() {
     local prog="$1"
     local expected="$2"
@@ -680,25 +712,121 @@ SH
     fi
 }
 
-run_native_codegen_completeness_grep() {
+check_native_codegen_grade_count() {
+    # tollgate: the FENCE. On the default `make test` path the C interpreter must
+    # GRADE the native-codegen suite (link1..16 + rejects) ZERO times -- the
+    # differential oracle loads committed C-free goldens, and every per-link
+    # bespoke C call is retired (seed-compiled+run natively, or an intrinsic
+    # property graded directly). The count only increments inside the delegating
+    # shim the ENTIRE native-codegen dispatch was wrapped with, so 0 here proves C
+    # was not in their grading path -- the native-codegen analogue of the turnstile
+    # "C did not GRADE" fence. The shim wraps the $HERBERT VARIABLE, so it counts
+    # EVERY C-grade idiom ($HERBERT $backend/$driver/$probe/$fragment/$be), not one
+    # grepped pattern -- strictly more complete than the prior presence grep.
     total=$((total + 1))
-    local hits="$native_codegen_dispatch_tmp/herbert_backend_hits.txt"
-    local bad="$native_codegen_dispatch_tmp/herbert_backend_bad.txt"
-    : >"$bad"
-    grep -n '"\$HERBERT"[[:space:]]*"\$backend"' native_codegen_oracle.sh run_native_codegen_*.sh >"$hits" 2>/dev/null || true
-    while IFS= read -r hit; do
-        case "$hit" in
-            native_codegen_oracle.sh:*'<"$backend"'*) ;;
-            run_native_codegen_link10.sh:*'<"$tmp/self_host_probe.herb"'*) ;;
-            *) printf '%s\n' "$hit" >>"$bad" ;;
-        esac
-    done <"$hits"
-    if [[ ! -s "$bad" ]]; then
-        echo "PASS: native-codegen switchover completeness grep (no ordinary Role-2 HERBERT/backend compile sites remain)"
+    if [[ "$tollgate_oracle" != "golden" ]]; then
+        echo "PASS: native-codegen C-grade fence: opt-in live-C cross-check ran (NATIVE_CODEGEN_ORACLE=$tollgate_oracle -- the native-vs-C differential was exercised by request; the C-free fence is not asserted in this mode)"
+        pass=$((pass + 1))
+        return
+    fi
+    local got
+    got=$(grep -c 'C-GRADE' "$tollgate_grade_count" 2>/dev/null || true)
+    [[ -n "$got" ]] || got=0
+    if [[ "$got" -eq 0 ]]; then
+        echo "PASS: native-codegen C-grade count: 0 (the C interpreter did NOT grade link1..16+rejects -- each passed C-free on the committed golden / seed-compiled native path)"
         pass=$((pass + 1))
     else
-        echo "FAIL: native-codegen switchover completeness grep (unexpected HERBERT/backend sites)"
-        cat "$bad"
+        echo "FAIL: native-codegen C-grade count: $got (expected 0 -- the C interpreter re-entered the native-codegen grading path on the default run)"
+        cat "$tollgate_grade_count"
+        fail=$((fail + 1))
+    fi
+}
+
+check_native_codegen_grade_gating_present() {
+    # Static backstop to the behavioral fence -- it DE-HOLES the prior
+    # named-exception presence grep (which matched only `"$HERBERT" "$backend"`
+    # and carved out two named sites). Every native-codegen script must EXIST + be
+    # executable (so a deleted gate cannot pass vacuously by recording zero C
+    # calls) and route C ONLY via the $HERBERT variable -- no command-position
+    # hardcoded `herbert` binary (build/herbert) and no unconditional HERBERT=
+    # override -- so the injected counting shim cannot be bypassed.
+    # (check_native_codegen_grade_count is the primary guard: any $HERBERT C call
+    # that fires under the default golden run is counted, in ANY idiom.)
+    total=$((total + 1))
+    local bad="" s n
+    for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 rejects; do
+        if [[ "$n" == "rejects" ]]; then
+            s="$PWD/run_native_codegen_rejects.sh"
+        else
+            s="$PWD/run_native_codegen_link${n}.sh"
+        fi
+        if [[ ! -x "$s" ]]; then
+            bad="$bad ${n}(missing-or-not-exec)"
+            continue
+        fi
+        # Forbid a COMMAND-POSITION invocation of a hardcoded lowercase `herbert`
+        # binary that bypasses $HERBERT. Strip full-line comments first (the
+        # scripts narrate "herbert's runtime fault" etc.), then two patterns
+        # (cross-model + same-model review both flagged the turnstile space-only
+        # pattern alone misses a quote-immediate path "build/herbert"$x):
+        # (a) the validated turnstile pattern -- `herbert` + space + quote/var/
+        # redirect/pipe (catches `build/herbert "$x"`); (b) any `build/herbert`
+        # path token NOT inside a ${HERBERT:-...} default-fallback (catches the
+        # quoted `"build/herbert" "$x"`). $HERBERT is uppercase so never matches.
+        local decommented
+        decommented="$(grep -vE '^[[:space:]]*#' "$s")"
+        if printf '%s\n' "$decommented" | grep -qE '(^|[^[:alnum:]_])herbert[[:space:]]+["'\''$<>|]'; then
+            bad="$bad ${n}(hardcoded-C-call)"
+        fi
+        if printf '%s\n' "$decommented" | grep -E 'build/herbert' | grep -vE ':[-=]' | grep -q .; then
+            bad="$bad ${n}(hardcoded-build-herbert)"
+        fi
+        if grep -nE '^[[:space:]]*HERBERT=' "$s" | grep -vE '\$\{?HERBERT' | grep -q .; then
+            bad="$bad ${n}(unconditional-HERBERT-override)"
+        fi
+    done
+    if [[ -z "$bad" ]]; then
+        echo "PASS: native-codegen C-grade gating present (all 17 scripts exist+executable and route C only via \$HERBERT -- the counting shim cannot be bypassed by a hardcoded C call)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: native-codegen C-grade gating present (issues:$bad)"
+        fail=$((fail + 1))
+    fi
+}
+
+run_native_codegen_grade_fence_mutation() {
+    # Prove the C-grade fence BITES on the REAL pre-tollgate behavior (the live-C
+    # differential oracle + per-link C calls -- exactly the grading path this link
+    # removes), not a poison-only setup: re-run representative scripts -- link2 (a
+    # pure differential-oracle link) and link1 (a bespoke ELF-emitter link) -- under
+    # NATIVE_CODEGEN_ORACLE=c with a delegating counting shim. Each must still
+    # SUCCEED (rc 0 -- a real completed C-grade, not a crash) and the total count
+    # must be nonzero. That nonzero count is exactly what
+    # check_native_codegen_grade_count would catch under the (now-default) golden run.
+    total=$((total + 1))
+    local mcount="$turnstile_tmp/nc_grade_count.mutation"
+    local mshim="$turnstile_tmp/herbert_nc_grade_shim.mutation.sh"
+    : >"$mcount"
+    turnstile_write_shim "$mshim" "$mcount"
+    local ran=0 ok=0 rc s
+    for s in "$PWD/run_native_codegen_link2.sh" "$PWD/run_native_codegen_link1.sh"; do
+        if [[ ! -x "$s" ]]; then
+            echo "FAIL: native-codegen C-grade fence mutation (representative script $s missing -- cannot prove the fence bites)"
+            fail=$((fail + 1)); return
+        fi
+        NATIVE_CODEGEN_ORACLE=c HERBERT="$mshim" "$s" >/dev/null 2>&1
+        rc=$?
+        ran=$((ran + 1))
+        [[ $rc -eq 0 ]] && ok=$((ok + 1))
+    done
+    local got
+    got=$(grep -c 'C-GRADE' "$mcount" 2>/dev/null || true)
+    [[ -n "$got" ]] || got=0
+    if [[ "$ran" -eq 2 && "$ok" -eq 2 && "$got" -gt 0 ]]; then
+        echo "PASS: native-codegen C-grade fence mutation (the pre-tollgate default -- NATIVE_CODEGEN_ORACLE=c -- invoked C $got times across $ran scripts, both succeeding; check_native_codegen_grade_count would go RED on it; the fence bites on real prior behavior, not a poison-only setup)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: native-codegen C-grade fence mutation (expected ran=2 ok=2 got>0 under NATIVE_CODEGEN_ORACLE=c; got ran=$ran ok=$ok got=$got -- the fence may be vacuous or C delegation failed)"
         fail=$((fail + 1))
     fi
 }
@@ -1714,7 +1842,7 @@ if [[ -d ../../stack ]]; then
 
     if [[ -f "$NATIVE_CODEGEN_LINK1" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK1"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK1"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1724,7 +1852,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK2="$PWD/run_native_codegen_link2.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK2" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK2"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK2"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1734,7 +1862,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK3="$PWD/run_native_codegen_link3.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK3" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK3"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK3"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1744,7 +1872,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK4="$PWD/run_native_codegen_link4.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK4" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK4"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK4"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1754,7 +1882,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK5="$PWD/run_native_codegen_link5.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK5" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK5"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK5"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1764,7 +1892,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK6="$PWD/run_native_codegen_link6.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK6" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK6"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK6"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1774,7 +1902,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK7="$PWD/run_native_codegen_link7.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK7" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK7"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK7"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1784,7 +1912,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK8="$PWD/run_native_codegen_link8.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK8" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK8"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK8"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1794,7 +1922,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK9="$PWD/run_native_codegen_link9.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK9" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK9"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK9"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1804,7 +1932,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK10="$PWD/run_native_codegen_link10.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK10" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK10"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK10"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1814,7 +1942,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK11="$PWD/run_native_codegen_link11.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK11" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK11"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK11"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1824,7 +1952,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK12="$PWD/run_native_codegen_link12.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK12" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK12"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK12"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1834,7 +1962,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK13="$PWD/run_native_codegen_link13.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK13" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK13"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK13"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1844,7 +1972,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK14="$PWD/run_native_codegen_link14.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK14" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK14"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK14"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1854,7 +1982,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK15="$PWD/run_native_codegen_link15.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK15" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK15"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK15"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1864,7 +1992,7 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_LINK16="$PWD/run_native_codegen_link16.sh"
     if [[ -f "$NATIVE_CODEGEN_LINK16" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_LINK16"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_LINK16"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1874,14 +2002,16 @@ if [[ -d ../../stack ]]; then
     NATIVE_CODEGEN_REJECTS="$PWD/run_native_codegen_rejects.sh"
     if [[ -f "$NATIVE_CODEGEN_REJECTS" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$NATIVE_CODEGEN_REJECTS"; then
+        if HERBERT="$tollgate_nc_herbert" "$NATIVE_CODEGEN_REJECTS"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
         fi
     fi
 
-    if [[ "${NATIVE_CODEGEN_ORACLE:-c}" != "golden" ]]; then
+    # tollgate: the DEFAULT is golden (C-free); this redundant C-free re-validation
+    # pass runs ONLY under the opt-in `c` cross-check, where pass-1 ran live C.
+    if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" != "golden" ]]; then
         for native_codegen_script in \
             "$PWD/run_native_codegen_link1.sh" \
             "$PWD/run_native_codegen_link2.sh" \
@@ -1912,7 +2042,9 @@ if [[ -d ../../stack ]]; then
 
     run_native_codegen_non_vacuity_check
     run_native_codegen_corrupt_compiler_check
-    run_native_codegen_completeness_grep
+    check_native_codegen_grade_count
+    check_native_codegen_grade_gating_present
+    run_native_codegen_grade_fence_mutation
     check_native_codegen_mint_count
     run_native_codegen_michoi_seed_check
 
