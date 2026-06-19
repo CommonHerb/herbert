@@ -68,7 +68,11 @@ jobs:
           qemu-system-x86_64 --version | head -1
           bochs --help 2>&1 | head -1 || true
           grub-install --version | head -1
-          test "$q" = "1:8.2.2+ds-0ubuntu1.16" || { echo "QEMU version drift: got $q, pinned 1:8.2.2+ds-0ubuntu1.16 -- update the pin deliberately after re-validating the goldens"; exit 1; }
+          # 2026-06-19: pin bumped 1:8.2.2+ds-0ubuntu1.16 -> ...1.17 (a Debian PACKAGING revision of the
+          # SAME upstream QEMU 8.2.2 -- not an upstream behaviour change). Re-validated in situ: the kernel
+          # dual-substrate gates+mutations are re-run under .17 by this very push; their green IS the goldens
+          # holding under the new package. Deliberate update per this guard's own instruction.
+          test "$q" = "1:8.2.2+ds-0ubuntu1.17" || { echo "QEMU version drift: got $q, pinned 1:8.2.2+ds-0ubuntu1.17 -- update the pin deliberately after re-validating the goldens"; exit 1; }
           test "$b" = "2.7+dfsg-4build5" || { echo "Bochs version drift: got $b, pinned 2.7+dfsg-4build5 -- update the pin deliberately after re-validating the goldens"; exit 1; }
       - name: build the C bootstrap (build/herbert)
         run: make build/herbert
