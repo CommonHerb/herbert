@@ -31,12 +31,63 @@ test_14a_heap=
 test_14b_heap=
 native_codegen_dispatch_tmp=
 
+turnstile_tmp=
 cleanup_run_tests() {
     if [[ -n "$native_codegen_dispatch_tmp" && -d "$native_codegen_dispatch_tmp" ]]; then
         rm -rf "$native_codegen_dispatch_tmp"
     fi
+    if [[ -n "$turnstile_tmp" && -d "$turnstile_tmp" ]]; then
+        rm -rf "$turnstile_tmp"
+    fi
 }
 trap cleanup_run_tests EXIT
+
+# --- turnstile (sovereignty link 9): the first SUBTRACTIVE link --------------
+# Links 3-8 ADDED a C-free native execution path BESIDE C for each of the six
+# metacircular fragments (lexer/parser/evaluator/vm/klondike/emitter). turnstile
+# RETIRES C from GRADING them on the default `make test` path: each fragment
+# native gate passes on its ENDURING C-free oracle leg (gen-1 ELF vs an
+# INDEPENDENT hand-authored oracle -- strictly stronger than the C cross-check,
+# since it catches a bug C and native SHARE), and the RETIREABLE native-vs-C
+# faithfulness leg becomes OPT-IN (HERBERT_C_GRADE_CROSSCHECK=1 -- exactly the
+# way `make reseed` preserves the one sanctioned C mint). Zero coverage loss.
+# A counting-DELEGATING HERBERT shim instruments EXACTLY the six gate dispatches
+# so check_fragment_grade_count (below) can fence the default path at ZERO C
+# grading invocations -- the grading-path analogue of michoi's "C did not MINT"
+# mint-count fence ("C did not GRADE"). This is the first link whose default
+# run-path C footprint SHRINKS rather than grows.
+turnstile_real_herbert="$HERBERT"
+turnstile_crosscheck="${HERBERT_C_GRADE_CROSSCHECK:-0}"
+turnstile_tmp="$(mktemp -d)"
+turnstile_grade_count="$turnstile_tmp/frag_grade_count"
+: >"$turnstile_grade_count"
+turnstile_write_shim() {
+    # Emit a counting-DELEGATING herbert shim: it records that a fragment gate
+    # invoked the C interpreter as a grader, then DELEGATEs to the captured REAL
+    # interpreter (so the gate still runs normally -- letting the bite-proof
+    # exercise the real pre-turnstile behavior). Paths are shell-escaped via %q
+    # (robust to spaces / odd chars); it execs the real interpreter, never itself.
+    local shim="$1" count="$2"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'printf %s >> %q\n' "'C-GRADE\\n'" "$count"
+        printf 'exec %q "$@"\n' "$turnstile_real_herbert"
+    } >"$shim"
+    chmod +x "$shim"
+}
+turnstile_grade_shim="$turnstile_tmp/herbert_grade_shim.sh"
+turnstile_write_shim "$turnstile_grade_shim" "$turnstile_grade_count"
+if [[ "$turnstile_crosscheck" == "1" ]]; then
+    # Opt-in: run the native-vs-C faithfulness cross-check (requires C to exist).
+    turnstile_frag_no_c=0
+    turnstile_frag_herbert="$turnstile_real_herbert"
+else
+    # Default: C-free grading. <FRAG>_NATIVE_NO_C=1 skips each faithfulness leg;
+    # the shim is a trip-wire the C-free gates never reach (caught by the fence
+    # if a regression re-enters the C grading path).
+    turnstile_frag_no_c=1
+    turnstile_frag_herbert="$turnstile_grade_shim"
+fi
 
 run_one() {
     local prog="$1"
@@ -675,6 +726,117 @@ check_native_codegen_mint_count() {
     fi
 }
 
+check_fragment_grade_count() {
+    # turnstile: the FENCE. On the default `make test` path the C interpreter must
+    # GRADE the six metacircular-fragment native gates ZERO times -- each gate
+    # passes on its ENDURING C-free oracle leg, and the RETIREABLE native-vs-C
+    # faithfulness leg is opt-in (HERBERT_C_GRADE_CROSSCHECK=1). The count only
+    # ever increments inside the delegating shim the six gates were dispatched
+    # with, so 0 here proves C was not in their grading path -- the grading-path
+    # analogue of the michoi "C did not MINT" mint-count fence ("C did not GRADE").
+    total=$((total + 1))
+    if [[ "$turnstile_crosscheck" == "1" ]]; then
+        echo "PASS: fragment-gate C-grade fence: opt-in cross-check ran (HERBERT_C_GRADE_CROSSCHECK=1 -- native-vs-C faithfulness exercised by request; the C-free fence is not asserted in this mode)"
+        pass=$((pass + 1))
+        return
+    fi
+    local got
+    got=$(grep -c 'C-GRADE' "$turnstile_grade_count" 2>/dev/null || true)
+    [[ -n "$got" ]] || got=0
+    if [[ "$got" -eq 0 ]]; then
+        echo "PASS: fragment-gate C-grade count: 0 (the C interpreter did NOT grade the 6 metacircular fragments -- each passed C-free on its enduring oracle leg)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: fragment-gate C-grade count: $got (expected 0 -- the C interpreter re-entered the fragment grading path on the default run)"
+        cat "$turnstile_grade_count"
+        fail=$((fail + 1))
+    fi
+}
+
+check_fragment_grade_gating_present() {
+    # Secondary STATIC backstop to the behavioral fence (closes two gaps the
+    # cross-model review flagged): (1) all six fragment native gates must EXIST and
+    # be executable, so a deleted/disabled gate cannot pass vacuously by recording
+    # zero C calls; (2) every gate must retain its <FRAG>_NATIVE_NO_C opt-out AND
+    # route its C-grader call through the $HERBERT variable -- no hardcoded
+    # build/herbert at a command position (a ':-'/':=' default-fallback, comment,
+    # or "cannot find" error string is fine; those never override an injected
+    # HERBERT) -- so the injected counting shim cannot be bypassed.
+    # (check_fragment_grade_count is the primary behavioral guard: any UNGUARDED
+    # $HERBERT grade call would still hit the shim and be counted.)
+    total=$((total + 1))
+    local bad="" g flag s
+    for g in lexer parser evaluator vm klondike emitter; do
+        flag="$(printf '%s' "$g" | tr '[:lower:]' '[:upper:]')_NATIVE_NO_C"
+        s="$PWD/run_${g}_native.sh"
+        if [[ ! -x "$s" ]]; then
+            bad="$bad ${g}(missing-or-not-exec)"
+            continue
+        fi
+        grep -q "$flag" "$s" || bad="$bad ${g}(no-NO_C-guard)"
+        # Forbid a COMMAND-POSITION invocation of the C interpreter binary that
+        # bypasses $HERBERT -- a hardcoded lowercase `herbert` path (e.g.
+        # build/herbert) called with an arg/redirect/pipe. $HERBERT is UPPERCASE so
+        # this never matches the variable; a ':-' default-fallback (build/herbert}),
+        # the "cannot find herbert at $HERBERT" error string (herbert at ...), and
+        # comments are command-position-safe (validated: zero match on all 6 gates).
+        if grep -nE '(^|[^[:alnum:]_])herbert[[:space:]]+["'\''$<>|]' "$s" | grep -q .; then
+            bad="$bad ${g}(hardcoded-C-call)"
+        fi
+        # Forbid an UNCONDITIONAL HERBERT= override (one whose RHS ignores the
+        # injected ${HERBERT}); the gates' "${HERBERT:-default}" fallback is fine.
+        if grep -nE '^[[:space:]]*HERBERT=' "$s" | grep -vE '\$\{?HERBERT' | grep -q .; then
+            bad="$bad ${g}(unconditional-HERBERT-override)"
+        fi
+    done
+    if [[ -z "$bad" ]]; then
+        echo "PASS: fragment-gate C-grade gating present (all 6 native gates exist+executable, retain their *_NATIVE_NO_C opt-out, and route C only via \$HERBERT -- the C-free default cannot be silently removed or bypassed)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: fragment-gate C-grade gating present (issues:$bad)"
+        fail=$((fail + 1))
+    fi
+}
+
+run_fragment_grade_fence_mutation() {
+    # Prove the C-grade fence BITES on the REAL pre-turnstile behavior (NO_C=0, the
+    # flag's unset default -- exactly the grading path this link removes), not a poison-only
+    # setup: re-run BOTH representative fragment gates (lexer+emitter, smallest for
+    # runtime; the NO_C mechanism is identical across all six) with the faithfulness
+    # leg ENABLED, counting C invocations via a delegating shim. Each gate must
+    # still SUCCEED (rc 0 -- so the count reflects a real, completed C-grader call,
+    # not a crash), and the count must equal the gate count (each invokes C exactly
+    # once). That nonzero count is what check_fragment_grade_count would catch.
+    total=$((total + 1))
+    local mcount="$turnstile_tmp/frag_grade_count.mutation"
+    local mshim="$turnstile_tmp/herbert_grade_shim.mutation.sh"
+    : >"$mcount"
+    turnstile_write_shim "$mshim" "$mcount"
+    local ran=0 ok=0 rc g flag
+    for g in lexer emitter; do
+        if [[ ! -x "$PWD/run_${g}_native.sh" ]]; then
+            echo "FAIL: fragment-gate C-grade fence mutation (representative gate $g missing -- cannot prove the fence bites)"
+            fail=$((fail + 1)); return
+        fi
+        flag="$(printf '%s' "$g" | tr '[:lower:]' '[:upper:]')_NATIVE_NO_C"
+        # NO_C=0 == the pre-turnstile default: the faithfulness leg runs and calls C.
+        env "$flag=0" HERBERT="$mshim" "$PWD/run_${g}_native.sh" >/dev/null 2>&1
+        rc=$?
+        ran=$((ran + 1))
+        [[ $rc -eq 0 ]] && ok=$((ok + 1))
+    done
+    local got
+    got=$(grep -c 'C-GRADE' "$mcount" 2>/dev/null || true)
+    [[ -n "$got" ]] || got=0
+    if [[ "$ran" -eq 2 && "$ok" -eq 2 && "$got" -eq 2 ]]; then
+        echo "PASS: fragment-gate C-grade fence mutation (the pre-turnstile default -- NO_C=0, the flag's unset default, the grading path this link removes -- invoked C exactly $got times across $ran gates, both succeeding; check_fragment_grade_count would go RED on it; the fence bites on real prior behavior, not a poison-only setup)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: fragment-gate C-grade fence mutation (expected ran=2 ok=2 got=2 under the pre-turnstile default; got ran=$ran ok=$ok got=$got -- the fence may be vacuous or C delegation failed)"
+        fail=$((fail + 1))
+    fi
+}
+
 run_native_codegen_michoi_seed_check() {
     # michoi: prove the production compiler this run used IS the committed,
     # integrity-checked, C-free gen-1 seed. (The seed's C-free SELF-REPRODUCTION
@@ -879,7 +1041,7 @@ if [[ -d ../../stack ]]; then
     # lexer self-description test now survives C's deletion (only klondike remains).
     if [[ -x "$PWD/run_lexer_native.sh" ]]; then
         total=$((total + 1))
-        if "$PWD/run_lexer_native.sh"; then
+        if LEXER_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_lexer_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -984,7 +1146,7 @@ if [[ -d ../../stack ]]; then
     # self-description test now survives C's deletion.
     if [[ -x "$PWD/run_parser_native.sh" ]]; then
         total=$((total + 1))
-        if "$PWD/run_parser_native.sh"; then
+        if PARSER_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_parser_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1052,7 +1214,7 @@ if [[ -d ../../stack ]]; then
     # evaluator self-description test now survives C's deletion.
     if [[ -x "$PWD/run_evaluator_native.sh" ]]; then
         total=$((total + 1))
-        if "$PWD/run_evaluator_native.sh"; then
+        if EVALUATOR_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_evaluator_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1120,7 +1282,7 @@ if [[ -d ../../stack ]]; then
     # bytecode-VM self-description test now survives C's deletion.
     if [[ -x "$PWD/run_vm_native.sh" ]]; then
         total=$((total + 1))
-        if "$PWD/run_vm_native.sh"; then
+        if VM_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_vm_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1150,7 +1312,7 @@ if [[ -d ../../stack ]]; then
     # fragments survive C's deletion.
     if [[ -x "$PWD/run_klondike_native.sh" ]]; then
         total=$((total + 1))
-        if "$PWD/run_klondike_native.sh"; then
+        if KLONDIKE_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_klondike_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1183,7 +1345,7 @@ if [[ -d ../../stack ]]; then
     # ALL SIX metacircular fragments survive C's deletion.
     if [[ -x "$PWD/run_emitter_native.sh" ]]; then
         total=$((total + 1))
-        if "$PWD/run_emitter_native.sh"; then
+        if EMITTER_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_emitter_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1201,6 +1363,14 @@ if [[ -d ../../stack ]]; then
             fail=$((fail + 1))
         fi
     fi
+
+    # turnstile (sovereignty link 9): the six fragment native gates above ran on
+    # the default C-free path; fence the default at ZERO C grading invocations,
+    # prove the gating is intact, and prove the fence BITES on the real
+    # pre-turnstile default.
+    check_fragment_grade_count
+    check_fragment_grade_gating_present
+    run_fragment_grade_fence_mutation
 
     # Klondike canonical integration forcing functions. The canonical driver
     # reads source through clogger(), checks the diagnostics front end, lowers
