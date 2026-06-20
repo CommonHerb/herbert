@@ -34,7 +34,7 @@ fixtures="$script_dir/fixtures/link16"
 # the bound only when a probe compile actually hangs.
 compile_bound="${THRONE_COMPILE_TIMEOUT:-20s}"
 
-if [[ ! -x "$HERBERT" ]]; then
+if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" == "c" && ! -x "$HERBERT" ]]; then
     echo "FAIL: stack/native_compile_fragment.herb (cannot find herbert at $HERBERT)"
     exit 1
 fi

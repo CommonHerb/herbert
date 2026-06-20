@@ -66,7 +66,7 @@ backend="$repo_root/stack/native_compile_fragment.herb"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 BOCHS_PROBES="${L5_BOCHS_PROBES:-store_then store_else}"
 
-if [[ ! -x "$HERBERT" ]]; then
+if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" == "c" && ! -x "$HERBERT" ]]; then
     echo "FAIL: stack/native_compile_fragment.herb (cannot find herbert at $HERBERT)"; exit 1
 fi
 if [[ ! -f "$backend" ]]; then

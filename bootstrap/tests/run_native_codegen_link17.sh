@@ -55,7 +55,7 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 # Bochs leg is slow + needs passwordless sudo; run it on a representative subset.
 BOCHS_PROBES="${L1_BOCHS_PROBES:-5x15 6x15}"
 
-if [[ ! -x "$HERBERT" ]]; then
+if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" == "c" && ! -x "$HERBERT" ]]; then
     echo "FAIL: stack/native_compile_fragment.herb (cannot find herbert at $HERBERT)"
     exit 1
 fi

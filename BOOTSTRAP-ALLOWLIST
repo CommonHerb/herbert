@@ -127,6 +127,9 @@ bootstrap/tests/run_native_codegen_link40_mutation.sh
 bootstrap/tests/kernel_input_feed.py
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
+bootstrap/tests/switchover_manifest.tsv
+bootstrap/tests/run_switchover_cfree.sh
+bootstrap/tests/run_switchover_cfree_mutation.sh
 bootstrap/tests/capture_native_goldens.sh
 bootstrap/tests/native_codegen_oracle.sh
 bootstrap/tests/reseed_gen1.sh

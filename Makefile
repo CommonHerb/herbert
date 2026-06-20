@@ -19,7 +19,7 @@ HERBERT_SRCS := \
     bootstrap/main.c
 HERBERT_HDR  := bootstrap/herbert.h
 
-.PHONY: all check smoke test test-timeout lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics verify-local beta-full reseed clean
+.PHONY: all check smoke test test-timeout lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree verify-local beta-full reseed clean
 
 all: $(HERBERT)
 
@@ -74,7 +74,16 @@ lexer-copy-sync:
 native-codegen-diagnostics:
 	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
 
-verify-local: check test-timeout smoke lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics
+# switchover-cfree: the FIRST switchover-machinery slice (sovereignty link 14).
+# Prove the C-free production surface stands with the C interpreter PHYSICALLY
+# ABSENT. NO $(HERBERT) prerequisite -- this target deliberately does NOT build
+# the C interpreter; the driver self-scrubs cc/gcc/as/ld and runs the CFREE
+# surface on the committed gen-1 seed, then proves it bites RED-first.
+switchover-cfree:
+	@bash bootstrap/tests/run_switchover_cfree.sh
+	@bash bootstrap/tests/run_switchover_cfree_mutation.sh
+
+verify-local: check test-timeout smoke lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree
 
 beta-full: $(HERBERT)
 	@PATH=$(abspath tools):$$PATH HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_beta_full.sh

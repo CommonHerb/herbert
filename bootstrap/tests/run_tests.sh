@@ -2558,6 +2558,36 @@ if [[ -d ../../stack ]]; then
     fi
 fi
 
+# --- switchover-cfree (sovereignty link 14): the FIRST switchover-machinery slice
+#     -- prove the C-free production surface STANDS WITH THE C INTERPRETER
+#     PHYSICALLY ABSENT (no build/herbert; cc/gcc/as/ld unreachable) over a
+#     COMPLETE, frozen, whole-suite partition, and prove it BITES RED-first. The
+#     driver/bite-proof self-scrub C; nothing here touches the make-test $HERBERT.
+if [[ -x "$PWD/run_switchover_cfree.sh" ]]; then
+    total=$((total + 1))
+    if bash "$PWD/run_switchover_cfree.sh" >/tmp/herbert_switchover.$$ 2>&1; then
+        echo "PASS: $(grep -E '^PASS: switchover-cfree' /tmp/herbert_switchover.$$ | tail -1 | sed 's/^PASS: //')"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: switchover-cfree (the C-free production surface did NOT stand with C physically absent)"
+        sed 's/^/    | /' /tmp/herbert_switchover.$$ | tail -20
+        fail=$((fail + 1))
+    fi
+    rm -f /tmp/herbert_switchover.$$
+fi
+if [[ -x "$PWD/run_switchover_cfree_mutation.sh" ]]; then
+    total=$((total + 1))
+    if bash "$PWD/run_switchover_cfree_mutation.sh" >/tmp/herbert_switchover_bite.$$ 2>&1; then
+        echo "PASS: switchover-cfree mutation proof (M-guard + M-leak + M-gerrymander + M-modeenv + M-incomplete bite; control green)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: switchover-cfree mutation proof (a load-bearing piece did not bite)"
+        sed 's/^/    | /' /tmp/herbert_switchover_bite.$$ | tail -20
+        fail=$((fail + 1))
+    fi
+    rm -f /tmp/herbert_switchover_bite.$$
+fi
+
 echo
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $total test(s) failed."

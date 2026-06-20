@@ -29,7 +29,7 @@ HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
 fixtures="$script_dir/fixtures/link15"
 
-if [[ ! -x "$HERBERT" ]]; then
+if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" == "c" && ! -x "$HERBERT" ]]; then
     echo "FAIL: stack/native_compile_fragment.herb (cannot find herbert at $HERBERT)"
     exit 1
 fi

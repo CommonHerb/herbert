@@ -1,0 +1,130 @@
+# MEWTWO switchover disposition manifest  (sovereignty link 14)
+#
+# The complete, frozen, exhaustive+disjoint partition of every gate script in
+# bootstrap/tests/ by its disposition for the eventual C-RETIREMENT SWITCHOVER
+# (when the C bootstrap interpreter + C sources are deleted). This is the
+# switchover readiness ledger: it answers, for every test surface, "does it
+# stand without C, and if not, why."
+#
+# run_switchover_cfree.sh runs the CFREE_SWITCHOVER set (a FROZEN 24-gate list it
+# also pins by exact membership) with the C interpreter PHYSICALLY ABSENT -- in
+# TWO phases: (A) $HERBERT a nonexistent path (catches any presence guard), then
+# (B) $HERBERT a counting tombstone whose target does not exist (asserts ZERO C
+# invocations) -- with cc/gcc/clang/c++/g++/as/ld poisoned and the committed
+# gen-1 seed FORCED as the production compiler. It registers every other row.
+# The driver's step-0 completeness check asserts this manifest covers EVERY
+# run_*.sh exactly once (no test in limbo -> the fence cannot be gerrymandered).
+#
+# disposition         meaning
+#   CFREE_SWITCHOVER    near-axis C-free production gate; RUN by the C-absent driver
+#   CFREE_KERNEL        far-axis gate graded on the QEMU+Bochs SUBSTRATE oracle (C
+#                       does not GRADE); emits via the gen-1 seed; C interpreter
+#                       NOT invoked. Run by the kernel-codegen-l1 CI.
+#   KERNEL_C_EMIT       far-axis kernel mutation gate that currently EMITS its image
+#                       THROUGH the C interpreter (no seed path); graded on the
+#                       substrate. NOT C-free today -> rehome onto the gen-1 seed at
+#                       the switchover (as run_native_codegen_link29..43_mutation.sh
+#                       already are). A recorded sovereignty TODO, not a clean row.
+#   CFREE_BITEPROOF     near-axis C-free mutation bite-proof; run by verify-local
+#   RETIRE_WITH_C       needs the C interpreter (tests C itself / GC-instrumentation
+#                       / native output diverges); retires WHEN C is deleted
+#   RETIRE_AT_SWITCH    inherently-C reference (the C dumper IS the oracle); retires
+#                       AT the switchover
+#   HARNESS             the make-test orchestrator itself (C-present; its inline
+#                       retire-with-C residue is muster-frozen in run_tests.sh)
+#   SWITCHOVER_MACHINERY  the link-14 driver + bite-proof themselves
+#
+# columns (TAB-separated): disposition  run-context  script  cfree-mode-env  reason
+RETIRE_WITH_C	-	run_aggregate_render_native_mutation.sh	-	aggregate-render bite-proof: CONTROL leg execs C as the live oracle (residual; could move to the committed key later)
+CFREE_SWITCHOVER	switchover	run_aggregate_render_native.sh	AGGREGATE_RENDER_NATIVE_NO_C=1	native aggregate render + 12 foundational native-output tests (seed; C cross-check opt-in)
+RETIRE_WITH_C	-	run_beta_full.sh	-	metacircular beta-full nesting runs klondike-under-C (tests the C interpreter metacircular run)
+CFREE_BITEPROOF	verify-local	run_emitter_native_mutation.sh	EMITTER_NATIVE_NO_C=1	emitter gate RED-first bite-proof (seed; C-free)
+CFREE_SWITCHOVER	switchover	run_emitter_native.sh	EMITTER_NATIVE_NO_C=1	metacircular emitter native execution (seed; C cross-check opt-in)
+CFREE_BITEPROOF	verify-local	run_evaluator_native_mutation.sh	EVALUATOR_NATIVE_NO_C=1	evaluator gate RED-first bite-proof (seed; C-free)
+CFREE_SWITCHOVER	switchover	run_evaluator_native.sh	EVALUATOR_NATIVE_NO_C=1	metacircular evaluator native execution (seed; C cross-check opt-in)
+CFREE_BITEPROOF	verify-local	run_klondike_native_mutation.sh	KLONDIKE_NATIVE_NO_C=1	klondike gate RED-first bite-proof (seed; C-free)
+CFREE_SWITCHOVER	switchover	run_klondike_native.sh	KLONDIKE_NATIVE_NO_C=1	metacircular klondike native execution (seed; C cross-check opt-in)
+RETIRE_AT_SWITCH	-	run_lexer_equivalence.sh	-	lexer C-vs-Herbert equivalence altimeter (the C lexer dumper IS the reference)
+CFREE_BITEPROOF	verify-local	run_lexer_native_mutation.sh	LEXER_NATIVE_NO_C=1	lexer gate RED-first bite-proof (seed; C-free)
+CFREE_SWITCHOVER	switchover	run_lexer_native.sh	LEXER_NATIVE_NO_C=1	metacircular lexer native execution (seed; C cross-check opt-in)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link10.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link10 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link11.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link11 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link12.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link12 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link13.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link13 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link14.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link14 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link15.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link15 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link16.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link16 (seed-graded; C only opt-in ORACLE=c)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link17.sh	-	native-codegen kernel gate link17 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link18_mutation.sh	-	kernel mutation gate link18 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link18.sh	-	native-codegen kernel gate link18 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link19_mutation.sh	-	kernel mutation gate link19 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link19.sh	-	native-codegen kernel gate link19 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link1.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link1 (seed-graded; C only opt-in ORACLE=c)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link20_mutation.sh	-	kernel mutation gate link20 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link20.sh	-	native-codegen kernel gate link20 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link21_mutation.sh	-	kernel mutation gate link21 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link21.sh	-	native-codegen kernel gate link21 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link22_mutation.sh	-	kernel mutation gate link22 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link22.sh	-	native-codegen kernel gate link22 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link23_mutation.sh	-	kernel mutation gate link23 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link23.sh	-	native-codegen kernel gate link23 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link24_mutation.sh	-	kernel mutation gate link24 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link24.sh	-	native-codegen kernel gate link24 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link25_mutation.sh	-	kernel mutation gate link25 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link25.sh	-	native-codegen kernel gate link25 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link26_mutation.sh	-	kernel mutation gate link26 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link26.sh	-	native-codegen kernel gate link26 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link27_mutation.sh	-	kernel mutation gate link27 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link27.sh	-	native-codegen kernel gate link27 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+KERNEL_C_EMIT	kernel-ci	run_native_codegen_link28_mutation.sh	-	kernel mutation gate link28 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link28.sh	-	native-codegen kernel gate link28 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link29_mutation.sh	-	native-codegen kernel gate link29 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link29.sh	-	native-codegen kernel gate link29 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link2.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link2 (seed-graded; C only opt-in ORACLE=c)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link30_mutation.sh	-	native-codegen kernel gate link30 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link30.sh	-	native-codegen kernel gate link30 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link31_mutation.sh	-	native-codegen kernel gate link31 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link31.sh	-	native-codegen kernel gate link31 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link32_mutation.sh	-	native-codegen kernel gate link32 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link32.sh	-	native-codegen kernel gate link32 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link33_mutation.sh	-	native-codegen kernel gate link33 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link33.sh	-	native-codegen kernel gate link33 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link34_mutation.sh	-	native-codegen kernel gate link34 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link34.sh	-	native-codegen kernel gate link34 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link35_mutation.sh	-	native-codegen kernel gate link35 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link35.sh	-	native-codegen kernel gate link35 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link36_mutation.sh	-	native-codegen kernel gate link36 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link36.sh	-	native-codegen kernel gate link36 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link37_mutation.sh	-	native-codegen kernel gate link37 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link37.sh	-	native-codegen kernel gate link37 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link38_mutation.sh	-	native-codegen kernel gate link38 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link38.sh	-	native-codegen kernel gate link38 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link39_mutation.sh	-	native-codegen kernel gate link39 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link39.sh	-	native-codegen kernel gate link39 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link3.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link3 (seed-graded; C only opt-in ORACLE=c)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link40_mutation.sh	-	native-codegen kernel gate link40 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link40.sh	-	native-codegen kernel gate link40 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link41_mutation.sh	-	native-codegen kernel gate link41 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link41.sh	-	native-codegen kernel gate link41 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link42_mutation.sh	-	native-codegen kernel gate link42 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link42.sh	-	native-codegen kernel gate link42 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link43_mutation.sh	-	native-codegen kernel gate link43 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link43.sh	-	native-codegen kernel gate link43 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link4.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link4 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link5.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link5 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link6.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link6 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link7.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link7 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link8.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link8 (seed-graded; C only opt-in ORACLE=c)
+CFREE_SWITCHOVER	switchover	run_native_codegen_link9.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link9 (seed-graded; C only opt-in ORACLE=c)
+CFREE_KERNEL	kernel-ci	run_native_codegen_qemu_diag_tests.sh	-	native-codegen kernel diagnostics (substrate-graded; C interpreter not invoked)
+CFREE_SWITCHOVER	switchover	run_native_codegen_rejects.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen verifier reject battery (seed-graded; C only opt-in ORACLE=c)
+RETIRE_AT_SWITCH	-	run_parser_equivalence_mutation.sh	-	parser-equivalence altimeter bite-proof (mutates parse.c; inherently C)
+RETIRE_AT_SWITCH	-	run_parser_equivalence.sh	-	parser C-vs-Herbert equivalence altimeter (the C parse.c dumper IS the reference)
+CFREE_BITEPROOF	verify-local	run_parser_native_mutation.sh	PARSER_NATIVE_NO_C=1	parser gate RED-first bite-proof (seed; C-free)
+CFREE_SWITCHOVER	switchover	run_parser_native.sh	PARSER_NATIVE_NO_C=1	metacircular parser native execution (seed; C cross-check opt-in)
+RETIRE_WITH_C	-	run_smoke.sh	-	C-interpreter resource-limit smoke (peak-heap/scopes GC instrumentation native cannot emit)
+SWITCHOVER_MACHINERY	-	run_switchover_cfree_mutation.sh	-	the C-absent driver RED-first bite-proof (sovereignty link 14)
+SWITCHOVER_MACHINERY	-	run_switchover_cfree.sh	-	the C-absent surface driver (sovereignty link 14); runs the frozen CFREE_SWITCHOVER set with C physically absent
+HARNESS	-	run_tests.sh	-	make-test orchestrator (C-present; retire-with-C inline residue muster-frozen)
+CFREE_BITEPROOF	verify-local	run_vm_native_mutation.sh	VM_NATIVE_NO_C=1	VM gate RED-first bite-proof (seed; C-free)
+CFREE_SWITCHOVER	switchover	run_vm_native.sh	VM_NATIVE_NO_C=1	metacircular VM native execution (seed; C cross-check opt-in)
