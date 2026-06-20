@@ -20,14 +20,14 @@
 #   CFREE_KERNEL        far-axis gate graded on the QEMU+Bochs SUBSTRATE oracle (C
 #                       does not GRADE); emits via the gen-1 seed; C interpreter
 #                       NOT invoked. Run by the kernel-codegen-l1 CI.
-#   KERNEL_C_EMIT       far-axis kernel mutation gate that currently EMITS its image
-#                       THROUGH the C interpreter (no seed path); graded on the
-#                       substrate. NOT C-free today -> rehome onto the gen-1 seed via a
-#                       TWO-STAGE seed compile of the mutated backend (assay/link 15
-#                       proved the template on link18_mutation; run_native_codegen_
-#                       link29..43_mutation.sh were born seed-emit). link19..28_mutation
-#                       (10) remain: a recorded sovereignty TODO, a dedicated far-axis
-#                       cleanup link, not a clean row.
+#   KERNEL_C_EMIT       far-axis kernel mutation gate that EMITS its image THROUGH the
+#                       C interpreter (no seed path). As of link 16 this class is
+#                       EMPTY: link19..28_mutation (the last 10) were rehomed onto the
+#                       gen-1 seed via a TWO-STAGE seed compile of the mutated backend
+#                       (assay/link 15 proved the template on link18_mutation;
+#                       run_native_codegen_link29..43_mutation.sh were born seed-emit).
+#                       Every kernel mutation gate is now C-free -> the rehomeable-C
+#                       residue is exhausted. Kept as a legend entry only.
 #   CFREE_BITEPROOF     C-free RED-first mutation bite-proof; seed-emit, no C grading
 #                       (run by verify-local; aggregate-render-mutation runs in make test)
 #   RETIRE_WITH_C       needs the C interpreter (tests C itself / GC-instrumentation
@@ -61,26 +61,26 @@ CFREE_SWITCHOVER	switchover	run_native_codegen_link16.sh	NATIVE_CODEGEN_ORACLE=g
 CFREE_KERNEL	kernel-ci	run_native_codegen_link17.sh	-	native-codegen kernel gate link17 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 CFREE_KERNEL	kernel-ci	run_native_codegen_link18_mutation.sh	-	native-codegen kernel mutation gate link18, now C-FREE via a two-stage seed compile of the mutated backend (assay, link 15; was KERNEL_C_EMIT -- the rehome TEMPLATE for link19..28_mutation); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK18_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link18.sh	-	native-codegen kernel gate link18 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link19_mutation.sh	-	kernel mutation gate link19 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link19_mutation.sh	-	native-codegen kernel mutation gate link19, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK19_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link19.sh	-	native-codegen kernel gate link19 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 CFREE_SWITCHOVER	switchover	run_native_codegen_link1.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link1 (seed-graded; C only opt-in ORACLE=c)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link20_mutation.sh	-	kernel mutation gate link20 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link20_mutation.sh	-	native-codegen kernel mutation gate link20, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK20_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link20.sh	-	native-codegen kernel gate link20 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link21_mutation.sh	-	kernel mutation gate link21 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link21_mutation.sh	-	native-codegen kernel mutation gate link21, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK21_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link21.sh	-	native-codegen kernel gate link21 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link22_mutation.sh	-	kernel mutation gate link22 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link22_mutation.sh	-	native-codegen kernel mutation gate link22, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK22_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link22.sh	-	native-codegen kernel gate link22 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link23_mutation.sh	-	kernel mutation gate link23 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link23_mutation.sh	-	native-codegen kernel mutation gate link23, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK23_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link23.sh	-	native-codegen kernel gate link23 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link24_mutation.sh	-	kernel mutation gate link24 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link24_mutation.sh	-	native-codegen kernel mutation gate link24, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK24_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link24.sh	-	native-codegen kernel gate link24 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link25_mutation.sh	-	kernel mutation gate link25 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link25_mutation.sh	-	native-codegen kernel mutation gate link25, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK25_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link25.sh	-	native-codegen kernel gate link25 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link26_mutation.sh	-	kernel mutation gate link26 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link26_mutation.sh	-	native-codegen kernel mutation gate link26, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK26_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link26.sh	-	native-codegen kernel gate link26 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link27_mutation.sh	-	kernel mutation gate link27 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link27_mutation.sh	-	native-codegen kernel mutation gate link27, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK27_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link27.sh	-	native-codegen kernel gate link27 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link28_mutation.sh	-	kernel mutation gate link28 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link28_mutation.sh	-	native-codegen kernel mutation gate link28, now C-FREE via a two-stage seed compile of the mutated backend (link 16; was KERNEL_C_EMIT); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK28_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link28.sh	-	native-codegen kernel gate link28 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 CFREE_KERNEL	kernel-ci	run_native_codegen_link29_mutation.sh	-	native-codegen kernel gate link29 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 CFREE_KERNEL	kernel-ci	run_native_codegen_link29.sh	-	native-codegen kernel gate link29 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Link 25 (hoopteeter, ninth kernel-arc link) MUTATION proof -- "prove the long-mode-entry gate bites."
 # The link25 dual-substrate gate is only meaningful if a WRONG compiler would fail it. We mutate the
-# compiler SOURCE at a unique anchor and re-emit the canonical probe through the C-interpreted backend:
-# each mutation must be CAUGHT -- a white-box pin rejects the structural change, or no/ a wrong frame is
-# emitted (triple-fault / != golden).
+# compiler SOURCE at a unique anchor and re-emit the canonical probe: each mutation must be CAUGHT -- a
+# white-box pin rejects the structural change, or no/ a wrong frame is emitted (triple-fault / != golden).
 #
 # The central claim: "the proof byte appeared only because the image GENUINELY crossed into 64-bit long
 # mode and computed the HIGH dword of V*K with REX.W instructions." Mutations attack exactly that:
@@ -23,6 +22,16 @@
 # reachability pin (the analogue of talkert's jb-target==.ack); M-pml4 is caught on silicon. The exact
 # transition bytes and K/shr-count are NOT silicon-witnessable in isolation -- they are white-box-pinned.
 #
+# SOVEREIGNTY (link 16): this proof is C-FREE. It NO LONGER re-emits through the C interpreter. Instead it
+# runs each mutation through a genuine TWO-STAGE seed compile (the assay/link18 template): the committed
+# C-free gen-1 seed compiles the (mutated) backend into a native gen-1' compiler ELF, and THAT compiler
+# emits the probe. This is strictly MORE faithful than the prior C path: it runs the ACTUAL mutated
+# compiler and checks the gate catches ITS output, so the proof's meaning ("a wrong compiler is caught")
+# survives C's deletion intact. A retireable cross-check -- DEFAULT-ON when C is present, opt-OUT via
+# LINK25_MUTATION_NO_C=1 -- also re-emits each mutation via the C interpreter and asserts the native
+# two-stage image is BYTE-IDENTICAL to the C image (substrate faithfulness, while C still exists); it
+# retires WITH C at the switchover.
+#
 # QEMU-only, gated behind KERNEL_CODEGEN_MUTATION=1 (or REQUIRE_EMU=1). Each anchor is asserted to occur
 # EXACTLY ONCE, so a drifted anchor fails loudly.
 set -u
@@ -39,7 +48,15 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: native-codegen link25 mutation proof (no qemu)"; exit 0
 fi
 
+# C-free production compiler: the committed gen-1 seed (NOT the C interpreter).
+source "$script_dir/native_codegen_oracle.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/gen1" || exit 1
+SEED="$NATIVE_CODEGEN_COMPILER"
+# retireable C cross-check: ON only when C is present and not opted out.
+XCHECK=0
+if [[ -x "$HERBERT" && "${LINK25_MUTATION_NO_C:-0}" != "1" ]]; then XCHECK=1; fi
+
 pass=0; fail=0
 fail_test() { echo "FAIL: link25-mutation ($1)"; fail=$((fail + 1)); }
 
@@ -54,15 +71,26 @@ DATAFLOW='89f090b901000100480fafc148c1e82088c366bae900b0deee88d8eeb0adee88d83431
 le32_at() { local h="${1:$2:8}"; echo $(( 16#${h:6:2}${h:4:2}${h:2:2}${h:0:2} )); }
 
 emit_seq=0
-# assess(compiler_src) -> "GREEN" or "CAUGHT:<why>"
-assess() {
-    local comp="$1"; emit_seq=$((emit_seq + 1))
-    local d="$tmp/run.$emit_seq"; rm -rf "$d"; mkdir -p "$d"
+# emit_via(compiler, outdir): the given native compiler ELF emits the PROBE. Sets
+# $EMIT_IMG to the emitted image path, or "" if the compiler refused to emit.
+EMIT_IMG=""
+emit_via() {
+    local compiler="$1" d="$2"; rm -rf "$d"; mkdir -p "$d"
     printf -- '-- emit: multiboot32-long\n%s\n' "$PROBE" > "$d/p.herb"
-    ( cd "$d" && "$HERBERT" "$comp" < p.herb >/dev/null 2>/dev/null )
-    [[ -f "$d/a.out" ]] || { echo "CAUGHT:no-image"; return; }
-    grub-file --is-x86-multiboot "$d/a.out" >/dev/null 2>&1 || { echo "CAUGHT:bad-image"; return; }
-    local chx; chx=$(dd if="$d/a.out" bs=1 skip=4108 status=none 2>/dev/null | xxd -p | tr -d '\n')
+    ( cd "$d" && "$compiler" < p.herb >emit.out 2>&1 )
+    if [[ -f "$d/a.out" ]]; then EMIT_IMG="$d/a.out"; else EMIT_IMG=""; fi
+}
+# assess(compiler) -> "GREEN" or "CAUGHT:<why>". The given native compiler ELF
+# emits the probe; the emitted image is run through the white-box + boot gates.
+assess() {
+    local compiler="$1"; emit_seq=$((emit_seq + 1))
+    local d="$tmp/run.$emit_seq"
+    emit_via "$compiler" "$d"
+    [[ -n "$EMIT_IMG" ]] && cp "$EMIT_IMG" "$compiler.graded" 2>/dev/null
+    [[ -z "$EMIT_IMG" ]] && cp "$d/emit.out" "$compiler.emiterr" 2>/dev/null
+    [[ -n "$EMIT_IMG" ]] || { echo "CAUGHT:no-image"; return; }
+    grub-file --is-x86-multiboot "$EMIT_IMG" >/dev/null 2>&1 || { echo "CAUGHT:bad-image"; return; }
+    local chx; chx=$(dd if="$EMIT_IMG" bs=1 skip=4108 status=none 2>/dev/null | xxd -p | tr -d '\n')
     [[ "$(echo "$chx" | grep -oE "$HEAD" | wc -l | tr -d ' ')" == 1 ]] || { echo "CAUGHT:head"; return; }
     [[ "$(echo "$chx" | grep -oE "$OBS"  | wc -l | tr -d ' ')" == 1 ]] || { echo "CAUGHT:observable"; return; }
     [[ "$(echo "$chx" | grep -oE "$DATAFLOW" | wc -l | tr -d ' ')" == 1 ]] || { echo "CAUGHT:dataflow"; return; }
@@ -91,7 +119,7 @@ assess() {
     [[ "$(le32_at "$chx" $(( cr3_pos + 8 )))" -eq "$pml4_vaddr" ]] || { echo "CAUGHT:cr3-bind"; return; }
     [[ "$(le32_at "$chx" $(( lgdt_pos + 8 )))" -eq "$(( gdt_vaddr + 24 ))" ]] || { echo "CAUGHT:lgdt-bind"; return; }
     : > "$d/e9"
-    timeout 30 qemu-system-x86_64 -kernel "$d/a.out" -debugcon file:"$d/e9" -display none \
+    timeout 30 qemu-system-x86_64 -kernel "$EMIT_IMG" -debugcon file:"$d/e9" -display none \
         -no-reboot -serial none -monitor none -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
         -cpu qemu64 -m 64M >/dev/null 2>&1
     local hx; hx=$(xxd -p "$d/e9" 2>/dev/null | tr -d '\n')
@@ -103,12 +131,42 @@ assess() {
     echo "CAUGHT:boot(noframe:$hx)"
 }
 
-ctrl=$(assess "$backend")
-if [[ "$ctrl" == "GREEN" ]]; then echo "PASS control: unmutated compiler emits golden=$GOLDEN via a genuine 64-bit long-mode entry"; pass=$((pass+1));
-else echo "FAIL control: unmutated compiler did not pass cleanly: $ctrl"; fail=$((fail+1)); fi
+# seed_compile(backend_src, outpath): the C-free seed compiles a (mutated) backend
+# into a native gen-1' compiler ELF. Echoes "" if the backend did not compile.
+seed_compile() {
+    local src="$1" out="$2" d; d="$(mktemp -d "$tmp/sc.XXXX")"
+    ( cd "$d" && "$SEED" < "$src" >/dev/null 2>/dev/null )
+    # require a real ELF (magic 7f454c46), not merely a present a.out -- a truncated or
+    # partial stage-1 output must not be accepted as a compiler (Codex link16 review).
+    if [[ -f "$d/a.out" && "$(head -c4 "$d/a.out" | xxd -p | tr -d '\n')" == "7f454c46" ]]; then
+        cp "$d/a.out" "$out"; chmod +x "$out"; echo "$out"; else echo ""; fi
+}
 
+# c_emit(backend_src, outdir): the RETIREABLE C path -- the C interpreter runs the
+# (mutated) backend to emit the probe. Sets $C_IMG (or "" if no image).
+C_IMG=""
+c_emit() {
+    local src="$1" d="$2"; rm -rf "$d"; mkdir -p "$d"
+    printf -- '-- emit: multiboot32-long\n%s\n' "$PROBE" > "$d/p.herb"
+    ( cd "$d" && "$HERBERT" "$src" < p.herb >/dev/null 2>/dev/null )
+    if [[ -f "$d/a.out" ]]; then C_IMG="$d/a.out"; else C_IMG=""; fi
+}
+
+# control: the unmutated compiler is the SEED itself (the gen-1 fixpoint); it must
+# emit the golden byte via a genuine 64-bit long-mode entry C-FREE.
+ctrl=$(assess "$SEED")
+if [[ "$ctrl" == "GREEN" ]]; then echo "PASS control: unmutated seed compiler emits golden=$GOLDEN via a genuine 64-bit long-mode entry C-free"; pass=$((pass+1));
+else echo "FAIL control: unmutated seed compiler did not pass cleanly: $ctrl"; fail=$((fail+1)); fi
+[[ "$XCHECK" == "1" ]] && echo "  (retireable C cross-check ON: each mutation's native two-stage image is asserted byte-identical to the C image)"
+
+# mutate(name, old, new [, expect_no_image_diag]): old must occur exactly once; the
+# mutant must be CAUGHT. The C-free seed compiles the mutated backend -> gen1'
+# compiler, which emits the probe (two-stage). Optionally cross-checked byte-identical
+# to the C image. If expect_no_image_diag is given, a "no-image" verdict is only a
+# genuine catch when the mutated compiler emits THAT reject diagnostic (its own
+# layout invariant), NOT any incidental empty image -- closing the no-image catch-all.
 mutate() {
-    local name="$1" old="$2" new="$3"
+    local name="$1" old="$2" new="$3" expect_no_image_diag="${4:-}"
     local n; n=$(python3 - "$backend" "$old" <<'PY'
 import sys; print(open(sys.argv[1]).read().count(sys.argv[2]))
 PY
@@ -119,9 +177,41 @@ PY
 import sys
 open(sys.argv[4],"w").write(open(sys.argv[1]).read().replace(sys.argv[2],sys.argv[3],1))
 PY
-    local v; v=$(assess "$mut")
-    if [[ "$v" == CAUGHT:* ]]; then echo "PASS mutation $name: $v"; pass=$((pass+1));
-    else fail_test "$name: mutant escaped the gate (verdict=$v) -- the gate does NOT bite"; fi
+    # two-stage: seed compiles the mutated backend into a native gen1' compiler.
+    local gen1x; gen1x=$(seed_compile "$mut" "$tmp/gen1x.$name")
+    if [[ -z "$gen1x" ]]; then fail_test "$name: seed could not compile the mutated backend (two-stage stage-1 failed)"; return; fi
+    local v; v=$(assess "$gen1x")
+    if [[ "$v" != CAUGHT:* ]]; then
+        fail_test "$name: mutant escaped ALL gates (verdict=$v) -- the gate does NOT bite"; return
+    fi
+    # no-image pin: a "no-image" catch must be the mutated compiler's OWN reject
+    # diagnostic, not an incidental empty image.
+    if [[ -n "$expect_no_image_diag" ]]; then
+        if [[ "$v" != "CAUGHT:no-image" ]]; then
+            fail_test "$name: expected a no-image catch ($expect_no_image_diag) but got $v -- a layout-invariant mutation must refuse to emit"; return
+        fi
+        # bind the diagnostic to the SAME run assess() graded as no-image (its captured
+        # output, saved to $gen1x.emiterr) -- NOT a re-run (Codex link16 review).
+        local diag=""; [[ -f "$gen1x.emiterr" ]] && diag="$(cat "$gen1x.emiterr")"
+        if [[ "$diag" != *"$expect_no_image_diag"* ]]; then
+            fail_test "$name: no-image but NOT the expected reject '$expect_no_image_diag' (got: $(echo "$diag" | tr '\n' ' ')) -- a non-load-bearing empty image"; return
+        fi
+    elif [[ "$v" == "CAUGHT:no-image" ]]; then
+        fail_test "$name: unexpected no-image catch for a mutation that should emit a wrong image"; return
+    fi
+    # retireable faithfulness: the native two-stage image == the C image, byte-for-byte
+    # (or both produce no image). Confirms the C->seed substrate swap is loss-free.
+    if [[ "$XCHECK" == "1" ]]; then
+        # compare the EXACT image assess() graded (saved as $gen1x.graded), not a re-emit, so a
+        # stateful/nondeterministic compiler cannot grade image A then compare a clean image B
+        # (Codex link16 review -- bind the assessed artifact itself).
+        local nimg=""; [[ -f "$gen1x.graded" ]] && nimg="$gen1x.graded"
+        c_emit "$mut" "$tmp/c.$name"; local cimg="$C_IMG"
+        if [[ -z "$nimg" && -z "$cimg" ]]; then :   # both no-image -- faithful
+        elif [[ -n "$nimg" && -n "$cimg" ]] && cmp -s "$nimg" "$cimg"; then :   # byte-identical -- faithful
+        else fail_test "$name: native two-stage image != C image (substrate faithfulness broken: nat=${nimg:-<none>} c=${cimg:-<none>})"; return; fi
+    fi
+    echo "PASS mutation $name: $v"; pass=$((pass+1))
 }
 
 # M-Lbit: clear the GDT 64-bit code descriptor L-bit (flags byte 0xAF -> 0xCF). The far-jmp then loads a
@@ -265,5 +355,6 @@ mutate hardcode \
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail link25-mutation check(s) failed."; exit 1; fi
-echo "PASS: link25 mutation proof ($pass checks: control passes head+observable+data-flow+gdt(L=1)+L0-mask+GDTR-base+PML4+PDPT+emit+ljmp-target+CR3+lgdt binds + boot; 11 mutations each CAUGHT -- incl. M-hardcode (epilogue 'mov bl,al'->'mov bl,0xBE': the 64-bit observable runs but its output is discarded and the framed byte is a constant -- BEHAVIORALLY INVISIBLE, the same byte still boots -- caught ONLY by the contiguous observable->epilogue data-flow pin) -- M-Lbit (GDT L-bit 0xAF->0xCF -> compatibility mode, the identical REX.W body emits 0xFF on BOTH substrates) by the GDT pin; M-lme/M-pae/M-pg (drop EFER.LME / CR4.PAE / CR0.PG -> never genuine 64-bit -> triple-fault/garbage on silicon) by the exact-head pin; M-pml4 (clear PML4[0] present) and M-pdpt (clear PDPT[0] present -> first-fetch page-walk #PF) caught WHITE-BOX by the PML4/PDPT present binds; M-cr3val (CR3 -> the adjacent PDPT table: STILL BOOTS GREEN on silicon) caught ONLY by the new CR3==pml4_vaddr white-box reachability bind; M-ljmp (retarget the far-jmp off long_entry) by the ljmp-target==long_entry bind; M-shr (REX.W shr count 0x20->0, the compat self-defeat byte -> de-01-ad) and M-imul (REX.W 0x48->nop -> 32-bit non-widening multiply -> high dword 0) by the exact 16-byte observable pin -- so EFER.LME, CR4.PAE, CR0.PG, the descriptor L-bit, the FULL CR3->PML4->PDPT->PD page-table chain, the GDTR-base->selector-0x08 resolution, the mode-switch far-jmp reachability, the 64-bit shr-32, and the 64-bit widening imul are all proven load-bearing or white-box-bound; the byte cannot appear without a genuine 64-bit long-mode entry. The completeness-critic's body-far-jmp forge [a body ljmp 0x08:<hidden 32-bit blob> that hardcodes the byte and skips the transition] is closed in the forcing harness's body gate, NOT here -- the mutation harness mutates only the honest compiler)"
+xc=""; [[ "$XCHECK" == "1" ]] && xc=" + each native two-stage image byte-identical to C (retireable)"
+echo "PASS: link25 mutation proof ($pass checks, C-FREE via a real two-stage seed compile of the mutated backend: control passes head+observable+data-flow+gdt(L=1)+L0-mask+GDTR-base+PML4+PDPT+emit+ljmp-target+CR3+lgdt binds + boot; 11 mutations each CAUGHT -- incl. M-hardcode (epilogue 'mov bl,al'->'mov bl,0xBE': the 64-bit observable runs but its output is discarded and the framed byte is a constant -- BEHAVIORALLY INVISIBLE, the same byte still boots -- caught ONLY by the contiguous observable->epilogue data-flow pin) -- M-Lbit (GDT L-bit 0xAF->0xCF -> compatibility mode, the identical REX.W body emits 0xFF on BOTH substrates) by the GDT pin; M-lme/M-pae/M-pg (drop EFER.LME / CR4.PAE / CR0.PG -> never genuine 64-bit -> triple-fault/garbage on silicon) by the exact-head pin; M-pml4 (clear PML4[0] present) and M-pdpt (clear PDPT[0] present -> first-fetch page-walk #PF) caught WHITE-BOX by the PML4/PDPT present binds; M-cr3val (CR3 -> the adjacent PDPT table: STILL BOOTS GREEN on silicon) caught ONLY by the new CR3==pml4_vaddr white-box reachability bind; M-ljmp (retarget the far-jmp off long_entry) by the ljmp-target==long_entry bind; M-shr (REX.W shr count 0x20->0, the compat self-defeat byte -> de-01-ad) and M-imul (REX.W 0x48->nop -> 32-bit non-widening multiply -> high dword 0) by the exact 16-byte observable pin -- so EFER.LME, CR4.PAE, CR0.PG, the descriptor L-bit, the FULL CR3->PML4->PDPT->PD page-table chain, the GDTR-base->selector-0x08 resolution, the mode-switch far-jmp reachability, the 64-bit shr-32, and the 64-bit widening imul are all proven load-bearing or white-box-bound; the byte cannot appear without a genuine 64-bit long-mode entry. The completeness-critic's body-far-jmp forge [a body ljmp 0x08:<hidden 32-bit blob> that hardcodes the byte and skips the transition] is closed in the forcing harness's body gate, NOT here -- the mutation harness mutates only the honest compiler$xc)"
 exit 0

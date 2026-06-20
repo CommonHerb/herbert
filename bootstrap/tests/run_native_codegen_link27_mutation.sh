@@ -42,6 +42,16 @@
 # and wrong_tick_cell (bump the wrong cell => no advance): with N=3 the byte requires 3 real shared-cell
 # bumps sustained by EOI + eax-preserving iret-resume.
 #
+# SOVEREIGNTY (link 16): this proof is C-FREE. It NO LONGER re-emits through the C interpreter. Instead it
+# runs each mutation through a genuine TWO-STAGE seed compile (the assay/link18 template): the committed
+# C-free gen-1 seed compiles the (mutated) backend into a native gen-1' compiler ELF, and THAT compiler
+# emits the probe. This is strictly MORE faithful than the prior C path: it runs the ACTUAL mutated
+# compiler and checks the gate catches ITS output, so the proof's meaning ("a wrong compiler is caught")
+# survives C's deletion intact. A retireable cross-check -- DEFAULT-ON when C is present, opt-OUT via
+# LINK27_MUTATION_NO_C=1 -- also re-emits each mutation via the C interpreter and asserts the native
+# two-stage image is BYTE-IDENTICAL to the C image (substrate faithfulness, while C still exists); it
+# retires WITH C at the switchover.
+#
 # QEMU-only, gated behind KERNEL_CODEGEN_MUTATION=1 (or REQUIRE_EMU=1). Each anchor is asserted to occur
 # EXACTLY ONCE, so a drifted anchor fails loudly.
 set -u
@@ -58,7 +68,15 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: native-codegen link27 mutation proof (no qemu)"; exit 0
 fi
 
+# C-free production compiler: the committed gen-1 seed (NOT the C interpreter).
+source "$script_dir/native_codegen_oracle.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/gen1" || exit 1
+SEED="$NATIVE_CODEGEN_COMPILER"
+# retireable C cross-check: ON only when C is present and not opted out.
+XCHECK=0
+if [[ -x "$HERBERT" && "${LINK27_MUTATION_NO_C:-0}" != "1" ]]; then XCHECK=1; fi
+
 pass=0; fail=0
 fail_test() { echo "FAIL: link27-mutation ($1)"; fail=$((fail + 1)); }
 
@@ -71,15 +89,26 @@ HEAD='^fa0f0115[0-9a-f]{8}ea1b001000080066b810008ed88ec08ee08ee88ed0bc[0-9a-f]{8
 le32_at() { hx="$1"; o="$2"; echo $((16#${hx:o+6:2}${hx:o+4:2}${hx:o+2:2}${hx:o+0:2})); }
 
 emit_seq=0
-# assess(compiler_src) -> "GREEN" or "CAUGHT:<why>"
-assess() {
-    local comp="$1"; emit_seq=$((emit_seq + 1))
-    local d="$tmp/run.$emit_seq"; rm -rf "$d"; mkdir -p "$d"
+# emit_via(compiler, outdir): the given native compiler ELF emits the PROBE. Sets
+# $EMIT_IMG to the emitted image path, or "" if the compiler refused to emit.
+EMIT_IMG=""
+emit_via() {
+    local compiler="$1" d="$2"; rm -rf "$d"; mkdir -p "$d"
     printf -- '-- emit: multiboot32-rizzing\n%s\n' "$PROBE" > "$d/p.herb"
-    ( cd "$d" && "$HERBERT" "$comp" < p.herb >/dev/null 2>/dev/null )
-    [[ -f "$d/a.out" ]] || { echo "CAUGHT:no-image"; return; }
-    grub-file --is-x86-multiboot "$d/a.out" >/dev/null 2>&1 || { echo "CAUGHT:bad-image"; return; }
-    local chx; chx=$(dd if="$d/a.out" bs=1 skip=4108 status=none 2>/dev/null | xxd -p | tr -d '\n')
+    ( cd "$d" && "$compiler" < p.herb >emit.out 2>&1 )
+    if [[ -f "$d/a.out" ]]; then EMIT_IMG="$d/a.out"; else EMIT_IMG=""; fi
+}
+# assess(compiler) -> "GREEN" or "CAUGHT:<why>". The given native compiler ELF emits
+# the probe; the emitted image is run through the full link27 white-box + boot gates.
+assess() {
+    local compiler="$1"; emit_seq=$((emit_seq + 1))
+    local d="$tmp/run.$emit_seq"
+    emit_via "$compiler" "$d"
+    [[ -n "$EMIT_IMG" ]] && cp "$EMIT_IMG" "$compiler.graded" 2>/dev/null
+    [[ -z "$EMIT_IMG" ]] && cp "$d/emit.out" "$compiler.emiterr" 2>/dev/null
+    [[ -n "$EMIT_IMG" ]] || { echo "CAUGHT:no-image"; return; }
+    grub-file --is-x86-multiboot "$EMIT_IMG" >/dev/null 2>&1 || { echo "CAUGHT:bad-image"; return; }
+    local chx; chx=$(dd if="$EMIT_IMG" bs=1 skip=4108 status=none 2>/dev/null | xxd -p | tr -d '\n')
     # (0) the exact 104-byte head' (catches no_sti)
     [[ "${chx:0:208}" =~ $HEAD ]] || { echo "CAUGHT:head"; return; }
     # (1) the glue-spin at byte offset 104 (hex 208), contiguous with the head', AND exactly once
@@ -122,7 +151,7 @@ assess() {
     # (6) single 0xE9 emit path
     [[ "$(echo "$chx" | grep -oE '66bae900' | wc -l | tr -d ' ')" == 1 ]] || { echo "CAUGHT:emit"; return; }
     : > "$d/e9"
-    timeout 30 qemu-system-x86_64 -kernel "$d/a.out" -debugcon file:"$d/e9" -display none \
+    timeout 30 qemu-system-x86_64 -kernel "$EMIT_IMG" -debugcon file:"$d/e9" -display none \
         -no-reboot -serial none -monitor none -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
         -cpu qemu64 -m 64M >/dev/null 2>&1
     local hx; hx=$(xxd -p "$d/e9" 2>/dev/null | tr -d '\n')
@@ -134,12 +163,42 @@ assess() {
     echo "CAUGHT:boot(noframe:$hx)"
 }
 
-ctrl=$(assess "$backend")
-if [[ "$ctrl" == "GREEN" ]]; then echo "PASS control: unmutated compiler emits golden=$GOLDEN via the shared-memory tick (mainline spins on [tick] the glue-ISR bumps, surviving N=3 async IRQ0s)"; pass=$((pass+1));
-else echo "FAIL control: unmutated compiler did not pass cleanly: $ctrl"; fail=$((fail+1)); fi
+# seed_compile(backend_src, outpath): the C-free seed compiles a (mutated) backend
+# into a native gen-1' compiler ELF. Echoes "" if the backend did not compile.
+seed_compile() {
+    local src="$1" out="$2" d; d="$(mktemp -d "$tmp/sc.XXXX")"
+    ( cd "$d" && "$SEED" < "$src" >/dev/null 2>/dev/null )
+    # require a real ELF (magic 7f454c46), not merely a present a.out -- a truncated or
+    # partial stage-1 output must not be accepted as a compiler (Codex link16 review).
+    if [[ -f "$d/a.out" && "$(head -c4 "$d/a.out" | xxd -p | tr -d '\n')" == "7f454c46" ]]; then
+        cp "$d/a.out" "$out"; chmod +x "$out"; echo "$out"; else echo ""; fi
+}
 
+# c_emit(backend_src, outdir): the RETIREABLE C path -- the C interpreter runs the
+# (mutated) backend to emit the probe. Sets $C_IMG (or "" if no image).
+C_IMG=""
+c_emit() {
+    local src="$1" d="$2"; rm -rf "$d"; mkdir -p "$d"
+    printf -- '-- emit: multiboot32-rizzing\n%s\n' "$PROBE" > "$d/p.herb"
+    ( cd "$d" && "$HERBERT" "$src" < p.herb >/dev/null 2>/dev/null )
+    if [[ -f "$d/a.out" ]]; then C_IMG="$d/a.out"; else C_IMG=""; fi
+}
+
+# control: the unmutated compiler is the SEED itself (the gen-1 fixpoint); it must
+# emit the golden byte via the shared-memory tick path C-FREE.
+ctrl=$(assess "$SEED")
+if [[ "$ctrl" == "GREEN" ]]; then echo "PASS control: unmutated seed compiler emits golden=$GOLDEN via the shared-memory tick C-free (mainline spins on [tick] the glue-ISR bumps, surviving N=3 async IRQ0s)"; pass=$((pass+1));
+else echo "FAIL control: unmutated seed compiler did not pass cleanly: $ctrl"; fail=$((fail+1)); fi
+[[ "$XCHECK" == "1" ]] && echo "  (retireable C cross-check ON: each mutation's native two-stage image is asserted byte-identical to the C image)"
+
+# mutate(name, old, new [, expect_no_image_diag]): old must occur exactly once; the
+# mutant must be CAUGHT. The C-free seed compiles the mutated backend -> gen1'
+# compiler, which emits the probe (two-stage). Optionally cross-checked byte-identical
+# to the C image. If expect_no_image_diag is given, a "no-image" verdict is only a
+# genuine catch when the mutated compiler emits THAT reject diagnostic (its own
+# layout invariant), NOT any incidental empty image -- closing the no-image catch-all.
 mutate() {
-    local name="$1" old="$2" new="$3"
+    local name="$1" old="$2" new="$3" expect_no_image_diag="${4:-}"
     local n; n=$(python3 - "$backend" "$old" <<'PY'
 import sys; print(open(sys.argv[1]).read().count(sys.argv[2]))
 PY
@@ -150,9 +209,41 @@ PY
 import sys
 open(sys.argv[4],"w").write(open(sys.argv[1]).read().replace(sys.argv[2],sys.argv[3],1))
 PY
-    local v; v=$(assess "$mut")
-    if [[ "$v" == CAUGHT:* ]]; then echo "PASS mutation $name: $v"; pass=$((pass+1));
-    else fail_test "$name: mutant escaped the gate (verdict=$v) -- the gate does NOT bite"; fi
+    # two-stage: seed compiles the mutated backend into a native gen1' compiler.
+    local gen1x; gen1x=$(seed_compile "$mut" "$tmp/gen1x.$name")
+    if [[ -z "$gen1x" ]]; then fail_test "$name: seed could not compile the mutated backend (two-stage stage-1 failed)"; return; fi
+    local v; v=$(assess "$gen1x")
+    if [[ "$v" != CAUGHT:* ]]; then
+        fail_test "$name: mutant escaped ALL gates (verdict=$v) -- the gate does NOT bite"; return
+    fi
+    # no-image pin: a "no-image" catch must be the mutated compiler's OWN reject
+    # diagnostic, not an incidental empty image.
+    if [[ -n "$expect_no_image_diag" ]]; then
+        if [[ "$v" != "CAUGHT:no-image" ]]; then
+            fail_test "$name: expected a no-image catch ($expect_no_image_diag) but got $v -- a layout-invariant mutation must refuse to emit"; return
+        fi
+        # bind the diagnostic to the SAME run assess() graded as no-image (its captured
+        # output, saved to $gen1x.emiterr) -- NOT a re-run (Codex link16 review).
+        local diag=""; [[ -f "$gen1x.emiterr" ]] && diag="$(cat "$gen1x.emiterr")"
+        if [[ "$diag" != *"$expect_no_image_diag"* ]]; then
+            fail_test "$name: no-image but NOT the expected reject '$expect_no_image_diag' (got: $(echo "$diag" | tr '\n' ' ')) -- a non-load-bearing empty image"; return
+        fi
+    elif [[ "$v" == "CAUGHT:no-image" ]]; then
+        fail_test "$name: unexpected no-image catch for a mutation that should emit a wrong image"; return
+    fi
+    # retireable faithfulness: the native two-stage image == the C image, byte-for-byte
+    # (or both produce no image). Confirms the C->seed substrate swap is loss-free.
+    if [[ "$XCHECK" == "1" ]]; then
+        # compare the EXACT image assess() graded (saved as $gen1x.graded), not a re-emit, so a
+        # stateful/nondeterministic compiler cannot grade image A then compare a clean image B
+        # (Codex link16 review -- bind the assessed artifact itself).
+        local nimg=""; [[ -f "$gen1x.graded" ]] && nimg="$gen1x.graded"
+        c_emit "$mut" "$tmp/c.$name"; local cimg="$C_IMG"
+        if [[ -z "$nimg" && -z "$cimg" ]]; then :   # both no-image -- faithful
+        elif [[ -n "$nimg" && -n "$cimg" ]] && cmp -s "$nimg" "$cimg"; then :   # byte-identical -- faithful
+        else fail_test "$name: native two-stage image != C image (substrate faithfulness broken: nat=${nimg:-<none>} c=${cimg:-<none>})"; return; fi
+    fi
+    echo "PASS mutation $name: $v"; pass=$((pass+1))
 }
 
 # assess_image(image_path) -> "GREEN"/"CAUGHT:..." : run the SAME gates on a pre-built (binary-patched
@@ -171,15 +262,12 @@ assess_image() {
     echo "GREEN-gates"   # only the structural pins relevant to the displacement forge; sufficient for the bite
 }
 
-# the unmutated control image, for binary-patch forges. Re-interpret the (unmutated) backend source via
-# the C bootstrap through a VARIABLE (ctrl_comp) -- the same test-time pattern assess() uses, distinct
-# from a Role-2 production HERBERT-compiles-the-backend literal site (which the gaggle switchover-
-# completeness grep in run_tests.sh targets; test-time re-interpretation via a variable is exempt).
-ctrl_d="$tmp/ctrl.d"; rm -rf "$ctrl_d"; mkdir -p "$ctrl_d"
-printf -- '-- emit: multiboot32-rizzing\n%s\n' "$PROBE" > "$ctrl_d/p.herb"
-ctrl_comp="$backend"
-( cd "$ctrl_d" && "$HERBERT" "$ctrl_comp" < p.herb >/dev/null 2>/dev/null )
-CTRL_IMG="$ctrl_d/a.out"
+# the unmutated control image, for binary-patch forges. C-FREE: the committed gen-1 seed (the production
+# compiler, NOT the C interpreter) emits the probe. This is the same C-free image assess("$SEED") grades,
+# so the binary-patch forge is patched onto a genuinely sovereign control image.
+ctrl_d="$tmp/ctrl.d"
+emit_via "$SEED" "$ctrl_d"
+CTRL_IMG="$EMIT_IMG"
 
 # ============================ SILICON-RED mutations ==========================
 # no_inc: ff05 inc dword[tick] -> two nops (255 5 -> 144 144). The ISR never bumps the shared cell, so
@@ -330,5 +418,6 @@ fi
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail link27-mutation check(s) failed."; exit 1; fi
-echo "PASS: link27 mutation proof ($pass checks: control passes head'+spin-pos+isr+provenance+gate+gdt+emit+boot gates; 9 mutations each CAUGHT -- no_inc (ISR never bumps [tick] -> spin never advances), no_eoi (PIC never re-delivers -> stuck below N), no_iret (mainline never resumes) all break the glue-ISR anchor and are caught at the ISR pin (their underlying silicon RED -- no advance past the spin -> timeout -- is real on QEMU+Bochs); no_sti (no IRQ -> spin forever) breaks the 104-byte head' and is caught at the head' pin; jb_retarget (jb -10 -> jb +0: no genuine spin re-read) and wrong_N (cmp 3 -> 1: emits on tick 1, the SAME byte, BEHAVIORALLY INVISIBLE) break the glue-spin anchor (the back-edge rel8 and N are pinned LITERALLY in the regex) and are caught at the spin pin -- the exact count is not silicon-witnessable, like talkert's PIT divisor; wrong_tick_cell (ISR bumps a different word than the mainline spins on) leaves every PRESENCE pin intact and is caught ONLY by the TICK-CELL PROVENANCE value-bind (head==spin==ISR) -- the loader/CPU-redirect meta-class; idtr_redirect (the head' lidt operand pointed at a different IDTR) is caught ONLY by the (4b) lidt-bind requiring the LOADED IDTR's base+0x100 == the checked vec-0x20 gate -- the same meta-class extended to the CPU's ACTUAL interrupt substrate (a cross-model Codex review built the silicon-valid decoy-IDTR + trap-gate forge); prespin_inject (a binary-patched forge that injects code between the exact head' and a now-displaced spin -- the rizz head' falls through, so a free occ-anywhere spin pin would pass a synchronous-emit-then-dead-spin forge) is caught ONLY by the POSITIONAL spin pin requiring the spin at byte offset 104 contiguous with the head' [a cross-model Codex review built this forge]; so the per-tick inc, the EOI, the iret-resume, sti, the back-edge reachability, the exact N, the shared-cell identity, AND the spin's contiguity with the head' are all proven load-bearing or white-box-pinned, and the async-SYNCHRONIZATION property holds: the mainline cannot reach the byte without the ISR genuinely bumping the SAME shared word N times)"
+xc=""; [[ "$XCHECK" == "1" ]] && xc=" + each native two-stage image byte-identical to C (retireable)"
+echo "PASS: link27 mutation proof ($pass checks: control passes head'+spin-pos+isr+provenance+gate+gdt+emit+boot gates C-FREE (via a TWO-STAGE seed compile -- the committed gen-1 seed emits the probe, C interpreter NOT on the emit path)$xc; 9 mutations each CAUGHT via a real two-stage seed compile of the mutated backend -- no_inc (ISR never bumps [tick] -> spin never advances), no_eoi (PIC never re-delivers -> stuck below N), no_iret (mainline never resumes) all break the glue-ISR anchor and are caught at the ISR pin (their underlying silicon RED -- no advance past the spin -> timeout -- is real on QEMU+Bochs); no_sti (no IRQ -> spin forever) breaks the 104-byte head' and is caught at the head' pin; jb_retarget (jb -10 -> jb +0: no genuine spin re-read) and wrong_N (cmp 3 -> 1: emits on tick 1, the SAME byte, BEHAVIORALLY INVISIBLE) break the glue-spin anchor (the back-edge rel8 and N are pinned LITERALLY in the regex) and are caught at the spin pin -- the exact count is not silicon-witnessable, like talkert's PIT divisor; wrong_tick_cell (ISR bumps a different word than the mainline spins on) leaves every PRESENCE pin intact and is caught ONLY by the TICK-CELL PROVENANCE value-bind (head==spin==ISR) -- the loader/CPU-redirect meta-class; idtr_redirect (the head' lidt operand pointed at a different IDTR) is caught ONLY by the (4b) lidt-bind requiring the LOADED IDTR's base+0x100 == the checked vec-0x20 gate -- the same meta-class extended to the CPU's ACTUAL interrupt substrate (a cross-model Codex review built the silicon-valid decoy-IDTR + trap-gate forge); prespin_inject (a binary-patched forge that injects code between the exact head' and a now-displaced spin -- the rizz head' falls through, so a free occ-anywhere spin pin would pass a synchronous-emit-then-dead-spin forge) is caught ONLY by the POSITIONAL spin pin requiring the spin at byte offset 104 contiguous with the head' [a cross-model Codex review built this forge]; so the per-tick inc, the EOI, the iret-resume, sti, the back-edge reachability, the exact N, the shared-cell identity, AND the spin's contiguity with the head' are all proven load-bearing or white-box-pinned, and the async-SYNCHRONIZATION property holds: the mainline cannot reach the byte without the ISR genuinely bumping the SAME shared word N times)"
 exit 0
