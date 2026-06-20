@@ -155,19 +155,30 @@ nat_nest="$tmp/probe_nest.out"
 native_render "$probe_nest" "$nat_nest" || fail "nested-tuple probe did not run cleanly under gen-1"
 cmp -s "$nat_nest" "$want_nest" || fail "nested-tuple native render != independent oracle (native=$(cat "$nat_nest" | tr -d '\n'))"
 
-# --- 3. ENDURING leg over the FOUNDATIONAL tuple tests vs committed .expected.
-# These are the actual language-conformance programs the C interpreter runs; the
-# native toolchain now reproduces their output C-free. link12 adds test_06 (nested
-# tuple + strings), the LAST rendering-blocked foundational test. (test_02 ERR431
-# short-circuit and the resource-bound tests test_10..14 remain C-only -- D13/D16,
-# not rendering -- so a COMPLETE foundational fence is still future work.)
-foundational="test_01_arith test_03_if_elif test_06_tuples test_07_array test_08_strings_buffer test_09_ref_vs_value"
+# --- 3. ENDURING leg: native C-free grading of every foundational test whose
+# OUTPUT the native toolchain reproduces byte-exact (the muster set, sovereignty
+# link 13). These are the actual language-conformance programs; the C-free seed
+# compiles + runs each and its stdout == the committed .expected, so C is not
+# needed to grade their OUTPUT. This is the FULL native-output-gradeable set --
+# 12 of the 15 foundational tests: the 6 rendering tests (link11/12) PLUS 04/05
+# (scalar return, kringle) and 10/13/14a/14b (the resource-bound tests, whose
+# OUTPUT native reproduces -- only their C-GC INSTRUMENTATION .maxscopes/.maxheap
+# retires WITH C, asserted separately on run_tests.sh's retire-with-C path). NOT
+# here (native diverges on OUTPUT, not rendering, so they retire WITH C): test_02
+# (native correctly REJECTS dead out-of-range code, ERR431 -- native is stricter)
+# and test_11/12 (1,000,000-deep non-tail recursion SIGSEGVs on the native
+# hardware stack). MUSTER_MANIFEST, if set, receives the exact graded list so
+# run_tests.sh's static backstop can prove this gate grades precisely the fenced
+# set (no vacuous pass from a silently-shrunk list).
+foundational="test_01_arith test_03_if_elif test_04_recursion test_05_block_scope test_06_tuples test_07_array test_08_strings_buffer test_09_ref_vs_value test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap"
+: >"${MUSTER_MANIFEST:-/dev/null}"
 for t in $foundational; do
     src="$tests_dir/$t.herb"; exp="$tests_dir/$t.expected"
     [[ -f "$src" && -f "$exp" ]] || fail "missing foundational probe $t"
     out="$tmp/$t.out"
     native_render "$src" "$out" || fail "foundational $t did not render natively"
     cmp -s "$out" "$exp" || fail "foundational $t native render != committed .expected (native=$(cat "$out" | tr -d '\n'))"
+    printf '%s\n' "$t" >>"${MUSTER_MANIFEST:-/dev/null}"
 done
 
 # --- 4. Out-of-scope cases are STILL rejected (the scope boundary is real, not
@@ -191,6 +202,47 @@ end'
 reject_oos "width-16"      'func main():
     return (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
 end'
+
+# --- 4b. muster (link 13) REASON pin: test_02 is in the foundational suite's
+# RETIRE-WITH-C set because the native verifier correctly REJECTS its dead
+# out-of-range tuple access (ERR431 -- native is MORE correct than C's lazy eval;
+# parity would be a regression). Pin that reason C-FREE here (the seed has it), so
+# the retire-with-C disposition cannot be silently invalidated -- e.g. by relaxing
+# the verifier so test_02 starts compiling -- while keeping its blessed name. This
+# is the assertion-granular complement to run_tests.sh's structural backstop.
+t02="$tests_dir/test_02_short_circuit.herb"
+if [[ -f "$t02" ]]; then
+    t02wd="$(mktemp -d "$tmp/t02.XXXX")"
+    ( cd "$t02wd" && "$GEN1" <"$t02" >t02.log 2>t02.err ) || true
+    [[ ! -f "$t02wd/a.out" ]] || fail "test_02 UNEXPECTEDLY compiled natively -- its retire-with-C reason (native rejects ERR431) is now invalid; reclassify it"
+    grep -q "ERR 431" "$t02wd/t02.log" "$t02wd/t02.err" 2>/dev/null || fail "test_02 native rejection is not ERR 431 (retire-with-C reason changed): $(head -1 "$t02wd/t02.log")"
+fi
+
+# --- 4c. muster (link 13) REASON pin: test_11/12 are in RETIRE-WITH-C because native
+# diverges on OUTPUT -- their 1,000,000-deep non-tail recursion overflows the native
+# hardware stack and SIGSEGVs (C runs it on a heap activation stack). Pin that reason
+# C-FREE by BEHAVIOR (stronger than a depth-literal grep): the seed compiles each to
+# a real ELF that SIGSEGVs (rc 139). Lowering the depth so it runs+exits-0 would make
+# the test native-gradeable -- and fail this pin, forcing a conscious reclassification.
+for t_rec in test_11_non_tail_self_recursion test_12_non_tail_mutual_recursion; do
+    src_rec="$tests_dir/$t_rec.herb"
+    [[ -f "$src_rec" ]] || continue
+    recwd="$(mktemp -d "$tmp/rec.XXXX")"
+    ( cd "$recwd" && "$GEN1" <"$src_rec" >rec.log 2>rec.err ) || true
+    [[ -f "$recwd/a.out" ]] || fail "$t_rec did not compile under the seed -- cannot verify its native-SIGSEGV retire-with-C reason"
+    [[ "$(head -c4 "$recwd/a.out" | xxd -p)" == "7f454c46" ]] || fail "$t_rec compiled to a non-ELF artifact"
+    chmod +x "$recwd/a.out"
+    # cd into the temp dir + suppress core dumps, so a SIGSEGV cannot drop a `core`
+    # file into the tracked bootstrap/tests (it would otherwise land in the gate's cwd
+    # and get staged); $recwd is under $tmp and removed by the EXIT trap.
+    # Capture the rc via command substitution with stderr fully suppressed, so the
+    # shell's expected "Segmentation fault" job message (a scary-looking line in an
+    # otherwise-green run) never reaches the log. `echo $?` carries a.out's 139 exit
+    # out on stdout; the trailing 2>/dev/null eats the signal message. cd + ulimit -c 0
+    # keep any core in the trap-cleaned temp dir, off the tracked tree.
+    rc_rec=$( cd "$recwd"; ulimit -c 0 2>/dev/null; ./a.out >/dev/null 2>&1; echo $? ) 2>/dev/null
+    [[ "$rc_rec" -eq 139 ]] || fail "$t_rec no longer SIGSEGVs natively (rc=$rc_rec) -- its retire-with-C reason (deep recursion overflows the native stack) is invalid; reclassify it"
+done
 
 # --- 5. C-FREE proven, not asserted: run gen-1 with an EMPTY PATH (so no external
 # toolchain -- cc/gcc/as/ld -- is reachable by name) and it must STILL emit the ELF
@@ -236,7 +288,7 @@ if [[ "${AGGREGATE_RENDER_NATIVE_NO_C:-0}" != "1" && -x "$HERBERT" ]]; then
         "$HERBERT" "$tests_dir/$t.herb" >"$cf" 2>/dev/null || fail "C interpreter could not run $t"
         cmp -s "$tmp/$t.out" "$cf" || fail "native $t diverges from the C interpreter (faithfulness)"
     done
-    c_checked="(faithfulness vs C interpreter: native == C-interp == oracle, held-back flat/string/nested + 6 foundational)"
+    c_checked="(faithfulness vs C interpreter: native == C-interp == oracle, held-back flat/string/nested + 12 foundational)"
 fi
 
-echo "PASS: aggregate-render native execution (gen-1 renders flat/string/NESTED tuples C-FREE: held-back flat+string+nested probes + test_01/03/06/07/08/09 == committed keys; array/array-elem/width-16 still ERR432; $c_checked)"
+echo "PASS: aggregate-render native execution (gen-1 renders flat/string/NESTED tuples C-FREE: held-back flat+string+nested probes + the 12 native-output foundational tests 01/03/04/05/06/07/08/09/10/13/14a/14b == committed .expected; array/array-elem/width-16 still ERR432; $c_checked)"

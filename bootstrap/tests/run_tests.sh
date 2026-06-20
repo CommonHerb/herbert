@@ -121,6 +121,62 @@ else
     tollgate_nc_herbert="$turnstile_real_herbert"
 fi
 
+# --- muster (sovereignty link 13): the foundational-suite switchover fence ------
+# turnstile retired C from grading the 6 metacircular fragments; tollgate from the
+# native-codegen oracle. muster retires C from grading the FOUNDATIONAL suite's
+# OUTPUT -- the 15 test_*.herb language-conformance programs that until now were
+# graded ONLY by running each under the C interpreter and diffing stdout vs its
+# committed .expected. Every foundational test gets a SETTLED switchover DISPOSITION
+# (a complete roll-call; no test left undischarged, no C grade native can replace):
+#   * 12 are NATIVE-OUTPUT-GRADED, C-FREE: the C-free seed compiles+runs each and its
+#     stdout == .expected (run_aggregate_render_native.sh, the muster enduring leg).
+#     C grades their OUTPUT zero times on the default path.
+#   * 3 RETIRE WITH C (whole): native diverges on OUTPUT, each for a defended reason
+#     -- test_02 (native's verifier correctly REJECTS dead OOB code C runs lazily,
+#     ERR431 -- native is MORE correct; parity would be a regression) and test_11/12
+#     (1,000,000-deep non-tail recursion SIGSEGVs the native hardware stack; C runs
+#     it on a heap activation stack -- a FAR-axis capacity debt, D13).
+#   * 4 RETIRE the C-GC INSTRUMENTATION ASSERTION only: test_10/13 (.maxscopes) and
+#     test_14a/14b (.maxheap + heap-slope). Their OUTPUT is native-graded above; only
+#     the peak-live-scopes / peak-heap-bytes bounds -- a property of C's mark-sweep GC
+#     the native runtime cannot emit (native never frees, D16) -- stay on C, retiring
+#     at the switchover. The honest line is assertion-granular: grade everything
+#     native reproduces, retire WITH C only what native genuinely cannot.
+# A counting-DELEGATING HERBERT shim (the turnstile writer, reused) instruments the
+# enduring-leg dispatch so check_foundational_grade_count fences the default at ZERO
+# C grading invocations of the 12 OUTPUTS; check_foundational_grade_gating_present is
+# a static backstop (exhaustive partition + the gate grades exactly the fenced set +
+# each retire-with-C test still carries its stated C-only PROPERTY, not just a blessed
+# name + C reachable only via $HERBERT); run_foundational_grade_fence_mutation proves
+# the fence BITES on the real pre-muster path. FOUNDATIONAL_C_GRADE_CROSSCHECK=1
+# re-enables the native-vs-C faithfulness leg (the one sanctioned live-C path).
+muster_crosscheck="${FOUNDATIONAL_C_GRADE_CROSSCHECK:-0}"
+muster_grade_count="$turnstile_tmp/foundational_grade_count"
+: >"$muster_grade_count"
+muster_grade_shim="$turnstile_tmp/herbert_foundational_grade_shim.sh"
+turnstile_write_shim "$muster_grade_shim" "$muster_grade_count"
+muster_manifest="$turnstile_tmp/foundational_manifest"
+: >"$muster_manifest"
+# The 12 native-OUTPUT-gradeable foundational tests (stdout == .expected under the
+# C-free seed) and their complementary retire-with-C dispositions. These lists are
+# the fence's source of truth; check_foundational_grade_gating_present proves they
+# partition the on-disk test_*.herb set EXHAUSTIVELY (MUSTER_NATIVE_OUTPUT and
+# MUSTER_RETIRE_WHOLE are disjoint and cover all 15; MUSTER_RETIRE_GC is the subset
+# of the 12 that ALSO carries a C-GC-instrumentation assertion).
+MUSTER_NATIVE_OUTPUT="test_01_arith test_03_if_elif test_04_recursion test_05_block_scope test_06_tuples test_07_array test_08_strings_buffer test_09_ref_vs_value test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap"
+MUSTER_RETIRE_WHOLE="test_02_short_circuit test_11_non_tail_self_recursion test_12_non_tail_mutual_recursion"
+MUSTER_RETIRE_GC="test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap"
+if [[ "$muster_crosscheck" == "1" ]]; then
+    # Opt-in: run the native-vs-C faithfulness cross-check (requires C to exist).
+    muster_no_c=0
+    muster_grade_herbert="$turnstile_real_herbert"
+else
+    # Default: C-free grading of the 12 outputs; the shim is a trip-wire the C-free
+    # enduring leg never reaches (caught by the fence if C re-enters the path).
+    muster_no_c=1
+    muster_grade_herbert="$muster_grade_shim"
+fi
+
 run_one() {
     local prog="$1"
     local expected="$2"
@@ -193,6 +249,49 @@ run_one() {
     else
         echo "PASS: $label"
     fi
+    return 0
+}
+
+grade_retire_gc() {
+    # muster (link 13): the retire-with-C disposition for the resource-bound tests
+    # (test_10/13/14a/14b). Their OUTPUT is graded C-FREE by the muster enduring leg;
+    # here C grades ONLY the GC-INSTRUMENTATION assertion -- peak-live-scopes
+    # (.maxscopes) and/or peak-heap-bytes (.maxheap), a property of the C interpreter's
+    # mark-sweep GC the native runtime cannot emit (native never frees, D16). This C
+    # grade retires at the switchover. Mirrors run_one's GC checks exactly; the stdout
+    # diff is omitted because the output is already graded natively. Captures the heap
+    # peak for the test_14 heap-slope check (a sibling C-GC property, also retire-with-C).
+    local prog="$1" label="$2"
+    local maxfile="${prog%.herb}.maxscopes" maxheapfile="${prog%.herb}.maxheap"
+    local err peak heap base detail=
+    err=$(mktemp)
+    HERBERT_REPORT_PEAK=1 HERBERT_REPORT_HEAP=1 "$HERBERT" "$prog" >/dev/null 2>"$err"
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "FAIL: $label (interpreter exit $rc)"
+        cat "$err"; rm -f "$err"; return 1
+    fi
+    peak=$(awk '/^peak-live-scopes: [0-9]+$/ {print $2}' "$err")
+    heap=$(awk '/^peak-heap-bytes: [0-9]+$/ {print $2}' "$err")
+    base="$(basename "$prog")"
+    case "$base" in
+        test_14a_bounded_heap.herb) test_14a_heap="$heap" ;;
+        test_14b_bounded_heap.herb) test_14b_heap="$heap" ;;
+    esac
+    if [[ -f "$maxfile" ]]; then
+        local bound; bound=$(tr -d '[:space:]' < "$maxfile")
+        if [[ -z "$peak" ]]; then echo "FAIL: $label (no peak-live-scopes reported)"; rm -f "$err"; return 1; fi
+        if (( peak > bound )); then echo "FAIL: $label (peak-live-scopes $peak > bound $bound)"; rm -f "$err"; return 1; fi
+        detail="peak-live-scopes $peak <= $bound"
+    fi
+    if [[ -f "$maxheapfile" ]]; then
+        local hbound; hbound=$(tr -d '[:space:]' < "$maxheapfile")
+        if [[ -z "$heap" ]]; then echo "FAIL: $label (no peak-heap-bytes reported)"; rm -f "$err"; return 1; fi
+        if (( heap > hbound )); then echo "FAIL: $label (peak-heap-bytes $heap > bound $hbound)"; rm -f "$err"; return 1; fi
+        detail="${detail}${detail:+; }peak-heap-bytes $heap <= $hbound"
+    fi
+    rm -f "$err"
+    echo "PASS: $label ($detail)"
     return 0
 }
 
@@ -965,6 +1064,156 @@ run_fragment_grade_fence_mutation() {
     fi
 }
 
+check_foundational_grade_count() {
+    # muster: the FENCE. On the default `make test` path the C interpreter must GRADE
+    # the 12 native-OUTPUT foundational tests ZERO times -- their stdout is graded by
+    # the C-free seed in run_aggregate_render_native.sh (the enduring leg), and the
+    # native-vs-C faithfulness leg is opt-in (FOUNDATIONAL_C_GRADE_CROSSCHECK=1). The
+    # count only increments inside the delegating shim the enduring leg was dispatched
+    # with, so 0 here proves C was not in their OUTPUT grading path -- the foundational
+    # analogue of the michoi "C did not MINT" / turnstile "C did not GRADE" fence. (C
+    # STILL legitimately grades the retire-with-C residue -- test_02/11/12 whole and the
+    # GC instrumentation of 10/13/14a/14b -- via run_one/grade_retire_gc, NOT this shim;
+    # that residue is what retires at the switchover, registered + reason-checked below.)
+    total=$((total + 1))
+    if [[ "$muster_crosscheck" == "1" ]]; then
+        echo "PASS: foundational C-grade fence: opt-in cross-check ran (FOUNDATIONAL_C_GRADE_CROSSCHECK=1 -- native-vs-C faithfulness exercised by request; the C-free fence is not asserted in this mode)"
+        pass=$((pass + 1))
+        return
+    fi
+    local got
+    got=$(grep -c 'C-GRADE' "$muster_grade_count" 2>/dev/null || true)
+    [[ -n "$got" ]] || got=0
+    if [[ "$got" -eq 0 ]]; then
+        echo "PASS: foundational C-grade count: 0 (the C interpreter did NOT grade the 12 native-output foundational tests -- each passed C-free on the seed-compiled enduring leg)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: foundational C-grade count: $got (expected 0 -- the C interpreter re-entered the foundational output grading path on the default run)"
+        cat "$muster_grade_count"
+        fail=$((fail + 1))
+    fi
+}
+
+check_foundational_grade_gating_present() {
+    # Static backstop to the behavioral fence (folds the cross-model design review):
+    #  (1) the enduring leg exists+executable, retains its AGGREGATE_RENDER_NATIVE_NO_C
+    #      opt-out, and routes C only via $HERBERT -- no hardcoded command-position
+    #      `herbert` and no unconditional HERBERT= override (so the counting shim
+    #      cannot be bypassed by a direct C-interpreter call);
+    #  (2) MANIFEST == fenced set: the enduring leg graded EXACTLY MUSTER_NATIVE_OUTPUT
+    #      (a RUNTIME manifest, so the fence cannot pass vacuously on a silently-shrunk
+    #      graded list);
+    #  (3) EXHAUSTIVE partition: MUSTER_NATIVE_OUTPUT and MUSTER_RETIRE_WHOLE are
+    #      disjoint and together cover every on-disk test_*.herb (no orphan slips past
+    #      native grading); MUSTER_RETIRE_GC is a subset of the native-output set;
+    #  (4) REASON not just NAME: each retire-with-C test still EXERCISES its stated
+    #      C-only property -- 10/13 keep a .maxscopes, 14a/14b a .maxheap, 11/12 keep
+    #      their deep (1,000,000) non-tail recursion (test_02's native-ERR431 rejection
+    #      is pinned C-free inside the enduring leg) -- so a retired test cannot be
+    #      silently weakened while keeping its blessed name.
+    total=$((total + 1))
+    local bad="" s
+    s="$PWD/run_aggregate_render_native.sh"
+    if [[ ! -x "$s" ]]; then
+        echo "FAIL: foundational C-grade gating present (enduring leg run_aggregate_render_native.sh missing or not executable)"
+        fail=$((fail + 1)); return
+    fi
+    grep -q "AGGREGATE_RENDER_NATIVE_NO_C" "$s" || bad="$bad enduring-leg(no-NO_C-guard)"
+    if grep -nE '(^|[^[:alnum:]_])herbert[[:space:]]+["'\''$<>|]' "$s" | grep -q .; then
+        bad="$bad enduring-leg(hardcoded-C-call)"
+    fi
+    if grep -nE '^[[:space:]]*HERBERT=' "$s" | grep -vE '\$\{?HERBERT' | grep -q .; then
+        bad="$bad enduring-leg(unconditional-HERBERT-override)"
+    fi
+    # Forbid any hardcoded build/herbert C-interpreter invocation (the direct-C
+    # bypass the behavioral fence cannot see). The ONLY allowed occurrence is the
+    # documented ${HERBERT:-...build/herbert} default fallback (then called via the
+    # routed $HERBERT). Catches "$repo_root/build/herbert" "$x" and the like, which
+    # the whitespace-form herbert grep above misses (herbert followed by a quote).
+    if grep -n 'build/herbert' "$s" | grep -vE 'HERBERT:-' | grep -q .; then
+        bad="$bad enduring-leg(hardcoded-build/herbert)"
+    fi
+    # (2) manifest == fenced set (sorted compare).
+    local want_native got_native
+    want_native=$(printf '%s\n' $MUSTER_NATIVE_OUTPUT | sort)
+    got_native=$(sort "$muster_manifest" 2>/dev/null)
+    [[ "$want_native" == "$got_native" ]] || bad="$bad manifest!=fenced-set"
+    # (3) exhaustive + disjoint partition over the on-disk test_*.herb set.
+    local on_disk want_all f
+    on_disk=$(for f in "$PWD"/test_*.herb; do printf '%s\n' "$(basename "${f%.herb}")"; done | sort)
+    want_all=$(printf '%s\n' $MUSTER_NATIVE_OUTPUT $MUSTER_RETIRE_WHOLE | sort)
+    [[ "$on_disk" == "$want_all" ]] || bad="$bad partition-not-exhaustive"
+    if printf '%s\n' $MUSTER_NATIVE_OUTPUT $MUSTER_RETIRE_WHOLE | sort | uniq -d | grep -q .; then
+        bad="$bad native/whole-overlap"
+    fi
+    local g
+    for g in $MUSTER_RETIRE_GC; do
+        [[ " $MUSTER_NATIVE_OUTPUT " == *" $g "* ]] || bad="$bad gc-not-in-native($g)"
+    done
+    # (4) FREEZE the retire-with-C sets by EXACT membership, so a new test cannot be
+    # silently dropped into retire-with-C (dodging native grading with no reason
+    # check). Adding a test forces it into MUSTER_NATIVE_OUTPUT (native-graded) or a
+    # CONSCIOUS update here plus a new reason pin.
+    local t v
+    [[ "$(printf '%s\n' $MUSTER_RETIRE_WHOLE | sort | tr '\n' ' ')" == "test_02_short_circuit test_11_non_tail_self_recursion test_12_non_tail_mutual_recursion " ]] || bad="$bad retire-whole-set-changed"
+    [[ "$(printf '%s\n' $MUSTER_RETIRE_GC | sort | tr '\n' ' ')" == "test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap " ]] || bad="$bad retire-gc-set-changed"
+    # (5) reason-not-name (structural): pin the GC bounds by EXACT committed VALUE (not
+    # mere existence) -- grade_retire_gc asserts `peak <= bound`, so an inflated bound
+    # (e.g. 999999999) would vacuously pass and silently neuter the retired C-only
+    # property. 10/13/14 carry .maxscopes==16, 14a/14b .maxheap==1100000; a deliberate
+    # bound change must update this pin too. (test_02's native-ERR431 rejection and
+    # test_11/12's native-SIGSEGV divergence are reason-pinned by BEHAVIOR -- C-free,
+    # run under the seed -- inside the enduring leg run_aggregate_render_native.sh.)
+    for t in test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap; do
+        v=$(tr -d '[:space:]' < "$PWD/$t.maxscopes" 2>/dev/null)
+        [[ "$v" == "16" ]] || bad="$bad $t(.maxscopes!=16:${v:-missing})"
+    done
+    for t in test_14a_bounded_heap test_14b_bounded_heap; do
+        v=$(tr -d '[:space:]' < "$PWD/$t.maxheap" 2>/dev/null)
+        [[ "$v" == "1100000" ]] || bad="$bad $t(.maxheap!=1100000:${v:-missing})"
+    done
+    if [[ -z "$bad" ]]; then
+        echo "PASS: foundational C-grade gating present (enduring leg exists+exec, retains its NO_C opt-out, routes C only via \$HERBERT with no hardcoded build/herbert; manifest == the 12 fenced tests; the {12 native-output}+{3 retire-whole} partition is exhaustive+disjoint over all test_*.herb, GC-subset OK; the retire-with-C sets are FROZEN by exact membership; GC bounds pinned exact -- 10/13/14 .maxscopes==16, 14a/14b .maxheap==1100000; 02 ERR431-reject + 11/12 SIGSEGV behavior-pinned C-free in the enduring leg)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: foundational C-grade gating present (issues:$bad)"
+        fail=$((fail + 1))
+    fi
+}
+
+run_foundational_grade_fence_mutation() {
+    # Prove the C-grade fence BITES on the REAL pre-muster behavior -- grading the 12
+    # foundational OUTPUTS by running each under the C interpreter (exactly the path
+    # this link removes), not a poison-only setup. Re-grade all 12 via a delegating
+    # counting shim and assert C was invoked once per test (12), each producing the
+    # committed .expected (rc 0 -- a real, completed C grade). That nonzero count is
+    # precisely what check_foundational_grade_count asserts is 0 on the default run.
+    total=$((total + 1))
+    local mcount="$turnstile_tmp/foundational_grade_count.mutation"
+    local mshim="$turnstile_tmp/herbert_foundational_grade_shim.mutation.sh"
+    : >"$mcount"
+    turnstile_write_shim "$mshim" "$mcount"
+    local ran=0 ok=0 t out
+    for t in $MUSTER_NATIVE_OUTPUT; do
+        out=$(mktemp)
+        if "$mshim" "$PWD/$t.herb" >"$out" 2>/dev/null && cmp -s "$out" "$PWD/$t.expected"; then
+            ok=$((ok + 1))
+        fi
+        ran=$((ran + 1))
+        rm -f "$out"
+    done
+    local got
+    got=$(grep -c 'C-GRADE' "$mcount" 2>/dev/null || true)
+    [[ -n "$got" ]] || got=0
+    if [[ "$ran" -eq 12 && "$ok" -eq 12 && "$got" -eq 12 ]]; then
+        echo "PASS: foundational C-grade fence mutation (the pre-muster default -- grading the 12 OUTPUTS under the C interpreter, the path this link removes -- invoked C exactly $got times, all 12 producing the committed .expected; check_foundational_grade_count would go RED on it; the fence bites on real prior behavior, not a poison-only setup)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: foundational C-grade fence mutation (expected ran=12 ok=12 got=12; got ran=$ran ok=$ok got=$got -- the fence may be vacuous or C grading failed)"
+        fail=$((fail + 1))
+    fi
+}
+
 run_native_codegen_michoi_seed_check() {
     # michoi: prove the production compiler this run used IS the committed,
     # integrity-checked, C-free gen-1 seed. (The seed's C-free SELF-REPRODUCTION
@@ -1068,18 +1317,47 @@ run_recursion_depth_guard_check() {
 
 shopt -s nullglob
 for prog in test_*.herb; do
-    total=$((total + 1))
-    expected="${prog%.herb}.expected"
+    # muster (link 13): route each foundational test by its switchover DISPOSITION.
+    # The 12 native-output tests are graded C-FREE by run_aggregate_render_native.sh
+    # (the enduring leg, fenced below); here C grades ONLY the retire-with-C residue
+    # -- the whole of test_02/11/12 (native diverges on output) and the
+    # GC-instrumentation of test_10/13/14a/14b (their output is native-graded). An
+    # unclassified test fails loudly so the partition stays exhaustive (a new test
+    # cannot silently slip past native grading).
+    base="${prog%.herb}"
+    expected="$base.expected"
+    is_native=0; is_whole=0; is_gc=0
+    [[ " $MUSTER_NATIVE_OUTPUT " == *" $base "* ]] && is_native=1
+    [[ " $MUSTER_RETIRE_WHOLE "  == *" $base "* ]] && is_whole=1
+    [[ " $MUSTER_RETIRE_GC "     == *" $base "* ]] && is_gc=1
+    if [[ $is_native -eq 0 && $is_whole -eq 0 ]]; then
+        echo "FAIL: $prog (unclassified foundational test -- not in MUSTER_NATIVE_OUTPUT or MUSTER_RETIRE_WHOLE; classify its switchover disposition before landing)"
+        total=$((total + 1)); fail=$((fail + 1)); continue
+    fi
     if [[ ! -f "$expected" ]]; then
         echo "FAIL: $prog (missing $expected)"
-        fail=$((fail + 1))
-        continue
+        total=$((total + 1)); fail=$((fail + 1)); continue
     fi
-    if run_one "$prog" "$expected" "$prog"; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
+    if [[ $is_whole -eq 1 ]]; then
+        # Retire WITH C, whole: native diverges on OUTPUT (test_02 ERR431 / 11/12 SIGSEGV).
+        total=$((total + 1))
+        if run_one "$prog" "$expected" "$prog (retire-with-C: native diverges on output)"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
     fi
+    if [[ $is_gc -eq 1 ]]; then
+        # Retire WITH C the C-GC instrumentation assertion only; OUTPUT graded C-free.
+        total=$((total + 1))
+        if grade_retire_gc "$prog" "$prog (retire-with-C GC instrumentation; output graded C-free)"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    fi
+    # is_native tests with no GC assertion (01/03/04/05/06/07/08/09) are graded
+    # C-FREE by the enduring leg alone -- nothing for C to grade here.
 done
 
 if [[ -n "$test_14a_heap" || -n "$test_14b_heap" ]]; then
@@ -1370,7 +1648,12 @@ if [[ -d ../../stack ]]; then
     # fence nor the tollgate native-codegen fence).
     if [[ -x "$PWD/run_aggregate_render_native.sh" ]]; then
         total=$((total + 1))
-        if HERBERT="$HERBERT" "$PWD/run_aggregate_render_native.sh"; then
+        # muster (link 13): the enduring leg grades the 12 native-output foundational
+        # tests C-FREE (AGGREGATE_RENDER_NATIVE_NO_C=1 default) under the counting shim,
+        # so check_foundational_grade_count can fence the default at ZERO C output-grades.
+        # MUSTER_MANIFEST records exactly which tests it graded (backstop cross-check).
+        # FOUNDATIONAL_C_GRADE_CROSSCHECK=1 re-enables the native-vs-C faithfulness leg.
+        if AGGREGATE_RENDER_NATIVE_NO_C="$muster_no_c" MUSTER_MANIFEST="$muster_manifest" HERBERT="$muster_grade_herbert" "$PWD/run_aggregate_render_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
@@ -1387,6 +1670,16 @@ if [[ -d ../../stack ]]; then
             fail=$((fail + 1))
         fi
     fi
+
+    # muster (link 13): the enduring leg above graded the 12 native-output
+    # foundational tests on the default C-free path; fence the default at ZERO C
+    # output-grading invocations, prove the partition/gating is intact (exhaustive +
+    # the gate grades exactly the fenced set + each retired test still carries its
+    # stated C-only property + C reachable only via $HERBERT), and prove the fence
+    # BITES on the real pre-muster default.
+    check_foundational_grade_count
+    check_foundational_grade_gating_present
+    run_foundational_grade_fence_mutation
 
     # VM forcing-function test: the VM fragment runs the blessed bytecode for the
     # same evaluator probe and now EMITS the serialized result via flogger (stdout
