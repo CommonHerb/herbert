@@ -3,9 +3,8 @@
 #
 # The link18 dual-substrate gate is only meaningful if a WRONG compiler would
 # fail it. We prove that by mutating the compiler SOURCE at a unique anchor and
-# re-emitting a green probe through the C-interpreted backend: each mutation must
-# be CAUGHT by at least one gate. Crucially, this exercises BOTH gate kinds and
-# names which one fired:
+# re-emitting a green probe, then asserting each mutation is CAUGHT by at least
+# one gate. This exercises BOTH gate kinds and names which one fired:
 #   - the BLACK-BOX boot differential (the emitted byte changes), and
 #   - the WHITE-BOX static gate (real jcc + every branch target on an instruction
 #     boundary + a NEGATIVE-displacement frame store/load round-trip).
@@ -14,6 +13,21 @@
 # the value still round-trips and the byte is unchanged (the zelph lesson). Those
 # are caught only by the white-box gate. A mutation that escaped BOTH would mean
 # the gate does not bite. The unmutated control must pass every gate.
+#
+# SOVEREIGNTY (link 15 / assay): this proof is C-FREE. It NO LONGER re-emits
+# through the C interpreter. Instead it runs each mutation through a genuine
+# TWO-STAGE seed compile: the committed C-free gen-1 seed compiles the (mutated)
+# backend into a native gen-1' compiler ELF, and THAT compiler emits the probe.
+# This is strictly MORE faithful than the prior C path AND than a binary-patch:
+# it runs the ACTUAL mutated compiler and checks the gate catches ITS output, so
+# the proof's meaning ("a wrong compiler is caught") survives C's deletion intact
+# -- including the "no-image" mutation (M4), where the mutated compiler's own
+# body-length invariant refuses to emit, which only a real compile can reproduce.
+# A retireable cross-check -- DEFAULT-ON when C is present, opt-OUT via
+# LINK18_MUTATION_NO_C=1 -- also re-emits each mutation via the C interpreter
+# and asserts the native
+# two-stage image is BYTE-IDENTICAL to the C image (substrate faithfulness, while
+# C still exists); it retires WITH C at the switchover.
 #
 # QEMU-only (no losetup/sudo), gated behind KERNEL_CODEGEN_MUTATION=1 (or
 # REQUIRE_EMU=1) so it does not slow the default make test. Each anchor is
@@ -32,7 +46,15 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: native-codegen link18 mutation proof (no qemu)"; exit 0
 fi
 
+# C-free production compiler: the committed gen-1 seed (NOT the C interpreter).
+source "$script_dir/native_codegen_oracle.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+native_codegen_ensure_compiler "$tmp/gen1" || exit 1
+SEED="$NATIVE_CODEGEN_COMPILER"
+# retireable C cross-check: ON only when C is present and not opted out.
+XCHECK=0
+if [[ -x "$HERBERT" && "${LINK18_MUTATION_NO_C:-0}" != "1" ]]; then XCHECK=1; fi
+
 pass=0; fail=0
 fail_test() { echo "FAIL: link18-mutation ($1)"; fail=$((fail + 1)); }
 
@@ -70,18 +92,36 @@ whitebox_ok() { # elf
     return 1
 }
 
-# assess(compiler_src) -> echoes "GREEN" (passes every gate, == control) or
-# "CAUGHT:<which gate fired>".
-assess() {
-    local comp="$1"; emit_seq=$((emit_seq + 1))
-    local d="$tmp/run.$emit_seq"; rm -rf "$d"; mkdir -p "$d"
+# emit_via(compiler, outdir): the given native compiler ELF emits the PROBE. Sets
+# $EMIT_IMG to the emitted image path, or "" if the compiler refused to emit.
+EMIT_IMG=""
+emit_via() {
+    local compiler="$1" d="$2"; rm -rf "$d"; mkdir -p "$d"
     printf -- '-- emit: multiboot32\n%s\n' "$PROBE" > "$d/p.herb"
-    ( cd "$d" && "$HERBERT" "$comp" < p.herb >/dev/null 2>/dev/null )
-    [[ -f "$d/a.out" ]] || { echo "CAUGHT:no-image"; return; }
-    grub-file --is-x86-multiboot "$d/a.out" >/dev/null 2>&1 || { echo "CAUGHT:bad-image"; return; }
-    whitebox_ok "$d/a.out" || { echo "CAUGHT:whitebox"; return; }
+    ( cd "$d" && "$compiler" < p.herb >/dev/null 2>/dev/null )
+    if [[ -f "$d/a.out" ]]; then EMIT_IMG="$d/a.out"; else EMIT_IMG=""; fi
+}
+
+# seed_compile(backend_src, outpath): the C-free seed compiles a (mutated) backend
+# into a native gen-1' compiler ELF. Echoes "" if the backend did not compile.
+seed_compile() {
+    local src="$1" out="$2" d; d="$(mktemp -d "$tmp/sc.XXXX")"
+    ( cd "$d" && "$SEED" < "$src" >/dev/null 2>/dev/null )
+    if [[ -f "$d/a.out" ]]; then cp "$d/a.out" "$out"; chmod +x "$out"; echo "$out"; else echo ""; fi
+}
+
+# assess(compiler) -> echoes "GREEN" (passes every gate, == control) or
+# "CAUGHT:<which gate fired>". The given native compiler ELF emits the probe and
+# the emitted image is run through the white-box + boot gates.
+assess() {
+    local compiler="$1"; emit_seq=$((emit_seq + 1))
+    local d="$tmp/run.$emit_seq"
+    emit_via "$compiler" "$d"
+    [[ -n "$EMIT_IMG" ]] || { echo "CAUGHT:no-image"; return; }
+    grub-file --is-x86-multiboot "$EMIT_IMG" >/dev/null 2>&1 || { echo "CAUGHT:bad-image"; return; }
+    whitebox_ok "$EMIT_IMG" || { echo "CAUGHT:whitebox"; return; }
     : > "$d/e9"
-    timeout 30 qemu-system-x86_64 -kernel "$d/a.out" -debugcon file:"$d/e9" -display none \
+    timeout 30 qemu-system-x86_64 -kernel "$EMIT_IMG" -debugcon file:"$d/e9" -display none \
         -no-reboot -serial none -monitor none -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
         -cpu qemu64 -m 64M >/dev/null 2>&1
     local hx; hx=$(xxd -p "$d/e9" 2>/dev/null | tr -d '\n')
@@ -93,14 +133,31 @@ assess() {
     echo "CAUGHT:boot(noframe:$hx)"
 }
 
-# control: unmutated compiler must pass EVERY gate (white-box + boot golden).
-ctrl=$(assess "$backend")
-if [[ "$ctrl" == "GREEN" ]]; then echo "PASS control: unmutated compiler passes all gates (white-box + boot=$GOLDEN)"; pass=$((pass+1));
-else echo "FAIL control: unmutated compiler did not pass cleanly: $ctrl"; fail=$((fail+1)); fi
+# control: the unmutated compiler is the SEED itself (the gen-1 fixpoint); it must
+# pass EVERY gate (white-box + boot golden) C-FREE.
+ctrl=$(assess "$SEED")
+if [[ "$ctrl" == "GREEN" ]]; then echo "PASS control: unmutated seed compiler passes all gates C-free (white-box + boot=$GOLDEN)"; pass=$((pass+1));
+else echo "FAIL control: unmutated seed compiler did not pass cleanly: $ctrl"; fail=$((fail+1)); fi
+[[ "$XCHECK" == "1" ]] && echo "  (retireable C cross-check ON: each mutation's native two-stage image is asserted byte-identical to the C image)"
 
-# mutate(name, old, new): old must occur exactly once; the mutant must be CAUGHT.
+# c_emit(backend_src, outdir): the RETIREABLE C path -- the C interpreter runs the
+# (mutated) backend to emit the probe. Sets $C_IMG (or "" if no image).
+C_IMG=""
+c_emit() {
+    local src="$1" d="$2"; rm -rf "$d"; mkdir -p "$d"
+    printf -- '-- emit: multiboot32\n%s\n' "$PROBE" > "$d/p.herb"
+    ( cd "$d" && "$HERBERT" "$src" < p.herb >/dev/null 2>/dev/null )
+    if [[ -f "$d/a.out" ]]; then C_IMG="$d/a.out"; else C_IMG=""; fi
+}
+
+# mutate(name, old, new [, expect_no_image_diag]): old must occur exactly once; the
+# mutant must be CAUGHT. The C-free seed compiles the mutated backend -> gen1'
+# compiler, which emits the probe (two-stage). Optionally cross-checked byte-identical
+# to the C image. If expect_no_image_diag is given (M4), a "no-image" verdict is only
+# a genuine catch when the mutated compiler emits THAT reject diagnostic (its own
+# layout invariant), NOT any incidental empty image -- closing the no-image catch-all.
 mutate() {
-    local name="$1" old="$2" new="$3"
+    local name="$1" old="$2" new="$3" expect_no_image_diag="${4:-}"
     local n; n=$(python3 - "$backend" "$old" <<'PY'
 import sys; print(open(sys.argv[1]).read().count(sys.argv[2]))
 PY
@@ -111,9 +168,35 @@ PY
 import sys
 open(sys.argv[4],"w").write(open(sys.argv[1]).read().replace(sys.argv[2],sys.argv[3],1))
 PY
-    local v; v=$(assess "$mut")
-    if [[ "$v" == CAUGHT:* ]]; then echo "PASS mutation $name: $v"; pass=$((pass+1));
-    else fail_test "$name: mutant escaped ALL gates (verdict=$v) -- the gate does NOT bite"; fi
+    # two-stage: seed compiles the mutated backend into a native gen1' compiler.
+    local gen1x; gen1x=$(seed_compile "$mut" "$tmp/gen1x.$name")
+    if [[ -z "$gen1x" ]]; then fail_test "$name: seed could not compile the mutated backend (two-stage stage-1 failed)"; return; fi
+    local v; v=$(assess "$gen1x")
+    if [[ "$v" != CAUGHT:* ]]; then
+        fail_test "$name: mutant escaped ALL gates (verdict=$v) -- the gate does NOT bite"; return
+    fi
+    # no-image pin: a "no-image" catch must be the mutated compiler's OWN reject
+    # diagnostic (ERR 452 layout invariant), not an incidental empty image.
+    if [[ "$v" == "CAUGHT:no-image" && -n "$expect_no_image_diag" ]]; then
+        local dd; dd="$(mktemp -d "$tmp/diag.XXXX")"
+        printf -- '-- emit: multiboot32\n%s\n' "$PROBE" > "$dd/p.herb"
+        local diag; diag="$( cd "$dd" && "$gen1x" < p.herb 2>&1 )"
+        if [[ "$diag" != *"$expect_no_image_diag"* ]]; then
+            fail_test "$name: no-image but NOT the expected reject '$expect_no_image_diag' (got: $(echo "$diag" | tr '\n' ' ')) -- a non-load-bearing empty image"; return
+        fi
+    elif [[ "$v" == "CAUGHT:no-image" && -z "$expect_no_image_diag" ]]; then
+        fail_test "$name: unexpected no-image catch for a mutation that should emit a wrong image"; return
+    fi
+    # retireable faithfulness: the native two-stage image == the C image, byte-for-byte
+    # (or both produce no image). Confirms the C->seed substrate swap is loss-free.
+    if [[ "$XCHECK" == "1" ]]; then
+        emit_via "$gen1x" "$tmp/nat.$name"; local nimg="$EMIT_IMG"
+        c_emit "$mut" "$tmp/c.$name"; local cimg="$C_IMG"
+        if [[ -z "$nimg" && -z "$cimg" ]]; then :   # both no-image (M4) -- faithful
+        elif [[ -n "$nimg" && -n "$cimg" ]] && cmp -s "$nimg" "$cimg"; then :   # byte-identical -- faithful
+        else fail_test "$name: native two-stage image != C image (substrate faithfulness broken: nat=${nimg:-<none>} c=${cimg:-<none>})"; return; fi
+    fi
+    echo "PASS mutation $name: $v"; pass=$((pass+1))
 }
 
 # M1: jz(0x84/132) -> jnz(0x85/133) in BR_IF_FALSE (branch polarity). Boot-caught.
@@ -156,7 +239,9 @@ mutate local_disp_sign \
 '    do append(buf, 4 * (slot + 1))'
 
 # M4: mis-size PUSH_INT in the layout pass (5 -> 6) so layout offsets desync from
-# the lowering. The body-length invariant rejects it (no image).
+# the lowering. The body-length invariant rejects it (no image). This is the case
+# only a real compile reproduces: the mutated compiler's OWN invariant refuses to
+# emit -- a binary patch of a good image could never produce it.
 mutate pushint_layout_size \
 '    if op == 0:
         return 5
@@ -165,7 +250,8 @@ mutate pushint_layout_size \
 '    if op == 0:
         return 6
     end
-    if op == 3:'
+    if op == 3:' \
+'ERR 452'
 
 # M5: ADD(0x01) -> AND(0x21) (wrong ALU op). Boot-caught (wrong byte).
 mutate add_opcode \
@@ -215,5 +301,6 @@ mutate brif_target_off_by_one \
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail link18-mutation check(s) failed."; exit 1; fi
-echo "PASS: link18 mutation proof ($pass checks: control passes all gates; 6 mutations each CAUGHT -- jcc polarity (boot), EQ polarity (boot), local-disp sign (white-box, behaviorally invisible to boot), layout offset size (length invariant), ALU opcode (boot), branch-target off-by-one (white-box))"
+xc=""; [[ "$XCHECK" == "1" ]] && xc=" + each native two-stage image byte-identical to C (retireable)"
+echo "PASS: link18 mutation proof ($pass checks: control passes all gates C-FREE; 6 mutations each CAUGHT via a real two-stage seed compile of the mutated backend -- jcc polarity (boot), EQ polarity (boot), local-disp sign (white-box, behaviorally invisible to boot), layout offset size (no-image, only a real compile reproduces it), ALU opcode (boot), branch-target off-by-one (white-box)$xc)"
 exit 0

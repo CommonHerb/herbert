@@ -22,10 +22,14 @@
 #                       NOT invoked. Run by the kernel-codegen-l1 CI.
 #   KERNEL_C_EMIT       far-axis kernel mutation gate that currently EMITS its image
 #                       THROUGH the C interpreter (no seed path); graded on the
-#                       substrate. NOT C-free today -> rehome onto the gen-1 seed at
-#                       the switchover (as run_native_codegen_link29..43_mutation.sh
-#                       already are). A recorded sovereignty TODO, not a clean row.
-#   CFREE_BITEPROOF     near-axis C-free mutation bite-proof; run by verify-local
+#                       substrate. NOT C-free today -> rehome onto the gen-1 seed via a
+#                       TWO-STAGE seed compile of the mutated backend (assay/link 15
+#                       proved the template on link18_mutation; run_native_codegen_
+#                       link29..43_mutation.sh were born seed-emit). link19..28_mutation
+#                       (10) remain: a recorded sovereignty TODO, a dedicated far-axis
+#                       cleanup link, not a clean row.
+#   CFREE_BITEPROOF     C-free RED-first mutation bite-proof; seed-emit, no C grading
+#                       (run by verify-local; aggregate-render-mutation runs in make test)
 #   RETIRE_WITH_C       needs the C interpreter (tests C itself / GC-instrumentation
 #                       / native output diverges); retires WHEN C is deleted
 #   RETIRE_AT_SWITCH    inherently-C reference (the C dumper IS the oracle); retires
@@ -35,7 +39,7 @@
 #   SWITCHOVER_MACHINERY  the link-14 driver + bite-proof themselves
 #
 # columns (TAB-separated): disposition  run-context  script  cfree-mode-env  reason
-RETIRE_WITH_C	-	run_aggregate_render_native_mutation.sh	-	aggregate-render bite-proof: CONTROL leg execs C as the live oracle (residual; could move to the committed key later)
+CFREE_BITEPROOF	make-test	run_aggregate_render_native_mutation.sh	AGGREGATE_RENDER_MUTATION_NO_C=1	aggregate-render bite-proof, now C-FREE via a two-stage seed compile of the mutated backend (assay, link 15; was RETIRE_WITH_C); runs in make test; retireable C cross-check opt-out via AGGREGATE_RENDER_MUTATION_NO_C=1
 CFREE_SWITCHOVER	switchover	run_aggregate_render_native.sh	AGGREGATE_RENDER_NATIVE_NO_C=1	native aggregate render + 12 foundational native-output tests (seed; C cross-check opt-in)
 RETIRE_WITH_C	-	run_beta_full.sh	-	metacircular beta-full nesting runs klondike-under-C (tests the C interpreter metacircular run)
 CFREE_BITEPROOF	verify-local	run_emitter_native_mutation.sh	EMITTER_NATIVE_NO_C=1	emitter gate RED-first bite-proof (seed; C-free)
@@ -55,7 +59,7 @@ CFREE_SWITCHOVER	switchover	run_native_codegen_link14.sh	NATIVE_CODEGEN_ORACLE=g
 CFREE_SWITCHOVER	switchover	run_native_codegen_link15.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link15 (seed-graded; C only opt-in ORACLE=c)
 CFREE_SWITCHOVER	switchover	run_native_codegen_link16.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link16 (seed-graded; C only opt-in ORACLE=c)
 CFREE_KERNEL	kernel-ci	run_native_codegen_link17.sh	-	native-codegen kernel gate link17 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
-KERNEL_C_EMIT	kernel-ci	run_native_codegen_link18_mutation.sh	-	kernel mutation gate link18 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
+CFREE_KERNEL	kernel-ci	run_native_codegen_link18_mutation.sh	-	native-codegen kernel mutation gate link18, now C-FREE via a two-stage seed compile of the mutated backend (assay, link 15; was KERNEL_C_EMIT -- the rehome TEMPLATE for link19..28_mutation); QEMU+Bochs substrate; retireable C cross-check opt-out via LINK18_MUTATION_NO_C=1
 CFREE_KERNEL	kernel-ci	run_native_codegen_link18.sh	-	native-codegen kernel gate link18 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 KERNEL_C_EMIT	kernel-ci	run_native_codegen_link19_mutation.sh	-	kernel mutation gate link19 EMITS via the C interpreter (no seed path); rehome onto the gen-1 seed at the switchover
 CFREE_KERNEL	kernel-ci	run_native_codegen_link19.sh	-	native-codegen kernel gate link19 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
