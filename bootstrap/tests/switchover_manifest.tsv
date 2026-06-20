@@ -129,6 +129,8 @@ CFREE_SWITCHOVER	switchover	run_parser_native.sh	PARSER_NATIVE_NO_C=1	metacircul
 RETIRE_WITH_C	-	run_smoke.sh	-	C-interpreter resource-limit smoke (peak-heap/scopes GC instrumentation native cannot emit)
 SWITCHOVER_MACHINERY	-	run_switchover_cfree_mutation.sh	-	the C-absent driver RED-first bite-proof (sovereignty link 14)
 SWITCHOVER_MACHINERY	-	run_switchover_cfree.sh	-	the C-absent surface driver (sovereignty link 14); runs the frozen CFREE_SWITCHOVER set with C physically absent
+SWITCHOVER_MACHINERY	-	run_switchover_dryrun.sh	-	the switchover DRY-RUN (sovereignty link 17); proves the 7 C-free bite-proofs STILL BITE with C physically absent (hardened: extended poison + clean state + counting tombstone)
+SWITCHOVER_MACHINERY	-	run_switchover_dryrun_mutation.sh	-	the switchover DRY-RUN RED-first bite-proof (sovereignty link 17); M-cleak + M-cleanstate + M-gerrymander + M-forge
 HARNESS	-	run_tests.sh	-	make-test orchestrator (C-present; retire-with-C inline residue muster-frozen)
 CFREE_BITEPROOF	verify-local	run_vm_native_mutation.sh	VM_NATIVE_NO_C=1	VM gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_vm_native.sh	VM_NATIVE_NO_C=1	metacircular VM native execution (seed; C cross-check opt-in)

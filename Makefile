@@ -19,7 +19,7 @@ HERBERT_SRCS := \
     bootstrap/main.c
 HERBERT_HDR  := bootstrap/herbert.h
 
-.PHONY: all check smoke test test-timeout lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree verify-local beta-full reseed clean
+.PHONY: all check smoke test test-timeout lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run verify-local beta-full reseed clean
 
 all: $(HERBERT)
 
@@ -83,7 +83,17 @@ switchover-cfree:
 	@bash bootstrap/tests/run_switchover_cfree.sh
 	@bash bootstrap/tests/run_switchover_cfree_mutation.sh
 
-verify-local: check test-timeout smoke lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree
+# switchover-dry-run: sovereignty link 17. Extends the C-absent proof beyond
+# drydock's 24-gate surface: proves the 7 C-free BITE-PROOFS still bite with the
+# C interpreter PHYSICALLY ABSENT (the non-vacuity guards survive C's removal) +
+# its RED-first bite-proof. The EXECUTABLE deletion recipe is
+# bootstrap/tests/apply_switchover.sh <clean-worktree> (run on-demand; see
+# SWITCHOVER.md). NO $(HERBERT) prereq -- this target does not build the C interpreter.
+switchover-dry-run:
+	@bash bootstrap/tests/run_switchover_dryrun.sh
+	@bash bootstrap/tests/run_switchover_dryrun_mutation.sh
+
+verify-local: check test-timeout smoke lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
 
 beta-full: $(HERBERT)
 	@PATH=$(abspath tools):$$PATH HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_beta_full.sh

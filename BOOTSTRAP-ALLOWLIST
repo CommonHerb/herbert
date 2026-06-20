@@ -21,6 +21,7 @@ BOOTSTRAP-RESPONSIBILITIES.md
 ROADMAP.md
 Makefile
 README.md
+SWITCHOVER.md
 VERIFYING.md
 bootstrap/tests/run_smoke.sh
 bootstrap/tests/lexer_equiv_dump.c
@@ -130,6 +131,9 @@ bootstrap/tests/run_tests.sh
 bootstrap/tests/switchover_manifest.tsv
 bootstrap/tests/run_switchover_cfree.sh
 bootstrap/tests/run_switchover_cfree_mutation.sh
+bootstrap/tests/run_switchover_dryrun.sh
+bootstrap/tests/run_switchover_dryrun_mutation.sh
+bootstrap/tests/apply_switchover.sh
 bootstrap/tests/capture_native_goldens.sh
 bootstrap/tests/native_codegen_oracle.sh
 bootstrap/tests/reseed_gen1.sh
