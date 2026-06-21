@@ -113,12 +113,15 @@ bootstrap/tests/mmj_ref.py
 bootstrap/tests/chiefturbo_ref.py
 bootstrap/tests/mumbani_ref.py
 bootstrap/tests/tandem_ref.py
+bootstrap/tests/tickover_ref.py
 bootstrap/tests/run_native_codegen_link42.sh
 bootstrap/tests/run_native_codegen_link42_mutation.sh
 bootstrap/tests/run_native_codegen_link43.sh
 bootstrap/tests/run_native_codegen_link43_mutation.sh
 bootstrap/tests/run_native_codegen_link44.sh
 bootstrap/tests/run_native_codegen_link44_mutation.sh
+bootstrap/tests/run_native_codegen_link45.sh
+bootstrap/tests/run_native_codegen_link45_mutation.sh
 bootstrap/tests/run_native_codegen_link40.sh
 bootstrap/tests/run_native_codegen_link41.sh
 bootstrap/tests/run_native_codegen_link41_mutation.sh
