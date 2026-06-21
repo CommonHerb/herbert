@@ -36,6 +36,8 @@ bootstrap/tests/run_klondike_native.sh
 bootstrap/tests/run_klondike_native_mutation.sh
 bootstrap/tests/run_emitter_native.sh
 bootstrap/tests/run_emitter_native_mutation.sh
+bootstrap/tests/run_error_vocab_native.sh
+bootstrap/tests/run_error_vocab_native_mutation.sh
 bootstrap/tests/run_aggregate_render_native.sh
 bootstrap/tests/run_aggregate_render_native_mutation.sh
 bootstrap/tests/run_native_codegen_link1.sh
@@ -326,6 +328,7 @@ bootstrap/tests/test_14b_bounded_heap.maxscopes
 stack/.gitkeep
 stack/emitter_probe.expected
 stack/error_probes.expected
+stack/error_probes_native.expected
 stack/evaluator_probe.expected
 stack/lexer_probe.expected
 stack/parser_probe.expected

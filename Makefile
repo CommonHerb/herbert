@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run reseed verify-local clean
+.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run reseed verify-local clean
 
 all: $(SCANNER)
 
@@ -56,6 +56,13 @@ emitter-native:
 	@EMITTER_NATIVE_NO_C=1 bash bootstrap/tests/run_emitter_native.sh
 	@bash bootstrap/tests/run_emitter_native_mutation.sh
 
+# Front-end error-vocabulary native gate: the C-free rehome of klondike.herb's located
+# ERR 101-316 diagnostics (the assurance castoff spent at the switchover). No NO_C flag --
+# there is no C-faithfulness leg to retire; the gate is C-free by construction.
+error-vocab-native:
+	@bash bootstrap/tests/run_error_vocab_native.sh
+	@bash bootstrap/tests/run_error_vocab_native_mutation.sh
+
 lexer-copy-sync:
 	@python3 bootstrap/tests/check_lexer_copy_sync.py
 
@@ -85,7 +92,7 @@ switchover-dry-run:
 reseed:
 	@bash bootstrap/tests/reseed_gen1.sh
 
-verify-local: check test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
+verify-local: check test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

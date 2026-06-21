@@ -129,3 +129,5 @@ SWITCHOVER_MACHINERY	-	run_switchover_dryrun_mutation.sh	-	the switchover DRY-RU
 HARNESS	-	run_tests.sh	-	make-test orchestrator (C-present; retire-with-C inline residue muster-frozen)
 CFREE_BITEPROOF	verify-local	run_vm_native_mutation.sh	VM_NATIVE_NO_C=1	VM gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_vm_native.sh	VM_NATIVE_NO_C=1	metacircular VM native execution (seed; C cross-check opt-in)
+CFREE_SWITCHOVER	switchover	run_error_vocab_native.sh	-	front-end error-vocabulary native gate -- klondike.herb located ERR 101-316 diagnostics, C-free rehome of the castoff-disclosed assurance loss (seed; no C-faithfulness leg)
+CFREE_BITEPROOF	verify-local	run_error_vocab_native_mutation.sh	-	error-vocab gate RED-first bite-proof (seed; C-free; message/code/line/payload rot each -> gate RED)
