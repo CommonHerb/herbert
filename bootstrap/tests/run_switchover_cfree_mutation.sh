@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # run_switchover_cfree_mutation.sh -- sovereignty link 14: prove the C-absent
-# switchover machinery BITES (RED-first). Five load-bearing mutations, each of
+# switchover machinery BITES (RED-first). Four load-bearing mutations, each of
 # which MUST flip RED -- otherwise a guard in run_switchover_cfree.sh is decorative:
+#
+#   (M-leak retired WITH C at the switchover -- sovereignty link `castoff`: it proved
+#    the counting tombstone DETECTS C use by running a C-using gate; with the C
+#    interpreter physically gone there is no C-using gate to invoke, so the proof is
+#    vacuously satisfied and unprovable. The remaining four still bite.)
 #
 #   M-guard      The vestigial-guard CONDITIONING is what makes the C-free
 #                production gates runnable with C absent. Restore a gate's OLD bare
 #                `[[ ! -x "$HERBERT" ]]` guard, run it with $HERBERT truly absent +
 #                golden oracle: it must FAIL where the real conditioned gate PASSES.
-#   M-leak       The counting tombstone must DETECT C use. Run a C-using gate
-#                (beta-full -> klondike-under-C) under the tombstone: the count
-#                must be > 0 (a C-using gate cannot hide in the surface).
 #   M-gerrymander  The surface is FROZEN by exact membership. Move a CFREE_SWITCHOVER
 #                gate to another disposition (manifest still complete) -> the driver
 #                must go RED (you cannot shrink/swap the proven surface).
@@ -17,7 +19,7 @@
 #                surface row -> the driver must go RED (no manifest-text injection).
 #   M-incomplete The partition must be EXHAUSTIVE. Drop a row -> driver RED (limbo).
 #
-# Exit 0 iff all five bite and the matching CONTROL is GREEN.
+# Exit 0 iff all four bite and the matching CONTROL is GREEN.
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -50,14 +52,6 @@ if run_gate "$bite_gate"; then bad "M-guard did NOT bite: bare-guard gate passed
     grep -q 'cannot find herbert' "$work/out" && ok "M-guard BITES: bare-guard gate FAILS C-absent for the right reason" || bad "M-guard failed but not via the bare guard ($(tail -1 "$work/out"))"
 fi
 
-printf '== M-leak: the counting tombstone DETECTS C use ==\n'
-cnt="$work/cnt"; : >"$cnt"
-tomb="$scrub/herbert"; printf '#!/bin/sh\necho x >> %q\nexec %q "$@"\n' "$cnt" "$work/ABSENT" >"$tomb"; chmod +x "$tomb"
-# beta-full runs klondike-under-C -> invokes $HERBERT (the tombstone) -> count++.
-env PATH="$scrub:$PATH" HERBERT="$tomb" bash "$script_dir/run_beta_full.sh" >/dev/null 2>&1 || true
-leak=$(wc -l <"$cnt" | tr -d ' ')
-[[ "$leak" -gt 0 ]] && ok "M-leak BITES: a C-using gate hits the tombstone (count=$leak > 0)" || bad "M-leak did NOT bite: C-using gate produced count 0 (the count is blind)"
-
 printf '== M-gerrymander: the CFREE surface is FROZEN by exact membership ==\n'
 # Move one CFREE_SWITCHOVER gate to CFREE_KERNEL (manifest stays complete: 93 rows).
 sed 's/^CFREE_SWITCHOVER\tswitchover\trun_native_codegen_link1\.sh\tNATIVE_CODEGEN_ORACLE=golden/CFREE_KERNEL\tkernel-ci\trun_native_codegen_link1.sh\t-/' "$manifest" >"$work/m_gerry.tsv"
@@ -72,14 +66,14 @@ if SWITCHOVER_MANIFEST="$work/m_mode.tsv" bash "$driver" >"$work/out" 2>&1; then
 fi
 
 printf '== M-incomplete: the partition must be exhaustive (no limbo) ==\n'
-grep -v $'\trun_smoke.sh\t' "$manifest" >"$work/m_incomplete.tsv"
-if SWITCHOVER_MANIFEST="$work/m_incomplete.tsv" bash "$driver" >"$work/out" 2>&1; then bad "M-incomplete did NOT bite: driver passed with run_smoke.sh in limbo"; else
+grep -v $'\trun_native_codegen_link17.sh\t' "$manifest" >"$work/m_incomplete.tsv"
+if SWITCHOVER_MANIFEST="$work/m_incomplete.tsv" bash "$driver" >"$work/out" 2>&1; then bad "M-incomplete did NOT bite: driver passed with run_native_codegen_link17.sh in limbo"; else
     grep -q 'incomplete/duplicated partition' "$work/out" && ok "M-incomplete BITES: driver RED on the limbo gate" || bad "M-incomplete failed but not via the completeness check ($(grep FAIL "$work/out" | head -1))"
 fi
 
 printf '\n'
 if [[ "$fail" -eq 0 ]]; then
-    echo "PASS: switchover-cfree mutation proof ($pass/$pass -- M-guard + M-leak + M-gerrymander + M-modeenv + M-incomplete all bite, control green)"
+    echo "PASS: switchover-cfree mutation proof ($pass/$pass -- M-guard + M-gerrymander + M-modeenv + M-incomplete all bite, control green)"
     exit 0
 fi
 echo "FAIL: switchover-cfree mutation proof ($fail of $((pass+fail)) checks bad)"

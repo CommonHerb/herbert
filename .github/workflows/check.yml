@@ -13,7 +13,5 @@ jobs:
         run: make check
       - name: timeout shim
         run: make test-timeout
-      - name: smoke
-        run: make smoke
       - name: make test
         run: make test

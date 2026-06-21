@@ -5,9 +5,12 @@
 # the committed C-free golden artifact and the C interpreter is NOT invoked on the
 # grading path. The live-C differential (`c` mode: re-derive the expected by
 # running the C bootstrap, validate it against the committed golden) is preserved
-# as an OPT-IN cross-check (NATIVE_CODEGEN_ORACLE=c), exactly the way `make reseed`
-# preserves the one sanctioned C mint. Golden mode loads only the committed
-# artifact; `c` mode also re-validates it against live C.
+# as an OPT-IN cross-check (NATIVE_CODEGEN_ORACLE=c). Golden mode loads only the
+# committed artifact; `c` mode also re-validates it against live C.
+# NOTE (post-switchover, sovereignty link `castoff`): the C interpreter is retired,
+# so the `c` cross-check is now inert gated dead code (no C to invoke), and `make
+# reseed` re-mints the seed C-FREE (the seed recompiles the backend to its fixpoint),
+# no longer via a C mint. The default golden path is unchanged.
 
 native_codegen_oracle__script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NATIVE_CODEGEN_GOLDENS_DIR="${NATIVE_CODEGEN_GOLDENS_DIR:-$native_codegen_oracle__script_dir/native_codegen_goldens}"

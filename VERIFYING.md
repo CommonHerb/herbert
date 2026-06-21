@@ -10,14 +10,15 @@ make verify-local
 
 Runs:
 
-- `make check`: confirms tracked non-`.herb` files exactly match `BOOTSTRAP-ALLOWLIST`.
+- `make check`: confirms tracked non-`.herb` files exactly match `BOOTSTRAP-ALLOWLIST` (the from-scratch boundary scanner `tools/scan.c` — kept governance meta-tooling, not the retired interpreter).
 - `make test-timeout`: checks the repo-local portable `timeout` shim.
-- `make smoke`: builds the C bootstrap and runs the `bootstrap/tests/test_*.herb` sample suite, including existing scope/heap sidecar limits.
-- `make lexer-equivalence`: normalizes C `lex()` output for the accepted lexer fixture corpus, checks `stack/lexer_probe.expected`, diffs the corpus against `stack/lexer_stdin_driver.herb`, and checks the existing lexer malformed probes against `stack/lexer_error_driver.herb` for ERR code, line, and message parity.
-- `make lexer-copy-sync`: checks that accepted-token lexer copies in the stdin driver, parser/evaluator/emitter fragments, and Suke fragments remain synchronized with `stack/lexer_fragment.herb`; it also checks the line-aware Klondike/native lexer variants against the same token contract plus their line field.
-- `make native-codegen-diagnostics`: checks the local helper used to enrich Link 38 QEMU mismatch logs.
+- `make test`: the full non-emulator harness (see below).
+- `make evaluator-native` / `vm-native` / `parser-native` / `lexer-native` / `klondike-native` / `emitter-native`: the six metacircular fragments compiled to ELF by the committed gen-1 seed and run with **no C**, each diffed against its independently-authored oracle, plus a RED-first mutation proof.
+- `make lexer-copy-sync`: checks that accepted-token lexer copies in the stdin/parser/evaluator/emitter and Suke fragments stay synchronized with `stack/lexer_fragment.herb` (the line-aware token contract).
+- `make native-codegen-diagnostics`: checks the local helper used to enrich kernel QEMU mismatch logs.
+- `make switchover-cfree`: proves the C-free production surface stands with the C interpreter PHYSICALLY ABSENT, then proves it bites RED-first.
 
-This is the fast local confidence command. It does not run the full metacircular/native-codegen suite.
+This is the fast local confidence command. It does not run the full emulator-heavy kernel suite.
 
 ## Full Non-Emulator Suite
 
@@ -36,20 +37,7 @@ but it may be too slow for the default full-suite timeouts in deeper
 Klondike/metacircular/native-compile legs. Treat CI or real Linux/x86_64
 hardware as the authoritative `make test` lane.
 
-This suite exercises the C bootstrap, stack probes, metacircular paths, and native-codegen links covered by the main harness. It is still not the same as the emulator-heavy kernel workflow.
-
-## Beta Full
-
-```bash
-make beta-full
-```
-
-Runs the dedicated deeper metacircular driver in `bootstrap/tests/run_beta_full.sh`.
-
-This runner expects GNU `/usr/bin/time -v` and a host capable of the deeper
-metacircular workload. On macOS, treat it like `make test`: use Linux CI or an
-equivalent Linux/x86_64 environment unless GNU time and enough resources are
-installed deliberately.
+This suite exercises the native gen-1 toolchain, the stack fragments run natively, the metacircular native-execution gates, and the native-codegen links — all **C-free** (the C bootstrap interpreter was retired at the switchover). It is still not the same as the emulator-heavy kernel workflow.
 
 ## Kernel/Module Gate
 
@@ -63,7 +51,7 @@ Local runs can silently shrink if emulator prerequisites are absent. Treat the w
 
 - They do not prove arbitrary-program compiler correctness.
 - They do not prove a finished OS.
-- They do not remove the C bootstrap.
+- They do not, on their own, re-establish the trusting-trust provenance of the committed seed (the C bootstrap interpreter has been removed at the switchover; the seed remains C-minted once, and the textual-seed hardening is the remaining deferred sovereignty residue).
 - They do not make old archived docs current.
 
 They prove the specific executable surfaces each command invokes.

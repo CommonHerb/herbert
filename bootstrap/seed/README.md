@@ -40,8 +40,13 @@ compiler embeds source line numbers — makes this seed stale and the michoi see
 gate goes **RED**. That RED means *re-seed*, not *regression*:
 
 ```
-make reseed          # re-mints gen-1 via C (the one sanctioned C mint),
-                     # checks it self-reproduces, rewrites gen1.seed + .sha256
+make reseed          # re-mints gen-1 C-FREE: the committed seed recompiles the
+                     # backend to its own fixpoint, checks it self-reproduces,
+                     # rewrites gen1.seed + .sha256 (no C interpreter involved)
 git add bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 make check && make test
 ```
+
+(Post-switchover — sovereignty link `castoff` — the C bootstrap is gone, so the
+seed re-mints **itself**: the old seed compiles the new backend to the new gen-1,
+proven legitimate by the self-hosting fixpoint, not by a C diff.)

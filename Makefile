@@ -7,21 +7,15 @@ BUILD   := build
 SCANNER := $(BUILD)/scan
 TRACKED := $(BUILD)/tracked.txt
 
-# --- Herbert interpreter ----------------------------------------------
-HERBERT      := $(BUILD)/herbert
-HERBERT_SRCS := \
-    bootstrap/util.c \
-    bootstrap/lex.c \
-    bootstrap/parse.c \
-    bootstrap/value.c \
-    bootstrap/reclaim.c \
-    bootstrap/eval.c \
-    bootstrap/main.c
-HERBERT_HDR  := bootstrap/herbert.h
+# The C bootstrap interpreter was RETIRED at the switchover (sovereignty link 18):
+# the native gen-1 ELF compiler -- the committed bootstrap/seed/gen1.seed, run as
+# the production toolchain -- is now the sole way Herbert source becomes machine
+# code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
+# Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check smoke test test-timeout lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run verify-local beta-full reseed clean
+.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run reseed verify-local clean
 
-all: $(HERBERT)
+all: $(SCANNER)
 
 check: $(SCANNER)
 	@git ls-files > $(TRACKED)
@@ -29,44 +23,38 @@ check: $(SCANNER)
 
 test:
 	@bash tools/check_full_test_host.sh
-	@$(MAKE) $(HERBERT)
-	@PATH=$(abspath tools):$$PATH HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_tests.sh
-
-smoke: $(HERBERT)
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_smoke.sh
+	@PATH=$(abspath tools):$$PATH bash bootstrap/tests/run_tests.sh
 
 test-timeout:
 	@python3 tools/check_timeout.py
 
-lexer-equivalence: $(HERBERT)
-	@CC="$(CC)" CFLAGS="$(CFLAGS)" bash bootstrap/tests/run_lexer_equivalence.sh
+# The six metacircular-fragment NATIVE-EXECUTION gates: the committed gen-1 seed
+# compiles each fragment to an ELF that runs with NO C. <FRAG>_NATIVE_NO_C=1 flips
+# the (now-retired) C-faithfulness cross-check permanently off -- the enduring leg
+# (native ELF == independent oracle) is all that remains and needs no C.
+evaluator-native:
+	@EVALUATOR_NATIVE_NO_C=1 bash bootstrap/tests/run_evaluator_native.sh
+	@bash bootstrap/tests/run_evaluator_native_mutation.sh
 
-parser-equivalence: $(HERBERT)
-	@CC="$(CC)" CFLAGS="$(CFLAGS)" HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_parser_equivalence.sh
+vm-native:
+	@VM_NATIVE_NO_C=1 bash bootstrap/tests/run_vm_native.sh
+	@bash bootstrap/tests/run_vm_native_mutation.sh
 
-evaluator-native: $(HERBERT)
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_evaluator_native.sh
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_evaluator_native_mutation.sh
+parser-native:
+	@PARSER_NATIVE_NO_C=1 bash bootstrap/tests/run_parser_native.sh
+	@bash bootstrap/tests/run_parser_native_mutation.sh
 
-vm-native: $(HERBERT)
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_vm_native.sh
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_vm_native_mutation.sh
+lexer-native:
+	@LEXER_NATIVE_NO_C=1 bash bootstrap/tests/run_lexer_native.sh
+	@bash bootstrap/tests/run_lexer_native_mutation.sh
 
-parser-native: $(HERBERT)
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_parser_native.sh
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_parser_native_mutation.sh
+klondike-native:
+	@KLONDIKE_NATIVE_NO_C=1 bash bootstrap/tests/run_klondike_native.sh
+	@bash bootstrap/tests/run_klondike_native_mutation.sh
 
-lexer-native: $(HERBERT)
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_lexer_native.sh
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_lexer_native_mutation.sh
-
-klondike-native: $(HERBERT)
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_klondike_native.sh
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_klondike_native_mutation.sh
-
-emitter-native: $(HERBERT)
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_emitter_native.sh
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_emitter_native_mutation.sh
+emitter-native:
+	@EMITTER_NATIVE_NO_C=1 bash bootstrap/tests/run_emitter_native.sh
+	@bash bootstrap/tests/run_emitter_native_mutation.sh
 
 lexer-copy-sync:
 	@python3 bootstrap/tests/check_lexer_copy_sync.py
@@ -74,41 +62,33 @@ lexer-copy-sync:
 native-codegen-diagnostics:
 	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
 
-# switchover-cfree: the FIRST switchover-machinery slice (sovereignty link 14).
-# Prove the C-free production surface stands with the C interpreter PHYSICALLY
-# ABSENT. NO $(HERBERT) prerequisite -- this target deliberately does NOT build
-# the C interpreter; the driver self-scrubs cc/gcc/as/ld and runs the CFREE
-# surface on the committed gen-1 seed, then proves it bites RED-first.
+# switchover-cfree: prove the C-free production surface stands with the C
+# interpreter PHYSICALLY ABSENT (the driver self-scrubs cc/gcc/as/ld and runs the
+# CFREE surface on the committed gen-1 seed), then proves it bites RED-first.
 switchover-cfree:
 	@bash bootstrap/tests/run_switchover_cfree.sh
 	@bash bootstrap/tests/run_switchover_cfree_mutation.sh
 
-# switchover-dry-run: sovereignty link 17. Extends the C-absent proof beyond
-# drydock's 24-gate surface: proves the 7 C-free BITE-PROOFS still bite with the
-# C interpreter PHYSICALLY ABSENT (the non-vacuity guards survive C's removal) +
-# its RED-first bite-proof. The EXECUTABLE deletion recipe is
-# bootstrap/tests/apply_switchover.sh <clean-worktree> (run on-demand; see
-# SWITCHOVER.md). NO $(HERBERT) prereq -- this target does not build the C interpreter.
+# switchover-dry-run: now a standing C-free guard. Post-switchover the C
+# interpreter is gone, so this proves the 7 C-free bite-proofs STILL bite with C
+# physically absent (the permanent reality) -- a stronger regression guard against
+# C creeping back. The on-demand deletion recipe (apply_switchover.sh) + SWITCHOVER.md
+# remain as the historical record of the event.
 switchover-dry-run:
 	@bash bootstrap/tests/run_switchover_dryrun.sh
 	@bash bootstrap/tests/run_switchover_dryrun_mutation.sh
 
-verify-local: check test-timeout smoke lexer-equivalence parser-equivalence evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
+# reseed: re-mint the gen-1 seed C-FREE (the committed seed recompiles the backend
+# to its own fixpoint). Post-switchover this replaces the old C-mint reseed; run it
+# ONLY when stack/native_compile_fragment.herb legitimately changes (the michoi seed
+# gate goes RED). No C interpreter is involved.
+reseed:
+	@bash bootstrap/tests/reseed_gen1.sh
 
-beta-full: $(HERBERT)
-	@PATH=$(abspath tools):$$PATH HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/run_beta_full.sh
-
-# michoi: re-mint the C-free gen-1 seed from the C bootstrap. Run ONLY when
-# stack/native_compile_fragment.herb changes (which shifts gen-1's bytes and
-# makes the committed seed stale). This is the one sanctioned C mint.
-reseed: $(HERBERT)
-	@HERBERT=$(abspath $(HERBERT)) bash bootstrap/tests/reseed_gen1.sh
+verify-local: check test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<
-
-$(HERBERT): $(HERBERT_SRCS) $(HERBERT_HDR) | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $(HERBERT_SRCS)
 
 $(BUILD):
 	@mkdir -p $(BUILD)

@@ -41,14 +41,12 @@
 # columns (TAB-separated): disposition  run-context  script  cfree-mode-env  reason
 CFREE_BITEPROOF	make-test	run_aggregate_render_native_mutation.sh	AGGREGATE_RENDER_MUTATION_NO_C=1	aggregate-render bite-proof, now C-FREE via a two-stage seed compile of the mutated backend (assay, link 15; was RETIRE_WITH_C); runs in make test; retireable C cross-check opt-out via AGGREGATE_RENDER_MUTATION_NO_C=1
 CFREE_SWITCHOVER	switchover	run_aggregate_render_native.sh	AGGREGATE_RENDER_NATIVE_NO_C=1	native aggregate render + 12 foundational native-output tests (seed; C cross-check opt-in)
-RETIRE_WITH_C	-	run_beta_full.sh	-	metacircular beta-full nesting runs klondike-under-C (tests the C interpreter metacircular run)
 CFREE_BITEPROOF	verify-local	run_emitter_native_mutation.sh	EMITTER_NATIVE_NO_C=1	emitter gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_emitter_native.sh	EMITTER_NATIVE_NO_C=1	metacircular emitter native execution (seed; C cross-check opt-in)
 CFREE_BITEPROOF	verify-local	run_evaluator_native_mutation.sh	EVALUATOR_NATIVE_NO_C=1	evaluator gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_evaluator_native.sh	EVALUATOR_NATIVE_NO_C=1	metacircular evaluator native execution (seed; C cross-check opt-in)
 CFREE_BITEPROOF	verify-local	run_klondike_native_mutation.sh	KLONDIKE_NATIVE_NO_C=1	klondike gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_klondike_native.sh	KLONDIKE_NATIVE_NO_C=1	metacircular klondike native execution (seed; C cross-check opt-in)
-RETIRE_AT_SWITCH	-	run_lexer_equivalence.sh	-	lexer C-vs-Herbert equivalence altimeter (the C lexer dumper IS the reference)
 CFREE_BITEPROOF	verify-local	run_lexer_native_mutation.sh	LEXER_NATIVE_NO_C=1	lexer gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_lexer_native.sh	LEXER_NATIVE_NO_C=1	metacircular lexer native execution (seed; C cross-check opt-in)
 CFREE_SWITCHOVER	switchover	run_native_codegen_link10.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link10 (seed-graded; C only opt-in ORACLE=c)
@@ -122,11 +120,8 @@ CFREE_SWITCHOVER	switchover	run_native_codegen_link8.sh	NATIVE_CODEGEN_ORACLE=go
 CFREE_SWITCHOVER	switchover	run_native_codegen_link9.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link9 (seed-graded; C only opt-in ORACLE=c)
 CFREE_KERNEL	kernel-ci	run_native_codegen_qemu_diag_tests.sh	-	native-codegen kernel diagnostics (substrate-graded; C interpreter not invoked)
 CFREE_SWITCHOVER	switchover	run_native_codegen_rejects.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen verifier reject battery (seed-graded; C only opt-in ORACLE=c)
-RETIRE_AT_SWITCH	-	run_parser_equivalence_mutation.sh	-	parser-equivalence altimeter bite-proof (mutates parse.c; inherently C)
-RETIRE_AT_SWITCH	-	run_parser_equivalence.sh	-	parser C-vs-Herbert equivalence altimeter (the C parse.c dumper IS the reference)
 CFREE_BITEPROOF	verify-local	run_parser_native_mutation.sh	PARSER_NATIVE_NO_C=1	parser gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_parser_native.sh	PARSER_NATIVE_NO_C=1	metacircular parser native execution (seed; C cross-check opt-in)
-RETIRE_WITH_C	-	run_smoke.sh	-	C-interpreter resource-limit smoke (peak-heap/scopes GC instrumentation native cannot emit)
 SWITCHOVER_MACHINERY	-	run_switchover_cfree_mutation.sh	-	the C-absent driver RED-first bite-proof (sovereignty link 14)
 SWITCHOVER_MACHINERY	-	run_switchover_cfree.sh	-	the C-absent surface driver (sovereignty link 14); runs the frozen CFREE_SWITCHOVER set with C physically absent
 SWITCHOVER_MACHINERY	-	run_switchover_dryrun.sh	-	the switchover DRY-RUN (sovereignty link 17); proves the 7 C-free bite-proofs STILL BITE with C physically absent (hardened: extended poison + clean state + counting tombstone)

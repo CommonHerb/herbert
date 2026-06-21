@@ -23,13 +23,7 @@ Makefile
 README.md
 SWITCHOVER.md
 VERIFYING.md
-bootstrap/tests/run_smoke.sh
-bootstrap/tests/lexer_equiv_dump.c
-bootstrap/tests/run_lexer_equivalence.sh
 bootstrap/tests/check_lexer_copy_sync.py
-bootstrap/tests/parser_equiv_dump.c
-bootstrap/tests/run_parser_equivalence.sh
-bootstrap/tests/run_parser_equivalence_mutation.sh
 bootstrap/tests/run_evaluator_native.sh
 bootstrap/tests/run_evaluator_native_mutation.sh
 bootstrap/tests/run_vm_native.sh
@@ -44,7 +38,6 @@ bootstrap/tests/run_emitter_native.sh
 bootstrap/tests/run_emitter_native_mutation.sh
 bootstrap/tests/run_aggregate_render_native.sh
 bootstrap/tests/run_aggregate_render_native_mutation.sh
-bootstrap/tests/run_beta_full.sh
 bootstrap/tests/run_native_codegen_link1.sh
 bootstrap/tests/run_native_codegen_link2.sh
 bootstrap/tests/run_native_codegen_link3.sh
@@ -343,11 +336,3 @@ tools/check_full_test_host.sh
 tools/timeout
 
 # --- bootstrap (host-language Herbert implementation: shrinks to zero) ---
-bootstrap/eval.c
-bootstrap/herbert.h
-bootstrap/lex.c
-bootstrap/main.c
-bootstrap/parse.c
-bootstrap/reclaim.c
-bootstrap/util.c
-bootstrap/value.c
