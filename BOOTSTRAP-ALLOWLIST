@@ -117,6 +117,9 @@ bootstrap/tests/tickover_ref.py
 bootstrap/tests/rollcall_ref.py
 bootstrap/tests/tenement_ref.py
 bootstrap/tests/homestead_ref.py
+bootstrap/tests/furlough_ref.py
+bootstrap/tests/run_native_codegen_link49.sh
+bootstrap/tests/run_native_codegen_link49_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
