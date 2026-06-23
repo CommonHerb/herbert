@@ -123,6 +123,9 @@ bootstrap/tests/run_native_codegen_link49_mutation.sh
 bootstrap/tests/tessera_ref.py
 bootstrap/tests/run_native_codegen_link50.sh
 bootstrap/tests/run_native_codegen_link50_mutation.sh
+bootstrap/tests/cleave_ref.py
+bootstrap/tests/run_native_codegen_link51.sh
+bootstrap/tests/run_native_codegen_link51_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
