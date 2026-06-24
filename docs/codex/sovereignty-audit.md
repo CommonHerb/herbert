@@ -233,11 +233,17 @@ Branch repair: the seed README now says the C interpreter is retired and the
 remaining tracked C source is only the `tools/scan.c` governance scanner. It
 also names the current seed hash from `gen1.seed.sha256`.
 
-### `BOOTSTRAP-RESPONSIBILITIES.md` references missing `LEDGER.md`
+### Initial finding: `BOOTSTRAP-RESPONSIBILITIES.md` referenced missing `LEDGER.md`
 
-The responsibility map references `LEDGER.md`; no such file exists in the
+The responsibility map referenced `LEDGER.md`; no such file exists in the
 current checkout. That weakens the audit trail for claims such as native
 reclamation being far-axis-tethered.
+
+Branch repair: `BOOTSTRAP-RESPONSIBILITIES.md` now points to live sources. The
+C-GC instrumentation retirement is tied to the muster classification in
+`bootstrap/tests/run_tests.sh`; the later far-axis native reclamation proof is
+tied to `bootstrap/tests/run_native_codegen_link47.sh`, its mutation proof, and
+the L31 steps in `.github/workflows/kernel-codegen-l1.yml`.
 
 ## Verification Evidence
 
@@ -338,9 +344,10 @@ observed completed through L19 and then L20 in progress during audit
 
 2. Continue truth-surface cleanup beyond the repaired switchover docs.
    - The branch now marks `SWITCHOVER.md` as historical, fixes the seed README
-     hash/provenance wording, and updates `ROADMAP.md`'s retired-C framing.
-   - Remaining cleanup should focus on unresolved references such as the missing
-     `LEDGER.md` mention and any overbroad kernel PASS prose found by log review.
+     hash/provenance wording, updates `ROADMAP.md`'s retired-C framing, and
+     replaces the missing `LEDGER.md` pointer with live proof surfaces.
+   - Remaining cleanup should focus on any overbroad kernel PASS prose found by
+     log review.
 
 3. Tighten kernel run truth.
    - Treat Link 52 as not fully current until the `kernel-codegen-l1` run for
@@ -380,15 +387,16 @@ Repaired on this branch:
 
 Misleading `make verify-local` guidance, `README.md` C interpreter layout,
 `ROADMAP.md` C-bootstrap language, `SWITCHOVER.md` pending-status language, and
-`bootstrap/seed/README.md` pre-switchover/hash-prefix drift.
+`bootstrap/seed/README.md` pre-switchover/hash-prefix drift, and the missing
+`LEDGER.md` reference in `BOOTSTRAP-RESPONSIBILITIES.md`.
 
 Still misleading or stale:
 
-- Missing `LEDGER.md` reference.
+- No currently identified stale truth-surface entry in this audit remains open;
+  the next risk is claim precision in kernel PASS prose.
 
 Recommended next autonomous step:
 
-Reduce the next remaining trust-boundary ambiguity: either repair the missing
-`LEDGER.md` reference with a live source, or audit the kernel PASS/log wording
-for any claim that says KVM or emulator proof happened when the authoritative
-workflow did not actually run that substrate.
+Reduce the next remaining trust-boundary ambiguity: audit the kernel PASS/log
+wording for any claim that says KVM or emulator proof happened when the
+authoritative workflow did not actually run that substrate.
