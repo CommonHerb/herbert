@@ -69,11 +69,25 @@ failure under `KERNEL_CODEGEN_REQUIRE_EMU=1`, matching the nearby `link47` and
 `link48` behavior. With the flag unset, local non-emulator machines can still
 skip those QEMU-only mutation proofs honestly.
 
+Follow-up proof-hygiene pass on `codex/kernel-proof-hygiene-20260624` broadened
+that audit across the mutation scripts that `.github/workflows/kernel-codegen-l1.yml`
+runs with `KERNEL_CODEGEN_REQUIRE_EMU=1`. The clear drift was in L2-L13:
+`run_native_codegen_link18_mutation.sh` through
+`run_native_codegen_link29_mutation.sh` used the require flag to opt into the
+mutation proof, but still silently skipped missing QEMU. Those scripts now fail
+closed when `KERNEL_CODEGEN_REQUIRE_EMU=1` and still skip honestly when only
+`KERNEL_CODEGEN_MUTATION=1` is set for a local non-emulator run.
+
+This follow-up also adds `tools/check_kernel_emu_contracts.py`, wires it into
+`make verify-local` / `make verify-linux` as `kernel-emu-contracts`, and records
+the new tracked Python tool in `BOOTSTRAP-ALLOWLIST`. The checker is intentionally
+scoped to workflow mutation scripts so it enforces the public proof contract
+without rewriting ambiguous historical prose.
+
 ## Highest-Leverage Safe Moves
 
-1. Add a small scanner or check target that enforces the fail-closed emulator
-   convention across all kernel mutation scripts, then clean up older links in
-   small batches.
+1. Keep `tools/check_kernel_emu_contracts.py` green as new kernel mutation
+   scripts are added to the workflow.
 2. Continue reducing "silicon" wording where the actual public proof is QEMU
    plus Bochs and KVM is optional.
 3. Draft a textual-seed hardening plan with executable intermediate checks
@@ -132,6 +146,23 @@ The same require-fails / nonrequire-skips behavior was checked for
 `run_native_codegen_link50_mutation.sh`, `run_native_codegen_link51_mutation.sh`,
 and `run_native_codegen_link52_mutation.sh`.
 
+Follow-up focused fail-closed proof with QEMU hidden from `PATH`:
+
+```text
+python3 tools/check_kernel_emu_contracts.py
+PASS: kernel emulator contract guard (35 workflow mutation scripts fail closed when emulators are required)
+
+PATH=/usr/bin:/bin KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link18_mutation.sh
+FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)
+
+PATH=/usr/bin:/bin KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link18_mutation.sh
+SKIP: native-codegen link18 mutation proof (no qemu)
+```
+
+The same require-fails / optional-skips behavior was checked for
+`run_native_codegen_link18_mutation.sh` through
+`run_native_codegen_link29_mutation.sh`.
+
 Local gates:
 
 ```text
@@ -139,6 +170,9 @@ git diff --check
 
 python3 tools/check_verify_targets.py
 PASS: verify target guard (verify-local is portable; verify-linux keeps the full Linux/x86_64 ladder)
+
+python3 tools/check_kernel_emu_contracts.py
+PASS: kernel emulator contract guard (35 workflow mutation scripts fail closed when emulators are required)
 
 python3 tools/check_timeout.py
 PASS: timeout wrapper
@@ -149,12 +183,15 @@ PASS: lexer copy sync (8 copied lexer blocks match stack/lexer_fragment.herb con
 bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
 PASS: native-codegen qemu diagnostics
 
-bash -n bootstrap/tests/run_native_codegen_link49_mutation.sh bootstrap/tests/run_native_codegen_link50_mutation.sh bootstrap/tests/run_native_codegen_link51_mutation.sh bootstrap/tests/run_native_codegen_link52_mutation.sh
+bash -n bootstrap/tests/run_native_codegen_link18_mutation.sh ... bootstrap/tests/run_native_codegen_link29_mutation.sh
+
+python3 -m py_compile tools/check_kernel_emu_contracts.py tools/check_verify_targets.py
 
 make verify-local
 PASS: verify target guard (verify-local is portable; verify-linux keeps the full Linux/x86_64 ladder)
-OK: 355 tracked non-.herb file(s) match BOOTSTRAP-ALLOWLIST
+OK: 357 tracked non-.herb file(s) match BOOTSTRAP-ALLOWLIST
 PASS: timeout wrapper
 PASS: lexer copy sync (8 copied lexer blocks match stack/lexer_fragment.herb contracts)
 PASS: native-codegen qemu diagnostics
+PASS: kernel emulator contract guard (35 workflow mutation scripts fail closed when emulators are required)
 ```

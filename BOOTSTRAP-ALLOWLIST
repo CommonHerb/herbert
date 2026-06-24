@@ -24,6 +24,7 @@ README.md
 SWITCHOVER.md
 VERIFYING.md
 docs/codex/fresh-eyes-breather-2026-06-24.md
+docs/codex/proof-hygiene-2026-06-24.md
 docs/codex/sovereignty-audit.md
 docs/codex/status-2026-06-24.md
 bootstrap/tests/check_lexer_copy_sync.py
@@ -367,6 +368,7 @@ tools/scan.c
 tools/check_timeout.py
 tools/check_full_test_host.sh
 tools/check_verify_targets.py
+tools/check_kernel_emu_contracts.py
 tools/timeout
 
 # --- bootstrap (host-language Herbert implementation: shrinks to zero) ---

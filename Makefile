@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run reseed verify-targets verify-local verify-linux clean
+.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-emu-contracts switchover-cfree switchover-dry-run reseed verify-targets verify-local verify-linux clean
 
 all: $(SCANNER)
 
@@ -69,6 +69,9 @@ lexer-copy-sync:
 native-codegen-diagnostics:
 	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
 
+kernel-emu-contracts:
+	@python3 tools/check_kernel_emu_contracts.py
+
 # switchover-cfree: prove the C-free production surface stands with the C
 # interpreter PHYSICALLY ABSENT (the driver self-scrubs cc/gcc/as/ld and runs the
 # CFREE surface on the committed gen-1 seed), then proves it bites RED-first.
@@ -97,11 +100,11 @@ verify-targets:
 
 # Portable source/governance confidence: this target must stay runnable on
 # Darwin/arm64 and other non-Linux/x86_64 hosts.
-verify-local: verify-targets check test-timeout lexer-copy-sync native-codegen-diagnostics
+verify-local: verify-targets check test-timeout lexer-copy-sync native-codegen-diagnostics kernel-emu-contracts
 
 # Full local Linux/x86_64 ladder. This preserves the old verify-local coverage
 # under a host-truthful name.
-verify-linux: verify-targets check test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
+verify-linux: verify-targets check test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-emu-contracts switchover-cfree switchover-dry-run
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

@@ -16,6 +16,7 @@ EXPECTED_VERIFY_LOCAL = [
     "test-timeout",
     "lexer-copy-sync",
     "native-codegen-diagnostics",
+    "kernel-emu-contracts",
 ]
 
 EXPECTED_VERIFY_LINUX = [
@@ -32,6 +33,7 @@ EXPECTED_VERIFY_LINUX = [
     "error-vocab-native",
     "lexer-copy-sync",
     "native-codegen-diagnostics",
+    "kernel-emu-contracts",
     "switchover-cfree",
     "switchover-dry-run",
 ]

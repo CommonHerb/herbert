@@ -404,6 +404,6 @@ Still misleading or stale:
 
 Recommended next autonomous step:
 
-Push this substrate-wording follow-up, watch GitHub Actions for the exact new
-SHA, then audit mutation-script fail-closed behavior under
-`KERNEL_CODEGEN_REQUIRE_EMU=1`.
+Push the proof-hygiene follow-up, watch GitHub Actions for the exact new SHA,
+and keep any further "silicon" / KVM wording cleanup separate from compiler or
+kernel semantics.

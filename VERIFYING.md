@@ -14,6 +14,7 @@ Runs:
 - `make test-timeout`: checks the repo-local portable `timeout` shim.
 - `make lexer-copy-sync`: checks that accepted-token lexer copies in the stdin/parser/evaluator/emitter and Suke fragments stay synchronized with `stack/lexer_fragment.herb` (the line-aware token contract).
 - `make native-codegen-diagnostics`: checks the local helper used to enrich kernel QEMU mismatch logs.
+- `make kernel-emu-contracts`: checks that kernel workflow mutation scripts fail closed, rather than silently skipping, when `KERNEL_CODEGEN_REQUIRE_EMU=1` requires emulator coverage.
 
 This is the portable local confidence command. It does not run x86_64 Linux ELF
 artifacts, the full non-emulator suite, or the emulator-heavy kernel suite.
@@ -61,6 +62,10 @@ The heavy kernel/module proof chain lives in `.github/workflows/kernel-codegen-l
 That workflow installs QEMU, Bochs, GRUB, Xvfb, and disk tooling on Linux, then runs the later native-codegen kernel/module links and mutation gates with `KERNEL_CODEGEN_REQUIRE_EMU=1`.
 
 Local runs can silently shrink if emulator prerequisites are absent. Treat the workflow as the authoritative gate for those links.
+
+The portable `make kernel-emu-contracts` guard checks the workflow mutation
+script family for missing-QEMU skip paths that would violate that required
+emulator contract.
 
 ## What These Commands Do Not Prove
 
