@@ -55,6 +55,13 @@ have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+kernel_substrate_scope() {
+    local qemu=SKIPPED bochs=SKIPPED kvm="SKIPPED (/dev/kvm unavailable)"
+    have_qemu && qemu=GREEN
+    have_bochs && bochs=GREEN
+    have_kvm && kvm=GREEN
+    printf 'QEMU=%s, Bochs=%s, KVM=%s' "$qemu" "$bochs" "$kvm"
+}
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
@@ -205,4 +212,5 @@ fi
 
 echo "native-codegen link49 (furlough / BLOCKING SYS_READ block-wake): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link49 furlough / BLOCKING SYS_READ -- a naive reader on not-ready input is PARKED by the kernel (kernel-side deschedule via a blocked[] state, indexed by cur) instead of freezing the machine, peers run, the reader is woken EXACTLY ONCE with the delivered byte; PRIMARY discriminator wake-witness==1 (kills the runnable-retry forge structurally, disp[] is a loose supporting tripwire); byte-pinned to furlough_ref.build_elf (binds the GENERAL indexed mechanism, not a proc0-hardcoded forge), white-box block/wake machinery, QEMU+KVM+Bochs GREEN on RUN-2 + RUN-1, seed-differential data-dependent, frozen-homestead differential RED, additive on tenement/rollcall/tickover/homestead. HONEST SCOPE: single blocked reader (multi-reader queue future); poll-driven wake (poll-granularity, not an IRQ4 interrupt -- future); all-GP-clobbered-by-syscall ABI (stale GP fine for the no-retry reader); the synchronous-ready do_read path is byte-pin-bound but not runtime-graded)"
+scope="$(kernel_substrate_scope)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link49 furlough / BLOCKING SYS_READ -- a naive reader on not-ready input is PARKED by the kernel (kernel-side deschedule via a blocked[] state, indexed by cur) instead of freezing the machine, peers run, the reader is woken EXACTLY ONCE with the delivered byte; PRIMARY discriminator wake-witness==1 (kills the runnable-retry forge structurally, disp[] is a loose supporting tripwire); byte-pinned to furlough_ref.build_elf (binds the GENERAL indexed mechanism, not a proc0-hardcoded forge), white-box block/wake machinery, substrate scope: $scope, RUN-2 + RUN-1, seed-differential data-dependent, frozen-homestead differential RED, additive on tenement/rollcall/tickover/homestead. HONEST SCOPE: single blocked reader (multi-reader queue future); poll-driven wake (poll-granularity, not an IRQ4 interrupt -- future); all-GP-clobbered-by-syscall ABI (stale GP fine for the no-retry reader); the synchronous-ready do_read path is byte-pin-bound but not runtime-graded)"

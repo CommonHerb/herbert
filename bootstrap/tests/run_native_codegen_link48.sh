@@ -49,6 +49,13 @@ have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+kernel_substrate_scope() {
+    local qemu=SKIPPED bochs=SKIPPED kvm="SKIPPED (/dev/kvm unavailable)"
+    have_qemu && qemu=GREEN
+    have_bochs && bochs=GREEN
+    have_kvm && kvm=GREEN
+    printf 'QEMU=%s, Bochs=%s, KVM=%s' "$qemu" "$bochs" "$kvm"
+}
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
@@ -194,4 +201,5 @@ fi
 
 echo "native-codegen link48 (homestead / DEMAND-PAGED STACK GROWTH): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link48 homestead / DEMAND-PAGED STACK GROWTH -- a ring-3 program's stack grows past its 1-page region by demand-committing P=0 grow pages on NOT-PRESENT #PFs; byte-pinned to homestead_ref.build_elf, white-box demand-paging machinery, QEMU+KVM+Bochs GREEN, frozen-tenement differential RED, additive on tenement/rollcall/tickover/mumbani)"
+scope="$(kernel_substrate_scope)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link48 homestead / DEMAND-PAGED STACK GROWTH -- a ring-3 program's stack grows past its 1-page region by demand-committing P=0 grow pages on NOT-PRESENT #PFs; byte-pinned to homestead_ref.build_elf, white-box demand-paging machinery, substrate scope: $scope, frozen-tenement differential RED, additive on tenement/rollcall/tickover/mumbani)"

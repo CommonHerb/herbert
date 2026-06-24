@@ -42,6 +42,13 @@ have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
+kernel_substrate_scope() {
+    local qemu=SKIPPED bochs=SKIPPED kvm="SKIPPED (/dev/kvm unavailable)"
+    have_qemu && qemu=GREEN
+    have_bochs && bochs=GREEN
+    have_kvm && kvm=GREEN
+    printf 'QEMU=%s, Bochs=%s, KVM=%s' "$qemu" "$bochs" "$kvm"
+}
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
@@ -179,4 +186,5 @@ fi
 
 echo "native-codegen link47 (tenement / MEMORY RECLAMATION): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link47 tenement / MEMORY RECLAMATION -- $N programs reuse $M physical pages; byte-pinned to tenement_ref.build_elf, white-box reclamation machinery, QEMU+KVM+Bochs GREEN, frozen-rollcall differential RED, additive on rollcall/tickover)"
+scope="$(kernel_substrate_scope)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link47 tenement / MEMORY RECLAMATION -- $N programs reuse $M physical pages; byte-pinned to tenement_ref.build_elf, white-box reclamation machinery, substrate scope: $scope, frozen-rollcall differential RED, additive on rollcall/tickover)"

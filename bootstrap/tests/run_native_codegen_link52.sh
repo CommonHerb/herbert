@@ -52,6 +52,13 @@ have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+kernel_substrate_scope() {
+    local qemu=SKIPPED bochs=SKIPPED kvm="SKIPPED (/dev/kvm unavailable)"
+    have_qemu && qemu=GREEN
+    have_bochs && bochs=GREEN
+    have_kvm && kvm=GREEN
+    printf 'QEMU=%s, Bochs=%s, KVM=%s' "$qemu" "$bochs" "$kvm"
+}
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
@@ -194,4 +201,5 @@ fi
 
 echo "native-codegen link52 (lethe / ALIAS-REMAP + TARGETED TLB INVALIDATION): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link52 lethe / ALIAS-REMAP + TARGETED TLB INVALIDATION -- one ring-3 prober installs three non-identity aliases A,V->F and B->F', WARMS V->F into the TLB, then a SYS_REMAP (int 0x30) sets PTE[V]<-F'|7 and -- the link -- invlpg [V] (evict EXACTLY the one stale entry, NOT a heavy cr3 flush); the prober writes y to V (a fresh walk -> F') and reads A==x (F UNCHANGED -- no ghost corruption), V==y, B==y; the first time the kernel invalidates a stale TLB entry. Byte-pinned to lethe_ref.build_elf (binds the three alias installs + the remap arm's PTE[V]<-F'|7 THEN invlpg [V] contiguous + NO mov cr3 in the arm, not a permission flip), white-box assert_lethe, QEMU+KVM+Bochs GREEN, seed-differential data-dependent, frozen-tessera differential RED (no remap arm -> V stays ->F -> the write corrupts the witness A), additive on cleave/tessera/furlough/homestead/tenement/rollcall/tickover. Output-forced WITHIN one execution -- the corruption is observed in A, a DIFFERENT alias than the one written. HONEST SCOPE: ONE remapped alias + two witness aliases + two fixed frames (no general TLB shootdown, no SMP, no per-process address spaces / ELF loader))"
+scope="$(kernel_substrate_scope)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link52 lethe / ALIAS-REMAP + TARGETED TLB INVALIDATION -- one ring-3 prober installs three non-identity aliases A,V->F and B->F', WARMS V->F into the TLB, then a SYS_REMAP (int 0x30) sets PTE[V]<-F'|7 and -- the link -- invlpg [V] (evict EXACTLY the one stale entry, NOT a heavy cr3 flush); the prober writes y to V (a fresh walk -> F') and reads A==x (F UNCHANGED -- no ghost corruption), V==y, B==y; the first time the kernel invalidates a stale TLB entry. Byte-pinned to lethe_ref.build_elf (binds the three alias installs + the remap arm's PTE[V]<-F'|7 THEN invlpg [V] contiguous + NO mov cr3 in the arm, not a permission flip), white-box assert_lethe, substrate scope: $scope, seed-differential data-dependent, frozen-tessera differential RED (no remap arm -> V stays ->F -> the write corrupts the witness A), additive on cleave/tessera/furlough/homestead/tenement/rollcall/tickover. Output-forced WITHIN one execution -- the corruption is observed in A, a DIFFERENT alias than the one written. HONEST SCOPE: ONE remapped alias + two witness aliases + two fixed frames (no general TLB shootdown, no SMP, no per-process address spaces / ELF loader))"

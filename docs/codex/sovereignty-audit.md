@@ -336,9 +336,9 @@ observed completed through L19 and then L20 in progress during audit
 
 ## Highest-Leverage Next Moves
 
-1. Split or repair local verification.
-   - Make `make verify-local` a truthful portable source/governance ladder, or
-     rename the current full local command to a Linux-only target.
+1. Keep local verification split and truthful.
+   - This branch repaired `make verify-local` into a portable source/governance
+     ladder instead of a Darwin-hostile Linux/emulator suite.
    - Keep `make test` as the authoritative Linux/x86_64 non-emulator suite.
    - Update `VERIFYING.md` and `ROADMAP.md` to match the target topology.
 
@@ -346,15 +346,20 @@ observed completed through L19 and then L20 in progress during audit
    - The branch now marks `SWITCHOVER.md` as historical, fixes the seed README
      hash/provenance wording, updates `ROADMAP.md`'s retired-C framing, and
      replaces the missing `LEDGER.md` pointer with live proof surfaces.
-   - Remaining cleanup should focus on any overbroad kernel PASS prose found by
-     log review.
+   - Log review found late-link wording that said KVM was green even when CI
+     skipped `/dev/kvm`; this branch now scopes the L31-L36 PASS summaries and
+     L24/L28-L36 workflow titles to the substrates that actually ran.
+   - Continue scanning older kernel links and mutation logs for the same claim
+     precision problem.
 
 3. Tighten kernel run truth.
-   - Treat Link 52 as not fully current until the `kernel-codegen-l1` run for
-     `d1e8eb2` is green.
+   - The kernel workflow was green for pushed base `c943bb8` before the
+     substrate-wording follow-up; the wording follow-up still needs its own
+     remote GitHub Actions proof after push.
    - Audit mutation scripts for `KERNEL_CODEGEN_REQUIRE_EMU=1` fail-closed
      behavior.
-   - Avoid PASS prose that says KVM was green when KVM was skipped.
+   - Keep PASS prose reporting KVM as optional/skipped unless `have_kvm` is
+     true in that run.
 
 4. Advance seed provenance.
    - Document an executable plan for textual seed hardening.
@@ -386,17 +391,19 @@ Provisional:
 Repaired on this branch:
 
 Misleading `make verify-local` guidance, `README.md` C interpreter layout,
-`ROADMAP.md` C-bootstrap language, `SWITCHOVER.md` pending-status language, and
-`bootstrap/seed/README.md` pre-switchover/hash-prefix drift, and the missing
-`LEDGER.md` reference in `BOOTSTRAP-RESPONSIBILITIES.md`.
+`ROADMAP.md` C-bootstrap language, `SWITCHOVER.md` pending-status language,
+`bootstrap/seed/README.md` pre-switchover/hash-prefix drift, the missing
+`LEDGER.md` reference in `BOOTSTRAP-RESPONSIBILITIES.md`, and late-link
+kernel/KVM wording that claimed KVM proof when `/dev/kvm` was skipped.
 
 Still misleading or stale:
 
-- No currently identified stale truth-surface entry in this audit remains open;
-  the next risk is claim precision in kernel PASS prose.
+- No currently identified exact KVM-overclaim phrase remains in the edited L24
+  or L28-L36 workflow titles or L31-L36 PASS summaries; older kernel log
+  surfaces still deserve a continued precision scan.
 
 Recommended next autonomous step:
 
-Reduce the next remaining trust-boundary ambiguity: audit the kernel PASS/log
-wording for any claim that says KVM or emulator proof happened when the
-authoritative workflow did not actually run that substrate.
+Push this substrate-wording follow-up, watch GitHub Actions for the exact new
+SHA, then audit mutation-script fail-closed behavior under
+`KERNEL_CODEGEN_REQUIRE_EMU=1`.

@@ -54,6 +54,13 @@ have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+kernel_substrate_scope() {
+    local qemu=SKIPPED bochs=SKIPPED kvm="SKIPPED (/dev/kvm unavailable)"
+    have_qemu && qemu=GREEN
+    have_bochs && bochs=GREEN
+    have_kvm && kvm=GREEN
+    printf 'QEMU=%s, Bochs=%s, KVM=%s' "$qemu" "$bochs" "$kvm"
+}
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
@@ -202,4 +209,5 @@ fi
 
 echo "native-codegen link50 (tessera / SHARED MEMORY via a non-identity aliased frame): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link50 tessera / SHARED MEMORY via a NON-IDENTITY ALIASED FRAME -- the kernel installs ONE physical frame F at TWO distinct virtual pages Va != Vb (PTE[Va]<-F, PTE[Vb]<-F, F != Va, F != Vb -- the first PTEs where PFN != VPN), a producer writes a late-bound multi-word payload THROUGH Va and a consumer reads it back THROUGH Vb zero-copy; byte-pinned to tessera_ref.build_elf (binds the alias install, not a permission trick), white-box assert_tessera (aliased + non-identity), QEMU+KVM+Bochs GREEN, seed-differential data-dependent, frozen-furlough differential RED, additive on furlough/homestead/tenement/rollcall/tickover. HONEST SCOPE: ONE pre-installed aliased frame (no runtime free-frame allocator); single shared window mutually accessible to the two sharers (per-process restriction needs per-process CR3 -- the motivated successor); NO per-process address spaces / ELF loader)"
+scope="$(kernel_substrate_scope)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link50 tessera / SHARED MEMORY via a NON-IDENTITY ALIASED FRAME -- the kernel installs ONE physical frame F at TWO distinct virtual pages Va != Vb (PTE[Va]<-F, PTE[Vb]<-F, F != Va, F != Vb -- the first PTEs where PFN != VPN), a producer writes a late-bound multi-word payload THROUGH Va and a consumer reads it back THROUGH Vb zero-copy; byte-pinned to tessera_ref.build_elf (binds the alias install, not a permission trick), white-box assert_tessera (aliased + non-identity), substrate scope: $scope, seed-differential data-dependent, frozen-furlough differential RED, additive on furlough/homestead/tenement/rollcall/tickover. HONEST SCOPE: ONE pre-installed aliased frame (no runtime free-frame allocator); single shared window mutually accessible to the two sharers (per-process restriction needs per-process CR3 -- the motivated successor); NO per-process address spaces / ELF loader)"

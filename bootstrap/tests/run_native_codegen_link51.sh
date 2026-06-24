@@ -50,6 +50,13 @@ have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+kernel_substrate_scope() {
+    local qemu=SKIPPED bochs=SKIPPED kvm="SKIPPED (/dev/kvm unavailable)"
+    have_qemu && qemu=GREEN
+    have_bochs && bochs=GREEN
+    have_kvm && kvm=GREEN
+    printf 'QEMU=%s, Bochs=%s, KVM=%s' "$qemu" "$bochs" "$kvm"
+}
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
@@ -192,4 +199,5 @@ fi
 
 echo "native-codegen link51 (cleave / COPY-ON-WRITE): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link51 cleave / COPY-ON-WRITE -- one ring-3 program maps a shared frame F at a WRITABLE alias VW (F|7) and a READ-ONLY alias VR (F|5); a store THROUGH VR traps a write-protection #PF and the kernel COPIES F->F' (rep movsd), remaps PTE[VR]<-F'|7 private, and IRET-resumes the store into the copy, so VR diverges while VW (the shared F) is UNCHANGED; the first time the kernel copies a page on demand. Byte-pinned to cleave_ref.build_elf (binds the read-only alias + the page copy + the private-pool remap, not a permission flip), white-box assert_cleave, QEMU+KVM+Bochs GREEN, seed-differential data-dependent, frozen-tessera differential RED (tessera maps VR writable -> the store corrupts the shared frame), additive on tessera/furlough/homestead/tenement/rollcall/tickover. Output-forced WITHIN one execution -- the within-context observable aliasing makes forceable and per-process CR3 (cross-process, unobservable on one CPU) does not. HONEST SCOPE: ONE shared frame + a fixed-vaddr RO/RW alias pair + a reserved bump pool for copies (no runtime free-frame allocator, no general arena, no per-process address spaces / ELF loader))"
+scope="$(kernel_substrate_scope)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link51 cleave / COPY-ON-WRITE -- one ring-3 program maps a shared frame F at a WRITABLE alias VW (F|7) and a READ-ONLY alias VR (F|5); a store THROUGH VR traps a write-protection #PF and the kernel COPIES F->F' (rep movsd), remaps PTE[VR]<-F'|7 private, and IRET-resumes the store into the copy, so VR diverges while VW (the shared F) is UNCHANGED; the first time the kernel copies a page on demand. Byte-pinned to cleave_ref.build_elf (binds the read-only alias + the page copy + the private-pool remap, not a permission flip), white-box assert_cleave, substrate scope: $scope, seed-differential data-dependent, frozen-tessera differential RED (tessera maps VR writable -> the store corrupts the shared frame), additive on tessera/furlough/homestead/tenement/rollcall/tickover. Output-forced WITHIN one execution -- the within-context observable aliasing makes forceable and per-process CR3 (cross-process, unobservable on one CPU) does not. HONEST SCOPE: ONE shared frame + a fixed-vaddr RO/RW alias pair + a reserved bump pool for copies (no runtime free-frame allocator, no general arena, no per-process address spaces / ELF loader))"
