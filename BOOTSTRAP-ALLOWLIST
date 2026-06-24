@@ -126,6 +126,9 @@ bootstrap/tests/run_native_codegen_link50_mutation.sh
 bootstrap/tests/cleave_ref.py
 bootstrap/tests/run_native_codegen_link51.sh
 bootstrap/tests/run_native_codegen_link51_mutation.sh
+bootstrap/tests/lethe_ref.py
+bootstrap/tests/run_native_codegen_link52.sh
+bootstrap/tests/run_native_codegen_link52_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
