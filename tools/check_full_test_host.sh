@@ -15,6 +15,7 @@ FAIL: make test requires a Linux/x86_64 host.
 
 The full run mints and executes Linux ELF native-codegen artifacts. On this
 host ($os/$arch), use 'make verify-local' for the portable local ladder and run
-'make test' in Linux CI or an equivalent Linux/x86_64 environment.
+'make test' or 'make verify-linux' in Linux CI or an equivalent Linux/x86_64
+environment.
 MSG
 exit 1

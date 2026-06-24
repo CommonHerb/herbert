@@ -364,6 +364,7 @@ stack/klondike_native_probe.expected
 tools/scan.c
 tools/check_timeout.py
 tools/check_full_test_host.sh
+tools/check_verify_targets.py
 tools/timeout
 
 # --- bootstrap (host-language Herbert implementation: shrinks to zero) ---

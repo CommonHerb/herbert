@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run reseed verify-local clean
+.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run reseed verify-targets verify-local verify-linux clean
 
 all: $(SCANNER)
 
@@ -92,7 +92,16 @@ switchover-dry-run:
 reseed:
 	@bash bootstrap/tests/reseed_gen1.sh
 
-verify-local: check test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
+verify-targets:
+	@python3 tools/check_verify_targets.py
+
+# Portable source/governance confidence: this target must stay runnable on
+# Darwin/arm64 and other non-Linux/x86_64 hosts.
+verify-local: verify-targets check test-timeout lexer-copy-sync native-codegen-diagnostics
+
+# Full local Linux/x86_64 ladder. This preserves the old verify-local coverage
+# under a host-truthful name.
+verify-linux: verify-targets check test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

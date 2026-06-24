@@ -7,21 +7,17 @@ tests, goldens, runners, and workflow logs.
 
 ### Proven
 
-- The C bootstrap builds and runs the smoke suite through `make verify-local`.
+- The portable local source/governance ladder runs through `make verify-local`.
 - `make check` enforces the visible non-`.herb` bootstrap boundary in
   `BOOTSTRAP-ALLOWLIST`.
-- `make verify-local` includes a C-vs-Herbert accepted-source lexer
-  equivalence check for a small fixture corpus, including a focused
-  native/operator-surface fixture, via `stack/lexer_stdin_driver.herb`, plus
-  lexer ERR code, line, and message parity for the existing
-  `stack/error_probes/lex_*.herb` malformed probes via
-  `stack/lexer_error_driver.herb`.
-- `make verify-local` also checks that the accepted-token lexer copies in
-  `stack/lexer_stdin_driver.herb`, parser/evaluator/emitter fragments, and
-  Suke fragments remain synchronized with `stack/lexer_fragment.herb`; it
-  additionally checks that the line-aware lexer variants in `stack/klondike.herb`
-  and `stack/native_compile_fragment.herb` match the same token contract with
-  their documented line field.
+- `make verify-local` checks that the accepted-token lexer copies in
+  `stack/lexer_stdin_driver.herb`, parser/evaluator/emitter fragments, and Suke
+  fragments remain synchronized with `stack/lexer_fragment.herb`; it
+  additionally checks that the line-aware lexer variants in
+  `stack/klondike.herb` and `stack/native_compile_fragment.herb` match the same
+  token contract with their documented line field.
+- `make verify-linux` preserves the full Linux/x86_64 non-emulator ladder that
+  the old `verify-local` target ran.
 - `make test` is the Linux/x86_64 full non-emulator suite and refuses early on
   other hosts.
 - `.github/workflows/kernel-codegen-l1.yml` is the authoritative emulator gate
@@ -44,7 +40,9 @@ tests, goldens, runners, and workflow logs.
 
 ### Unknown
 
-- Which C bootstrap component is the safest next deletion candidate.
+- Which remaining non-Herbert trust anchor is the safest next reduction target:
+  `tools/scan.c`, textual seed provenance, shell/Python harnessing, or committed
+  goldens.
 - Which Herbert-written stack fragment has enough coverage to become an
   authoritative replacement for a host component.
 - Which optional Linux/x86_64 runner helper is the least misleading local path
@@ -55,6 +53,7 @@ tests, goldens, runners, and workflow logs.
 ## Near-Term Stabilization
 
 - Keep `make verify-local` fast, portable, and green on Darwin/arm64 and Linux.
+- Keep `make verify-linux` truthful about its Linux/x86_64 requirement.
 - Keep `make test` truthful about its Linux/x86_64 requirement.
 - Keep CI logs reviewable by separating portable checks, full non-emulator
   checks, and emulator-heavy kernel/module checks.

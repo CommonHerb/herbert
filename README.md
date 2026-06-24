@@ -6,10 +6,12 @@ This repository is a bootstrapping language/runtime project. Judge it by the cod
 
 ## Layout
 
-- `bootstrap/` contains the C seed interpreter/runtime, parser, evaluator, value model, garbage collector, and test harness.
+- `bootstrap/` contains the committed native gen-1 seed, verification harnesses,
+  native-codegen goldens, references, and switchover machinery.
 - `stack/` contains Herbert-written language, VM, native compiler, and kernel/module proof programs.
 - `bootstrap/tests/` contains sample interpreter tests, stack probes, native-codegen links, Python reference builders, golden artifacts, and kernel runners.
-- `tools/` contains guard and local verification helpers.
+- `tools/` contains guard and verification helpers, including the remaining C
+  governance scanner.
 - `.github/workflows/` contains CI verification surfaces.
 
 ## Development Rule
