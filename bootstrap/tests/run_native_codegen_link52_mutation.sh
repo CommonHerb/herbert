@@ -25,7 +25,10 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 REF="$script_dir/lethe_ref.py"
 SEED="${LETHE_SEED:-90}"
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $REF)"; exit 1; fi
-if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0; fi
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    if [[ "${KERNEL_CODEGEN_REQUIRE_EMU:-0}" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
+    echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
+fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }

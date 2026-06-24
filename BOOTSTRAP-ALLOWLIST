@@ -23,6 +23,7 @@ Makefile
 README.md
 SWITCHOVER.md
 VERIFYING.md
+docs/codex/fresh-eyes-breather-2026-06-24.md
 docs/codex/sovereignty-audit.md
 docs/codex/status-2026-06-24.md
 bootstrap/tests/check_lexer_copy_sync.py
