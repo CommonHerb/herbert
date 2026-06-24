@@ -3,10 +3,10 @@
 `gen1.seed` is the native x86-64 ELF **gen-1 compiler** — the Herbert backend
 (`stack/native_compile_fragment.herb`) compiled to a runnable binary. It is the
 committed **C-free seed**: the test suite mints the production compiler by
-running this seed, **not** by running the C bootstrap interpreter. This removes
-the C interpreter from the gen-1 *mint* path (the first step of retiring the C
-bootstrap). C is still present for the differential oracle and the interpreted
-stack/metacircular probes — those are later links.
+running this seed, **not** by running the retired C bootstrap interpreter. Since
+`castoff` (sovereignty link 18), the C interpreter is gone from the checkout;
+the remaining tracked C source is `tools/scan.c`, a governance scanner used by
+`make check`, not a Herbert execution path.
 
 ## Why a committed binary is sound here
 
@@ -29,7 +29,8 @@ bytes) is the deferred Oberon-ideal hardening.
   program header, zero sections, no `PT_INTERP`, raw Linux syscalls. No dynamic
   linker, no libc.
 - Integrity is pinned by `gen1.seed.sha256`
-  (`4af3dbee…ec7a0`). The suite validates magic + sha256 before use and fails
+  (`a3378031aa1314d522f68b0580e8c9723348ea8fd429b0c479edbb8777b11167`).
+  The suite validates magic + sha256 before use and fails
   closed if either is wrong.
 
 ## Re-seeding (when the backend legitimately changes)

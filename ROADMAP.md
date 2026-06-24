@@ -62,12 +62,12 @@ tests, goldens, runners, and workflow logs.
 
 ## Self-Hosting Prerequisites
 
-- Map each C bootstrap responsibility to the Herbert file or test that would
-  prove a replacement.
-- Add dual-run checks where a Herbert implementation and C bootstrap component
-  can be compared on the same fixtures.
-- Preserve byte-for-byte or behavior-for-behavior fixpoint checks where the
-  compiler/runtime is claiming self-ownership.
+- Keep `BOOTSTRAP-RESPONSIBILITIES.md` as the retired responsibility map for the
+  deleted C interpreter; do not revive C as a live oracle.
+- Add new replacement proofs against independent oracles, committed goldens,
+  self-hosting fixpoints, or substrate witnesses rather than C dual-run checks.
+- Preserve byte-for-byte or behavior-for-behavior fixpoint checks wherever the
+  compiler/runtime claims self-ownership.
 - Delete from `BOOTSTRAP-ALLOWLIST` only when a replacement is executable and
   verified.
 

@@ -178,41 +178,60 @@ Evidence:
 - On this host, `make verify-local` failed with:
   `FAIL: make test requires a Linux/x86_64 host.`
 
-Root cause: the command named `verify-local` includes non-portable native ELF
-execution gates after the switchover. The docs still describe the older
-portable/local split.
+Root cause: the command named `verify-local` included non-portable native ELF
+execution gates after the switchover. Branch repair: `make verify-local` is now
+the portable source/governance ladder, and `make verify-linux` preserves the old
+Linux/x86_64 ladder under a truthful name.
 
-### `README.md` still describes a C interpreter layout
+### Initial finding: `README.md` described a C interpreter layout
 
 `README.md` says `bootstrap/` contains the C seed interpreter/runtime, parser,
 evaluator, value model, garbage collector, and test harness. The current tree no
 longer contains that C interpreter. The remaining C source is `tools/scan.c`.
 
-### `ROADMAP.md` still says "The C bootstrap builds"
+Branch repair: `README.md` now describes the committed native gen-1 seed,
+verification harnesses, goldens, and switchover machinery instead of a live C
+interpreter.
 
-`ROADMAP.md` lists as proven: "The C bootstrap builds and runs the smoke suite
+### Initial finding: `ROADMAP.md` said "The C bootstrap builds"
+
+`ROADMAP.md` listed as proven: "The C bootstrap builds and runs the smoke suite
 through `make verify-local`." That contradicts the current Makefile and tree:
 the C interpreter is retired, `smoke` is gone, and `make verify-local` fails on
 Darwin/arm64 before reaching the advertised ladder.
 
-### `SWITCHOVER.md` is historical but reads like pending plan
+Branch repair: `ROADMAP.md` now names `make verify-local`, `make verify-linux`,
+`make test`, and the kernel workflow by their current proof boundaries. Its
+self-hosting section now treats `BOOTSTRAP-RESPONSIBILITIES.md` as a retired
+map and says not to revive C as a live oracle.
 
-`SWITCHOVER.md` says "Status: NOT YET EXECUTED" and describes a greenlight gate.
+### Initial finding: `SWITCHOVER.md` was historical but read like pending plan
+
+`SWITCHOVER.md` said the event had not executed and described a greenlight gate.
 The source history and current tree show the switchover has been executed. This
 file may still be useful as historical record, but it needs an explicit
 post-switchover preface or archival status so readers do not treat it as current
 operating truth.
 
-### `bootstrap/seed/README.md` has stale pre-switchover text
+Branch repair: `SWITCHOVER.md` now identifies itself as a historical record,
+names `castoff` commit `e231a7127a2d576e9caf5704b6e80e47cfe0b475` as the
+executed switchover, and points current truth to the Makefile, verifying docs,
+responsibility map, gates, and CI.
 
-The seed README correctly admits the trusting-trust limit and describes the
-post-switchover reseed path later in the file. But its opening still says C is
-present for the differential oracle and interpreted probes. That is stale.
+### Initial finding: `bootstrap/seed/README.md` had stale pre-switchover text
+
+The seed README correctly admitted the trusting-trust limit and described the
+post-switchover reseed path later in the file. But its opening said C was
+present for the differential oracle and interpreted probes. That was stale.
 
 It also advertises an old hash prefix `4af3dbee...ec7a0`; the tracked seed hash
 is currently `a3378031aa1314d522f68b0580e8c9723348ea8fd429b0c479edbb8777b11167`.
 The `.sha256` file is correct, so this is documentation drift rather than an
 integrity failure.
+
+Branch repair: the seed README now says the C interpreter is retired and the
+remaining tracked C source is only the `tools/scan.c` governance scanner. It
+also names the current seed hash from `gen1.seed.sha256`.
 
 ### `BOOTSTRAP-RESPONSIBILITIES.md` references missing `LEDGER.md`
 
@@ -317,11 +336,11 @@ observed completed through L19 and then L20 in progress during audit
    - Keep `make test` as the authoritative Linux/x86_64 non-emulator suite.
    - Update `VERIFYING.md` and `ROADMAP.md` to match the target topology.
 
-2. Mark switchover docs as post-event.
-   - Add a clear header to `SWITCHOVER.md` explaining that the event already
-     happened at sovereignty link 18 and that the file is historical.
-   - Fix `README.md`, `ROADMAP.md`, and `bootstrap/seed/README.md` stale
-     pre-switchover claims.
+2. Continue truth-surface cleanup beyond the repaired switchover docs.
+   - The branch now marks `SWITCHOVER.md` as historical, fixes the seed README
+     hash/provenance wording, and updates `ROADMAP.md`'s retired-C framing.
+   - Remaining cleanup should focus on unresolved references such as the missing
+     `LEDGER.md` mention and any overbroad kernel PASS prose found by log review.
 
 3. Tighten kernel run truth.
    - Treat Link 52 as not fully current until the `kernel-codegen-l1` run for
@@ -357,17 +376,19 @@ Provisional:
 - The strength of "self-owned" claims beyond the seed/golden trust root.
 - Any claim of general OS or arbitrary compiler correctness.
 
-Misleading or stale:
+Repaired on this branch:
 
-- `make verify-local` as macOS/non-x86_64 guidance.
-- `README.md` C interpreter layout.
-- `ROADMAP.md` C bootstrap and "next deletion candidate" language.
-- `SWITCHOVER.md` pending-status language.
-- `bootstrap/seed/README.md` pre-switchover text and old hash prefix.
+Misleading `make verify-local` guidance, `README.md` C interpreter layout,
+`ROADMAP.md` C-bootstrap language, `SWITCHOVER.md` pending-status language, and
+`bootstrap/seed/README.md` pre-switchover/hash-prefix drift.
+
+Still misleading or stale:
+
 - Missing `LEDGER.md` reference.
 
 Recommended next autonomous step:
 
-Make the verification surface truthful before expanding ambition: split the
-portable local source-governance ladder from the Linux/x86_64 full suite, update
-the docs to match, then use CI to keep the Linux truth authoritative.
+Reduce the next remaining trust-boundary ambiguity: either repair the missing
+`LEDGER.md` reference with a live source, or audit the kernel PASS/log wording
+for any claim that says KVM or emulator proof happened when the authoritative
+workflow did not actually run that substrate.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# run_switchover_dryrun.sh -- sovereignty link 17: the SWITCHOVER DRY-RUN.
+# run_switchover_dryrun.sh -- sovereignty link 17, retained after link 18.
 #
-# drydock (link 14) proved the FROZEN 24-gate near-axis production SURFACE stands
-# with the C interpreter physically absent. It did NOT prove two further things the
-# eventual switchover depends on:
+# Before castoff, drydock (link 14) proved the FROZEN 24-gate near-axis
+# production SURFACE stood with the C interpreter physically absent. It did NOT
+# prove two further things the pre-castoff switchover depended on:
 #
 #   (1) the C-free RED-first BITE-PROOFS (the regression guards that prove each
 #       C-free gate is non-vacuous) survive C's removal -- they were rehomed onto
@@ -16,12 +16,14 @@
 #       suite, the recursion-depth guard, the fragment C-interp forcing tests) was
 #       lumped as one opaque HARNESS row.
 #
-# This driver closes (1): it runs the 7 committed C-free bite-proofs with the C
-# toolchain + interpreter PHYSICALLY ABSENT (extended poison, sealed namespace,
-# clean artifact state, the committed gen-1 seed forced, a counting $HERBERT
-# tombstone) and asserts each runs GREEN -- i.e. each still CATCHES its mutations
-# without C -- at ZERO C invocations. (2) is closed by run_switchover_classification.sh
-# (the inline-suite completeness manifest), run alongside by `make switchover-dry-run`.
+# This retained driver closes and preserves (1): it runs the 7 committed C-free
+# bite-proofs with the C toolchain + interpreter PHYSICALLY ABSENT (extended
+# poison, sealed namespace, clean artifact state, the committed gen-1 seed
+# forced, a counting $HERBERT tombstone) and asserts each runs GREEN -- i.e. each
+# still CATCHES its mutations without C -- at ZERO C invocations. (2) was closed
+# by the castoff deletion and its reconciled `run_tests.sh` / manifest surgery;
+# this script now remains as a post-switchover regression guard against C
+# creeping back into the bite-proofs.
 #
 # This is forge-resistant by the drydock discipline, plus three Codex-review
 # hardenings beyond it: an EXTENDED tool poison (clang/cpp/gcc-NN/ld.lld/ccache,

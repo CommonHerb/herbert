@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# apply_switchover.sh -- sovereignty link 17: the EXECUTABLE C-RETIREMENT RECIPE.
+# apply_switchover.sh -- sovereignty link 17: historical C-retirement recipe.
 #
-# This is the EXACT, AUDITABLE, RE-RUNNABLE operation the eventual switchover (the
-# irreversible C-interpreter deletion) performs -- not a one-time hand-edit, and
-# not prose. It runs against a TARGET directory (a clean checkout / throwaway
-# worktree -- NEVER the live tree by default), performs the deletion + metadata
-# reconciliation, then PROVES the post-deletion tree is COHERENT: no dangling
-# reference to a deleted file remains, the switchover-disposition manifest still
-# partitions exhaustively, and the C-free production SURFACE + its (reconciled)
-# bite-proof stand GREEN with the C interpreter now physically GONE.
+# This was the exact, auditable, re-runnable operation prepared before castoff
+# (sovereignty link 18) for the irreversible C-interpreter deletion. It is kept
+# for auditability and can still be run against a clean pre-castoff checkout /
+# throwaway worktree, not the current post-castoff live tree.
 #
 # It is RED-first by construction: if the deletion leaves a dangling reference, or
 # the manifest no longer reconciles, or a "C-free" gate secretly needed C, the
-# coherence proof FAILS. `make switchover-dry-run` runs this on a throwaway worktree
-# as the standing rehearsal; SWITCHOVER.md is the human-readable companion plan.
+# coherence proof FAILS. The live post-castoff `make switchover-dry-run` no
+# longer performs the deletion; it guards the retained C-free bite-proofs with C
+# absent. `SWITCHOVER.md` is now the human-readable historical record.
 #
 # What it DELETES (the C-interpreter retirement -- see SWITCHOVER.md for the full
 # disposition table and the residual Makefile/CI surgery this recipe documents but

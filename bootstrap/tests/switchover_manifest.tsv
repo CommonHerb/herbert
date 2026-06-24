@@ -1,10 +1,10 @@
 # MEWTWO switchover disposition manifest  (sovereignty link 14)
 #
 # The complete, frozen, exhaustive+disjoint partition of every gate script in
-# bootstrap/tests/ by its disposition for the eventual C-RETIREMENT SWITCHOVER
-# (when the C bootstrap interpreter + C sources are deleted). This is the
-# switchover readiness ledger: it answers, for every test surface, "does it
-# stand without C, and if not, why."
+# bootstrap/tests/ by its disposition for the C-retirement switchover. It began
+# as the pre-castoff readiness ledger and is now retained as a post-castoff
+# regression ledger: it answers, for every test surface, "does it stand without
+# C, and if not, why."
 #
 # run_switchover_cfree.sh runs the CFREE_SWITCHOVER set (a FROZEN 24-gate list it
 # also pins by exact membership) with the C interpreter PHYSICALLY ABSENT -- in
