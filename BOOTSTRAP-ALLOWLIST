@@ -23,6 +23,7 @@ Makefile
 README.md
 SWITCHOVER.md
 VERIFYING.md
+docs/codex/sovereignty-audit.md
 bootstrap/tests/check_lexer_copy_sync.py
 bootstrap/tests/run_evaluator_native.sh
 bootstrap/tests/run_evaluator_native_mutation.sh
