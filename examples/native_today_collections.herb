@@ -1,0 +1,22 @@
+-- Native-today example: arrays, buffers, strings, and reference semantics.
+
+func append_marker(xs, marker):
+    do add(xs, marker)
+    return count(xs)
+end
+
+func main():
+    let xs = new_array(int)
+    do add(xs, 5)
+    do add(xs, 8)
+    let n = append_marker(xs, 13)
+
+    let b = new_buffer()
+    do append(b, 'h')
+    do append(b, 'e')
+    do append(b, 'r')
+    do append(b, 'b')
+    let s = freeze(b)
+
+    return (n, get(xs, 0), get(xs, 2), length(s), equal(s, "herb"))
+end
