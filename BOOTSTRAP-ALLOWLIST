@@ -129,6 +129,9 @@ bootstrap/tests/run_native_codegen_link51_mutation.sh
 bootstrap/tests/lethe_ref.py
 bootstrap/tests/run_native_codegen_link52.sh
 bootstrap/tests/run_native_codegen_link52_mutation.sh
+bootstrap/tests/platter_ref.py
+bootstrap/tests/run_native_codegen_link53.sh
+bootstrap/tests/run_native_codegen_link53_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
