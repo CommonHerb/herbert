@@ -29,3 +29,10 @@ not count as Herbert-native progress.
 This branch starts with documentation plus `.herb` programs only: examples that
 show what Herbert can make today, and a native ledger candidate that records the
 current replacement map from inside Herbert.
+
+## Native Ledger Candidate
+
+`stack/native_surface_ledger.herb` is the first Herbert-authored surface ledger
+candidate. It does not replace `BOOTSTRAP-ALLOWLIST`, `tools/scan.c`, or any
+shell/Python harness. It exists beside them until a future branch proves parity
+and makes deletion safe.

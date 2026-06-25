@@ -1,0 +1,8 @@
+native: stack/*.herb
+required-substrate: bootstrap/seed/gen1.seed
+required-substrate: .github/workflows
+replace-soon: tools/scan.c
+replace-later: bootstrap/tests/*.sh
+replace-later: bootstrap/tests/*_ref.py
+evidence: committed expected/golden artifacts
+7
