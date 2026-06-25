@@ -16,7 +16,7 @@ Where the retired C responsibilities now live (all C-free, all proven per push):
 | `bootstrap/parse.c` | `stack/parser_fragment.herb`, run natively (`run_parser_native.sh`); the production parser also self-hosts in `native_compile_fragment.herb` |
 | `bootstrap/eval.c` | `stack/evaluator_fragment.herb` (tree-walk) + `stack/vm_fragment.herb` (bytecode), run natively (`run_evaluator_native.sh`, `run_vm_native.sh`) |
 | `bootstrap/value.c` | the runtime value model lowered by the native back end (the fragments + the native-codegen gates) |
-| `bootstrap/reclaim.c` | the native runtime's own memory model (D16 — native reclamation — is far-axis-tethered, not a switchover prerequisite; see `LEDGER.md`) |
+| `bootstrap/reclaim.c` | the C GC instrumentation assertions retired with C (`bootstrap/tests/run_tests.sh`'s muster classification); the later far-axis native reclamation surface is the kernel-arc tenement gate (`bootstrap/tests/run_native_codegen_link47.sh` plus its mutation proof, run as L31 in `.github/workflows/kernel-codegen-l1.yml`) |
 | `bootstrap/util.c` | host helpers folded into the native back end |
 | `bootstrap/main.c` | the native gen-1 driver + the harness; the metacircular toolchain runs via `run_klondike_native.sh` / `run_emitter_native.sh` |
 | `bootstrap/herbert.h` | the native back end's own data contracts |

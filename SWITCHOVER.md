@@ -1,31 +1,30 @@
-# The C-retirement SWITCHOVER — execution plan (sovereignty link 17)
+# The C-retirement SWITCHOVER — historical record (sovereignty links 17-18)
 
-This file is the **exact, decided, ordered plan** for the irreversible event in
-which the C bootstrap interpreter is deleted and the native gen-1 seed becomes the
-sole production toolchain. It is the human-readable companion to the **executable**
-recipe `bootstrap/tests/apply_switchover.sh` (which performs + proves the mechanical
-core) and the **standing rehearsal** `make switchover-dry-run`.
+This file is the historical record of the irreversible event in which the C
+bootstrap interpreter was deleted and the native gen-1 seed became Herbert's
+sole production toolchain. The event was executed by `castoff`:
+`e231a7127a2d576e9caf5704b6e80e47cfe0b475` (sovereignty link 18).
 
-It exists because the rehomeable-C residue is **exhausted** (links `michoi`→`crucible`):
-every C dependency that *could* be moved onto the seed has been. What remains is not
-a rehome but the **switchover itself**. This link (the dry-run) proves the switchover
-is mechanical, coherent, and safe **without performing it** — the deletion waits for
-Ben's explicit, in-the-moment greenlight because it is **irreversible**.
+The pre-event recipe `bootstrap/tests/apply_switchover.sh` and the dry-run
+machinery are kept for auditability and regression pressure around C absence.
+Current operating truth lives in the Makefile, `VERIFYING.md`,
+`BOOTSTRAP-RESPONSIBILITIES.md`, the switchover gates, and CI results.
 
-> **Status: NOT YET EXECUTED.** This is the plan + the proof that it is ready. The
-> deletion (candidate *c*) is the next sovereignty decision, brought verdict-first.
+> **Status: EXECUTED.** The prose below preserves the original decisions and
+> dispositions around the switchover. Read future-tense language as historical
+> pre-`castoff` planning unless a current gate or source file says otherwise.
 
 ---
 
-## 1. What the switchover is (and is not)
+## 1. What the switchover was (and was not)
 
-The C interpreter cannot be de-C'd piecewise — you cannot delete `parse.c` while
-`eval.c` still `#include`s the tree it builds. It is a **single event**: the native
-ELF compiler (already minting the production compiler from the committed
-`bootstrap/seed/gen1.seed`) becomes the toolchain, and the C interpreter +its sources
-+ the tests that exist only to grade it are removed **at once**.
+The C interpreter could not be de-C'd piecewise — you could not delete `parse.c`
+while `eval.c` still `#include`d the tree it built. It was a **single event**:
+the native ELF compiler (already minting the production compiler from the
+committed `bootstrap/seed/gen1.seed`) became the toolchain, and the C interpreter
++ its sources + the tests that existed only to grade it were removed **at once**.
 
-**Scope of THIS event (the C-interpreter retirement):**
+**Scope of the event (the C-interpreter retirement):**
 - the C interpreter: `bootstrap/{eval,lex,main,parse,reclaim,util,value}.c` + `bootstrap/herbert.h`
 - the 2 C equivalence dumpers: `bootstrap/tests/{lexer,parser}_equiv_dump.c`
 - the 5 retire-tests (below)
@@ -88,14 +87,12 @@ the bite-proofs**, every one already proven to stand C-absent (drydock + this li
 
 ---
 
-## 4. The ordered recipe (what the irreversible event does)
+## 4. The ordered recipe (what the irreversible event did)
 
-`bootstrap/tests/apply_switchover.sh <clean-checkout>` performs **steps 1–3 + 7** and
-**proves 4–5** mechanically (validated green by `make switchover-dry-run`). Steps 6
-(the inline `run_tests.sh` excision) and the Makefile/CI edits are the **documented
-residual** the event completes by hand from §3 + this section; they are not needed for
-the C-free surface proof (which routes through neither `run_tests.sh` nor the C Makefile
-targets) but ARE needed for a green post-deletion `make test`.
+`bootstrap/tests/apply_switchover.sh <clean-checkout>` was the pre-event
+executable recipe for **steps 1–3 + 7** and the mechanical proof of **4–5**. The
+`castoff` commit completed the remaining `run_tests.sh`, Makefile, CI, allowlist,
+responsibility-map, and reseed surgery in the live tree.
 
 1. `make clean` (no stale C artifact may survive — disposition #10).
 2. **delete** the C interpreter (8 files), the 2 dumpers, the 5 retire-tests (§1).
@@ -124,14 +121,14 @@ ONCE — the textual-seed hardening, disposition's separate sub-question, remain
 
 ---
 
-## 5. Irreversibility + the greenlight gate
+## 5. Irreversibility after the greenlight
 
 This event **deletes** the only differential oracle the project has had since day one.
 After it, there is no `C_interp` to diff native behavior against — the native toolchain
 is self-validated (the fixpoint) + substrate-validated (the far-axis QEMU+Bochs oracle).
 That is **by design** (sovereignty = the stack owes nothing to C), and the foundation
-carries it (`muster` proved D13/D16 are not switchover prerequisites; every C-free gate
-is proven to stand C-absent). But it is **irreversible**, so it does not happen on
-standing autonomy: it is brought to Ben **verdict-first** and waits for his explicit,
-in-the-moment greenlight. This link (the dry-run) is the evidence that, when he gives
-it, the event is mechanical and proven — not a leap.
+carries it (`muster` proved D13/D16 were not switchover prerequisites; every C-free gate
+was proven to stand C-absent). Ben gave the greenlight and `castoff` performed the
+irreversible deletion. New work should treat C as gone, not as a hidden fallback, and
+should label any claim that still depends on the once-C-minted seed or host harnesses
+as a remaining trust boundary.

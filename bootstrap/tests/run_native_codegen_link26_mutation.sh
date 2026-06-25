@@ -43,7 +43,10 @@ backend="$repo_root/stack/native_compile_fragment.herb"
 
 RUN="${KERNEL_CODEGEN_MUTATION:-${KERNEL_CODEGEN_REQUIRE_EMU:-0}}"
 if [[ "$RUN" != "1" ]]; then echo "SKIP: native-codegen link26 mutation proof (set KERNEL_CODEGEN_MUTATION=1 to run)"; exit 0; fi
-if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then echo "SKIP: native-codegen link26 mutation proof (no qemu)"; exit 0; fi
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    if [[ "${KERNEL_CODEGEN_REQUIRE_EMU:-0}" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
+    echo "SKIP: native-codegen link26 mutation proof (no qemu)"; exit 0
+fi
 
 # C-free production compiler: the committed gen-1 seed (NOT the C interpreter).
 source "$script_dir/native_codegen_oracle.sh"

@@ -45,6 +45,7 @@ if [[ "$RUN" != "1" ]]; then
     echo "SKIP: native-codegen link25 mutation proof (set KERNEL_CODEGEN_MUTATION=1 to run)"; exit 0
 fi
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    if [[ "${KERNEL_CODEGEN_REQUIRE_EMU:-0}" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: native-codegen link25 mutation proof (no qemu)"; exit 0
 fi
 

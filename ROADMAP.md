@@ -7,21 +7,15 @@ tests, goldens, runners, and workflow logs.
 
 ### Proven
 
-- The C bootstrap builds and runs the smoke suite through `make verify-local`.
+- The C-interpreter-free local source/governance ladder runs through `make verify-local`.
 - `make check` enforces the visible non-`.herb` bootstrap boundary in
   `BOOTSTRAP-ALLOWLIST`.
-- `make verify-local` includes a C-vs-Herbert accepted-source lexer
-  equivalence check for a small fixture corpus, including a focused
-  native/operator-surface fixture, via `stack/lexer_stdin_driver.herb`, plus
-  lexer ERR code, line, and message parity for the existing
-  `stack/error_probes/lex_*.herb` malformed probes via
-  `stack/lexer_error_driver.herb`.
-- `make verify-local` also checks that the accepted-token lexer copies in
-  `stack/lexer_stdin_driver.herb`, parser/evaluator/emitter fragments, and
-  Suke fragments remain synchronized with `stack/lexer_fragment.herb`; it
-  additionally checks that the line-aware lexer variants in `stack/klondike.herb`
-  and `stack/native_compile_fragment.herb` match the same token contract with
-  their documented line field.
+- `make verify-local` checks that the accepted-token lexer copies in
+  `stack/lexer_stdin_driver.herb`, parser/evaluator/emitter fragments, and Suke
+  fragments remain synchronized with `stack/lexer_fragment.herb`; it
+  additionally checks that the line-aware lexer variants in
+  `stack/klondike.herb` and `stack/native_compile_fragment.herb` match the same
+  token contract with their documented line field.
 - `make test` is the Linux/x86_64 full non-emulator suite and refuses early on
   other hosts.
 - `.github/workflows/kernel-codegen-l1.yml` is the authoritative emulator gate
@@ -44,7 +38,9 @@ tests, goldens, runners, and workflow logs.
 
 ### Unknown
 
-- Which C bootstrap component is the safest next deletion candidate.
+- Which remaining non-Herbert trust anchor is the safest next reduction target:
+  `tools/scan.c`, textual seed provenance, shell/Python harnessing, or committed
+  goldens.
 - Which Herbert-written stack fragment has enough coverage to become an
   authoritative replacement for a host component.
 - Which optional Linux/x86_64 runner helper is the least misleading local path
@@ -63,12 +59,12 @@ tests, goldens, runners, and workflow logs.
 
 ## Self-Hosting Prerequisites
 
-- Map each C bootstrap responsibility to the Herbert file or test that would
-  prove a replacement.
-- Add dual-run checks where a Herbert implementation and C bootstrap component
-  can be compared on the same fixtures.
-- Preserve byte-for-byte or behavior-for-behavior fixpoint checks where the
-  compiler/runtime is claiming self-ownership.
+- Keep `BOOTSTRAP-RESPONSIBILITIES.md` as the retired responsibility map for the
+  deleted C interpreter; do not revive C as a live oracle.
+- Add new replacement proofs against independent oracles, committed goldens,
+  self-hosting fixpoints, or substrate witnesses rather than C dual-run checks.
+- Preserve byte-for-byte or behavior-for-behavior fixpoint checks wherever the
+  compiler/runtime claims self-ownership.
 - Delete from `BOOTSTRAP-ALLOWLIST` only when a replacement is executable and
   verified.
 
