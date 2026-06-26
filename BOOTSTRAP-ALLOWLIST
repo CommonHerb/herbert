@@ -143,6 +143,10 @@ bootstrap/tests/larder_ref.py
 bootstrap/tests/larder_latebound.py
 bootstrap/tests/run_native_codegen_link56.sh
 bootstrap/tests/run_native_codegen_link56_mutation.sh
+bootstrap/tests/growheap_ref.py
+bootstrap/tests/growheap_latebound.py
+bootstrap/tests/run_native_codegen_link57.sh
+bootstrap/tests/run_native_codegen_link57_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
