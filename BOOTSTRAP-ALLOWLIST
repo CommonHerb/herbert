@@ -139,6 +139,10 @@ bootstrap/tests/cairn_ref.py
 bootstrap/tests/cairn_latebound.py
 bootstrap/tests/run_native_codegen_link55.sh
 bootstrap/tests/run_native_codegen_link55_mutation.sh
+bootstrap/tests/larder_ref.py
+bootstrap/tests/larder_latebound.py
+bootstrap/tests/run_native_codegen_link56.sh
+bootstrap/tests/run_native_codegen_link56_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
