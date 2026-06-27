@@ -147,6 +147,10 @@ bootstrap/tests/growheap_ref.py
 bootstrap/tests/growheap_latebound.py
 bootstrap/tests/run_native_codegen_link57.sh
 bootstrap/tests/run_native_codegen_link57_mutation.sh
+bootstrap/tests/delete_ref.py
+bootstrap/tests/delete_latebound.py
+bootstrap/tests/run_native_codegen_link58.sh
+bootstrap/tests/run_native_codegen_link58_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh

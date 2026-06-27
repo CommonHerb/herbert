@@ -140,6 +140,8 @@ CFREE_KERNEL	kernel-ci	run_native_codegen_link56.sh	-	native-codegen kernel gate
 CFREE_KERNEL	kernel-ci	run_native_codegen_link56_mutation.sh	-	native-codegen kernel mutation gate link56 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 CFREE_KERNEL	kernel-ci	run_native_codegen_link57.sh	-	native-codegen kernel gate link57 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 CFREE_KERNEL	kernel-ci	run_native_codegen_link57_mutation.sh	-	native-codegen kernel mutation gate link57 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link58.sh	-	native-codegen kernel gate link58 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link58_mutation.sh	-	native-codegen kernel mutation gate link58 (QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 CFREE_SWITCHOVER	switchover	run_native_codegen_link4.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link4 (seed-graded; C only opt-in ORACLE=c)
 CFREE_SWITCHOVER	switchover	run_native_codegen_link5.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link5 (seed-graded; C only opt-in ORACLE=c)
 CFREE_SWITCHOVER	switchover	run_native_codegen_link6.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen near-axis gate link6 (seed-graded; C only opt-in ORACLE=c)
