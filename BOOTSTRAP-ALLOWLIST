@@ -155,6 +155,10 @@ bootstrap/tests/backfill_ref.py
 bootstrap/tests/backfill_latebound.py
 bootstrap/tests/run_native_codegen_link59.sh
 bootstrap/tests/run_native_codegen_link59_mutation.sh
+bootstrap/tests/tract_ref.py
+bootstrap/tests/tract_latebound.py
+bootstrap/tests/run_native_codegen_link60.sh
+bootstrap/tests/run_native_codegen_link60_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
