@@ -159,6 +159,10 @@ bootstrap/tests/tract_ref.py
 bootstrap/tests/tract_latebound.py
 bootstrap/tests/run_native_codegen_link60.sh
 bootstrap/tests/run_native_codegen_link60_mutation.sh
+bootstrap/tests/highwater_ref.py
+bootstrap/tests/highwater_latebound.py
+bootstrap/tests/run_native_codegen_link61.sh
+bootstrap/tests/run_native_codegen_link61_mutation.sh
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
