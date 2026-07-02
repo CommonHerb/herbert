@@ -68,7 +68,7 @@
 #     (!= branch) -- distinct nonzero bytes, the widened subset exercised.
 #   ACCEPTED (migrated from link26's retired locals/branch rejects): the locals + if/else bodies that
 #     link26 rejected now COMPILE under f2 (the deliberate widen) -- asserted as valid images here.
-#   REJECTS (+ twins): bodies STILL out of subset (div/mod, bitwise, 2-function call, parameterised
+#   REJECTS (+ twins): bodies STILL out of subset (div/mod, bitwise, parameterised
 #     main, too-many-locals > 15) emit NO valid image.
 #
 # Honest scope: proves "the freestanding 64-bit image runs a COMPILED body with if/else control flow
@@ -501,23 +501,25 @@ accept_probe branch      'func main(): if 1000000 * 1000000 == 3567587328: retur
 accept_probe branch_twin 'func main(): if 2000000 * 1000000 == 2840207360: return 5 else: return 2000000 * 1000000 end end'
 [[ "$fail" -eq 0 ]] && pass=$((pass + 4))
 
-# REJECTS that STILL hold (div/mod, bitwise, call, mainarg, too-many-locals).
+# REJECTS that STILL hold (div/mod, bitwise, mainarg, too-many-locals).
 reject_probe divmod      'func main(): return 1000000 * 1000000 % 7 end'
 reject_probe divmod_twin 'func main(): return 2000000 * 1000000 / 3 end'
 reject_probe bitor       'func main(): return 1000000 * 1000000 | 1 end'
 reject_probe bitor_twin  'func main(): return 2000000 * 1000000 & 3 end'
-reject_probe call        'func h(): return 1000000 end\nfunc main(): return h() * 1000000 end'
-reject_probe call_twin   'func g(): return 2000000 end\nfunc main(): return g() * 1000000 end'
+# (RETIRED 2026-07-02, obsolete-by-widen: taproot / link62 legitimately admits user calls in the
+# long64 subset. These EXACT two programs are now link62 ACCEPTED probes `call`/`call_twin` --
+# golden-pinned + booted to their genuine values (dee8ad/ded1ad) on QEMU+KVM+Bochs. Proven
+# obsolete-not-regression there; same precedent as link26's retirement of the same pair.)
 reject_probe mainarg     'func main(p): return p * 1000000 end'
 reject_probe mainarg_twin 'func main(k): return k * 2000000 end'
 reject_probe maxlocals      "$(gen_locals 16 a)"
 reject_probe maxlocals_twin "$(gen_locals 16 z)"
-[[ "$fail" -eq 0 ]] && pass=$((pass + 10))
+[[ "$fail" -eq 0 ]] && pass=$((pass + 8))
 
 echo ""
 if [[ "$run_bochs" -eq 0 ]] && have_qemu; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link29 sub-test(s) failed."; exit 1; fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link29 / trikea / f2 / thirteenth kernel-arc link: WIDEN the freestanding 64-bit (multiboot32-long64) subset to accept IF/ELSE + LET rbp-frame LOCALS -- mirrors the proven 32-bit toakie control-flow+locals machinery at 64-bit width (8-byte [rbp-8*(slot+1)] slots; nc64_layout_loop branch pass; REX.W cmp+setcc+movzx for EQ/NE); the forcing shape let x=A*B (>2^32) if x==C (C shares x's low 32 bits, differs in the high dword) so a GENUINE 64-bit cmp takes a different arm than a 32-bit-truncated one, proof byte = high dword of the selected arm's 64-bit value; $pass checks: static + ELF-P12 + white-box [56-byte head + ljmp target exactly-once; mov esp bound; the rbp prologue 48 89 e5 48 83 ec XX pinned; the body PROVENANCE-pinned to the exact host-derived 64-bit lowering ending at the grading tail (REX.W cmp 48 39 c8 + sete/setne + movzx + br_if_false 58 48 85 c0 0f 84 + load/store-local 48 8b 45 / 48 89 45, both REX.W); the je rel32 target == else-arm + the BR jmp(0xE9) rel32 target == the join (grading tail) bound BY VALUE so both arms feed the SINGLE grading tail 48c1e820 88c3 exactly-once; widened whitelist {movabs/mov/movzx/push/pop/imul/add/sub/cmp/sete/setne/test/je/jmp + rbp frame-mov} forward-only + frame/stack-only + free of I/O/privileged/call/segment, any 32-bit GPR rejected; the FULL frame anchor 66bae900 exactly-once disambiguated from the BR jmp e9; GDT L=1 + PAE chain + entry frame bound by value], QEMU substrate (4 probes: f2_else 0xE8 + f2_then 0x9A + f2_loc + f2_ne, distinct nonzero high-dword bytes taking different arms), Bochs substrate ($BOCHS_PROBES, unique frame + clean shutdown), 4 ACCEPTED widened-subset probes migrated from link26's retired locals/branch rejects, 10 out-of-subset rejects with twins (div/mod/bitwise/call/mainarg/too-many-locals>15 -> ERR 502/504); graded vs host-derived golden on the dual-substrate oracle)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link29 / trikea / f2 / thirteenth kernel-arc link: WIDEN the freestanding 64-bit (multiboot32-long64) subset to accept IF/ELSE + LET rbp-frame LOCALS -- mirrors the proven 32-bit toakie control-flow+locals machinery at 64-bit width (8-byte [rbp-8*(slot+1)] slots; nc64_layout_loop branch pass; REX.W cmp+setcc+movzx for EQ/NE); the forcing shape let x=A*B (>2^32) if x==C (C shares x's low 32 bits, differs in the high dword) so a GENUINE 64-bit cmp takes a different arm than a 32-bit-truncated one, proof byte = high dword of the selected arm's 64-bit value; $pass checks: static + ELF-P12 + white-box [56-byte head + ljmp target exactly-once; mov esp bound; the rbp prologue 48 89 e5 48 83 ec XX pinned; the body PROVENANCE-pinned to the exact host-derived 64-bit lowering ending at the grading tail (REX.W cmp 48 39 c8 + sete/setne + movzx + br_if_false 58 48 85 c0 0f 84 + load/store-local 48 8b 45 / 48 89 45, both REX.W); the je rel32 target == else-arm + the BR jmp(0xE9) rel32 target == the join (grading tail) bound BY VALUE so both arms feed the SINGLE grading tail 48c1e820 88c3 exactly-once; widened whitelist {movabs/mov/movzx/push/pop/imul/add/sub/cmp/sete/setne/test/je/jmp + rbp frame-mov} forward-only + frame/stack-only + free of I/O/privileged/call/segment, any 32-bit GPR rejected; the FULL frame anchor 66bae900 exactly-once disambiguated from the BR jmp e9; GDT L=1 + PAE chain + entry frame bound by value], QEMU substrate (4 probes: f2_else 0xE8 + f2_then 0x9A + f2_loc + f2_ne, distinct nonzero high-dword bytes taking different arms), Bochs substrate ($BOCHS_PROBES, unique frame + clean shutdown), 4 ACCEPTED widened-subset probes migrated from link26's retired locals/branch rejects, 8 out-of-subset rejects with twins (div/mod/bitwise/mainarg/too-many-locals>15 -> ERR 502/504; the call pair RETIRED obsolete-by-widen at link62/taproot, migrated there as accepted probes); graded vs host-derived golden on the dual-substrate oracle)"
 exit 0
