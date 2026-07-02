@@ -406,17 +406,21 @@ done
 # NOTE: the `locals` and `branch` reject_probes (+ twins) were RETIRED at native-codegen link29
 # (trikea / f2): that link deliberately WIDENS the multiboot32-long64 subset to admit if/else +
 # let rbp-frame locals, so those bodies now COMPILE (proven obsolete by the widen, migrated to
-# ACCEPTED probes in run_native_codegen_link29.sh with a 64-bit-distinguishing predicate). The
-# remaining rejects (div/mod, bitwise, call, mainarg) stay -- they are still out of subset.
+# ACCEPTED probes in run_native_codegen_link29.sh with a 64-bit-distinguishing predicate).
+# The `call` and `call_twin` reject_probes (+ twins) were RETIRED at native-codegen link62
+# (taproot): that link WIDENS multiboot32-long64 to admit MULTI-FUNCTION programs with user
+# calls + recursion, so a `main` that calls another function now COMPILES (proven obsolete by
+# the widen -- both probes emit a valid image whose proof byte is the genuine 64-bit product's
+# high dword, dee8ad / ded1ad on QEMU+KVM -- and are migrated to ACCEPTED probes in
+# run_native_codegen_link62.sh). The remaining rejects (div/mod, bitwise, mainarg) stay -- they
+# are still out of the (single-function) subset here.
 reject_probe divmod      'func main(): return 1000000 * 1000000 % 7 end'
 reject_probe divmod_twin 'func main(): return 2000000 * 1000000 / 3 end'
 reject_probe bitor       'func main(): return 1000000 * 1000000 | 1 end'
 reject_probe bitor_twin  'func main(): return 2000000 * 1000000 & 3 end'
-reject_probe call        'func h(): return 1000000 end\nfunc main(): return h() * 1000000 end'
-reject_probe call_twin   'func g(): return 2000000 end\nfunc main(): return g() * 1000000 end'
 reject_probe mainarg     'func main(p): return p * 1000000 end'
 reject_probe mainarg_twin 'func main(k): return k * 2000000 end'
-[[ "$fail" -eq 0 ]] && pass=$((pass + 8))
+[[ "$fail" -eq 0 ]] && pass=$((pass + 6))
 
 echo ""
 if [[ "$run_bochs" -eq 0 ]] && have_qemu; then

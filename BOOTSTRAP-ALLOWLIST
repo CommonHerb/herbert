@@ -163,6 +163,17 @@ bootstrap/tests/highwater_ref.py
 bootstrap/tests/highwater_latebound.py
 bootstrap/tests/run_native_codegen_link61.sh
 bootstrap/tests/run_native_codegen_link61_mutation.sh
+bootstrap/tests/run_native_codegen_link62.sh
+bootstrap/tests/run_native_codegen_link62_mutation.sh
+bootstrap/tests/taproot_goldens/p1.sha256
+bootstrap/tests/taproot_goldens/p2.sha256
+bootstrap/tests/taproot_goldens/p3.sha256
+bootstrap/tests/taproot_goldens/call.sha256
+bootstrap/tests/taproot_goldens/call_twin.sha256
+bootstrap/tests/taproot_goldens/p4.sha256
+bootstrap/tests/taproot_goldens/p5.sha256
+bootstrap/tests/taproot_goldens/p6.sha256
+bootstrap/tests/taproot_goldens/p7.sha256
 bootstrap/tests/run_native_codegen_link46.sh
 bootstrap/tests/run_native_codegen_link46_mutation.sh
 bootstrap/tests/run_native_codegen_link47.sh
