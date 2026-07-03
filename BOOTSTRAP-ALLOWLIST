@@ -141,6 +141,8 @@ bootstrap/tests/run_native_codegen_link55.sh
 bootstrap/tests/run_native_codegen_link55_mutation.sh
 bootstrap/tests/larder_ref.py
 bootstrap/tests/larder_latebound.py
+bootstrap/tests/larder_phaseA_gate.sh
+bootstrap/tests/larder_step0_ref.py
 bootstrap/tests/run_native_codegen_link56.sh
 bootstrap/tests/run_native_codegen_link56_mutation.sh
 bootstrap/tests/growheap_ref.py
@@ -193,6 +195,7 @@ bootstrap/tests/run_native_codegen_link41.sh
 bootstrap/tests/run_native_codegen_link41_mutation.sh
 bootstrap/tests/run_native_codegen_link40_mutation.sh
 bootstrap/tests/kernel_input_feed.py
+bootstrap/tests/kernel_verify.sh
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/switchover_manifest.tsv

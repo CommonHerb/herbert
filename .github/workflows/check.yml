@@ -15,3 +15,16 @@ jobs:
         run: make test-timeout
       - name: make test
         run: make test
+      # verify-local suites CI historically skipped (2026-07-03 canon-cleanup, §4). The two
+      # emulator-free ones run here; native-codegen-diagnostics needs QEMU so it runs in
+      # kernel-codegen-l1.yml; switchover-dry-run is HELD OUT pending a fix to a genuine
+      # pre-existing drift it surfaced (klaxon/link19 added run_error_vocab_native_mutation.sh
+      # to switchover_manifest.tsv's CFREE_BITEPROOF set but not to the FROZEN_BITEPROOFS
+      # literal -- and error-vocab is C-free-by-construction, with no C cross-check to retire,
+      # so it arguably does not belong in that set at all). That drift is a scoped product fix
+      # for its own change (Codex-reviewed), NOT this cleanup -- do not wire switchover-dry-run
+      # into CI until it is GREEN again.
+      - name: error-vocab-native (C-free front-end error vocabulary + mutation)
+        run: make error-vocab-native
+      - name: lexer-copy-sync (copied lexer blocks match the fragment contract)
+        run: make lexer-copy-sync

@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run reseed verify-local clean
+.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run reseed verify-local clean
 
 all: $(SCANNER)
 
@@ -66,8 +66,22 @@ error-vocab-native:
 lexer-copy-sync:
 	@python3 bootstrap/tests/check_lexer_copy_sync.py
 
+# native-codegen-diagnostics: a small QEMU DIAGNOSTICS suite for the native-codegen
+# emitter -- NOT the kernel-arc boot gate. The boot gate is `make kernel-verify` (the
+# link17..62 dual/tri-substrate gates + mutation proofs under KERNEL_CODEGEN_REQUIRE_EMU=1)
+# and its CI mirror `.github/workflows/kernel-codegen-l1.yml`. Do not read this target's
+# green as "the kernels boot" -- it is diagnostics, not the tri-substrate boot proof.
 native-codegen-diagnostics:
 	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
+
+# kernel-verify: the LOCAL kernel-arc boot gate. Runs every kernel-codegen link gate
+# (link17..62 = kernel-arc L1..L46) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
+# (a missing QEMU/Bochs is a HARD failure, never a silent skip), and REQUIRES the KVM
+# real-silicon leg when /dev/kvm is present -- the A11 tier-1 anchor CI cannot cover
+# (GitHub runners have no /dev/kvm). Run this before any kernel-arc push. See the driver
+# header for the local/CI substrate split.
+kernel-verify:
+	@bash bootstrap/tests/kernel_verify.sh
 
 # switchover-cfree: prove the C-free production surface stands with the C
 # interpreter PHYSICALLY ABSENT (the driver self-scrubs cc/gcc/as/ld and runs the

@@ -74,6 +74,8 @@ jobs:
           # holding under the new package. Deliberate update per this guard's own instruction.
           test "$q" = "1:8.2.2+ds-0ubuntu1.17" || { echo "QEMU version drift: got $q, pinned 1:8.2.2+ds-0ubuntu1.17 -- update the pin deliberately after re-validating the goldens"; exit 1; }
           test "$b" = "2.7+dfsg-4build5" || { echo "Bochs version drift: got $b, pinned 2.7+dfsg-4build5 -- update the pin deliberately after re-validating the goldens"; exit 1; }
+      - name: native-codegen QEMU diagnostics (emitter diag suite -- 2026-07-03 canon-cleanup §4; a verify-local suite CI never ran, runs here because it needs QEMU)
+        run: bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
       - name: L1 dual-substrate gate (lingo -- boot and emit a byte)
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 bash bootstrap/tests/run_native_codegen_link17.sh
       - name: L2 dual-substrate gate (toakie -- data-dependent branch + locals)
