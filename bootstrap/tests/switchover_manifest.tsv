@@ -29,7 +29,12 @@
 #                       Every kernel mutation gate is now C-free -> the rehomeable-C
 #                       residue is exhausted. Kept as a legend entry only.
 #   CFREE_BITEPROOF     C-free RED-first mutation bite-proof; seed-emit, no C grading
-#                       (run by verify-local; aggregate-render-mutation runs in make test)
+#                       (run by verify-local; aggregate-render-mutation runs in make test).
+#                       Column-4 mode-env marks two sub-kinds: a NAME=VALUE opt-out flag =
+#                       REHOMED off a C leg (a retireable C cross-check -- these ARE the
+#                       run_switchover_dryrun.sh frozen "survives-C-deletion" set); "-" =
+#                       BORN C-free, no C leg to retire (e.g. run_error_vocab_native_mutation.sh,
+#                       klaxon/link19), so NOT in that dry-run set though still a verify-local bite-proof
 #   RETIRE_WITH_C       needs the C interpreter (tests C itself / GC-instrumentation
 #                       / native output diverges); retires WHEN C is deleted
 #   RETIRE_AT_SWITCH    inherently-C reference (the C dumper IS the oracle); retires

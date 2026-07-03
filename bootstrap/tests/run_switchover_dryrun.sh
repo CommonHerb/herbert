@@ -38,9 +38,14 @@ die()  { printf 'FAIL: switchover-dry-run (%s)\n' "$1"; exit 1; }
 
 # The frozen C-free bite-proof set (sovereignty link 17). Each is a RED-first
 # regression guard for a gate that SURVIVES C's deletion; each carries a
-# DEFAULT-ON retireable C cross-check whose opt-out flag is named here. Changing
-# this set is a deliberate act recorded in git; the manifest's CFREE_BITEPROOF
-# rows must equal it exactly (asserted below), or the proof is RED.
+# DEFAULT-ON retireable C cross-check whose opt-out flag is named here (column 2).
+# This set is exactly the CFREE_BITEPROOF gates that HAD a C leg to lose. A
+# BORN-C-free bite-proof -- no retireable C cross-check, manifest column-4 mode-env
+# "-" (e.g. run_error_vocab_native_mutation.sh, added to the manifest at klaxon /
+# link 19) -- is NOT part of this "survives C's deletion" proof and is excluded
+# from the membership pin below. Changing this set is a deliberate act recorded in
+# git; the manifest's CFREE_BITEPROOF rows THAT CARRY a retireable C cross-check
+# must equal it exactly (asserted below), or the proof is RED.
 #   script                                  cross-check opt-out env
 FROZEN_BITEPROOFS=$'run_aggregate_render_native_mutation.sh\tAGGREGATE_RENDER_MUTATION_NO_C=1
 run_emitter_native_mutation.sh\tEMITTER_NATIVE_NO_C=1
@@ -59,13 +64,33 @@ seed_got=$(sha256sum "$seed" | awk '{print $1}')
 [[ "$seed_magic" == "7f454c46" ]] || die "committed seed is not an ELF (magic=$seed_magic)"
 [[ "$seed_got" == "$seed_want" ]] || die "committed seed sha mismatch (got=$seed_got want=$seed_want)"
 
-# --- the bite-proof set == the manifest's CFREE_BITEPROOF set ----------------
+# --- the bite-proof set == the manifest's retireable-C-cross-check CFREE_BITEPROOFs ---
+# Select CFREE_BITEPROOF rows whose column-4 mode-env is a real opt-out flag (not "-"):
+# those are the bite-proofs REHOMED off a C leg, which this dry-run proves STILL bite
+# with C absent. A born-C-free CFREE_BITEPROOF (column 4 = "-") has no C leg to retire,
+# so it is correctly not in this proof's frozen set -- excluding it keeps the
+# exact-membership pin honest without a false RED (the klaxon/link19 drift).
 manifest="${SWITCHOVER_MANIFEST:-$script_dir/switchover_manifest.tsv}"
 [[ -f "$manifest" ]] || die "missing switchover_manifest.tsv"
-manifest_bp="$(awk -F'\t' '$1=="CFREE_BITEPROOF"{print $3}' "$manifest" | sort)"
+manifest_bp="$(awk -F'\t' '$1=="CFREE_BITEPROOF" && $4!="-"{print $3}' "$manifest" | sort)"
 frozen_bp="$(printf '%s\n' "$FROZEN_BITEPROOFS" | cut -f1 | sort)"
 if [[ "$manifest_bp" != "$frozen_bp" ]]; then
     die "manifest CFREE_BITEPROOF set != the frozen bite-proof set (gerrymander/swap):"$'\n'"$(diff <(printf '%s\n' "$frozen_bp") <(printf '%s\n' "$manifest_bp") | sed 's/^/    /')"
+fi
+
+# --- the EXCLUDED (born-C-free) CFREE_BITEPROOFs == the born-C-free allowlist, EXACTLY ---------
+# The $4!="-" filter above excludes CFREE_BITEPROOF rows that carry no retireable C cross-check. That is
+# correct ONLY for genuinely BORN-C-free bite-proofs. Guard the semantic gerrymander it would otherwise
+# open (cross-model Codex, 2026-07-03): a NEW retireable bite-proof mislabeled column-4 "-" would be
+# silently excluded from the survives-C-deletion proof, and the sibling exact-once partition check
+# (run_switchover_cfree.sh) proves only classification, not that "-" is HONEST. So pin the excluded set by
+# EXACT membership to a named allowlist -- any CFREE_BITEPROOF carrying "-" that is not a listed born-C-free
+# proof (or a listed one that vanished) is RED, forcing a retireable bite-proof into the frozen set instead.
+BORN_CFREE_ALLOWLIST=$'run_error_vocab_native_mutation.sh'
+manifest_borncfree="$(awk -F'\t' '$1=="CFREE_BITEPROOF" && $4=="-"{print $3}' "$manifest" | sort)"
+allow_sorted="$(printf '%s\n' "$BORN_CFREE_ALLOWLIST" | sort)"
+if [[ "$manifest_borncfree" != "$allow_sorted" ]]; then
+    die "CFREE_BITEPROOF rows carrying column-4 '-' != the born-C-free allowlist (a retireable bite-proof mislabeled '-' to dodge the frozen set, or a born-C-free proof not allowlisted):"$'\n'"$(diff <(printf '%s\n' "$allow_sorted") <(printf '%s\n' "$manifest_borncfree") | sed 's/^/    /')"
 fi
 
 # --- clean-state precondition (Codex hardening): no stale C INTERPRETER -------

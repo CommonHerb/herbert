@@ -96,9 +96,24 @@ if [[ $rc -eq 0 ]]; then bad "M-forge did NOT bite: dry-run passed a silent-succ
     grep -qiE "NO .PASS. verdict|vacuous/forged" "$work/out" && ok "M-forge BITES: dry-run RED on a forged-green bite-proof (no PASS signature)" || bad "M-forge failed but not via the PASS-signature check ($(grep -i fail "$work/out" | head -1))"
 fi
 
+# --- M-borncfree: an unlisted column-4 "-" CFREE_BITEPROOF (mislabeled retireable / new born-C-free) ------
+printf '== M-borncfree: an unlisted column-4 "-" CFREE_BITEPROOF is caught by the born-C-free allowlist ==\n'
+# Append a fake CFREE_BITEPROOF row whose mode-env is "-" and whose script is NOT on the driver's
+# born-C-free allowlist. The $4!="-" frozen-set filter EXCLUDES it, so the membership pin still reads 7==7
+# and would NOT catch it -- which is exactly why the born-C-free allowlist check must. Point the UNMUTATED
+# driver at the mutated manifest via SWITCHOVER_MANIFEST; it must go RED on the allowlist diff.
+fake_manifest="$work/manifest_borncfree.tsv"
+cp "$script_dir/switchover_manifest.tsv" "$fake_manifest"
+printf 'CFREE_BITEPROOF\tverify-local\trun_fake_borncfree_mutation.sh\t-\tfake born-C-free row (M-borncfree)\n' >> "$fake_manifest"
+if timeout 300 env SWITCHOVER_MANIFEST="$fake_manifest" bash "$driver" >"$work/out" 2>&1; then
+    bad "M-borncfree did NOT bite: dry-run passed with an unlisted '-' CFREE_BITEPROOF"
+else
+    grep -q 'born-C-free allowlist' "$work/out" && ok "M-borncfree BITES: dry-run RED on an unlisted born-C-free-labeled bite-proof" || bad "M-borncfree failed but not via the allowlist check ($(grep FAIL "$work/out" | head -1))"
+fi
+
 printf '\n'
 if [[ "$fail" -eq 0 ]]; then
-    echo "PASS: switchover-dry-run mutation proof ($pass/$pass -- M-cleak + M-cleanstate + M-gerrymander + M-forge all bite, control green)"
+    echo "PASS: switchover-dry-run mutation proof ($pass/$pass -- M-cleak + M-cleanstate + M-gerrymander + M-forge + M-borncfree all bite, control green)"
     exit 0
 fi
 echo "FAIL: switchover-dry-run mutation proof ($fail of $((pass+fail)) checks bad)"
