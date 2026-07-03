@@ -50,6 +50,7 @@ pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
+have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # local real-silicon leg (links 44..62 KVM-leg pattern)
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 
@@ -189,13 +190,15 @@ PY
 whitebox() { python3 "$WB" "$1" "$2"; }
 
 # ---- QEMU runtime: boot, expect one de<byte>ad frame + result-dependent isa-debug-exit ----
-qemu_run() { # label elf v
-    local label="$1" elf="$2" v="$3"
+qemu_run() { # label elf v [kvm]
+    local label="$1" elf="$2" v="$3" kvm="${4:-}"
     local p ex ph; p=$(host_proof "$v"); ex=$(host_qemu_exit "$p"); ph=$(printf '%02x' "$p")
     local W="$tmp/$label.q"; mkdir -p "$W"
+    # acceleration: QEMU-TCG by default; -enable-kvm -cpu host for the real-silicon leg (links 44..62 KVM-leg pattern).
+    local acc=(-cpu qemu64); [[ -n "$kvm" ]] && acc=(-enable-kvm -cpu host)
     printf "\\xde\\x${ph}\\xad" > "$W/golden.bin"
     timeout 60 qemu-system-x86_64 -kernel "$elf" -debugcon file:"$W/e9.bin" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -serial none -monitor none -cpu qemu64 -m 64M
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -serial none -monitor none "${acc[@]}" -m 64M
     local rc=$?
     local nf; nf=$(xxd -p "$W/e9.bin" 2>/dev/null | tr -d '\n' | grep -o "de${ph}ad" | wc -l | tr -d ' ')
     if [[ "$rc" -eq "$ex" ]] && cmp -s "$W/e9.bin" "$W/golden.bin" && [[ "$nf" -eq 1 ]]; then return 0; fi
@@ -281,6 +284,12 @@ if ! have_qemu; then
 fi
 run_bochs=0; have_bochs && run_bochs=1
 if [[ "$run_bochs" -eq 0 && "$REQUIRE_EMU" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (KERNEL_CODEGEN_REQUIRE_EMU=1 but Bochs/sudo prerequisites missing)"; exit 1; fi
+run_kvm=0; have_kvm && run_kvm=1
+if [[ "$run_kvm" -eq 1 ]]; then
+    echo "link62: /dev/kvm present -- the KVM real-silicon leg runs on the accepted-probe value witness (links 44..62 KVM-leg pattern)."
+else
+    echo "NOTE: /dev/kvm absent -- KVM real-silicon leg skipped (a local pre-push leg; QEMU-TCG + Bochs are the fail-closed CI substrates)."
+fi
 
 declare -A BYTE
 for label in $ACCEPTED; do
@@ -302,8 +311,13 @@ for label in $ACCEPTED; do
     if [[ " $RECURSIVE " == *" $label "* ]]; then
         whitebox "$elf" backward && pass=$((pass + 1)) || fail_test "$label: no BACKWARD recursive call rel32 to a callee entry"
     fi
-    # (2) runtime QEMU
+    # (2) runtime QEMU-TCG
     qemu_run "$label" "$elf" "$v" && pass=$((pass + 1))
+    # (2b) KVM real-silicon leg on the SAME value witness (links 44..62 KVM-leg pattern): runs when /dev/kvm is
+    # present (kernel-verify REQUIRES it locally); skipped-with-note in CI (GitHub runners have no /dev/kvm).
+    if [[ "$run_kvm" -eq 1 ]]; then
+        qemu_run "${label}.kvm" "$elf" "$v" kvm && pass=$((pass + 1))
+    fi
     # runtime Bochs (subset)
     if [[ "$run_bochs" -eq 1 ]] && [[ " $BOCHS_PROBES " == *" $label "* ]]; then
         bochs_run "$label" "$elf" "$v" && pass=$((pass + 1))
@@ -346,5 +360,5 @@ if [[ "$run_bochs" -eq 0 ]] && have_qemu; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link62 sub-test(s) failed."; exit 1; fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link62 / taproot / 46th kernel-arc link: USER CALLS + RECURSION on the sovereign x86-64 freestanding target -- multi-function programs with forward+BACKWARD E8 rel32, the ouroboros 8-byte-slot pure-stack ABI, a relocated GUARD-PAGE stack (overflow faults, not corrupts); $pass checks: full-image golden hash + static + E8-only call whitelist + guard-PD white-box (exactly one non-present PDE at the guard index) + BACKWARD-call value-pin (recursion provenance) per accepted probe, a >=3-program distinctness panel (distinct recurrences -> distinct proof bytes), QEMU substrate (9 probes incl. param+local coexistence, mutual recursion, a FRAMEFUL main with calls, and the 14-param/15-slot boundary) + Bochs substrate ($BOCHS_PROBES), single-function byte-identity dispatch (full identity map, no guard), a 1,000,000-deep guard-fault runtime proof, and 8 rejects+twins (arity/call-main/>14-params/out-of-subset-callee); graded vs an independent hand-derived host golden on the dual-substrate oracle, no C)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link62 / taproot / 46th kernel-arc link: USER CALLS + RECURSION on the sovereign x86-64 freestanding target -- multi-function programs with forward+BACKWARD E8 rel32, the ouroboros 8-byte-slot pure-stack ABI, a relocated GUARD-PAGE stack (overflow faults, not corrupts); $pass checks: full-image golden hash + static + E8-only call whitelist + guard-PD white-box (exactly one non-present PDE at the guard index) + BACKWARD-call value-pin (recursion provenance) per accepted probe, a >=3-program distinctness panel (distinct recurrences -> distinct proof bytes), QEMU substrate (9 probes incl. param+local coexistence, mutual recursion, a FRAMEFUL main with calls, and the 14-param/15-slot boundary) + Bochs substrate ($BOCHS_PROBES) + KVM real-silicon leg on the accepted-probe value witness (when /dev/kvm present; links 44..62 KVM-leg pattern), single-function byte-identity dispatch (full identity map, no guard), a 1,000,000-deep guard-fault runtime proof, and 8 rejects+twins (arity/call-main/>14-params/out-of-subset-callee); graded vs an independent hand-derived host golden on the dual-substrate oracle, no C)"
 exit 0

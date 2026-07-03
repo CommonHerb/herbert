@@ -18,6 +18,16 @@
 #       returned ptr -> forces REAL backing of the multi-page pool);
 #   (4) FORGE legs for M-singlepage / M-nocrosspagecoalesce / no-free / static-arena (each DIVERGES: OOM where genuine
 #       returns a ptr); and (5) the grader (positional parse of the 0xE0 alloc trace + the 0xE1..0xE2 live readback).
+#
+# PROVENANCE NOTE (2026-07-03, residuals pass): `step0_growheap.py` -- referenced above and below as this
+# golden's mirror ("mirrors step0_growheap.py EXACTLY") -- was a /tmp-era STEP-0 spike (a throwaway
+# proof-of-capability for the cross-page-coalesce shape). It no longer exists anywhere in the repo, and was
+# already gone BEFORE the 2026-07-03 canon-cleanup (NOT one of that pass's 12 disclosed STEP-0 deletions).
+# Those mentions are HISTORICAL PROVENANCE of where this golden's first-fit/coalesce logic came from, NOT a
+# live dependency: this harness imports only `growheap_ref` (below), never step0_*. The committed golden
+# stands on the GATE's OWN proofs -- the byte-pin to `growheap_ref.build_elf(npages=2)`, `assert_growheap`,
+# the M-singlepage / M-nocrosspagecoalesce / no-free / static-arena forge divergences, and the tri-substrate
+# (QEMU-TCG + KVM real-silicon + Bochs) boot -- none of which reads the deleted spike.
 import os, sys, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import growheap_ref as G
