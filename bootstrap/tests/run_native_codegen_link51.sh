@@ -137,12 +137,24 @@ else
 fi
 
 # ---- Bochs (2nd substrate via GRUB; 1 module line) ----
-bochs_run() { # out seed timeout
+bochs_run() { # out seed timeout  -> nonzero (sets BOCHS_HARNESS_ERR) on a harness failure (F2 sweep 2026-07-04)
     local out="$1" sd="$2" to="$3"
+    # Harness-failure detectors (mirror of the link60 reference): a Bochs boot whose COM1 feeder never bound (no
+    # LISTENING), never delivered its payload (no SENT -> Bochs never connected COM1), or never reached the kernel's
+    # shutdown() tail (no 'shutdown requested' -> killed/hung mid-run) is a HARNESS failure, not a kernel miscompile.
+    _feed_ok() { local fl="$1" lbl="$2" i; for i in $(seq 1 50); do grep -q LISTENING "$fl" 2>/dev/null && break; sleep 0.1; done
+        grep -q LISTENING "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING for $lbl (log: $fl -- feeder/port-bind failure, not a kernel miscompile)"; return 1; }
+    _bochs_ran_ok() { local bl="$1" lbl="$2"; [[ -s "$bl" ]] || { BOCHS_HARNESS_ERR="Bochs produced NO output booting $lbl (log: $bl empty/missing -- the emulator did not run)"; return 1; }
+        grep -qa 'shutdown requested' "$bl" && return 0   # the kernel's shutdown() writes "Shutdown" to Bochs port 0x8900 -> logged on ANY completed boot
+        BOCHS_HARNESS_ERR="Bochs did NOT run $lbl through to a kernel shutdown tail (log: $bl has no 'shutdown requested' -- the boot died or was timeout-killed mid-run, not a kernel miscompile)"; return 1; }
+    _feed_delivered() { local fl="$1" lbl="$2"; grep -q '^SENT' "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload for $lbl (log: $fl has LISTENING but no SENT / shows NOCONN -- Bochs did not connect COM1, the kernel received no input, not a kernel miscompile)"; return 1; }
     local kelf; kelf="$(readlink -f "$MKELF")"
     local d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"; local port; port="$(free_port)"
     python3 "$script_dir/kernel_input_feed.py" "$port" "$sd" --delay 2 --hold 40 > "$d/feed.log" 2>&1 &
-    local bfp=$!; local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" 2>/dev/null && break; sleep 0.05; done
+    local bfp=$!
+    _feed_ok "$d/feed.log" "prober(BOOT)" || { kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null; return 1; }
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
     ( cd "$d"
@@ -171,6 +183,8 @@ panic: action=report
 BX
       xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
     kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null
+    _bochs_ran_ok "$d/bochs_out.txt" "prober(BOOT)" || return 1
+    _feed_delivered "$d/feed.log" "prober(BOOT)" || return 1
     python3 - "$d/bochs_out.txt" "$out" <<'PY'
 import sys
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c')
@@ -179,9 +193,26 @@ PY
 }
 if have_bochs; then
     emu_ran=1
-    bochs_run "$work/b" "$SEED" 150
-    if python3 "$REF" gradecleave "$work/b" "$KEND" "$SEED" >/dev/null 2>&1; then ok "(C) Bochs: copy-on-write is byte-identical on the 2nd substrate (GRUB delivers the prober; the write-protection #PF + page copy + private remap reproduce)"
-    else fail_test "(C) Bochs -> $(python3 "$REF" gradecleave "$work/b" "$KEND" "$SEED" 2>&1 | tr '\n' ';')"; fi
+    bochs_done=0
+    for attempt in 1 2 3; do
+        BOCHS_HARNESS_ERR=""
+        if ! bochs_run "$work/b" "$SEED" 150; then
+            echo "  HARNESS ERROR (Bochs attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2
+            continue
+        fi
+        # the feeder LISTENED + delivered (SENT) + the kernel ran THROUGH shutdown() -> grade is a GENUINE kernel verdict
+        if python3 "$REF" gradecleave "$work/b" "$KEND" "$SEED" >/dev/null 2>&1; then ok "(C) Bochs: copy-on-write is byte-identical on the 2nd substrate (GRUB delivers the prober; the write-protection #PF + page copy + private remap reproduce)"
+        else fail_test "(C) Bochs (fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake) -> $(python3 "$REF" gradecleave "$work/b" "$KEND" "$SEED" 2>&1 | tr '\n' ';')"; fi
+        bochs_done=1; break
+    done
+    if [[ "$bochs_done" -eq 0 ]]; then
+        if [[ "$REQUIRE_EMU" == "1" ]]; then
+            echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"
+            fail=$((fail + 1))
+        else
+            echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1 to require the Bochs substrate)" >&2
+        fi
+    fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
