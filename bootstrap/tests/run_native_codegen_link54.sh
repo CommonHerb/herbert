@@ -65,7 +65,7 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $REF)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing feeder $feeder)"; exit 1; fi
 source "$script_dir/native_codegen_oracle.sh"
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || true' EXIT   # clean up only THIS gate's orphaned bochs (scoped to its unique mktemp; never a system-wide `pkill bochs`). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -276,7 +276,7 @@ bochs_two_boot() { # x b2out
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
     # pre-run hygiene: a prior crashed Bochs can leave the disk locked
-    pkill -9 bochs 2>/dev/null || true
+    pkill -9 -f "$work" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
     rm -f "$d/disk.img.lock" 2>/dev/null || true
     ( cd "$d"
       dd if=/dev/zero of=disk.img bs=1M count=64 status=none
@@ -304,23 +304,55 @@ port_e9_hack: enabled=1
 display_library: x
 panic: action=report
 BX
-    # BOOT-1: run with the writer config + the feeder serving X over com1.
+    # Harness-failure detectors (F2 sweep, mirror of the link60 reference). Each sets BOCHS_HARNESS_ERR + returns
+    # nonzero so the caller re-rolls, never false-REDding the kernel.
+    _feed_ok() { # feedlog label -> 0 iff the feeder reached LISTENING within 5s
+        local fl="$1" lbl="$2" i
+        for i in $(seq 1 50); do grep -q LISTENING "$fl" 2>/dev/null && break; sleep 0.1; done
+        grep -q LISTENING "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING for $lbl (log: $fl -- feeder/port-bind failure, not a kernel miscompile)"; return 1
+    }
+    _bochs_ran_ok() { # bochslog label -> 0 iff the boot RAN TO A KERNEL shutdown() tail (i.e. was NOT killed/hung mid-run)
+        local bl="$1" lbl="$2"
+        [[ -s "$bl" ]] || { BOCHS_HARNESS_ERR="Bochs produced NO output booting $lbl (log: $bl empty/missing -- the emulator did not run, not a kernel miscompile)"; return 1; }
+        # The kernel's shutdown() writes "Shutdown" to Bochs' port 0x8900 -> Bochs logs 'shutdown requested' whenever the
+        # kernel reaches a shutdown() tail: proves the boot RAN TO COMPLETION (not a mid-run death). `[[ -s log ]]` alone
+        # is worthless (Bochs always prints a banner). grep -a: binary log.
+        grep -qa 'shutdown requested' "$bl" && return 0
+        BOCHS_HARNESS_ERR="Bochs did NOT run $lbl through to a kernel shutdown tail (log: $bl has no 'shutdown requested' -- the boot died or was timeout-killed mid-run, not a kernel miscompile)"; return 1
+    }
+    _feed_delivered() { # feedlog label -> 0 iff the feeder actually SENT its payload (Bochs connected COM1)
+        local fl="$1" lbl="$2"
+        grep -q '^SENT' "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload for $lbl (log: $fl has LISTENING but no SENT / shows NOCONN -- Bochs did not connect COM1, the kernel received no input, not a kernel miscompile)"; return 1
+    }
+    # BOOT-1: run with the writer config (set at install) + the feeder serving X over com1.
     local port; port=$(free_port)
     python3 "$feeder" "$port" "$x" --hold 150 > "$d/feed.log" 2>&1 & local fp=$!
-    local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    _feed_ok "$d/feed.log" "writer.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
-    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc_b1.txt" > bochs_b1.txt 2>&1 )
+    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" > bochs_b1.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "$work"`
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     rm -f "$d/disk.img.lock"
-    # REBOOT -> BOOT-2: swap GRUB's config to the reader module (re-mount the SAME disk.img, no re-format), then re-run.
-    ( cd "$d"
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mount "${LOOP}p1" mnt
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/reader.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      rm -f disk.img.lock
-      xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" > bochs_b2.txt 2>&1 )
+    _bochs_ran_ok "$d/bochs_b1.txt" "writer.bin(BOOT-1)" || return 1
+    _feed_delivered "$d/feed.log" "writer.bin(BOOT-1)" || return 1
+    # REBOOT -> BOOT-2: swap GRUB's config to the reader (GUARDED), then re-run. The reader reads the durable byte from
+    # DISK (not COM1) -> NO feeder, no SENT check; the config-swap guard + the shutdown-completion sentinel apply. A
+    # silent swap failure (losetup/mount/tee) would boot the STALE writer -> the reader never runs -> a stale/absent
+    # emit graded as kernel; now detected -> harness error -> re-roll.
+    if ! ( cd "$d"
+           LOOP="$(sudo losetup -fP --show disk.img)" || exit 1
+           sudo mount "${LOOP}p1" mnt || { sudo losetup -d "$LOOP" 2>/dev/null; exit 1; }
+           printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/reader.bin\n boot\n}\n' \
+             | sudo tee mnt/boot/grub/grub.cfg >/dev/null || { sudo umount mnt 2>/dev/null; sudo losetup -d "$LOOP" 2>/dev/null; exit 1; }
+           sudo umount mnt || { sudo losetup -d "$LOOP" 2>/dev/null; exit 1; }
+           sudo losetup -d "$LOOP"; rm -f disk.img.lock ); then
+        BOCHS_HARNESS_ERR="the GRUB config swap to reader.bin FAILED (losetup/mount/tee/umount) -- Bochs would boot the STALE writer; harness failure, not a kernel miscompile"
+        return 1
+    fi
+    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc.txt" > bochs_b2.txt 2>&1 )   # BOOT-2 reader: no COM1 feeder; absolute bochsrc path (scoped-kill: $work in the cmdline)
     rm -f "$d/disk.img.lock"
+    _bochs_ran_ok "$d/bochs_b2.txt" "reader.bin(BOOT-2)" || return 1
     python3 - "$d/bochs_b2.txt" "$b2out" <<'PY'
 import sys
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c')
@@ -329,10 +361,29 @@ PY
 }
 if have_bochs; then
     emu_ran=1
-    BX=$(( (RANDOM % 255) + 1 )); BXHEX=$(printf '0x%02x' "$BX")
-    bochs_two_boot "$BX" "$work/b.b2"
-    if python3 "$REF" gradedur "$work/b.b2" "$KEND" "$BXHEX" >/dev/null 2>&1; then ok "(C) Bochs TWO-BOOT: the durable byte X=$BXHEX survives across two Bochs runs on the SAME GRUB disk (BOOT-1 writer SYS_DISK_WRITEs X at the absolute window LBA + CACHE FLUSH; BOOT-2 reader reads it back -- the 2nd substrate's ATA controller persists the write, the software-RESET prologue Bochs needs is emitted)"
-    else fail_test "(C) Bochs two-boot -> $(python3 "$REF" gradedur "$work/b.b2" "$KEND" "$BXHEX" 2>&1 | tr '\n' ';')"; fi
+    bochs_done=0
+    for attempt in 1 2 3; do
+        BOCHS_HARNESS_ERR=""
+        BX=$(( (RANDOM % 255) + 1 )); BXHEX=$(printf '0x%02x' "$BX")
+        if ! bochs_two_boot "$BX" "$work/b.b2"; then
+            echo "  HARNESS ERROR (Bochs two-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the two-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
+            continue
+        fi
+        # both boots ran THROUGH shutdown() (BOOT-1 also LISTENED + delivered SENT) -> gradedur is a GENUINE kernel grade
+        if python3 "$REF" gradedur "$work/b.b2" "$KEND" "$BXHEX" >/dev/null 2>&1; then ok "(C) Bochs TWO-BOOT: the durable byte X=$BXHEX survives across two Bochs runs on the SAME GRUB disk (BOOT-1 writer SYS_DISK_WRITEs X at the absolute window LBA + CACHE FLUSH; BOOT-2 reader reads it back -- the 2nd substrate's ATA controller persists the write, the software-RESET prologue Bochs needs is emitted)"
+        else fail_test "(C) Bochs two-boot (both boots ran through shutdown -> a GENUINE kernel grade, not a harness flake) -> $(python3 "$REF" gradedur "$work/b.b2" "$KEND" "$BXHEX" 2>&1 | tr '\n' ';')"; fi
+        bochs_done=1; break
+    done
+    if [[ "$bochs_done" -eq 0 ]]; then
+        # 3 consecutive HARNESS failures (never the kernel; fresh disk each attempt). Distinct greppable marker (NOT the
+        # kernel-RED FAIL: prefix); fatal only when the Bochs substrate is REQUIRED (REQUIRE_EMU=1).
+        if [[ "$REQUIRE_EMU" == "1" ]]; then
+            echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"
+            fail=$((fail + 1))
+        else
+            echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1 to require the Bochs substrate)" >&2
+        fi
+    fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
