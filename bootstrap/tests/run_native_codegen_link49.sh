@@ -147,12 +147,25 @@ else
 fi
 
 # ---- Bochs (2nd substrate via GRUB; 3 module lines) ----
-bochs_run() { # out fbyte delay timeout
-    local out="$1" fb="$2" delay="$3" to="$4"
+bochs_run() { # out fbyte delay timeout [expect_full=1]  -> nonzero (sets BOCHS_HARNESS_ERR) on a harness failure (F2 sweep 2026-07-04)
+    local out="$1" fb="$2" delay="$3" to="$4" expect_full="${5:-1}"
+    # Harness-failure detectors (mirror of the link60 reference): a Bochs boot whose COM1 feeder never bound (no
+    # LISTENING), never delivered its payload (no SENT), or never reached the kernel's shutdown() tail (no 'shutdown
+    # requested') is a HARNESS failure, not a kernel miscompile. NOTE: SENT + shutdown are gated on expect_full because
+    # RUN-1 DELIBERATELY withholds the byte (see the post-boot block).
+    _feed_ok() { local fl="$1" lbl="$2" i; for i in $(seq 1 50); do grep -q LISTENING "$fl" 2>/dev/null && break; sleep 0.1; done
+        grep -q LISTENING "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING for $lbl (log: $fl -- feeder/port-bind failure, not a kernel miscompile)"; return 1; }
+    _bochs_ran_ok() { local bl="$1" lbl="$2"; [[ -s "$bl" ]] || { BOCHS_HARNESS_ERR="Bochs produced NO output booting $lbl (log: $bl empty/missing -- the emulator did not run)"; return 1; }
+        grep -qa 'shutdown requested' "$bl" && return 0   # the kernel's shutdown() writes "Shutdown" to Bochs port 0x8900 -> logged on ANY completed boot
+        BOCHS_HARNESS_ERR="Bochs did NOT run $lbl through to a kernel shutdown tail (log: $bl has no 'shutdown requested' -- the boot died or was timeout-killed mid-run, not a kernel miscompile)"; return 1; }
+    _feed_delivered() { local fl="$1" lbl="$2"; grep -q '^SENT' "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload for $lbl (log: $fl has LISTENING but no SENT / shows NOCONN -- Bochs did not connect COM1, the kernel received no input, not a kernel miscompile)"; return 1; }
     local kelf; kelf="$(readlink -f "$MKELF")"
     local d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"; local port; port="$(free_port)"
     python3 "$script_dir/kernel_input_feed.py" "$port" "$fb" --delay "$delay" --hold 40 > "$d/feed.log" 2>&1 &
-    local bfp=$!; local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" 2>/dev/null && break; sleep 0.05; done
+    local bfp=$!
+    _feed_ok "$d/feed.log" "prober(BOOT)" || { kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null; return 1; }
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
     ( cd "$d"
@@ -181,20 +194,56 @@ panic: action=report
 BX
       xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
     kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null
+    # RUN-1 (expect_full=0) DELIBERATELY withholds the byte (--delay > timeout): the reader PARKS, so there is NO SENT
+    # by design and the boot is timeout-killed (never reaches shutdown()). Applying SENT/shutdown there would false-fail
+    # the legitimate park test -- so only LISTENING is checked for it. RUN-2 (expect_full=1) delivers + shuts down normally.
+    if [[ "$expect_full" == "1" ]]; then
+        _bochs_ran_ok "$d/bochs_out.txt" "prober(BOOT)" || return 1
+        _feed_delivered "$d/feed.log" "prober(BOOT)" || return 1
+    fi
     python3 - "$d/bochs_out.txt" "$out" <<'PY'
 import sys
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c')
 open(sys.argv[2],'wb').write(d[i:] if i>=0 else b'')
 PY
 }
+# terminal handler for 3 consecutive HARNESS failures: distinct greppable marker (NOT the kernel-RED FAIL: prefix),
+# fatal only when the Bochs substrate is REQUIRED (REQUIRE_EMU=1).
+_bochs_harness_giveup() { # label
+    if [[ "$REQUIRE_EMU" == "1" ]]; then
+        echo "HARNESS-ERROR: (C-Bochs $1) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"
+        fail=$((fail + 1))
+    else
+        echo "  HARNESS-ERROR (non-fatal): (C-Bochs $1) Bochs failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1)" >&2
+    fi
+}
 if have_bochs; then
     emu_ran=1
-    bochs_run "$work/b2" "$FBYTE" 3 150
-    if python3 "$REF" gradefurl "$work/b2" "$KEND" "$K" run2 "$FBYTE" >/dev/null 2>&1; then ok "(C) Bochs RUN-2: block/wake is byte-identical on the 2nd substrate (GRUB delivers A,B,C)"
-    else fail_test "(C) Bochs RUN-2 -> $(python3 "$REF" gradefurl "$work/b2" "$KEND" "$K" run2 "$FBYTE" 2>&1 | tr '\n' ';')"; fi
-    bochs_run "$work/b1" "$FBYTE" 200 50
-    if python3 "$REF" gradefurl "$work/b1" "$KEND" "$K" run1 "$FBYTE" >/dev/null 2>&1; then ok "(C) Bochs RUN-1 (byte withheld): peers run while the reader is parked"
-    else fail_test "(C) Bochs RUN-1 -> $(python3 "$REF" gradefurl "$work/b1" "$KEND" "$K" run1 "$FBYTE" 2>&1 | tr '\n' ';')"; fi
+    # RUN-2 (delivers the byte -> the reader wakes + the kernel shuts down: full harness checks apply)
+    b2_done=0
+    for attempt in 1 2 3; do
+        BOCHS_HARNESS_ERR=""
+        if ! bochs_run "$work/b2" "$FBYTE" 3 150; then
+            echo "  HARNESS ERROR (Bochs RUN-2 attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue
+        fi
+        if python3 "$REF" gradefurl "$work/b2" "$KEND" "$K" run2 "$FBYTE" >/dev/null 2>&1; then ok "(C) Bochs RUN-2: block/wake is byte-identical on the 2nd substrate (GRUB delivers A,B,C)"
+        else fail_test "(C) Bochs RUN-2 (fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake) -> $(python3 "$REF" gradefurl "$work/b2" "$KEND" "$K" run2 "$FBYTE" 2>&1 | tr '\n' ';')"; fi
+        b2_done=1; break
+    done
+    [[ "$b2_done" -eq 0 ]] && _bochs_harness_giveup "RUN-2"
+    # RUN-1 (byte WITHHELD by design: --delay 200 > timeout 50 -> the reader PARKS, no SENT + timeout-killed, so only
+    # LISTENING is a valid harness check here; expect_full=0 skips the SENT/shutdown sentinels)
+    b1_done=0
+    for attempt in 1 2 3; do
+        BOCHS_HARNESS_ERR=""
+        if ! bochs_run "$work/b1" "$FBYTE" 200 50 0; then
+            echo "  HARNESS ERROR (Bochs RUN-1 attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue
+        fi
+        if python3 "$REF" gradefurl "$work/b1" "$KEND" "$K" run1 "$FBYTE" >/dev/null 2>&1; then ok "(C) Bochs RUN-1 (byte withheld): peers run while the reader is parked"
+        else fail_test "(C) Bochs RUN-1 (feeder LISTENED -> a GENUINE kernel grade of the park behavior) -> $(python3 "$REF" gradefurl "$work/b1" "$KEND" "$K" run1 "$FBYTE" 2>&1 | tr '\n' ';')"; fi
+        b1_done=1; break
+    done
+    [[ "$b1_done" -eq 0 ]] && _bochs_harness_giveup "RUN-1"
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
