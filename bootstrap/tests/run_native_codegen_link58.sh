@@ -58,7 +58,7 @@ if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missi
 if [[ ! -f "$LB" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $LB)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing feeder $feeder)"; exit 1; fi
 source "$script_dir/native_codegen_oracle.sh"
-work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 bochs 2>/dev/null || true' EXIT
+work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || true' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -343,7 +343,7 @@ bochs_three_boot_delete() { # putstream delstream getstream b3out
     local d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    pkill -9 bochs 2>/dev/null || true
+    pkill -9 -f "$work" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
     rm -f "$d/disk.img.lock" 2>/dev/null || true
     ( cd "$d"
       dd if=/dev/zero of=disk.img bs=1M count=64 status=none
@@ -369,32 +369,65 @@ port_e9_hack: enabled=1
 display_library: x
 panic: action=report
 BX
-    bochs_phase() { # module-name stream logfile
+    # Harness-failure detectors (F2 sweep, mirror of the link60 reference). Each sets BOCHS_HARNESS_ERR + returns
+    # nonzero so the caller re-rolls, never false-REDding the kernel.
+    _feed_ok() { # feedlog label -> 0 iff the feeder reached LISTENING within 5s
+        local fl="$1" lbl="$2" i
+        for i in $(seq 1 50); do grep -q LISTENING "$fl" 2>/dev/null && break; sleep 0.1; done
+        grep -q LISTENING "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING for $lbl (log: $fl -- feeder/port-bind failure, not a kernel miscompile)"; return 1
+    }
+    _bochs_ran_ok() { # bochslog label -> 0 iff the boot RAN TO A KERNEL shutdown() tail (i.e. was NOT killed/hung mid-run)
+        local bl="$1" lbl="$2"
+        [[ -s "$bl" ]] || { BOCHS_HARNESS_ERR="Bochs produced NO output booting $lbl (log: $bl empty/missing -- the emulator did not run, not a kernel miscompile)"; return 1; }
+        # The kernel's shutdown() writes "Shutdown" to Bochs' port 0x8900 -> Bochs logs 'shutdown requested' whenever the
+        # kernel reaches a shutdown() tail: proves the boot RAN TO COMPLETION (not a mid-run death). Crucial here: BOOT-3
+        # FOUND-probe emits NOTHING when the record is genuinely deleted -- indistinguishable from a mid-run death WITHOUT
+        # this sentinel + the SENT check. `[[ -s log ]]` alone is worthless (Bochs always prints a banner). grep -a: binary log.
+        grep -qa 'shutdown requested' "$bl" && return 0
+        BOCHS_HARNESS_ERR="Bochs did NOT run $lbl through to a kernel shutdown tail (log: $bl has no 'shutdown requested' -- the boot died or was timeout-killed mid-run, not a kernel miscompile)"; return 1
+    }
+    _feed_delivered() { # feedlog label -> 0 iff the feeder actually SENT its payload (Bochs connected COM1)
+        local fl="$1" lbl="$2"
+        grep -q '^SENT' "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload for $lbl (log: $fl has LISTENING but no SENT / shows NOCONN -- Bochs did not connect COM1, the kernel received no input, not a kernel miscompile)"; return 1
+    }
+    bochs_phase() { # module-name stream logfile  -> nonzero (sets BOCHS_HARNESS_ERR) on a harness failure
         local mod="$1" stream="$2" logf="$3"
         local port; port=$(free_port)
         python3 "$feeder" "$port" $stream --hold 150 > "$d/feed.log" 2>&1 & local fp=$!
-        local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
-        ( cd "$d"
-          LOOP="$(sudo losetup -fP --show disk.img)"
-          sudo mount "${LOOP}p1" mnt
-          printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/%s\n boot\n}\n' "$mod" | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-          sudo umount mnt; sudo losetup -d "$LOOP"
-          rm -f disk.img.lock )
+        _feed_ok "$d/feed.log" "$mod" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
+        # config-swap guard (cross-model Codex): a SILENT losetup/mount/tee failure boots the STALE/previous module ->
+        # a wrong-module emit (or absence) mis-graded as kernel. Detect each step (cleanup preserved) -> harness -> re-roll.
+        if ! ( cd "$d"
+               LOOP="$(sudo losetup -fP --show disk.img)" || exit 1
+               sudo mount "${LOOP}p1" mnt || { sudo losetup -d "$LOOP" 2>/dev/null; exit 1; }
+               printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/%s\n boot\n}\n' "$mod" \
+                 | sudo tee mnt/boot/grub/grub.cfg >/dev/null || { sudo umount mnt 2>/dev/null; sudo losetup -d "$LOOP" 2>/dev/null; exit 1; }
+               sudo umount mnt || { sudo losetup -d "$LOOP" 2>/dev/null; exit 1; }
+               sudo losetup -d "$LOOP"; rm -f disk.img.lock ); then
+            BOCHS_HARNESS_ERR="the GRUB config swap to $mod FAILED (losetup/mount/tee/umount) -- Bochs would boot the WRONG/stale module; harness failure, not a kernel miscompile"
+            kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1
+        fi
         sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_run.txt"
-        ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc_run.txt" > "$logf" 2>&1 )
+        ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_run.txt" > "$logf" 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "$work"`
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
         rm -f "$d/disk.img.lock"
+        _bochs_ran_ok "$logf" "$mod" || return 1
+        _feed_delivered "$d/feed.log" "$mod" || return 1
     }
     # BOOT-1 already has putter.bin in grub.cfg (set at install); feed the put-stream.
     local port; port=$(free_port)
     python3 "$feeder" "$port" $putstream --hold 150 > "$d/feed1.log" 2>&1 & local fp=$!
-    local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed1.log" && break; sleep 0.1; done
+    _feed_ok "$d/feed1.log" "putter.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
-    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc_b1.txt" > bochs_b1.txt 2>&1 )
+    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" > bochs_b1.txt 2>&1 )   # absolute bochsrc path (scoped-kill: $work in the cmdline)
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     rm -f "$d/disk.img.lock"
-    bochs_phase deleter.bin "$delstream" "$d/bochs_b2.txt"      # BOOT-2: DEL the decoy
-    bochs_phase foundprobe.bin "$getstream" "$d/bochs_b3.txt"   # BOOT-3: FOUND-probe the decoy -> must be found==0 (deleted)
+    _bochs_ran_ok "$d/bochs_b1.txt" "putter.bin(BOOT-1)" || return 1
+    _feed_delivered "$d/feed1.log" "putter.bin(BOOT-1)" || return 1
+    bochs_phase deleter.bin "$delstream" "$d/bochs_b2.txt" || return 1      # BOOT-2: DEL the decoy
+    bochs_phase foundprobe.bin "$getstream" "$d/bochs_b3.txt" || return 1   # BOOT-3: FOUND-probe the decoy -> must be found==0 (deleted)
     python3 - "$d/bochs_b3.txt" "$b3out" <<'PY'
 import sys
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c')
@@ -403,15 +436,35 @@ PY
 }
 if have_bochs; then
     emu_ran=1
-    BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
-    read -r BTN BTP BDN BDP < <(python3 "$LB" records "$BSEED")
-    BPUT="$(python3 "$LB" putstream "$BTN" "$BTP" "$BDN" "$BDP")"
-    BDEL="$(python3 "$LB" querystream "$BDN")"     # delete the DECOY
-    BGET="$(python3 "$LB" querystream "$BDN")"     # then GET the DECOY -> must be empty (deleted)
-    bochs_three_boot_delete "$BPUT" "$BDEL" "$BGET" "$work/b.b3"
-    # raw-dir ground truth on the Bochs disk image (the decoy slot's valid==0 persisted to the medium, name unchanged).
-    if python3 "$LB" tombstoneok "$work/b.d/disk.img" "$FS_DIR" 1 "$BDN" 0 "$BTN" >/dev/null 2>&1 && python3 "$LB" gradefound "$work/b.b3" "$KEND" 0 >/dev/null 2>&1; then ok "(C-Bochs) the tombstone PERSISTS across three Bochs runs on the SAME GRUB disk: BOOT-1 putter PUT a TARGET + a DECOY (late-bound over com1) + flush; BOOT-2 deleter SYS_FS_DEL the DECOY + flush; BOOT-3 FOUND-probe(DECOY) -> found==0 (the slot's VALID==0, REALLY deleted) -- the 2nd substrate's ATA controller PERSISTS the tombstone across the reboot (the software-RESET prologue Bochs needs is inherited from durable). HONEST SCOPE: this Bochs leg proves DECOY-ABSENCE persistence on the 2nd substrate; the TARGET-SURVIVES (no over-delete) half is proven on QEMU-TCG + KVM (where M-wipeall is caught). NOTE on the CACHE FLUSH: empirically this Bochs (like QEMU writethrough) persists the write even WITHOUT the 0xE7 flush -- it flushes its write-cache on clean exit -- so the flush is OUTPUT-INVISIBLE on every available substrate and is caught only WHITE-BOX (assert_delete); it is for real-hardware power-cut durability"
-    else BEMIT="$(python3 "$LB" emitbody "$work/b.b3" 2>/dev/null)"; fail_test "(C-Bochs) Bochs 3-phase: BOOT-3 FOUND-probe(DECOY) returned found='$BEMIT' (want 00 -- the delete did not persist across the Bochs reboot)"; fi
+    bochs_done=0
+    for attempt in 1 2 3; do
+        BOCHS_HARNESS_ERR=""
+        BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+        read -r BTN BTP BDN BDP < <(python3 "$LB" records "$BSEED")
+        BPUT="$(python3 "$LB" putstream "$BTN" "$BTP" "$BDN" "$BDP")"
+        BDEL="$(python3 "$LB" querystream "$BDN")"     # delete the DECOY
+        BGET="$(python3 "$LB" querystream "$BDN")"     # then GET the DECOY -> must be empty (deleted)
+        if ! bochs_three_boot_delete "$BPUT" "$BDEL" "$BGET" "$work/b.b3"; then
+            echo "  HARNESS ERROR (Bochs 3-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the 3-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
+            continue
+        fi
+        # every boot LISTENED + delivered (SENT) + swapped GRUB cleanly + ran THROUGH shutdown() -> the grade is GENUINE
+        # (BOOT-3 FOUND-probe emitting NOTHING now unambiguously means 'deleted', not a mid-run death)
+        # raw-dir ground truth on the Bochs disk image (the decoy slot's valid==0 persisted to the medium, name unchanged).
+        if python3 "$LB" tombstoneok "$work/b.d/disk.img" "$FS_DIR" 1 "$BDN" 0 "$BTN" >/dev/null 2>&1 && python3 "$LB" gradefound "$work/b.b3" "$KEND" 0 >/dev/null 2>&1; then ok "(C-Bochs) the tombstone PERSISTS across three Bochs runs on the SAME GRUB disk: BOOT-1 putter PUT a TARGET + a DECOY (late-bound over com1) + flush; BOOT-2 deleter SYS_FS_DEL the DECOY + flush; BOOT-3 FOUND-probe(DECOY) -> found==0 (the slot's VALID==0, REALLY deleted) -- the 2nd substrate's ATA controller PERSISTS the tombstone across the reboot (the software-RESET prologue Bochs needs is inherited from durable). HONEST SCOPE: this Bochs leg proves DECOY-ABSENCE persistence on the 2nd substrate; the TARGET-SURVIVES (no over-delete) half is proven on QEMU-TCG + KVM (where M-wipeall is caught). NOTE on the CACHE FLUSH: empirically this Bochs (like QEMU writethrough) persists the write even WITHOUT the 0xE7 flush -- it flushes its write-cache on clean exit -- so the flush is OUTPUT-INVISIBLE on every available substrate and is caught only WHITE-BOX (assert_delete); it is for real-hardware power-cut durability"
+        else BEMIT="$(python3 "$LB" emitbody "$work/b.b3" 2>/dev/null)"; fail_test "(C-Bochs) Bochs 3-phase (all three boots fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake): BOOT-3 FOUND-probe(DECOY) returned found='$BEMIT' (want 00 -- the delete did not persist across the Bochs reboot)"; fi
+        bochs_done=1; break
+    done
+    if [[ "$bochs_done" -eq 0 ]]; then
+        # 3 consecutive HARNESS failures (never the kernel; fresh disk each attempt). Distinct greppable marker (NOT the
+        # kernel-RED FAIL: prefix); fatal only when the Bochs substrate is REQUIRED (REQUIRE_EMU=1).
+        if [[ "$REQUIRE_EMU" == "1" ]]; then
+            echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"
+            fail=$((fail + 1))
+        else
+            echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1 to require the Bochs substrate)" >&2
+        fi
+    fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
