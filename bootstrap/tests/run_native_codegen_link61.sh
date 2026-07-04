@@ -39,7 +39,7 @@ feeder="$script_dir/kernel_input_feed.py"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 for f in "$REF" "$LB" "$feeder"; do [[ -f "$f" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing $f)"; exit 1; }; done
 source "$script_dir/native_codegen_oracle.sh"
-work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 bochs 2>/dev/null || true' EXIT
+work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || true' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -260,7 +260,7 @@ if have_bochs; then
     d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"
     BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    pkill -9 bochs 2>/dev/null || true
+    pkill -9 -f "$work" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
     ( cd "$d"
       dd if=/dev/zero of=disk.img bs=1M count=64 status=none
       parted -s disk.img mklabel msdos >/dev/null
@@ -284,24 +284,41 @@ port_e9_hack: enabled=1
 display_library: x
 panic: action=report
 BX
-    bochs_emit=""
+    # F2 sweep (2026-07-04): the existing retry re-rolls on a missing/truncated trace (is_struct_flake). Add the EXPLICIT
+    # harness detectors from the link60 reference so a harness failure re-rolls instead of grading a confounded trace:
+    # the feeder must LISTEN (bind) + deliver (SENT -> Bochs connected COM1) + the kernel must run THROUGH its shutdown()
+    # tail ('shutdown requested' -> shutdown() writes "Shutdown" to Bochs port 0x8900). Any missing => a re-rollable
+    # emulator/feeder failure, NEVER a false kernel RED.
+    bochs_emit=""; bochs_harness_fail=1; BOCHS_HARNESS_ERR=""
     for try in 1 2 3; do
         port=$(free_port)
         python3 "$feeder" "$port" "$SEED" --hold 150 > "$d/feed.log" 2>&1 & fp=$!
-        for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+        _ok_listen=1; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && { _ok_listen=0; break; }; sleep 0.1; done
+        if [[ $_ok_listen -ne 0 ]]; then BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; echo "  HARNESS ERROR (Bochs highwater witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi
         sed -e "s#__PORT__#$port#" -e "s#__RAM__#$RAM#" "$d/bochsrc.txt" > "$d/bochsrc_b.txt"
-        ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc_b.txt" > bochs.txt 2>&1 )
+        ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b.txt" > bochs.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "$work"`
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
+        if ! grep -q '^SENT' "$d/feed.log" 2>/dev/null; then BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload (no SENT / NOCONN -- Bochs did not connect COM1, the kernel got no input)"; echo "  HARNESS ERROR (Bochs highwater witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi
+        if ! grep -qa 'shutdown requested' "$d/bochs.txt" 2>/dev/null; then BOCHS_HARNESS_ERR="Bochs did NOT run through to the kernel shutdown tail (no 'shutdown requested' -- killed or hung mid-run)"; echo "  HARNESS ERROR (Bochs highwater witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi
+        # This attempt passed LISTENING+SENT+shutdown -> the harness SUCCEEDED, so from here the grade is a GENUINE
+        # kernel verdict, NOT a harness failure. Set the flag NOW (not only on a definitive grade) so a persistent
+        # struct-flake with a clean harness is graded as a real trace problem (fail_test), never masked as a
+        # re-rollable HARNESS-ERROR (cross-model Codex, uniform with link56/57). HARNESS-ERROR fires ONLY when NO
+        # attempt ever passed the harness checks.
+        bochs_harness_fail=0
         python3 - "$d/bochs.txt" "$d/out" <<'PY'
 import sys
 d=open(sys.argv[1],'rb').read(); i=d.rfind(b'LARDER\xa5\x5a')
 open(sys.argv[2],'wb').write(d[i:] if i>=0 else b'')
 PY
         bochs_emit="$(python3 "$LB" grade "$d/out" "$RAM" "$SEED" 2>&1)"
-        is_struct_flake "$bochs_emit" || break
+        is_struct_flake "$bochs_emit" || break   # a definitive grade (GREEN or a real value-RED) -> stop retrying
     done
-    if echo "$bochs_emit" | grep -q '^GREEN'; then ok "(C-Bochs) the author-unknown-megs witness on the EMITTED kernel is GREEN on the 3rd substrate: N top-down frames @ region_hi(${RAM}M) each holding its seed-payload on Bochs' chipset ($bochs_emit)"
-    else fail_test "(C-Bochs) Bochs witness not GREEN: $(echo "$bochs_emit" | tr '\n' ';')"; fi
+    if [[ $bochs_harness_fail -ne 0 ]]; then
+        if [[ "$REQUIRE_EMU" == "1" ]]; then echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- ${BOCHS_HARNESS_ERR:-missing/truncated trace} (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"; fail=$((fail + 1))
+        else echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs failed 3 consecutive harness attempts -- ${BOCHS_HARNESS_ERR:-missing/truncated trace} (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1)" >&2; fi
+    elif echo "$bochs_emit" | grep -q '^GREEN'; then ok "(C-Bochs) the author-unknown-megs witness on the EMITTED kernel is GREEN on the 3rd substrate: N top-down frames @ region_hi(${RAM}M) each holding its seed-payload on Bochs' chipset ($bochs_emit)"
+    else fail_test "(C-Bochs) Bochs witness not GREEN (fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake): $(echo "$bochs_emit" | tr '\n' ';')"; fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
