@@ -83,12 +83,27 @@ if (( (DISK_W & DISK_MASK) != 0 )); then echo "FAIL: stack/native_compile_fragme
 # absolute LBA offsets via dd. The kernel/prober are frozen BEFORE this runs -- the bytes are genuinely late-bound.
 make_chasemap() { # diskimg seedhint  -> echoes the chasemap arg
     local img="$1" hint="$2"
-    python3 - "$img" "$DISK_LO" "$DISK_W" "$hint" <<'PY'
+    python3 - "$img" "$DISK_LO" "$DISK_W" "$hint" "$DISK_START" "$DISK_KHOPS" <<'PY'
 import sys, os, random
 img, lo, w, hint = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+start_idx, khops, mask = int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[3]) - 1
 # author-unknown: seed from os.urandom XOR the per-call hint so two calls in one run differ (the MAPDIFF leg).
 rng = random.Random(int.from_bytes(os.urandom(8), 'little') ^ (hash(hint) & 0xFFFFFFFF))
-cm = {i: rng.randrange(0, 256) for i in range(w)}
+# Reject-and-regenerate DEGENERATE maps (still author-unknown -- only the disk BYTES are conditioned; the
+# frozen kernel/prober are unchanged). The M-fixedlba mutation pins EVERY hop to the start sector, so its
+# output is [cm[start]]*khops. If the honest chase (idx=start; idx=cm[idx]&mask each hop -- mirrors
+# platter_ref.disk_chase_expect + the prober's `and ebx,MASK`) self-loops within the hop count (visits
+# < khops DISTINCT sectors) or collapses to that same [cm[start]]*khops output, M-fixedlba becomes
+# output-INVISIBLE and its bite-proof false-REDs (~1/64: cm[start]&mask == start). Condition it out.
+for _attempt in range(100000):
+    cm = {i: rng.randrange(0, 256) for i in range(w)}
+    idx = start_idx; seen = set(); honest = []
+    for _ in range(khops):
+        seen.add(idx); honest.append(cm[idx] & 0xFF); idx = cm[idx] & mask
+    if len(seen) == khops and honest != [cm[start_idx] & 0xFF] * khops:
+        break
+else:
+    sys.exit('FATAL: no non-degenerate chasemap in 100000 tries (window=%d khops=%d)' % (w, khops))
 with open(img, 'r+b') as f:
     for i in range(w):
         f.seek((lo + i) * 512)
@@ -151,7 +166,7 @@ qemu_run() { # kernel-elf diskimg out timeout [kvm]
 }
 
 QIMG="$work/disk.img"; build_raw_disk "$QIMG"
-CHASEMAP="$(make_chasemap "$QIMG" map-a 2>/dev/null)"
+CHASEMAP="$(make_chasemap "$QIMG" map-a 2>/dev/null)" || { echo "FAIL: stack/native_compile_fragment.herb (chasemap generation FATAL -- the degenerate-map guard could not converge; refusing to continue with a degenerate/empty chasemap)"; exit 1; }
 EXPECT="$(python3 "$REF" diskexpect "$CHASEMAP")"
 
 if have_qemu; then
@@ -162,7 +177,7 @@ if have_qemu; then
 
     # (C-MAPDIFF) THE CHASEMAP DIFFERENTIAL: re-dd a DIFFERENT author-unknown chasemap into the SAME disk, re-run, and
     # check (a) grading the NEW run with the OLD map is RED, (b) grading the new run with the NEW map is GREEN.
-    CHASEMAP2="$(make_chasemap "$QIMG" map-b 2>/dev/null)"
+    CHASEMAP2="$(make_chasemap "$QIMG" map-b 2>/dev/null)" || { echo "FAIL: stack/native_compile_fragment.herb (MAPDIFF chasemap generation FATAL -- the degenerate-map guard could not converge)"; exit 1; }
     EXPECT2="$(python3 "$REF" diskexpect "$CHASEMAP2")"
     qemu_run "$MKELF" "$QIMG" "$work/q2" 40
     if python3 "$REF" gradedisk "$work/q2" "$KEND" "$CHASEMAP2" >/dev/null 2>&1; then ok "(C-MAPDIFF) QEMU new-map run grades GREEN against the NEW chasemap [$EXPECT2] (the chase follows the late-bound disk bytes)"

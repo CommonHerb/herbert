@@ -66,12 +66,25 @@ if (( (DISK_W & DISK_MASK) != 0 )); then echo "FAIL: stack/native_compile_fragme
 make_disk() { # diskimg seedhint  -> echoes the chasemap arg
     local img="$1" hint="$2"
     dd if=/dev/zero of="$img" bs=1M count=64 status=none
-    HOSTILE_LBAS="$(python3 "$REF" hostilelbas)" python3 - "$img" "$DISK_LO" "$DISK_W" "$hint" <<'PY'
+    HOSTILE_LBAS="$(python3 "$REF" hostilelbas)" python3 - "$img" "$DISK_LO" "$DISK_W" "$hint" "$DISK_START" "$DISK_KHOPS" <<'PY'
 import sys, os, random
 img, lo, w, hint = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+start_idx, khops, mask = int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[3]) - 1
 # author-unknown: seed from os.urandom XOR the per-call hint so two calls in one run differ.
 rng = random.Random(int.from_bytes(os.urandom(8), 'little') ^ (hash(hint) & 0xFFFFFFFF))
-cm = {i: rng.randrange(0, 256) for i in range(w)}
+# Reject-and-regenerate DEGENERATE maps (still author-unknown): M-fixedlba pins every hop to the start
+# sector -> output [cm[start]]*khops. If the honest chase (idx=start; idx=cm[idx]&mask each hop -- mirrors
+# platter_ref.disk_chase_expect) self-loops within the hop count (< khops distinct sectors) or collapses to
+# that value, M-fixedlba is output-INVISIBLE and this bite-proof false-REDs (~1/64: cm[start]&mask==start).
+for _attempt in range(100000):
+    cm = {i: rng.randrange(0, 256) for i in range(w)}
+    idx = start_idx; seen = set(); honest = []
+    for _ in range(khops):
+        seen.add(idx); honest.append(cm[idx] & 0xFF); idx = cm[idx] & mask
+    if len(seen) == khops and honest != [cm[start_idx] & 0xFF] * khops:
+        break
+else:
+    sys.exit('FATAL: no non-degenerate chasemap in 100000 tries (window=%d khops=%d)' % (w, khops))
 hostile = [int(x) for x in os.environ['HOSTILE_LBAS'].split()]
 with open(img, 'r+b') as f:
     for i in range(w):
@@ -89,7 +102,7 @@ PY
 }
 
 QIMG="$work/disk.img"
-CHASEMAP="$(make_disk "$QIMG" map-a 2>/dev/null)"
+CHASEMAP="$(make_disk "$QIMG" map-a 2>/dev/null)" || { echo "FAIL: stack/native_compile_fragment.herb (chasemap generation FATAL -- the degenerate-map guard could not converge; refusing to continue with a degenerate/empty chasemap)"; exit 1; }
 # seed the hostile-DF sentinel at (start sector, DF_PROBE_OFF) so the genuine FORWARD read is well-defined and the M-nocld
 # BACKWARD read (which leaves diskbuf[offset>=2] zero) is observably wrong. offset 0 stays the chase byte (untouched).
 read -r DF_LBA DF_OFF DF_BYTE < <(python3 "$REF" hostiledfprobe)
