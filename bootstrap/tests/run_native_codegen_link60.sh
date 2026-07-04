@@ -238,11 +238,39 @@ port_e9_hack: enabled=1
 display_library: x
 panic: action=report
 BX
-    bochs_phase() { # module-name stream...
+    # HARNESS-vs-KERNEL distinction (parent 2026-07-04): a Bochs boot whose COM1 feeder never bound its
+    # socket (feed*.log never reaches LISTENING) or whose Bochs run produced no output at all is an
+    # EMULATOR/HARNESS failure -- the kernel never received its late-bound input -- NOT a kernel miscompile.
+    # These helpers detect it and set the GLOBAL BOCHS_HARNESS_ERR (naming the offending file); bochs_four_boot
+    # then returns nonzero so the caller re-rolls (or reports a loud HARNESS error), never false-REDding the
+    # kernel from a downstream "record not found" that a missing boot caused.
+    _feed_ok() { # feedlog label -> 0 iff the feeder reached LISTENING within 5s
+        local fl="$1" lbl="$2" i
+        for i in $(seq 1 50); do grep -q LISTENING "$fl" 2>/dev/null && break; sleep 0.1; done
+        grep -q LISTENING "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING for $lbl (log: $fl -- feeder/port-bind failure, not a kernel miscompile)"
+        return 1
+    }
+    _bochs_ran_ok() { # bochslog label -> 0 iff Bochs produced boot output (a non-empty log)
+        local bl="$1" lbl="$2"
+        [[ -s "$bl" ]] && return 0
+        BOCHS_HARNESS_ERR="Bochs produced NO output booting $lbl (log: $bl empty/missing -- the emulator did not run, not a kernel miscompile)"
+        return 1
+    }
+    _feed_delivered() { # feedlog label -> 0 iff the feeder actually SENT its payload (Bochs connected COM1)
+        # LISTENING (before boot) only proves the feeder was READY; the feeder logs "SENT ..." after accept().
+        # If Bochs booted but never connected COM1 (feed log stuck at LISTENING, or "NOCONN"), the kernel got
+        # NO input -> a downstream "record not found" is a HARNESS failure, not a miscompile (cross-model Codex).
+        local fl="$1" lbl="$2"
+        grep -q '^SENT' "$fl" 2>/dev/null && return 0
+        BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload for $lbl (log: $fl has LISTENING but no SENT / shows NOCONN -- Bochs did not connect COM1, the kernel received no input, not a kernel miscompile)"
+        return 1
+    }
+    bochs_phase() { # module-name stream...  -> nonzero (sets BOCHS_HARNESS_ERR) on a harness failure
         local mod="$1"; shift
         local port; port=$(free_port)
         python3 "$feeder" "$port" "$@" --hold 150 > "$d/feed.log" 2>&1 & local fp=$!
-        local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+        _feed_ok "$d/feed.log" "$mod" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
         ( cd "$d"
           LOOP="$(sudo losetup -fP --show disk.img)"; sudo mount "${LOOP}p1" mnt
           printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/%s\n boot\n}\n' "$mod" | sudo tee mnt/boot/grub/grub.cfg >/dev/null
@@ -250,25 +278,45 @@ BX
         sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_run.txt"
         ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc_run.txt" > "$d/bochs_$mod.log" 2>&1 )
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; rm -f "$d/disk.img.lock"
+        _bochs_ran_ok "$d/bochs_$mod.log" "$mod" || return 1
+        _feed_delivered "$d/feed.log" "$mod" || return 1
     }
     # BOOT-1: writer.bin already in grub.cfg (set at install); feed the put1-stream.
     local port; port=$(free_port)
     python3 "$feeder" "$port" $(python3 "$LB" putstream1 "$seed") --hold 150 > "$d/feed1.log" 2>&1 & local fp=$!
-    local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed1.log" && break; sleep 0.1; done
+    _feed_ok "$d/feed1.log" "writer.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
     ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc_b1.txt" > bochs_b1.txt 2>&1 )
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; rm -f "$d/disk.img.lock"
-    bochs_phase deleter.bin $(python3 "$LB" delstream  "$seed")   # BOOT-2 DEL R1,R2
-    bochs_phase writer3.bin $(python3 "$LB" putstream3 "$seed")   # BOOT-3 PUT N0,N1
+    _bochs_ran_ok "$d/bochs_b1.txt" "writer.bin(BOOT-1)" || return 1
+    _feed_delivered "$d/feed1.log" "writer.bin(BOOT-1)" || return 1
+    bochs_phase deleter.bin $(python3 "$LB" delstream  "$seed") || return 1   # BOOT-2 DEL R1,R2
+    bochs_phase writer3.bin $(python3 "$LB" putstream3 "$seed") || return 1   # BOOT-3 PUT N0,N1
 }
 if have_bochs; then
     emu_ran=1
-    BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
-    bochs_four_boot "$BSEED"
-    if python3 "$LB" reuseok "$work/b.d/disk.img" "$BSEED" >/dev/null 2>&1; then
-        ok "(C-Bochs) the MULTI-SECTOR REUSE PERSISTS across four Bochs runs on the SAME GRUB disk: BOOT-1 PUT R0..R4 (>512B late-bound over com1) + flush; BOOT-2 DEL R1,R2 (merged gap) + flush; BOOT-3 PUT N0 into the merged gap + N1 into the split remainder + flush. The raw on-disk FS == the variable-size first-fit-by-LBA expected state (N0 byte-exact at LO+2 padding-zero, N1 at LO+6, survivor R0 UNCHANGED) -- the 2nd substrate's ATA controller persists the multi-sector runs across the reboots"
-    else
-        fail_test "(C-Bochs) Bochs 4-boot multi-sector reuse RED: [$(python3 "$LB" reuseok "$work/b.d/disk.img" "$BSEED" 2>&1 | tr '\n' ';' | cut -c1-300)]"
+    bochs_done=0
+    for attempt in 1 2 3; do
+        BOCHS_HARNESS_ERR=""
+        BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+        if ! bochs_four_boot "$BSEED"; then
+            echo "  HARNESS ERROR (Bochs 4-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the 4-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
+            continue
+        fi
+        # every boot's feeder LISTENED and its Bochs run produced output -> reuseok is now a GENUINE kernel grade
+        if python3 "$LB" reuseok "$work/b.d/disk.img" "$BSEED" >/dev/null 2>&1; then
+            ok "(C-Bochs) the MULTI-SECTOR REUSE PERSISTS across four Bochs runs on the SAME GRUB disk: BOOT-1 PUT R0..R4 (>512B late-bound over com1) + flush; BOOT-2 DEL R1,R2 (merged gap) + flush; BOOT-3 PUT N0 into the merged gap + N1 into the split remainder + flush. The raw on-disk FS == the variable-size first-fit-by-LBA expected state (N0 byte-exact at LO+2 padding-zero, N1 at LO+6, survivor R0 UNCHANGED) -- the 2nd substrate's ATA controller persists the multi-sector runs across the reboots"
+        else
+            fail_test "(C-Bochs) Bochs 4-boot multi-sector reuse RED (all four boots fed+ran clean -> a GENUINE kernel grade, not a harness flake): [$(python3 "$LB" reuseok "$work/b.d/disk.img" "$BSEED" 2>&1 | tr '\n' ';' | cut -c1-300)]"
+        fi
+        bochs_done=1; break
+    done
+    if [[ "$bochs_done" -eq 0 ]]; then
+        # 3 consecutive HARNESS failures (never the kernel). Loud + attributed to the emulator/harness (name
+        # the file). Under REQUIRE_EMU the Bochs substrate is required, so this still fails the gate -- but as a
+        # re-rollable HARNESS error, never a kernel miscompile (a fresh disk is rebuilt each attempt).
+        echo "FAIL: stack/native_compile_fragment.herb ((C-Bochs) HARNESS ERROR after 3 attempts -- $BOCHS_HARNESS_ERR)"
+        fail=$((fail + 1))
     fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi

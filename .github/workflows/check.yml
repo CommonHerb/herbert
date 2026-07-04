@@ -23,12 +23,12 @@ jobs:
       - name: lexer-copy-sync (copied lexer blocks match the fragment contract)
         run: make lexer-copy-sync
       # switchover-dry-run: the standing C-creep-back guard -- proves the 7 rehomed C-free
-      # bite-proofs still bite with C PHYSICALLY ABSENT, plus its 4-mutation bite-proof. Was
+      # bite-proofs still bite with C PHYSICALLY ABSENT, plus its 5-mutation bite-proof. Was
       # HELD OUT of CI pending a fix to a klaxon/link19 manifest drift: a BORN-C-free bite-proof
       # (run_error_vocab_native_mutation.sh) was added to the CFREE_BITEPROOF disposition but has
       # no retireable C leg, breaking the exact-membership pin. FIXED 2026-07-03 -- the dry-run now
       # derives its frozen set from CFREE_BITEPROOFs that carry a retireable C cross-check (manifest
-      # column-4 mode-env != "-"); mutation proof bites 5/5. Needs no emulator and no build/herbert
+      # column-4 mode-env != "-"); mutation proof bites 6/6. Needs no emulator and no build/herbert
       # (a fresh checkout has none), so it runs in this emulator-free job.
       - name: switchover-dry-run (C-free bite-proofs survive C's removal + mutation proof)
         run: make switchover-dry-run

@@ -288,7 +288,7 @@ run_kvm=0; have_kvm && run_kvm=1
 if [[ "$run_kvm" -eq 1 ]]; then
     echo "link62: /dev/kvm present -- the KVM real-silicon leg runs on the accepted-probe value witness (links 44..62 KVM-leg pattern)."
 else
-    echo "NOTE: /dev/kvm absent -- KVM real-silicon leg skipped (a local pre-push leg; QEMU-TCG + Bochs are the fail-closed CI substrates)."
+    echo "NOTE: /dev/kvm absent or unusable -- KVM real-silicon leg skipped (a standalone-gate local pre-push leg, skip-if-unavailable by design; kernel_verify.sh is the fail-closed enforcer that REQUIRES a present+usable /dev/kvm; QEMU-TCG + Bochs are the fail-closed CI substrates)."
 fi
 
 declare -A BYTE

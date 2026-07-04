@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run_switchover_dryrun_mutation.sh -- sovereignty link 17: prove the switchover
-# DRY-RUN gate BITES (RED-first). Four load-bearing mutations, each of which MUST
+# DRY-RUN gate BITES (RED-first). Five load-bearing mutations, each of which MUST
 # flip the dry-run RED -- otherwise a guard in run_switchover_dryrun.sh is decorative:
 #
 #   M-cleak       The 0-C-invocation assertion must DETECT C. Drop one bite-proof's
@@ -17,8 +17,14 @@
 #                 exit 0. Replace one bite-proof with a stub that EXITS 0 with NO
 #                 verdict (the silent-success forge): the dry-run must go RED on the
 #                 missing 'PASS' -- a forged-green bite-proof cannot be waved through.
+#   M-borncfree   The excluded (born-C-free, column-4 "-") CFREE_BITEPROOFs are pinned by
+#                 exact membership to a named allowlist. Append an UNLISTED "-" bite-proof
+#                 to the manifest: the $4!="-" frozen-set filter excludes it (so the
+#                 membership pin still reads 7==7), so the born-C-free allowlist check must
+#                 catch it -> the dry-run must go RED ("born-C-free allowlist"). A retireable
+#                 bite-proof mislabeled "-" to dodge the frozen set cannot hide.
 #
-# Exit 0 iff all four bite and the matching CONTROL is GREEN.
+# Exit 0 iff all five bite and the matching CONTROL is GREEN.
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
