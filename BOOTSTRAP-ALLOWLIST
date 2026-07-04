@@ -194,6 +194,7 @@ bootstrap/tests/run_native_codegen_link40.sh
 bootstrap/tests/run_native_codegen_link41.sh
 bootstrap/tests/run_native_codegen_link41_mutation.sh
 bootstrap/tests/run_native_codegen_link40_mutation.sh
+bootstrap/tests/FLAKE-LOG.md
 bootstrap/tests/kernel_input_feed.py
 bootstrap/tests/kernel_verify.sh
 bootstrap/tests/run_native_codegen_rejects.sh
