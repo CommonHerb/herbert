@@ -148,13 +148,31 @@ if have_qemu; then
     qemu_noin "$KELF" "$MSTRD" "$work/q.strd"
     if python3 "$REF" gradenoleak "$work/q.strd" "$KEND" >/dev/null 2>&1; then ok "QEMU page-straddling SYS_WRITE REJECTED (no relay past alloc_hi)"
     else fail_test "QEMU straddle -> $(python3 "$REF" gradenoleak "$work/q.strd" "$KEND" 2>&1 | tr '\n' ';')"; fi
-    # (D) non-regression: the holler kernel still outlives its module
+    # (D) non-regression: the holler kernel still outlives its module.
+    # SAME-INPUT REPLAY DISCRIMINATOR (parley, 2026-07-06): these two legs expect a POSITIVE frame
+    # (watchdog-kill / generic-fault) from a byte-pinned kernel on a CONSTANT input -- behavior is
+    # deterministic per boot, so a genuine defect recurs on EVERY boot while a transient debugcon
+    # frame-capture miss does not (the class that RED'd this leg on CI 2026-07-06, run 28763960036
+    # attempt 2). Budget: ONE completed replay; a second completed RED (any signature) is hard RED.
+    # Non-recurrence is NOT proof against an intermittent same-input race; the marker hedges.
+    # (The hostile-REJECT legs above expect NO frame and fail OPEN on a capture miss -- a replay
+    # cannot help those; recorded as a canon residual.)
     qemu_noin "$KELF" "$MVICT" "$work/q.vict"
     if python3 "$REF" gradevictim "$work/q.vict" "$KEND" >/dev/null 2>&1; then ok "QEMU holler kernel async-KILLS a runaway (geeking watchdog intact under do_write)"
-    else fail_test "QEMU victim -> $(python3 "$REF" gradevictim "$work/q.vict" "$KEND" 2>&1 | tr '\n' ';')"; fi
+    else
+        echo "  REPLAY (QEMU victim): completed boot graded RED -- ONE same-input replay (constant input + byte-pinned kernel: recurrence -> deterministic RED, non-recurrence -> transient capture miss)" >&2
+        qemu_noin "$KELF" "$MVICT" "$work/q.vict2"
+        if python3 "$REF" gradevictim "$work/q.vict2" "$KEND" >/dev/null 2>&1; then ok "QEMU holler kernel async-KILLS a runaway (geeking watchdog intact under do_write) [FLAKE-DISCRIMINATED: attempt-1 completed RED did NOT recur under one same-input replay -- no deterministic RED reproduced; classed a transient frame-capture miss, NOT proof against an intermittent race]"
+        else fail_test "QEMU victim REPRODUCED under same-input replay -> hard RED: deterministic same-input failure, not a one-shot capture miss (attempt-1 -> $(python3 "$REF" gradevictim "$work/q.vict" "$KEND" 2>&1 | tr '\n' ';'); replay -> $(python3 "$REF" gradevictim "$work/q.vict2" "$KEND" 2>&1 | tr '\n' ';'))"; fi
+    fi
     qemu_noin "$KELF" "$MBAD" "$work/q.bad"
     if python3 "$REF" gradegeneric "$work/q.bad" "$KEND" >/dev/null 2>&1; then ok "QEMU holler kernel NAMES+CONTINUES a CPL3 #UD (fault->continue intact)"
-    else fail_test "QEMU badop -> $(python3 "$REF" gradegeneric "$work/q.bad" "$KEND" 2>&1 | tr '\n' ';')"; fi
+    else
+        echo "  REPLAY (QEMU badop): completed boot graded RED -- ONE same-input replay (constant input + byte-pinned kernel: recurrence -> deterministic RED, non-recurrence -> transient capture miss)" >&2
+        qemu_noin "$KELF" "$MBAD" "$work/q.bad2"
+        if python3 "$REF" gradegeneric "$work/q.bad2" "$KEND" >/dev/null 2>&1; then ok "QEMU holler kernel NAMES+CONTINUES a CPL3 #UD (fault->continue intact) [FLAKE-DISCRIMINATED: attempt-1 completed RED did NOT recur under one same-input replay -- no deterministic RED reproduced; classed a transient frame-capture miss, NOT proof against an intermittent race]"
+        else fail_test "QEMU badop REPRODUCED under same-input replay -> hard RED: deterministic same-input failure, not a one-shot capture miss (attempt-1 -> $(python3 "$REF" gradegeneric "$work/q.bad" "$KEND" 2>&1 | tr '\n' ';'); replay -> $(python3 "$REF" gradegeneric "$work/q.bad2" "$KEND" 2>&1 | tr '\n' ';'))"; fi
+    fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "QEMU required (KERNEL_CODEGEN_REQUIRE_EMU=1) but qemu-system-x86_64 not found"; else echo "  SKIP: qemu-system-x86_64 not found (set KERNEL_CODEGEN_REQUIRE_EMU=1 to require)"; fi
 fi

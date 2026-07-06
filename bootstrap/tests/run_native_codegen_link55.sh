@@ -189,23 +189,40 @@ two_boot_two_query() { # kernel-elf seedhex kvmflag label [emit_retry]
     "$getfn" "$kel" "$GETTER" "$TWB_B2D" "$kvm" $qd                         # BOOT-2(ii): GET decoy
 }
 
+# SAME-INPUT REPLAY DISCRIMINATOR (parley, 2026-07-06 -- verification-honesty; cross-model Codex
+# AGREE-WITH-CHANGES, all adopted): the late-bound data is fully derived from $seed ('records $seed')
+# and the kernel is byte-pinned (leg B1), so ONE same-seed replay on a fresh disk re-poses the EXACT
+# question. A deterministic same-input defect MUST fail again; a one-shot serial transport/capture
+# miss (SENT is feeder-side -- guest receipt is unprovable over TCP; a lost BOOT-1 put byte shifts
+# framing, so EMPTY *and* WRONG bytes are both transport-reachable here) will not recur. This is
+# STRICTER than a fresh-seed re-roll, which rolls new data and can wash out a data-dependent defect.
+# Budget: ONE completed replay; a second COMPLETED RED (any signature -- the pair is printed so
+# drift is visible) is hard RED. It is NOT a receipt proof and does NOT rule out an intermittent
+# same-data race; the labels hedge accordingly.
 run_qemu_gate() { # kvmflag label substlabel
     local kvm="$1" lbl="$2" subst="$3"
     local seed; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
-    two_boot_two_query "$MKELF" "$seed" "$kvm" "$lbl" 1     # emit_retry=1 (genuine getter must emit; flake-robust)
-    local et ed
-    et="$(python3 "$LB" emitbody "$TWB_B2T" 2>/dev/null)"
-    ed="$(python3 "$LB" emitbody "$TWB_B2D" 2>/dev/null)"
-    local gt=1 gd=1
-    python3 "$LB" gradefs "$TWB_B2T" "$KEND" "$TWB_TP" >/dev/null 2>&1 && gt=0
-    python3 "$LB" gradefs "$TWB_B2D" "$KEND" "$TWB_DP" >/dev/null 2>&1 && gd=0
-    if [[ "$gt" -eq 0 && "$gd" -eq 0 ]]; then
-        ok "(C-$subst) late-bound two-boot two-query: BOOT-1 PUT a TARGET + a DECOY (names sharing a 15-byte prefix, differing only in the last byte; high-entropy late-bound payloads read over COM1) then REBOOT; BOOT-2 GET TARGET -> emitted P_T (${#et} hex chars == host-expected), GET DECOY -> emitted P_D (${#ed} hex chars == host-expected) -- name resolution persisted + correct per-name (forces the full 16-byte compare + the per-entry data_lba)"
-        return 0
-    else
-        fail_test "(C-$subst) late-bound two-boot: TARGET grade=$([[ $gt -eq 0 ]] && echo GREEN || echo RED) (emitted=$et want=$TWB_TP); DECOY grade=$([[ $gd -eq 0 ]] && echo GREEN || echo RED) (emitted=$ed want=$TWB_DP)"
-        return 1
-    fi
+    local att a1sig="" et ed gt gd
+    for att in 1 2; do
+        two_boot_two_query "$MKELF" "$seed" "$kvm" "${lbl}.a${att}" 1     # emit_retry=1 (genuine getter must emit)
+        et="$(python3 "$LB" emitbody "$TWB_B2T" 2>/dev/null)"
+        ed="$(python3 "$LB" emitbody "$TWB_B2D" 2>/dev/null)"
+        gt=1; gd=1
+        python3 "$LB" gradefs "$TWB_B2T" "$KEND" "$TWB_TP" >/dev/null 2>&1 && gt=0
+        python3 "$LB" gradefs "$TWB_B2D" "$KEND" "$TWB_DP" >/dev/null 2>&1 && gd=0
+        if [[ "$gt" -eq 0 && "$gd" -eq 0 ]]; then
+            local note=""
+            [[ "$att" -eq 2 ]] && note=" [FLAKE-DISCRIMINATED: attempt-1 completed RED ($a1sig) did NOT recur under one same-seed replay -- no deterministic same-data RED reproduced; classed a one-shot transport/capture miss, NOT proof against an intermittent same-data race]"
+            ok "(C-$subst) late-bound two-boot two-query: BOOT-1 PUT a TARGET + a DECOY (names sharing a 15-byte prefix, differing only in the last byte; high-entropy late-bound payloads read over COM1) then REBOOT; BOOT-2 GET TARGET -> emitted P_T (${#et} hex chars == host-expected), GET DECOY -> emitted P_D (${#ed} hex chars == host-expected) -- name resolution persisted + correct per-name (forces the full 16-byte compare + the per-entry data_lba)$note"
+            return 0
+        fi
+        if [[ "$att" -eq 1 ]]; then
+            a1sig="TARGET=$([[ $gt -eq 0 ]] && echo GREEN || echo "RED emitted=${et:-EMPTY}") DECOY=$([[ $gd -eq 0 ]] && echo GREEN || echo "RED emitted=${ed:-EMPTY}")"
+            echo "  REPLAY (C-$subst): completed two-boot graded RED ($a1sig) -- running ONE same-seed replay (same-input discriminator: byte-pinned kernel + seed-derived data; recurrence -> deterministic RED, non-recurrence -> transport-class miss)" >&2
+        fi
+    done
+    fail_test "(C-$subst) late-bound two-boot REPRODUCED under same-seed replay -> hard RED: deterministic same-input kernel/substrate failure, not a one-shot transport miss (attempt-1: $a1sig; replay: TARGET grade=$([[ $gt -eq 0 ]] && echo GREEN || echo RED) (emitted=$et want=$TWB_TP) DECOY grade=$([[ $gd -eq 0 ]] && echo GREEN || echo RED) (emitted=$ed want=$TWB_DP))"
+    return 1
 }
 
 if have_qemu; then
@@ -464,31 +481,59 @@ PY
 }
 if have_bochs; then
     emu_ran=1
+    # COMPLETED-RED runs get ONE SAME-SEED REPLAY (parley -- see run_qemu_gate's doctrine comment):
+    # "fed+delivered+ran through shutdown" proves the FEEDER sent and the emulator completed -- it is
+    # NOT guest receipt (the emulator drains the socket into the UART model whether or not the guest
+    # reads), so a completed zero-emission/wrong-bytes run is AMBIGUOUS between a transport miss and a
+    # data-dependent kernel defect. The same-seed replay discriminates: recurrence -> deterministic
+    # hard RED; non-recurrence -> transport-class miss, leg GREEN with a hedged marker. Harness-setup
+    # failures (never LISTENED / never completed / GRUB-swap failure) do NOT consume the replay budget.
     bochs_done=0
-    for attempt in 1 2 3; do
+    completed_red=0
+    B_A1=""
+    for attempt in 1 2 3 4; do
         BOCHS_HARNESS_ERR=""
-        BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
-        read -r BTN BTP BDN BDP < <(python3 "$LB" records "$BSEED")
-        BPUT="$(python3 "$LB" putstream "$BTN" "$BTP" "$BDN" "$BDP")"
-        BQD="$(python3 "$LB" querystream "$BDN")"     # query the DECOY on Bochs (the harder, returnfirst-killing query)
+        if [[ "$completed_red" -eq 0 ]]; then
+            BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+            read -r BTN BTP BDN BDP < <(python3 "$LB" records "$BSEED")
+            BPUT="$(python3 "$LB" putstream "$BTN" "$BTP" "$BDN" "$BDP")"
+            BQD="$(python3 "$LB" querystream "$BDN")"     # query the DECOY on Bochs (the harder, returnfirst-killing query)
+        fi
         if ! bochs_two_boot_query "$BPUT" "$BQD" "$work/b.b2"; then
-            echo "  HARNESS ERROR (Bochs two-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the two-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
+            echo "  HARNESS ERROR (Bochs two-boot attempt $attempt/4): $BOCHS_HARNESS_ERR -- re-rolling the two-boot (setup/no-completion failure, NOT a kernel grade; does not consume the same-seed replay budget)" >&2
             continue
         fi
         BEMIT="$(python3 "$LB" emitbody "$work/b.b2" 2>/dev/null)"
-        # both boots LISTENED + delivered (SENT) + swapped GRUB cleanly + ran THROUGH shutdown() -> gradefs is a GENUINE kernel grade
-        if python3 "$LB" gradefs "$work/b.b2" "$KEND" "$BDP" >/dev/null 2>&1; then ok "(C-Bochs) late-bound two-boot named lookup survives across two Bochs runs on the SAME GRUB disk: BOOT-1 putter PUT a TARGET + a DECOY (late-bound over com1) + flush; BOOT-2 getter resolved the DECOY name -> emitted P_D (${#BEMIT} hex chars == host-expected) -- the 2nd substrate's ATA controller persists the FS + resolves by name (the software-RESET prologue Bochs needs is inherited from durable)"
-        else fail_test "(C-Bochs) Bochs two-boot DECOY (both boots fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake) -> $(python3 "$LB" gradefs "$work/b.b2" "$KEND" "$BDP" 2>&1 | tr '\n' ';') (emitted=$BEMIT want=$BDP)"; fi
+        if python3 "$LB" gradefs "$work/b.b2" "$KEND" "$BDP" >/dev/null 2>&1; then
+            bnote=""
+            [[ "$completed_red" -eq 1 ]] && bnote=" [FLAKE-DISCRIMINATED: attempt's completed RED (emitted=${B_A1:-EMPTY}) did NOT recur under one same-seed replay -- no deterministic same-data RED reproduced; classed a one-shot transport/capture miss, NOT proof against an intermittent same-data race]"
+            ok "(C-Bochs) late-bound two-boot named lookup survives across two Bochs runs on the SAME GRUB disk: BOOT-1 putter PUT a TARGET + a DECOY (late-bound over com1) + flush; BOOT-2 getter resolved the DECOY name -> emitted P_D (${#BEMIT} hex chars == host-expected) -- the 2nd substrate's ATA controller persists the FS + resolves by name (the software-RESET prologue Bochs needs is inherited from durable)$bnote"
+            bochs_done=1; break
+        fi
+        if [[ "$completed_red" -eq 0 ]]; then
+            completed_red=1
+            B_A1="${BEMIT:-EMPTY}"
+            echo "  REPLAY (C-Bochs): completed two-boot graded RED (emitted=${B_A1} want=$BDP) -- running ONE same-seed replay (same-input discriminator: byte-pinned kernel + seed-derived data; recurrence -> deterministic RED, non-recurrence -> transport-class miss)" >&2
+            continue
+        fi
+        fail_test "(C-Bochs) two-boot DECOY REPRODUCED under same-seed replay -> hard RED: deterministic same-input kernel/substrate failure, not a one-shot transport miss (attempt-1 emitted=${B_A1}; replay -> $(python3 "$LB" gradefs "$work/b.b2" "$KEND" "$BDP" 2>&1 | tr '\n' ';') (emitted=${BEMIT:-EMPTY} want=$BDP))"
         bochs_done=1; break
     done
     if [[ "$bochs_done" -eq 0 ]]; then
-        # 3 consecutive HARNESS failures (never the kernel; a fresh disk each attempt). Distinct greppable marker (NOT
-        # the 'FAIL: stack/native_compile_fragment.herb' kernel-RED prefix); fatal only when the Bochs substrate is REQUIRED.
-        if [[ "$REQUIRE_EMU" == "1" ]]; then
-            echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"
+        # Exhausted without an adjudicated grade. TWO distinct cases (cross-model Codex diff catch, 2026-07-06):
+        if [[ "$completed_red" -eq 1 ]]; then
+            # A COMPLETED Bochs RED was observed but its same-seed replay never completed (setup failures ate
+            # the remaining attempts). It is UNADJUDICATED -- neither discriminated as a flake nor reproduced.
+            # FAIL CLOSED **unconditionally** (independent of REQUIRE_EMU): the pre-parley gate hard-failed ANY
+            # completed Bochs RED, and we may NOT clear a completed RED we could not reproduce-or-refute -- that
+            # would be exactly the teeth-loss this link exists to prevent. Uses the kernel-RED prefix on purpose.
+            fail_test "(C-Bochs) two-boot DECOY completed RED (emitted=${B_A1:-EMPTY} want=$BDP) but its same-seed replay never completed within the attempt budget -- UNADJUDICATED completed RED, FAILED CLOSED (never cleared; a completed RED that cannot be reproduced-or-refuted stays a failure regardless of KERNEL_CODEGEN_REQUIRE_EMU)"
+        elif [[ "$REQUIRE_EMU" == "1" ]]; then
+            # No completed grade EVER observed -- pure harness/setup failure. Fatal only when Bochs is REQUIRED.
+            echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate exhausted its harness attempts -- $BOCHS_HARNESS_ERR (re-rollable emulator/feeder setup failure, NOT an adjudicated kernel grade; the gate is RED because KERNEL_CODEGEN_REQUIRE_EMU=1)."
             fail=$((fail + 1))
         else
-            echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1 to require the Bochs substrate)" >&2
+            echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs exhausted its harness attempts -- $BOCHS_HARNESS_ERR (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a pure harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1 to require the Bochs substrate)." >&2
         fi
     fi
 else
