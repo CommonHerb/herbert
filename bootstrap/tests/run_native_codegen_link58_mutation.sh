@@ -41,7 +41,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "$REQUIRE_EMU" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
-work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 bochs 2>/dev/null || true' EXIT
+work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || true' EXIT   # scoped to THIS gate's own $work-referencing procs, never a system-wide `pkill bochs` (would false-RED a concurrent gate -- F4). This gate is QEMU-only (spawns no bochs); the scope is precautionary + reaps any hung own qemu. (Packet A item 3, 2026-07-05.)
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }

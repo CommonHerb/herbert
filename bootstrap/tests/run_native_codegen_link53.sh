@@ -284,8 +284,10 @@ bochs_run() { # out timeout chasemaparg
     local d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    # pre-run hygiene: a prior crashed Bochs can leave the disk locked
-    pkill -9 bochs 2>/dev/null || true
+    # pre-run hygiene: a prior crashed Bochs can leave the disk locked. Scoped to THIS gate's own process
+    # (`-f "$work"`; the bochs cmdline carries the absolute $work/b.d bochsrc path) -- a system-wide `pkill bochs`
+    # would false-RED a CONCURRENT gate's boot, the F4 class. (Packet A item 3, 2026-07-05; F2 own-process rule.)
+    pkill -9 -f "$work" 2>/dev/null || true
     rm -f "$d/disk.img.lock" 2>/dev/null || true
     ( cd "$d"
       dd if=/dev/zero of=disk.img bs=1M count=64 status=none
@@ -325,7 +327,7 @@ port_e9_hack: enabled=1
 display_library: x
 panic: action=report
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
+      xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" > bochs_out.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "$work"`
     python3 - "$d/bochs_out.txt" "$out" <<'PY'
 import sys
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c')

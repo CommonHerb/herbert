@@ -8,7 +8,7 @@ set -u
 T="$(cd "$(dirname "$0")" && pwd)"
 R="$T/larder_latebound.py"
 feeder="$T/kernel_input_feed.py"
-work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 bochs 2>/dev/null || true' EXIT
+work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || true' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp -- the bochs runs under $work/b.d with the absolute bochsrc path in its cmdline; a system-wide `pkill bochs` would false-RED a CONCURRENT gate's boot, the F4 class). (Packet A item 3, 2026-07-05.)
 pass=0; fail=0
 ok(){ echo "  PASS: $1"; pass=$((pass+1)); }
 bad(){ echo "  FAIL: $1"; fail=$((fail+1)); }
@@ -136,7 +136,7 @@ if have_bochs; then
   d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"
   BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
   VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-  pkill -9 bochs 2>/dev/null || true
+  pkill -9 -f "$work" 2>/dev/null || true   # scoped to THIS gate's own bochs ($work/b.d in the cmdline), not a system-wide `pkill bochs` (would false-RED a concurrent gate -- F4). (Packet A item 3, 2026-07-05.)
   ( cd "$d"
     dd if=/dev/zero of=disk.img bs=1M count=64 status=none
     parted -s disk.img mklabel msdos >/dev/null
@@ -164,7 +164,7 @@ BX
   python3 "$feeder" "$port" $STREAM --hold 150 > "$d/feed.log" 2>&1 & fp=$!
   for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
   sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b.txt"
-  ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc_b.txt" > bochs.txt 2>&1 )
+  ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b.txt" > bochs.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "$work"`
   kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
   python3 - "$d/bochs.txt" "$d/out" <<'PY'
 import sys
