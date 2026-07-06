@@ -167,6 +167,10 @@ bootstrap/tests/run_native_codegen_link61.sh
 bootstrap/tests/run_native_codegen_link61_mutation.sh
 bootstrap/tests/run_native_codegen_link62.sh
 bootstrap/tests/run_native_codegen_link62_mutation.sh
+bootstrap/tests/run_native_codegen_link63.sh
+bootstrap/tests/run_native_codegen_link63_mutation.sh
+bootstrap/tests/hearken_goldens/hi.sha256
+bootstrap/tests/hearken_goldens/hc.sha256
 bootstrap/tests/taproot_goldens/p1.sha256
 bootstrap/tests/taproot_goldens/p2.sha256
 bootstrap/tests/taproot_goldens/p3.sha256
