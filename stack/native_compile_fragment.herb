@@ -20143,6 +20143,9 @@ func nc_tap_op_allowed(op):
     if op == 20:
         return true
     end
+    if op == 45:
+        return true
+    end
     return nc64_op_allowed(op)
 end
 
@@ -20150,11 +20153,17 @@ func nc_tap_pops(op, nargs):
     if op == 20:
         return nargs
     end
+    if op == 45:
+        return 0
+    end
     return nc64_pops(op)
 end
 
 func nc_tap_pushes(op):
     if op == 20:
+        return 1
+    end
+    if op == 45:
         return 1
     end
     return nc64_pushes(op)
@@ -20213,6 +20222,9 @@ func nc_tap_op_size(op, nargs, is_last):
             end
         end
         return 5 + cl + 1
+    end
+    if op == 45:
+        return 18
     end
     return nc64_op_size(op, is_last)
 end
@@ -20427,6 +20439,30 @@ func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases):
         obuf = nc_append_le32(obuf, toff2 - endoff)
     elif op == 42:
         obuf = nc_emit_mul(obuf)
+    elif op == 45:
+        -- hearken op_input_byte on the long64 target: poll COM1 LSR (0x3FD) for Data-Ready,
+        -- then read the RBR (0x3F8) and push the byte zero-extended. 18 bytes, byte-identical
+        -- to the proven i386 op-45 lowering -- port I/O + movzx + push are opcode-identical in
+        -- long mode, and push (0x50) pushes 8 bytes (the long64 slot). Self-contained (the jz
+        -- back-edge is an internal rel8), fully position-independent -> no layout dependence.
+        do append(obuf, 102)   -- 66
+        do append(obuf, 186)   -- BA  mov dx, 0x03FD (LSR)
+        do append(obuf, 253)   -- FD
+        do append(obuf, 3)     -- 03
+        do append(obuf, 236)   -- EC  in al, dx
+        do append(obuf, 168)   -- A8  test al,
+        do append(obuf, 1)     -- 01     1 (Data-Ready)
+        do append(obuf, 116)   -- 74  jz
+        do append(obuf, 247)   -- F7     rel8 -9 -> back to the mov dx,0x3FD
+        do append(obuf, 102)   -- 66
+        do append(obuf, 186)   -- BA  mov dx, 0x03F8 (RBR)
+        do append(obuf, 248)   -- F8
+        do append(obuf, 3)     -- 03
+        do append(obuf, 236)   -- EC  in al, dx  (the live byte)
+        do append(obuf, 15)    -- 0F
+        do append(obuf, 182)   -- B6  movzx eax, al
+        do append(obuf, 192)   -- C0
+        do append(obuf, 80)    -- 50  push rax (8-byte slot; upper 32 bits zeroed by movzx eax)
     elif op == 20:
         let callee = get(code, i).1
         let nargs = get(code, i).2
@@ -20576,12 +20612,38 @@ func nc_tap_emit_pd_loop(buf, i, guard_2m):
     return nc_tap_emit_pd_loop(buf, i + 1, guard_2m)
 end
 
+-- hearken: any function body containing op 45 (input_byte) means the image reads a
+-- late-bound COM1 byte, so UART init (56 bytes) is emitted ONCE at long_entry. No op 45
+-- anywhere -> uart_len=0 -> byte-identical to taproot.
+func nc_tap_code_has_input(code, i, n):
+    if i >= n:
+        return false
+    end
+    if get(code, i).0 == 45:
+        return true
+    end
+    return nc_tap_code_has_input(code, i + 1, n)
+end
+
+func nc_tap_uses_input(funcs, i, nf):
+    if i >= nf:
+        return false
+    end
+    let fn = get(funcs, i)
+    let code = fn.4
+    if nc_tap_code_has_input(code, 0, count(code)):
+        return true
+    end
+    return nc_tap_uses_input(funcs, i + 1, nf)
+end
+
 -- the taproot driver (count(funcs) > 1). Layout (vaddr V0=0x10000c):
--- [56-byte head -> ljmp long_entry] [mov esp,esp_val] [optional main rbp frame]
--- [main body -- calls to callees via E8 rel32] [grading tail: shr rax,0x20]
--- [shared 58-byte epilogue] [CALLEE BLOCK: funcs[1..], each prologue+body+epilogue]
--- [GDT/GDTR 30] [pad to 4 KiB] [PML4][PDPT][PD w/ guard]. main never falls through to
--- the callees (the epilogue exits via isa-debug-exit); they are entered only by call.
+-- [56-byte head -> ljmp long_entry] [mov esp,esp_val] [uart init: 56 bytes iff any func
+-- reads input (hearken)] [optional main rbp frame] [main body -- calls to callees via E8
+-- rel32] [grading tail: shr rax,0x20] [shared 58-byte epilogue] [CALLEE BLOCK: funcs[1..],
+-- each prologue+body+epilogue] [GDT/GDTR 30] [pad to 4 KiB] [PML4][PDPT][PD w/ guard]. main
+-- never falls through to the callees (the epilogue exits via isa-debug-exit); they are
+-- entered only by call.
 func nc_tap_emit_program(funcs, mainidx):
     let nf = count(funcs)
     if mainidx != 0:
@@ -20603,10 +20665,14 @@ func nc_tap_emit_program(funcs, mainidx):
     if main_frame > 0:
         main_prefix = 12
     end
+    let uart_len = 0
+    if nc_tap_uses_input(funcs, 0, nf):
+        uart_len = 56
+    end
     let main_bodylen = nc_tap_body_size(maincode, 0, mainn, 0)
     let v0 = 1048588
     let long_entry_vaddr = v0 + 56
-    let main_body_base = 56 + main_prefix
+    let main_body_base = 56 + main_prefix + uart_len
     let main_epi_abs = main_body_base + main_bodylen
     let callee_block_start = main_epi_abs + 4 + 58
     let bases = new_array(int)
@@ -20632,6 +20698,9 @@ func nc_tap_emit_program(funcs, mainidx):
     cbuf = nc32_long_emit_head(cbuf, gdtr_vaddr, pml4_vaddr, long_entry_vaddr)
     do append(cbuf, 188)   -- BC mov esp,imm32
     cbuf = nc_append_le32(cbuf, esp_val)
+    if uart_len > 0:
+        cbuf = nc32_uart_init(cbuf)   -- hearken: COM1 init once, before the main frame
+    end
     if main_frame > 0:
         do append(cbuf, 72)    -- 48 89 E5 mov rbp,rsp
         do append(cbuf, 137)

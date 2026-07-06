@@ -22,7 +22,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."   # herbert repo root
 
 LO="${KERNEL_VERIFY_LO:-17}"
-HI="${KERNEL_VERIFY_HI:-62}"
+HI="${KERNEL_VERIFY_HI:-63}"
 
 # Validate the range up front: a non-integer or inverted range must FAIL, never fall
 # through to a vacuous "GREEN" with zero gates run (a false-green is the one outcome this
@@ -40,7 +40,7 @@ have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # mirrors the g
 #   * gate script     for every link 17..62
 #   * mutation proof  for every link 18..62  (link17 predates the mutation-proof convention -- the ONE
 #                     documented gate-only exception)
-GATE_LO=17; GATE_HI=62
+GATE_LO=17; GATE_HI=63
 mutation_expected() { local n="$1"; (( n >= 18 && n <= GATE_HI )); }
 
 # --- which requested links carry a KVM real-silicon leg (links 44..62; link62/taproot gained it 2026-07-03).
@@ -53,7 +53,7 @@ mutation_expected() { local n="$1"; (( n >= 18 && n <= GATE_HI )); }
 #     "+ KVM". Accepted for now: each gate's KVM leg is byte-pinned in that gate, and this full run empirically
 #     REQUIRES KVM. A stronger closure (a machine-readable KVM-ran sentinel per gate, or a
 #     KERNEL_CODEGEN_REQUIRE_KVM=1 the [44,62] gates honor) is a future hardening, out of this pass's scope. ---
-KVM_LO=44; KVM_HI=62
+KVM_LO=44; KVM_HI=63
 range_has_kvm_leg=0; (( LO <= KVM_HI && HI >= KVM_LO )) && range_has_kvm_leg=1
 
 # expected counts for the requested range (its intersection with the canonical set)
