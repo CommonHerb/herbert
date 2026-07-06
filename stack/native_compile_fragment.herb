@@ -1492,6 +1492,19 @@ func op_bufset():
     return 51
 end
 
+-- riposte (nc link 64, 48th kernel-arc link): output_byte(v) -- the sovereign long64
+-- target's FIRST program-authored device OUTPUT. A 1-arg VALUE builtin: writes v&0xff to
+-- the COM1 THR (0x3F8), then polls LSR.TEMT (0x3FD bit 6) until the byte is FULLY ON THE
+-- WIRE (write-then-drain -- STEP-0 proved Bochs's baud-paced TX drops back-to-back bytes
+-- under a THRE-only discipline and loses the LAST byte to shutdown without the drain),
+-- and returns v (pops 1, pushes 1 -- the FULL 64-bit argument, so a checksum consuming
+-- the return value pins push-semantics beyond the al-truncated device write). Admitted
+-- ONLY by the multi-function long64 path (nc_tap_*); absent from nc32/nc64/every other
+-- op_allowed, so all other modes reject a body carrying op 53. 53 because 46-52 are taken.
+func op_output_byte():
+    return 53
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1798,6 +1811,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "input_byte"):
         return emit_instr(ir, op_input_byte(), 0, 0)
+    end
+    if equal(name, "output_byte"):
+        return emit_instr(ir, op_output_byte(), 0, 0)
     end
     if equal(name, "module_byte"):
         return emit_instr(ir, op_module_byte(), 0, 0)
@@ -3291,7 +3307,7 @@ func err_is_builtin_name(name):
     if equal(name, "bufbase") or equal(name, "bufget") or equal(name, "bufset"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield")
+    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
 end
 
 func err_is_void_builtin(name):
@@ -3308,7 +3324,7 @@ func err_is_value_builtin(name):
     if equal(name, "bufbase") or equal(name, "bufget") or equal(name, "bufset"):
         return true
     end
-    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield")
+    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
 end
 
 func err_value_builtin_arity(name):
@@ -3334,6 +3350,9 @@ func err_value_builtin_arity(name):
         return 1
     end
     if equal(name, "sys_write"):
+        return 1
+    end
+    if equal(name, "output_byte"):
         return 1
     end
     if equal(name, "yield"):
@@ -6273,6 +6292,15 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
                 return (sw.0, 0, sw.1, sw.2, sw.3)
             end
             return (0, nc_type_int(), sw.1, sw.2, sw.3)
+        end
+        if equal(name, "output_byte"):
+            -- riposte: output_byte(v) -- v int, returns v (int). The device write truncates
+            -- to v&0xff on the wire; the RETURNED value is the full argument (op 53 push rbx).
+            let ob = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if ob.0 != 0:
+                return (ob.0, 0, ob.1, ob.2, ob.3)
+            end
+            return (0, nc_type_int(), ob.1, ob.2, ob.3)
         end
         if equal(name, "yield"):
             let yl = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
@@ -20146,6 +20174,9 @@ func nc_tap_op_allowed(op):
     if op == 45:
         return true
     end
+    if op == 53:
+        return true
+    end
     return nc64_op_allowed(op)
 end
 
@@ -20156,6 +20187,9 @@ func nc_tap_pops(op, nargs):
     if op == 45:
         return 0
     end
+    if op == 53:
+        return 1
+    end
     return nc64_pops(op)
 end
 
@@ -20164,6 +20198,9 @@ func nc_tap_pushes(op):
         return 1
     end
     if op == 45:
+        return 1
+    end
+    if op == 53:
         return 1
     end
     return nc64_pushes(op)
@@ -20224,6 +20261,9 @@ func nc_tap_op_size(op, nargs, is_last):
         return 5 + cl + 1
     end
     if op == 45:
+        return 18
+    end
+    if op == 53:
         return 18
     end
     return nc64_op_size(op, is_last)
@@ -20463,6 +20503,35 @@ func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases):
         do append(obuf, 182)   -- B6  movzx eax, al
         do append(obuf, 192)   -- C0
         do append(obuf, 80)    -- 50  push rax (8-byte slot; upper 32 bits zeroed by movzx eax)
+    elif op == 53:
+        -- riposte op_output_byte on the long64 target: WRITE-THEN-DRAIN. Pop the argument,
+        -- write its low byte to the COM1 THR (0x3F8), then poll LSR (0x3FD) bit 6 (TEMT --
+        -- transmitter fully EMPTY, holding+shift both drained) before returning, so every
+        -- op-53 leaves the byte ON THE WIRE and the THR free (the invariant that makes the
+        -- unconditional write safe). STEP-0 proved the weaker THRE-before-write discipline
+        -- LOSES bytes on Bochs's baud-paced TX model (back-to-back drops + a last-byte loss
+        -- to shutdown); TEMT-after-write is also the real-16550-correct drain for the pinned
+        -- physical target. Pushes the FULL argument back (rbx untouched by the poll), so the
+        -- return value is v, not the al-truncated device byte. 18 self-contained bytes
+        -- (internal rel8 back-edge only), position-independent -> no layout dependence.
+        do append(obuf, 91)    -- 5B  pop rbx (the argument; bl = the wire byte)
+        do append(obuf, 102)   -- 66
+        do append(obuf, 186)   -- BA  mov dx, 0x03F8 (THR)
+        do append(obuf, 248)   -- F8
+        do append(obuf, 3)     -- 03
+        do append(obuf, 136)   -- 88
+        do append(obuf, 216)   -- D8  mov al, bl
+        do append(obuf, 238)   -- EE  out dx, al  (the byte leaves the program)
+        do append(obuf, 102)   -- 66
+        do append(obuf, 186)   -- BA  mov dx, 0x03FD (LSR)
+        do append(obuf, 253)   -- FD
+        do append(obuf, 3)     -- 03
+        do append(obuf, 236)   -- EC  in al, dx
+        do append(obuf, 168)   -- A8  test al,
+        do append(obuf, 64)    -- 40     0x40 (TEMT)
+        do append(obuf, 116)   -- 74  jz
+        do append(obuf, 247)   -- F7     rel8 -9 -> back to the mov dx,0x3FD
+        do append(obuf, 83)    -- 53  push rbx (the full argument -- the op's value)
     elif op == 20:
         let callee = get(code, i).1
         let nargs = get(code, i).2
@@ -20612,29 +20681,34 @@ func nc_tap_emit_pd_loop(buf, i, guard_2m):
     return nc_tap_emit_pd_loop(buf, i + 1, guard_2m)
 end
 
--- hearken: any function body containing op 45 (input_byte) means the image reads a
--- late-bound COM1 byte, so UART init (56 bytes) is emitted ONCE at long_entry. No op 45
--- anywhere -> uart_len=0 -> byte-identical to taproot.
-func nc_tap_code_has_input(code, i, n):
+-- hearken/riposte: any function body containing op 45 (input_byte) OR op 53 (output_byte)
+-- means the image touches the COM1 UART, so UART init (56 bytes) is emitted ONCE at
+-- long_entry. Neither op anywhere -> uart_len=0 -> byte-identical to taproot. (riposte
+-- widened the predicate from op-45-only; an op-45-only program keeps the SAME block at the
+-- SAME offset, so every hearken golden is byte-identical under the widened predicate.)
+func nc_tap_code_uses_uart(code, i, n):
     if i >= n:
         return false
     end
     if get(code, i).0 == 45:
         return true
     end
-    return nc_tap_code_has_input(code, i + 1, n)
+    if get(code, i).0 == 53:
+        return true
+    end
+    return nc_tap_code_uses_uart(code, i + 1, n)
 end
 
-func nc_tap_uses_input(funcs, i, nf):
+func nc_tap_uses_uart(funcs, i, nf):
     if i >= nf:
         return false
     end
     let fn = get(funcs, i)
     let code = fn.4
-    if nc_tap_code_has_input(code, 0, count(code)):
+    if nc_tap_code_uses_uart(code, 0, count(code)):
         return true
     end
-    return nc_tap_uses_input(funcs, i + 1, nf)
+    return nc_tap_uses_uart(funcs, i + 1, nf)
 end
 
 -- the taproot driver (count(funcs) > 1). Layout (vaddr V0=0x10000c):
@@ -20666,7 +20740,7 @@ func nc_tap_emit_program(funcs, mainidx):
         main_prefix = 12
     end
     let uart_len = 0
-    if nc_tap_uses_input(funcs, 0, nf):
+    if nc_tap_uses_uart(funcs, 0, nf):
         uart_len = 56
     end
     let main_bodylen = nc_tap_body_size(maincode, 0, mainn, 0)

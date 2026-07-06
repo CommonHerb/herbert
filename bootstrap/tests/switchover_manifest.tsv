@@ -176,3 +176,5 @@ CFREE_BITEPROOF	verify-local	run_vm_native_mutation.sh	VM_NATIVE_NO_C=1	VM gate 
 CFREE_SWITCHOVER	switchover	run_vm_native.sh	VM_NATIVE_NO_C=1	metacircular VM native execution (seed; C cross-check opt-in)
 CFREE_SWITCHOVER	switchover	run_error_vocab_native.sh	-	front-end error-vocabulary native gate -- klondike.herb located ERR 101-316 diagnostics, C-free rehome of the castoff-disclosed assurance loss (seed; no C-faithfulness leg)
 CFREE_BITEPROOF	verify-local	run_error_vocab_native_mutation.sh	-	error-vocab gate RED-first bite-proof (seed; C-free; message/code/line/payload rot each -> gate RED)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link64.sh	-	native-codegen kernel gate link64 (riposte; program-authored COM1 device output, write-then-drain; QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link64_mutation.sh	-	native-codegen kernel mutation gate link64 (riposte; QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)

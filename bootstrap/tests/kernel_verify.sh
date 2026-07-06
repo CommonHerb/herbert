@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # kernel_verify.sh -- the LOCAL kernel-arc BOOT GATE (invoked by `make kernel-verify`).
 #
-# Runs every kernel-codegen link gate (link17..link62 = kernel-arc L1..L46) plus its
+# Runs every kernel-codegen link gate (link17..link64 = kernel-arc L1..L48) plus its
 # mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1 -- so a missing QEMU-TCG or Bochs is a
 # HARD failure, never the silent skip you get from a bare `bash run_native_codegen_linkNN.sh`.
 #
@@ -16,13 +16,13 @@
 #     usable it FAILS LOUD rather than dropping the substrate. When /dev/kvm is genuinely absent
 #     it runs the CI-equivalent QEMU+Bochs gate and says so.
 #
-# Range override (for smoke tests): KERNEL_VERIFY_LO / KERNEL_VERIFY_HI (default 17..62).
+# Range override (for smoke tests): KERNEL_VERIFY_LO / KERNEL_VERIFY_HI (default 17..64).
 
 set -uo pipefail
 cd "$(dirname "$0")/../.."   # herbert repo root
 
 LO="${KERNEL_VERIFY_LO:-17}"
-HI="${KERNEL_VERIFY_HI:-63}"
+HI="${KERNEL_VERIFY_HI:-64}"
 
 # Validate the range up front: a non-integer or inverted range must FAIL, never fall
 # through to a vacuous "GREEN" with zero gates run (a false-green is the one outcome this
@@ -37,23 +37,23 @@ have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # mirrors the g
 
 # --- the canonical kernel-arc gate set (what MUST exist -- a missing member inside the requested range is a
 #     HARD failure, never the silent skip that yields a vacuous GREEN) --------------------------------------
-#   * gate script     for every link 17..62
-#   * mutation proof  for every link 18..62  (link17 predates the mutation-proof convention -- the ONE
+#   * gate script     for every link 17..64
+#   * mutation proof  for every link 18..64  (link17 predates the mutation-proof convention -- the ONE
 #                     documented gate-only exception)
-GATE_LO=17; GATE_HI=63
+GATE_LO=17; GATE_HI=64
 mutation_expected() { local n="$1"; (( n >= 18 && n <= GATE_HI )); }
 
-# --- which requested links carry a KVM real-silicon leg (links 44..62; link62/taproot gained it 2026-07-03).
+# --- which requested links carry a KVM real-silicon leg (links 44..64; link62/taproot gained it 2026-07-03).
 #     The KVM REQUIREMENT and the GREEN banner's KVM claim apply ONLY when the requested range includes one:
 #     a 17..18 smoke has no KVM leg, so requiring or claiming KVM there would be a false guarantee. If a
 #     future link past 62 lands without a KVM leg, RAISE nothing here; if it lands WITH one, bump KVM_HI.
 #     RESIDUAL (cross-model Codex, 2026-07-03): this is a RANGE assumption, not per-gate proof -- kernel-verify
-#     verifies each 44..62 gate EXISTS + exits 0 (3a), but not that it actually ran its -enable-kvm leg. So a
+#     verifies each 44..64 gate EXISTS + exits 0 (3a), but not that it actually ran its -enable-kvm leg. So a
 #     FUTURE gate silently dropping its KVM branch while still exiting 0 would let the banner over-claim
 #     "+ KVM". Accepted for now: each gate's KVM leg is byte-pinned in that gate, and this full run empirically
 #     REQUIRES KVM. A stronger closure (a machine-readable KVM-ran sentinel per gate, or a
-#     KERNEL_CODEGEN_REQUIRE_KVM=1 the [44,62] gates honor) is a future hardening, out of this pass's scope. ---
-KVM_LO=44; KVM_HI=63
+#     KERNEL_CODEGEN_REQUIRE_KVM=1 the [44,64] gates honor) is a future hardening, out of this pass's scope. ---
+KVM_LO=44; KVM_HI=64
 range_has_kvm_leg=0; (( LO <= KVM_HI && HI >= KVM_LO )) && range_has_kvm_leg=1
 
 # expected counts for the requested range (its intersection with the canonical set)
@@ -87,7 +87,7 @@ fi
 
 fail=0; ran=0; ran_mut=0
 for n in $(seq "$LO" "$HI"); do
-    (( n >= GATE_LO && n <= GATE_HI )) || continue   # kernel-verify runs ONLY the canonical kernel-arc set (17..62)
+    (( n >= GATE_LO && n <= GATE_HI )) || continue   # kernel-verify runs ONLY the canonical kernel-arc set (17..64)
     g="bootstrap/tests/run_native_codegen_link${n}.sh"
     [[ -f "$g" ]] || { echo "FAIL: canonical kernel-arc gate $g is MISSING (deleted/renamed?) -- refusing a vacuous GREEN." >&2; fail=1; break; }
     echo "== link${n} gate (kernel-arc L$((n-16))) =="

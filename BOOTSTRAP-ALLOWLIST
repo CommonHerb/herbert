@@ -169,8 +169,13 @@ bootstrap/tests/run_native_codegen_link62.sh
 bootstrap/tests/run_native_codegen_link62_mutation.sh
 bootstrap/tests/run_native_codegen_link63.sh
 bootstrap/tests/run_native_codegen_link63_mutation.sh
+bootstrap/tests/run_native_codegen_link64.sh
+bootstrap/tests/run_native_codegen_link64_mutation.sh
 bootstrap/tests/hearken_goldens/hi.sha256
 bootstrap/tests/hearken_goldens/hc.sha256
+bootstrap/tests/riposte_goldens/ro.sha256
+bootstrap/tests/riposte_goldens/rc.sha256
+bootstrap/tests/riposte_goldens/oo.sha256
 bootstrap/tests/taproot_goldens/p1.sha256
 bootstrap/tests/taproot_goldens/p2.sha256
 bootstrap/tests/taproot_goldens/p3.sha256
@@ -200,6 +205,7 @@ bootstrap/tests/run_native_codegen_link41_mutation.sh
 bootstrap/tests/run_native_codegen_link40_mutation.sh
 bootstrap/tests/FLAKE-LOG.md
 bootstrap/tests/kernel_input_feed.py
+bootstrap/tests/kernel_io_feed.py
 bootstrap/tests/kernel_verify.sh
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh

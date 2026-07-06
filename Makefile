@@ -68,14 +68,14 @@ lexer-copy-sync:
 
 # native-codegen-diagnostics: a small QEMU DIAGNOSTICS suite for the native-codegen
 # emitter -- NOT the kernel-arc boot gate. The boot gate is `make kernel-verify` (the
-# link17..62 dual/tri-substrate gates + mutation proofs under KERNEL_CODEGEN_REQUIRE_EMU=1)
+# link17..64 dual/tri-substrate gates + mutation proofs under KERNEL_CODEGEN_REQUIRE_EMU=1)
 # and its CI mirror `.github/workflows/kernel-codegen-l1.yml`. Do not read this target's
 # green as "the kernels boot" -- it is diagnostics, not the tri-substrate boot proof.
 native-codegen-diagnostics:
 	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
 
 # kernel-verify: the LOCAL kernel-arc boot gate. Runs every kernel-codegen link gate
-# (link17..62 = kernel-arc L1..L46) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
+# (link17..64 = kernel-arc L1..L48) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
 # (a missing QEMU/Bochs is a HARD failure, never a silent skip), and REQUIRES the KVM
 # real-silicon leg when /dev/kvm is present -- the A11 tier-1 anchor CI cannot cover
 # (GitHub runners have no /dev/kvm). Run this before any kernel-arc push. See the driver
