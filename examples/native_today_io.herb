@@ -1,0 +1,7 @@
+-- Native-today example: runtime input and output through the current native ABI.
+
+func main():
+    let incoming = clogger()
+    do flogger("HERBERT-NATIVE-TODAY\n")
+    return length(incoming)
+end

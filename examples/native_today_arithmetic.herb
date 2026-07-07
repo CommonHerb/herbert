@@ -1,0 +1,15 @@
+-- Native-today example: arithmetic, comparisons, recursion, and tuples.
+
+func fib(n):
+    if n <= 1:
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+
+func main():
+    let a = 21 + 21
+    let b = fib(8)
+    let ok = a == 42 and b == 21
+    return (a, b, ok)
+end
