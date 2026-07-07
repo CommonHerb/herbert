@@ -208,9 +208,9 @@ if have_bochs; then
             echo "  HARNESS ERROR (Bochs attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2
             continue
         fi
-        # the feeder LISTENED + delivered (SENT) + the kernel ran THROUGH shutdown() -> grade is a GENUINE kernel verdict
+        # the feeder LISTENED + SENT + the kernel ran THROUGH shutdown() -- but guest RECEIPT is unproven feeder-side, so a lone RED may be a capture-class flake (re-derive per the parley replay discriminator), not necessarily a genuine kernel verdict
         if python3 "$REF" grade "$work/b.gx" "$KEND" gx >/dev/null 2>&1; then ok "(C) Bochs: the preemptive run is byte-identical on the 2nd substrate (gx; GRUB delivers two module lines)"
-        else fail_test "(C) Bochs gx (fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake) -> $(python3 "$REF" grade "$work/b.gx" "$KEND" gx 2>&1 | tr '\n' ';')"; fi
+        else fail_test "(C) Bochs gx (feeder SENT + ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator) -> $(python3 "$REF" grade "$work/b.gx" "$KEND" gx 2>&1 | tr '\n' ';')"; fi
         bochs_done=1; break
     done
     if [[ "$bochs_done" -eq 0 ]]; then

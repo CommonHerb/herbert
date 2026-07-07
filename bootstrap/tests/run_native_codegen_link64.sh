@@ -267,12 +267,15 @@ BX
         BOCHS_HARNESS_ERR="never completed (sent=$listened shutdown=$shutdown) -- emulator/feeder, not a kernel grade"
         return 2
     fi
-    # COMPLETED -> a genuine grade from here on (never re-rolled).
+    # feeder SENT + boot ran THROUGH shutdown -> the output capture (cap.bin) + frame count are graded from here
+    # (never re-rolled). NOTE (parley/attest honesty): SENT is feeder-side; guest RECEIPT of the input byte is NOT
+    # independently proven, so a lone RED here may be a capture-class flake -- re-derive per the parley (57262f7)
+    # same-input replay discriminator, not the SENT+shutdown completion alone.
     hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
     local nf; nf=$(grep -o "$want_e9" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
     local got_cap; got_cap=$(xxd -p "$W/cap.bin" 2>/dev/null | tr -d '\n')
     if [[ "$nf" -eq 1 && "$got_cap" == "$want_cap" ]]; then return 0; fi
-    fail_test "$label Bochs byte=$byte (COMPLETED run -- a genuine grade, not a harness flake): frames($want_e9)=$nf(want 1) cap=${got_cap:-EMPTY}(want $want_cap)"
+    fail_test "$label Bochs byte=$byte (feeder SENT + ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator): frames($want_e9)=$nf(want 1) cap=${got_cap:-EMPTY}(want $want_cap)"
     return 1
 }
 

@@ -810,6 +810,8 @@ HOSTW_WRITE_RET = 5+5+5+2     # = 17  eip in the reject (or, under M-nobounds, t
 # mod_straddle (HOSTILE boundary): ptr = esp-1 = alloc_hi-1 (in-page), len = 0x100 -> ptr+len straddles PAST
 # alloc_hi into the Supervisor neighbor page. Isolates the END>alloc_hi branch: the benign kernel REJECTS
 # (end>hi); under M-noendhi the kernel relays 0x100 bytes incl. kernel neighbor memory (a leak past the page).
+STRD_LEAK_LEN  = 0x100        # the rejected len (edx) witnessed in the STRD reject frame
+STRD_WRITE_RET = 4+5+5+2      # = 16  eip in the STRD reject frame (lea ecx / mov edx / mov eax / int 0x30)
 def mod_straddle(tag='STRD'):
     body = (bytes([0x8D,0x4C,0x24,0xFF])                       # lea ecx,[esp-1]     (4)  ptr=alloc_hi-1
         + bytes([0xBA,0x00,0x01,0x00,0x00])                   # mov edx,0x100       (5)  len straddles page end
@@ -1249,12 +1251,28 @@ def grade_leak(stream, kend_elf):
     return errs
 
 def grade_noleak(stream, kend_elf):
-    # Assert NO relay frame (D4..D5) -- the OOB write was REJECTED, nothing leaked. GREEN on the benign kernel;
-    # RED when a branch-drop mutation lets the relay through (the per-sub-check isolation bite).
+    # Assert the page-straddling SYS_WRITE was REJECTED: NO relay frame (D4..D5) AND a POSITIVE reject-witness
+    # frame (D6..D7) present. The positive witness is load-bearing (parley residual (1), 2026-07-06): the old
+    # check asserted only relay-frame ABSENCE, so a debugcon capture MISS that dropped a genuine leak's relay
+    # frame read as a PASS -- fail-OPEN. Requiring the reject frame (as grade_hostwrite already does for HOWR)
+    # makes a dropped stream fail CLOSED: no D6..D7 -> RED (a real reject on a completed boot always dumps it).
+    # Under M-noendhi the straddle RELAYS past the page -> a D4..D5 frame appears (LEAK) -> RED, unchanged.
+    errs=[]; r=parse(stream)
+    if not r: return ['no OWN table parsed -- kernel faulted before dump, or the debugcon capture dropped the stream (fail CLOSED, not a silent pass)']
+    ms,ah=r.get('ms'),r.get('ah')
     wf=_wframe(stream, b'\xD4', b'\xD5', True)
+    rj=_wframe(stream, b'\xD6', b'\xD7', False)
     if wf is not None:
-        return [f'LEAK: relay frame present (len={wf["ln"]}, body[:16]={wf["body"][:16].hex()}) -- the OOB write was NOT rejected']
-    return []
+        errs.append(f'LEAK: relay frame present (len={wf["ln"]}, body[:16]={wf["body"][:16].hex()}) -- the OOB write was NOT rejected')
+    if rj is None:
+        errs.append('no reject frame (D6..D7) -- kernel did not refuse the page-straddling SYS_WRITE, or the debugcon capture dropped it (fail CLOSED)')
+    else:
+        if not rj['closed']: errs.append('reject frame not closed by D7')
+        if rj['ln']!=STRD_LEAK_LEN: errs.append(f'reject len {rj["ln"]} != {STRD_LEAK_LEN}')
+        if rj['cs']!=UCODE3 or (rj['cs']&3)!=3: errs.append(f'reject frame cs 0x{rj["cs"]:x} != UCODE3/RPL3')
+        if ah is not None and rj['esp']!=ah: errs.append(f'reject frame useresp 0x{rj["esp"]:x} != alloc_hi 0x{ah:x}')
+        if ms is not None and rj['eip']!=ms+STRD_WRITE_RET: errs.append(f'reject frame eip 0x{rj["eip"]:x} != mod+{STRD_WRITE_RET}')
+    return errs
 
 if __name__=='__main__':
     cmd=sys.argv[1]

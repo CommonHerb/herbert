@@ -227,7 +227,7 @@ if have_bochs; then
             echo "  HARNESS ERROR (Bochs RUN-2 attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue
         fi
         if python3 "$REF" gradefurl "$work/b2" "$KEND" "$K" run2 "$FBYTE" >/dev/null 2>&1; then ok "(C) Bochs RUN-2: block/wake is byte-identical on the 2nd substrate (GRUB delivers A,B,C)"
-        else fail_test "(C) Bochs RUN-2 (fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake) -> $(python3 "$REF" gradefurl "$work/b2" "$KEND" "$K" run2 "$FBYTE" 2>&1 | tr '\n' ';')"; fi
+        else fail_test "(C) Bochs RUN-2 (feeder SENT + ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator) -> $(python3 "$REF" gradefurl "$work/b2" "$KEND" "$K" run2 "$FBYTE" 2>&1 | tr '\n' ';')"; fi
         b2_done=1; break
     done
     [[ "$b2_done" -eq 0 ]] && _bochs_harness_giveup "RUN-2"
@@ -240,7 +240,7 @@ if have_bochs; then
             echo "  HARNESS ERROR (Bochs RUN-1 attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue
         fi
         if python3 "$REF" gradefurl "$work/b1" "$KEND" "$K" run1 "$FBYTE" >/dev/null 2>&1; then ok "(C) Bochs RUN-1 (byte withheld): peers run while the reader is parked"
-        else fail_test "(C) Bochs RUN-1 (feeder LISTENED -> a GENUINE kernel grade of the park behavior) -> $(python3 "$REF" gradefurl "$work/b1" "$KEND" "$K" run1 "$FBYTE" 2>&1 | tr '\n' ';')"; fi
+        else fail_test "(C) Bochs RUN-1 (feeder LISTENED; a lone RED here may be a capture-class flake, not necessarily a genuine park-behavior defect -- see the parley replay discriminator) -> $(python3 "$REF" gradefurl "$work/b1" "$KEND" "$K" run1 "$FBYTE" 2>&1 | tr '\n' ';')"; fi
         b1_done=1; break
     done
     [[ "$b1_done" -eq 0 ]] && _bochs_harness_giveup "RUN-1"

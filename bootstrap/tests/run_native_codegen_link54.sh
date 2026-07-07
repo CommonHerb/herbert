@@ -369,9 +369,9 @@ if have_bochs; then
             echo "  HARNESS ERROR (Bochs two-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the two-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
             continue
         fi
-        # both boots ran THROUGH shutdown() (BOOT-1 also LISTENED + delivered SENT) -> gradedur is a GENUINE kernel grade
+        # both boots ran THROUGH shutdown() (BOOT-1 also LISTENED + delivered SENT) -> gradedur RED is treated as a kernel grade, but guest RECEIPT is unproven feeder-side (a lone RED may be a capture-class flake; see the parley replay discriminator)
         if python3 "$REF" gradedur "$work/b.b2" "$KEND" "$BXHEX" >/dev/null 2>&1; then ok "(C) Bochs TWO-BOOT: the durable byte X=$BXHEX survives across two Bochs runs on the SAME GRUB disk (BOOT-1 writer SYS_DISK_WRITEs X at the absolute window LBA + CACHE FLUSH; BOOT-2 reader reads it back -- the 2nd substrate's ATA controller persists the write, the software-RESET prologue Bochs needs is emitted)"
-        else fail_test "(C) Bochs two-boot (both boots ran through shutdown -> a GENUINE kernel grade, not a harness flake) -> $(python3 "$REF" gradedur "$work/b.b2" "$KEND" "$BXHEX" 2>&1 | tr '\n' ';')"; fi
+        else fail_test "(C) Bochs two-boot (both boots ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator) -> $(python3 "$REF" gradedur "$work/b.b2" "$KEND" "$BXHEX" 2>&1 | tr '\n' ';')"; fi
         bochs_done=1; break
     done
     if [[ "$bochs_done" -eq 0 ]]; then

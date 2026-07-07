@@ -328,11 +328,11 @@ if have_bochs; then
             echo "  HARNESS ERROR (Bochs 3-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the 3-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
             continue
         fi
-        # every boot's feeder LISTENED, DELIVERED (SENT), and its kernel ran THROUGH to shutdown() -> reuseok is a GENUINE kernel grade
+        # every boot's feeder LISTENED, DELIVERED (SENT), and its kernel ran THROUGH to shutdown() -> reuseok RED is treated as a kernel grade, but guest RECEIPT is unproven feeder-side (a lone RED may be a capture-class flake; see the parley replay discriminator)
         if python3 "$LB" reuseok "$work/b.d/disk.img" "$BSEED" >/dev/null 2>&1; then
             ok "(C-Bochs) the MULTI-SECTOR REUSE PERSISTS across three Bochs runs on the SAME GRUB disk: BOOT-1 PUT R0..R4 (>512B late-bound over com1) + flush; BOOT-2 DEL R1,R2 (merged gap) + flush; BOOT-3 PUT N0 into the merged gap + N1 into the split remainder + flush. The raw on-disk FS == the variable-size first-fit-by-LBA expected state (N0 byte-exact at LO+2 padding-zero, N1 at LO+6, survivor R0 UNCHANGED) -- the 2nd substrate's ATA controller persists the multi-sector runs across the reboots"
         else
-            fail_test "(C-Bochs) Bochs 3-boot multi-sector reuse RED (all three boots fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake): [$(python3 "$LB" reuseok "$work/b.d/disk.img" "$BSEED" 2>&1 | tr '\n' ';' | cut -c1-300)]"
+            fail_test "(C-Bochs) Bochs 3-boot multi-sector reuse RED (all three boots: feeder SENT + ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator): [$(python3 "$LB" reuseok "$work/b.d/disk.img" "$BSEED" 2>&1 | tr '\n' ';' | cut -c1-300)]"
         fi
         bochs_done=1; break
     done

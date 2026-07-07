@@ -273,7 +273,7 @@ PY
         if [[ "$REQUIRE_EMU" == "1" ]]; then echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- ${BOCHS_HARNESS_ERR:-missing/truncated trace} (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"; fail=$((fail + 1))
         else echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs failed 3 consecutive harness attempts -- ${BOCHS_HARNESS_ERR:-missing/truncated trace} (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1)" >&2; fi
     elif echo "$bochs_emit" | grep -q '^GREEN'; then ok "(C-Bochs) the late-bound cross-page witness on the EMITTED kernel is GREEN on the 2nd substrate: the kernel-emitted trace == the host first-fit golden (the make-or-break alloc fits the cross-page-coalesced hole) on Bochs' chipset"
-    else fail_test "(C-Bochs) Bochs cross-page witness not GREEN (fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake): $(echo "$bochs_emit" | tr '\n' ';')"; fi
+    else fail_test "(C-Bochs) Bochs cross-page witness not GREEN (feeder SENT + ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator): $(echo "$bochs_emit" | tr '\n' ';')"; fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi

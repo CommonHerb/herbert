@@ -341,11 +341,11 @@ if have_bochs; then
             echo "  HARNESS ERROR (Bochs 3-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the 3-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
             continue
         fi
-        # every boot LISTENED + delivered (SENT) + swapped GRUB cleanly + ran THROUGH shutdown() -> reuseok is a GENUINE kernel grade
+        # every boot LISTENED + delivered (SENT) + swapped GRUB cleanly + ran THROUGH shutdown() -> reuseok RED is treated as a kernel grade, but guest RECEIPT is unproven feeder-side (a lone RED may be a capture-class flake; see the parley replay discriminator)
         if python3 "$LB" reuseok "$work/b.d/disk.img" "$BF" "$BN" >/dev/null 2>&1; then
             ok "(C-Bochs) the REUSE PERSISTS across three Bochs runs on the SAME GRUB disk: BOOT-1 filler PUT FS_D records (late-bound over com1) + flush; BOOT-2 multi-deleter DEL three holes {0,i,j} (scrambled order) + flush; BOOT-3 putter PUT three NEW records into the freed holes + flush. The raw on-disk FS == the first-free expected state (new records in the holes lowest-first, 1:1 data_lba, freed sectors carry the new payloads, survivors UNCHANGED) -- the 2nd substrate's ATA controller persists the reuse across the reboots (the software-RESET prologue Bochs needs is inherited from durable). NOTE on the CACHE FLUSH: empirically this Bochs (like QEMU writethrough) persists writes even WITHOUT the 0xE7 flush, so the flush is OUTPUT-INVISIBLE on every available substrate and is caught only WHITE-BOX (inherited assert_delete); it is for real-hardware power-cut durability"
         else
-            fail_test "(C-Bochs) Bochs 3-boot reuse RED (all three boots fed+delivered+ran through shutdown -> a GENUINE kernel grade, not a harness flake): [$(python3 "$LB" reuseok "$work/b.d/disk.img" "$BF" "$BN" 2>&1 | tr '\n' ';' | cut -c1-300)]"
+            fail_test "(C-Bochs) Bochs 3-boot reuse RED (all three boots: feeder SENT + ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator): [$(python3 "$LB" reuseok "$work/b.d/disk.img" "$BF" "$BN" 2>&1 | tr '\n' ';' | cut -c1-300)]"
         fi
         bochs_done=1; break
     done
