@@ -16,6 +16,7 @@
 .github/workflows/check.yml
 .github/workflows/kernel-codegen-l1.yml
 .gitignore
+AGENTS.md
 BOOTSTRAP-ALLOWLIST
 BOOTSTRAP-RESPONSIBILITIES.md
 ROADMAP.md
