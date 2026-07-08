@@ -11282,19 +11282,16 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
 end
 
 func nc_emit_function(buf, fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base):
-    let start_len = length(freeze(buf))
+    if get(layout.1, 0) != layout.4:
+        return (nc_fail(418, 0, "prefix"), buf)
+    end
+    if get(layout.1, count(fn.4)) != layout.5:
+        return (nc_fail(418, 0, "length"), buf)
+    end
     buf = nc_emit_prologue(buf, layout.3)
     buf = nc_emit_sret_save(buf, meta)
     buf = nc_emit_arg_copies_loop(buf, 0, meta.0)
-    let after_prefix = length(freeze(buf)) - start_len
-    if after_prefix != layout.4:
-        return (nc_fail(418, 0, "prefix"), buf)
-    end
     buf = nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, 0, count(fn.4), buf)
-    let len = length(freeze(buf)) - start_len
-    if len != layout.5:
-        return (nc_fail(418, 0, "length"), buf)
-    end
     return (0, buf)
 end
 
@@ -21194,4 +21191,3 @@ func main():
     do fwriter(freeze(buf))
     return 0
 end
-

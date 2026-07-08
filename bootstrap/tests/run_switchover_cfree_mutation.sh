@@ -53,7 +53,7 @@ if run_gate "$bite_gate"; then bad "M-guard did NOT bite: bare-guard gate passed
 fi
 
 printf '== M-gerrymander: the CFREE surface is FROZEN by exact membership ==\n'
-# Move one CFREE_SWITCHOVER gate to CFREE_KERNEL (manifest stays complete: 93 rows).
+# Move one CFREE_SWITCHOVER gate to CFREE_KERNEL while keeping the partition complete.
 sed 's/^CFREE_SWITCHOVER\tswitchover\trun_native_codegen_link1\.sh\tNATIVE_CODEGEN_ORACLE=golden/CFREE_KERNEL\tkernel-ci\trun_native_codegen_link1.sh\t-/' "$manifest" >"$work/m_gerry.tsv"
 if SWITCHOVER_MANIFEST="$work/m_gerry.tsv" bash "$driver" >"$work/out" 2>&1; then bad "M-gerrymander did NOT bite: driver passed with a shrunk CFREE surface"; else
     grep -q 'FROZEN' "$work/out" && ok "M-gerrymander BITES: driver RED on surface != frozen set" || bad "M-gerrymander failed but not via the frozen-set check ($(grep FAIL "$work/out" | head -1))"

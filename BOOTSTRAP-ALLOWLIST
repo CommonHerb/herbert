@@ -46,6 +46,7 @@ bootstrap/tests/run_error_vocab_native.sh
 bootstrap/tests/run_error_vocab_native_mutation.sh
 bootstrap/tests/run_aggregate_render_native.sh
 bootstrap/tests/run_aggregate_render_native_mutation.sh
+bootstrap/tests/run_closed_loop_memory_diet.sh
 bootstrap/tests/run_native_codegen_link1.sh
 bootstrap/tests/run_native_codegen_link2.sh
 bootstrap/tests/run_native_codegen_link3.sh

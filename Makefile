@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run reseed verify-local clean
+.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run closed-loop-memory-diet reseed verify-local clean
 
 all: $(SCANNER)
 
@@ -98,6 +98,13 @@ switchover-cfree:
 switchover-dry-run:
 	@bash bootstrap/tests/run_switchover_dryrun.sh
 	@bash bootstrap/tests/run_switchover_dryrun_mutation.sh
+
+# closed-loop-memory-diet: core-owned RSS gate for the Linux production compiler
+# appliance. It proves gen-1 emits a byte-identical gen-2 while staying under the
+# current bounded RSS ceiling, and prints an attribution cone for the front end vs
+# the rest of the self-compile.
+closed-loop-memory-diet:
+	@bash bootstrap/tests/run_closed_loop_memory_diet.sh
 
 # reseed: re-mint the gen-1 seed C-FREE (the committed seed recompiles the backend
 # to its own fixpoint). Post-switchover this replaces the old C-mint reseed; run it

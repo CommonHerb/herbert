@@ -46,6 +46,7 @@ FROZEN_SURFACE="$(printf '%s\n' \
   run_native_codegen_link10.sh run_native_codegen_link11.sh run_native_codegen_link12.sh \
   run_native_codegen_link13.sh run_native_codegen_link14.sh run_native_codegen_link15.sh \
   run_native_codegen_link16.sh run_native_codegen_rejects.sh \
+  run_closed_loop_memory_diet.sh \
   run_evaluator_native.sh run_vm_native.sh run_parser_native.sh run_lexer_native.sh \
   run_klondike_native.sh run_emitter_native.sh run_aggregate_render_native.sh \
   run_error_vocab_native.sh | sort)"
@@ -88,7 +89,7 @@ while IFS=$'\t' read -r disp ctx scriptname modeenv reason; do
 done < <(grep -vE '^#|^[[:space:]]*$' "$manifest")
 manifest_surface="$(printf '%s' "$manifest_surface" | grep -v '^$' | sort)"
 if [[ "$manifest_surface" != "$FROZEN_SURFACE" ]]; then
-    die "manifest CFREE_SWITCHOVER set != the FROZEN 25-gate surface (gerrymander/swap):"$'\n'"$(diff <(printf '%s\n' "$FROZEN_SURFACE") <(printf '%s\n' "$manifest_surface") | sed 's/^/    /')"
+    die "manifest CFREE_SWITCHOVER set != the FROZEN surface (gerrymander/swap):"$'\n'"$(diff <(printf '%s\n' "$FROZEN_SURFACE") <(printf '%s\n' "$manifest_surface") | sed 's/^/    /')"
 fi
 # Static anti-bypass: a surface gate must not reach C by a path the $HERBERT
 # tombstone count cannot see -- a hardcoded `build/herbert`, or an absolute C

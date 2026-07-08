@@ -6,7 +6,7 @@
 # switchover readiness ledger: it answers, for every test surface, "does it
 # stand without C, and if not, why."
 #
-# run_switchover_cfree.sh runs the CFREE_SWITCHOVER set (a FROZEN 24-gate list it
+# run_switchover_cfree.sh runs the CFREE_SWITCHOVER set (a FROZEN 26-gate list it
 # also pins by exact membership) with the C interpreter PHYSICALLY ABSENT -- in
 # TWO phases: (A) $HERBERT a nonexistent path (catches any presence guard), then
 # (B) $HERBERT a counting tombstone whose target does not exist (asserts ZERO C
@@ -46,6 +46,7 @@
 # columns (TAB-separated): disposition  run-context  script  cfree-mode-env  reason
 CFREE_BITEPROOF	make-test	run_aggregate_render_native_mutation.sh	AGGREGATE_RENDER_MUTATION_NO_C=1	aggregate-render bite-proof, now C-FREE via a two-stage seed compile of the mutated backend (assay, link 15; was RETIRE_WITH_C); runs in make test; retireable C cross-check opt-out via AGGREGATE_RENDER_MUTATION_NO_C=1
 CFREE_SWITCHOVER	switchover	run_aggregate_render_native.sh	AGGREGATE_RENDER_NATIVE_NO_C=1	native aggregate render + 12 foundational native-output tests (seed; C cross-check opt-in)
+CFREE_SWITCHOVER	switchover	run_closed_loop_memory_diet.sh	-	Closed-Loop memory diet gate: gen-1 emits byte-identical gen-2 under the bounded RSS ceiling, with front-end vs lower+emit attribution (seed; no C leg)
 CFREE_BITEPROOF	verify-local	run_emitter_native_mutation.sh	EMITTER_NATIVE_NO_C=1	emitter gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_emitter_native.sh	EMITTER_NATIVE_NO_C=1	metacircular emitter native execution (seed; C cross-check opt-in)
 CFREE_BITEPROOF	verify-local	run_evaluator_native_mutation.sh	EVALUATOR_NATIVE_NO_C=1	evaluator gate RED-first bite-proof (seed; C-free)
