@@ -7324,7 +7324,6 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     if op >= 26 and op <= 32:
         has_heap = 1
     end
-    stacks = nc_array_int_set(stacks, i, stack)
     max_stack = nc_max_i(max_stack, nc_stack_word_depth(pool, stack))
     if op == 0:
         stack = nc_stack_push(stack, nc_type_int())
@@ -7654,7 +7653,7 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
         return (nc_fail(439, 0, ""), (0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, new_array(array(int)), new_array((int, int, int)), new_array((int, int, int)), 0, 0, heap_meta0, 0))
     end
     let local_types = nc_init_local_types(fn, sig, fn_idx)
-    let stacks = nc_make_stacks(n + 1)
+    let stacks = nc_make_stacks(0)
     let tuple_meta = nc_make_tuple3s(n, (0 - 1, 0 - 1, 0 - 1))
     let call_meta = nc_make_tuple3s(n, (0, 0, 0))
     let p = nc_meta_process_loop(pool, funcs, sig, fn_idx, prog.2, count(prog.1), code, fn.5, 0, n, new_array(int), local_types, stacks, tuple_meta, call_meta, 0, 0, 0, heap_meta0, 0)

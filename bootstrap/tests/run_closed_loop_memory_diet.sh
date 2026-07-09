@@ -14,7 +14,7 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 seed="$repo_root/bootstrap/seed/gen1.seed"
 backend="$repo_root/stack/native_compile_fragment.herb"
 time_bin="${TIME_BIN:-/usr/bin/time}"
-max_rss_kb="${CLOSED_LOOP_MAX_RSS_KB:-1200000}"
+max_rss_kb="${CLOSED_LOOP_MAX_RSS_KB:-390000}"
 
 [[ -f "$seed" ]] || { echo "FAIL: closed-loop-memory-diet (missing seed $seed)"; exit 1; }
 [[ -f "$backend" ]] || { echo "FAIL: closed-loop-memory-diet (missing backend $backend)"; exit 1; }
