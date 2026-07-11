@@ -179,3 +179,5 @@ CFREE_SWITCHOVER	switchover	run_error_vocab_native.sh	-	front-end error-vocabula
 CFREE_BITEPROOF	verify-local	run_error_vocab_native_mutation.sh	-	error-vocab gate RED-first bite-proof (seed; C-free; message/code/line/payload rot each -> gate RED)
 CFREE_KERNEL	kernel-ci	run_native_codegen_link64.sh	-	native-codegen kernel gate link64 (riposte; program-authored COM1 device output, write-then-drain; QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
 CFREE_KERNEL	kernel-ci	run_native_codegen_link64_mutation.sh	-	native-codegen kernel mutation gate link64 (riposte; QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link65.sh	-	native-codegen kernel gate link65 (gyre; constant-stack tail calls on the long64 target; QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)
+CFREE_KERNEL	kernel-ci	run_native_codegen_link65_mutation.sh	-	native-codegen kernel mutation gate link65 (gyre; QEMU+Bochs substrate oracle; seed-emit, C interpreter not invoked)

@@ -20275,6 +20275,126 @@ func nc_tap_frame_size(fn):
     return s
 end
 
+-- gyre (link65): tail-call eligibility on the long64 tap target -- the Linux-parity
+-- rule (nc_is_tail_call precedent + EQUAL ARGUMENT WORDS + non-main caller). Every tap
+-- slot is one word, so equal argument words == equal arity; every tap function returns
+-- exactly one word (op-21 depth-1 invariant), so the Linux rw==my_rw leg is structural.
+-- main is EXCLUDED: its prologue has no push rbp and no return address ([rbp]/[rbp+8]
+-- would be garbage above the relocated stack top), and its op-21 falls into the grading
+-- tail -- a tail transition from main would be flatly wrong, so its calls stay E8.
+func nc_tap_is_tco(code, i, n, funcs, is_main, nparams):
+    if is_main == 1:
+        return false
+    end
+    if not nc_is_tail_call(code, i, n):
+        return false
+    end
+    if get(funcs, get(code, i).1).2 == nparams:
+        return true
+    end
+    return false
+end
+
+-- gyre: tail-transition byte length. Frame-zero caller (nparams==0, no locals -- the
+-- operand stack holds exactly nargs==0 words at a tail site, so rsp ALREADY points AT
+-- the return address and rbp is already the parent's): bare `E9 rel32` = 5. Frameful
+-- caller: preamble (4+4) + 9 per copied arg (48 8B 44 24 ib = 5; 48 89 45 ib = 4) +
+-- store r11 (4) + lea rsp (4) + mov rbp,r10 (3) + E9 rel32 (5) = 24 + 9*nargs. The
+-- 14-param cap keeps every displacement disp8 (src max 8*13=104, dst max 8+8*14=120).
+func nc_tap_tail_len(nargs, frame):
+    if frame == 0:
+        return 5
+    end
+    return 24 + 9 * nargs
+end
+
+-- gyre: per-site op size -- the tail-aware wrapper the tap grouping/sizing walkers
+-- (nc_tap_body_size, nc_tap_offsets_loop, nc_tap_lower_body) use, so a TAIL op-20 is
+-- sized as its transition and every other op keeps nc_tap_op_size. Sizing and lowering
+-- consult the SAME nc_tap_is_tco predicate, so the ERR 610/611 block-length invariants
+-- keep their teeth over tail sites.
+func nc_tap_op_size_at(code, i, n, funcs, is_main, nparams, frame):
+    if nc_tap_is_tco(code, i, n, funcs, is_main, nparams):
+        return nc_tap_tail_len(get(code, i).2, frame)
+    end
+    let il = 0
+    if i == n - 1:
+        il = 1
+    end
+    return nc_tap_op_size(get(code, i).0, get(code, i).2, il)
+end
+
+-- gyre: copy the k-th of nf argument words from the OPERAND STACK into the caller's
+-- incoming argument slots. The operand stack is the parallel-move staging area (the
+-- Linux nc_emit_tail_copy_loop discipline): every new argument was fully evaluated and
+-- pushed BEFORE any destination slot is written, so a swap `return f(b, a)` reads both
+-- sources from staged copies, never from a clobbered slot. At a tail site the operand
+-- stack holds EXACTLY the nf argument words (op-21 depth-1 invariant), arg k deepest:
+-- src = [rsp + 8*(nf-1-k)]; dst = [rbp + 8 + 8*(nf-k)] -- arg k's own incoming slot
+-- under the equal-arity rule (the Linux ng==nf specialization), disjoint from every
+-- src because the operand stack sits below the frame while the slots sit above rbp.
+func nc_tap_emit_tail_copy(obuf, k, nf):
+    if k >= nf:
+        return obuf
+    end
+    do append(obuf, 72)    -- 48 8B 44 24 ib mov rax,[rsp + 8*(nf-1-k)]
+    do append(obuf, 139)
+    do append(obuf, 68)
+    do append(obuf, 36)
+    do append(obuf, 8 * (nf - 1 - k))
+    do append(obuf, 72)    -- 48 89 45 ib    mov [rbp + 8 + 8*(nf-k)],rax
+    do append(obuf, 137)
+    do append(obuf, 69)
+    do append(obuf, 8 + 8 * (nf - k))
+    return nc_tap_emit_tail_copy(obuf, k + 1, nf)
+end
+
+-- gyre: the TAIL transition -- the long64 port of the proven Linux nc_emit_tail_call,
+-- same structure, tap ABI. Frameful caller:
+--   4C 8B 5D 08  mov r11,[rbp+8]   save the return address BEFORE any slot is touched
+--   4C 8B 55 00  mov r10,[rbp]     save the parent rbp
+--   <copy loop>                    stage-copy nf args operand-stack -> incoming slots
+--   4C 89 5D 08  mov [rbp+8],r11   rewrite the return-address slot (equal arity makes
+--                                  this slot the SAME [rbp+8] -- kept for byte-level
+--                                  parity with the Linux sequence's rslot store)
+--   48 8D 65 08  lea rsp,[rbp+8]   the STACK RECLAMATION: locals + operand stack are
+--                                  released in one move; rsp now points AT the return
+--                                  address -- exactly a fresh E8 entry's stack shape
+--   4C 89 D5     mov rbp,r10       restore the parent rbp
+--   E9 rel32     jmp callee ENTRY  the callee's own prologue re-frames at the SAME
+--                                  address -> constant stack at any depth
+-- Frame-zero caller (nparams==0): rsp already points AT the return address and rbp is
+-- already the parent's, so the transition is the bare E9. Either way the callee entry
+-- state is byte-for-byte what an E8 call would have produced (minus the pushed frame).
+func nc_tap_emit_tail_call(obuf, nargs, frame, cbase, tail_end):
+    if frame == 0:
+        do append(obuf, 233)   -- E9 rel32 jmp callee entry
+        return nc_append_rel32(obuf, cbase, tail_end)
+    end
+    do append(obuf, 76)    -- 4C 8B 5D 08 mov r11,[rbp+8]
+    do append(obuf, 139)
+    do append(obuf, 93)
+    do append(obuf, 8)
+    do append(obuf, 76)    -- 4C 8B 55 00 mov r10,[rbp]
+    do append(obuf, 139)
+    do append(obuf, 85)
+    do append(obuf, 0)
+    obuf = nc_tap_emit_tail_copy(obuf, 0, nargs)
+    do append(obuf, 76)    -- 4C 89 5D 08 mov [rbp+8],r11
+    do append(obuf, 137)
+    do append(obuf, 93)
+    do append(obuf, 8)
+    do append(obuf, 72)    -- 48 8D 65 08 lea rsp,[rbp+8] (reclaim locals + operands)
+    do append(obuf, 141)
+    do append(obuf, 101)
+    do append(obuf, 8)
+    do append(obuf, 76)    -- 4C 89 D5    mov rbp,r10
+    do append(obuf, 137)
+    do append(obuf, 213)
+    do append(obuf, 233)   -- E9 rel32    jmp callee entry
+    return nc_append_rel32(obuf, cbase, tail_end)
+end
+
 -- prologue bytes. main (frame>0): mov rbp,rsp (3) + sub rsp,8S (4) = 7. callee (frame>0):
 -- push rbp (1) + mov rbp,rsp (3) + sub rsp,8S (4) + nparams*8 param-copies. frame==0: none.
 func nc_tap_prologue_len(is_main, nparams, frame):
@@ -20297,21 +20417,20 @@ func nc_tap_epilogue_len(is_main, frame):
     return 1
 end
 
-func nc_tap_body_size(code, i, n, acc):
+-- gyre: body sizing is TAIL-AWARE via nc_tap_op_size_at (a tail op-20 is sized as its
+-- transition), so it threads (funcs, is_main, nparams, frame) -- the same context the
+-- lowering consults, keeping sizes and bytes in lockstep for the ERR 610/611 checks.
+func nc_tap_body_size(code, i, n, acc, funcs, is_main, nparams, frame):
     if i >= n:
         return acc
     end
-    let il = 0
-    if i == n - 1:
-        il = 1
-    end
-    return nc_tap_body_size(code, i + 1, n, acc + nc_tap_op_size(get(code, i).0, get(code, i).2, il))
+    return nc_tap_body_size(code, i + 1, n, acc + nc_tap_op_size_at(code, i, n, funcs, is_main, nparams, frame), funcs, is_main, nparams, frame)
 end
 
-func nc_tap_func_total(fn, is_main, frame):
+func nc_tap_func_total(fn, funcs, is_main, frame):
     let code = fn.4
     let n = count(code)
-    return nc_tap_prologue_len(is_main, fn.2, frame) + nc_tap_body_size(code, 0, n, 0) + nc_tap_epilogue_len(is_main, frame)
+    return nc_tap_prologue_len(is_main, fn.2, frame) + nc_tap_body_size(code, 0, n, 0, funcs, is_main, fn.2, frame) + nc_tap_epilogue_len(is_main, frame)
 end
 
 func nc_tap_callees_total(funcs, i, nf, acc):
@@ -20320,21 +20439,17 @@ func nc_tap_callees_total(funcs, i, nf, acc):
     end
     let fn = get(funcs, i)
     let frame = nc_tap_frame_size(fn)
-    return nc_tap_callees_total(funcs, i + 1, nf, acc + nc_tap_func_total(fn, 0, frame))
+    return nc_tap_callees_total(funcs, i + 1, nf, acc + nc_tap_func_total(fn, funcs, 0, frame))
 end
 
 -- absolute instruction offsets within one function (cur starts at the function's body
--- base = its image base + its prologue length).
-func nc_tap_offsets_loop(code, i, n, cur, offs):
+-- base = its image base + its prologue length). gyre: tail-aware via nc_tap_op_size_at.
+func nc_tap_offsets_loop(code, i, n, cur, offs, funcs, is_main, nparams, frame):
     if i >= n:
         return (offs, cur)
     end
     do add(offs, cur)
-    let il = 0
-    if i == n - 1:
-        il = 1
-    end
-    return nc_tap_offsets_loop(code, i + 1, n, cur + nc_tap_op_size(get(code, i).0, get(code, i).2, il), offs)
+    return nc_tap_offsets_loop(code, i + 1, n, cur + nc_tap_op_size_at(code, i, n, funcs, is_main, nparams, frame), offs, funcs, is_main, nparams, frame)
 end
 
 -- mov rax,[rbp + 16 + 8*(nparams-1-i)] (48 8B 45 disp8); mov [rbp - 8*(i+1)],rax
@@ -20395,8 +20510,12 @@ end
 -- lower one function body at 64-bit width with ABSOLUTE image offsets. Identical to
 -- nc64_lower_loop for ops {0,3,4,5,6,11,12,16,17,42,21}; adds op 20 (call): E8 rel32 to
 -- the callee's image base (bases[callee]) -- FORWARD or BACKWARD (recursion) via the
--- signed nc_append_rel32 -- + add rsp,8*nargs cleanup + push rax.
-func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases):
+-- signed nc_append_rel32 -- + add rsp,8*nargs cleanup + push rax. gyre: an op-20 that
+-- nc_tap_is_tco accepts (non-main, nc_is_tail_call, equal argument words) is lowered as
+-- the constant-stack TAIL transition (nc_tap_emit_tail_call, E9 -- never E8) instead;
+-- the op-21 after a tail site is still emitted (dead but shape-preserving, the Linux
+-- lowering's discipline). NON-tail calls keep the E8 + cleanup + push rax form.
+func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases, funcs, is_main, nparams, frame):
     if i >= n:
         return obuf
     end
@@ -20405,7 +20524,7 @@ func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases):
     if i == n - 1:
         il = 1
     end
-    let endoff = get(offs, i) + nc_tap_op_size(op, get(code, i).2, il)
+    let endoff = get(offs, i) + nc_tap_op_size_at(code, i, n, funcs, is_main, nparams, frame)
     if op == 0:
         obuf = nc_emit_push_int(obuf, get(code, i).1)
     elif op == 3:
@@ -20532,23 +20651,29 @@ func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases):
         let callee = get(code, i).1
         let nargs = get(code, i).2
         let cbase = get(bases, callee)
-        let call_end = get(offs, i) + 5
-        do append(obuf, 232)   -- E8 call rel32
-        obuf = nc_append_rel32(obuf, cbase, call_end)
-        if nargs > 0:
-            if 8 * nargs <= 127:
-                do append(obuf, 72)    -- 48 83 C4 ib add rsp,imm8
-                do append(obuf, 131)
-                do append(obuf, 196)
-                do append(obuf, 8 * nargs)
-            else:
-                do append(obuf, 72)    -- 48 81 C4 id add rsp,imm32
-                do append(obuf, 129)
-                do append(obuf, 196)
-                obuf = nc_append_le32(obuf, 8 * nargs)
+        if nc_tap_is_tco(code, i, n, funcs, is_main, nparams):
+            -- gyre TAIL site: the constant-stack transition; endoff is the byte after
+            -- the E9's rel32 (the transition is the whole per-site emission).
+            obuf = nc_tap_emit_tail_call(obuf, nargs, frame, cbase, endoff)
+        else:
+            let call_end = get(offs, i) + 5
+            do append(obuf, 232)   -- E8 call rel32
+            obuf = nc_append_rel32(obuf, cbase, call_end)
+            if nargs > 0:
+                if 8 * nargs <= 127:
+                    do append(obuf, 72)    -- 48 83 C4 ib add rsp,imm8
+                    do append(obuf, 131)
+                    do append(obuf, 196)
+                    do append(obuf, 8 * nargs)
+                else:
+                    do append(obuf, 72)    -- 48 81 C4 id add rsp,imm32
+                    do append(obuf, 129)
+                    do append(obuf, 196)
+                    obuf = nc_append_le32(obuf, 8 * nargs)
+                end
             end
+            do append(obuf, 80)    -- 50 push rax
         end
-        do append(obuf, 80)    -- 50 push rax
     elif op == 21:
         if il == 1:
             do append(obuf, 88)
@@ -20558,7 +20683,7 @@ func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases):
             obuf = nc_append_le32(obuf, epi - endoff)
         end
     end
-    return nc_tap_lower_body(obuf, code, i + 1, n, offs, epi, bases)
+    return nc_tap_lower_body(obuf, code, i + 1, n, offs, epi, bases, funcs, is_main, nparams, frame)
 end
 
 -- callee image bases (i starts at 1; bases[0] = main entry, already added).
@@ -20569,7 +20694,7 @@ func nc_tap_callee_bases(funcs, i, nf, cur, bases):
     do add(bases, cur)
     let fn = get(funcs, i)
     let frame = nc_tap_frame_size(fn)
-    return nc_tap_callee_bases(funcs, i + 1, nf, cur + nc_tap_func_total(fn, 0, frame), bases)
+    return nc_tap_callee_bases(funcs, i + 1, nf, cur + nc_tap_func_total(fn, funcs, 0, frame), bases)
 end
 
 func nc_tap_emit_callees(buf, funcs, i, nf, bases):
@@ -20584,8 +20709,8 @@ func nc_tap_emit_callees(buf, funcs, i, nf, bases):
         buf = nc_tap_emit_prologue(buf, 0, fn.2, frame)
     end
     let pbase = get(bases, i) + nc_tap_prologue_len(0, fn.2, frame)
-    let lay = nc_tap_offsets_loop(code, 0, n, pbase, new_array(int))
-    buf = nc_tap_lower_body(buf, code, 0, n, lay.0, lay.1, bases)
+    let lay = nc_tap_offsets_loop(code, 0, n, pbase, new_array(int), funcs, 0, fn.2, frame)
+    buf = nc_tap_lower_body(buf, code, 0, n, lay.0, lay.1, bases, funcs, 0, fn.2, frame)
     buf = nc_tap_emit_epilogue(buf, 0, frame)
     return nc_tap_emit_callees(buf, funcs, i + 1, nf, bases)
 end
@@ -20739,7 +20864,7 @@ func nc_tap_emit_program(funcs, mainidx):
     if nc_tap_uses_uart(funcs, 0, nf):
         uart_len = 56
     end
-    let main_bodylen = nc_tap_body_size(maincode, 0, mainn, 0)
+    let main_bodylen = nc_tap_body_size(maincode, 0, mainn, 0, funcs, 1, 0, main_frame)
     let v0 = 1048588
     let long_entry_vaddr = v0 + 56
     let main_body_base = 56 + main_prefix + uart_len
@@ -20780,8 +20905,8 @@ func nc_tap_emit_program(funcs, mainidx):
         do append(cbuf, 236)
         do append(cbuf, 8 * main_frame)
     end
-    let mlay = nc_tap_offsets_loop(maincode, 0, mainn, main_body_base, new_array(int))
-    cbuf = nc_tap_lower_body(cbuf, maincode, 0, mainn, mlay.0, mlay.1, bases)
+    let mlay = nc_tap_offsets_loop(maincode, 0, mainn, main_body_base, new_array(int), funcs, 1, 0, main_frame)
+    cbuf = nc_tap_lower_body(cbuf, maincode, 0, mainn, mlay.0, mlay.1, bases, funcs, 1, 0, main_frame)
     do append(cbuf, 72)    -- 48 C1 E8 20 shr rax,0x20 (grading tail)
     do append(cbuf, 193)
     do append(cbuf, 232)
