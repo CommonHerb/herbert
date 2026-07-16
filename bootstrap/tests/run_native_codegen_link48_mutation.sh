@@ -23,6 +23,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "  SKIP: qemu-system-x86_64 not found -- mutation proof needs the silicon gate"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -33,10 +34,12 @@ GROWER="$work/grower.bin"; python3 "$REF" modgrower "$GROWER" "$N"
 boot() { # kelf out
     local P; P="$(free_port)"
     python3 "$script_dir/kernel_input_feed.py" "$P" "$SEED" --hold 12 > "$work/feed.log" 2>&1 &
-    local fp=$!; local i; for i in $(seq 1 50); do grep -q LISTENING "$work/feed.log" 2>/dev/null && break; done
+    local fp=$!; local i; for i in $(seq 1 50); do grep -q LISTENING "$work/feed.log" 2>/dev/null && break; sleep 0.1; done
+    grep -q LISTENING "$work/feed.log" 2>/dev/null || { echo "FAIL: link48 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 90 qemu-system-x86_64 -cpu qemu64 -kernel "$1" -initrd "$GROWER" -debugcon file:"$2" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$P",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$P",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$2.qerr"
+        grep -qvE 'terminating on signal' "$2.qerr" 2>/dev/null && { echo "FAIL: link48 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$2.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
 }
 # control: the canonical kernel must be GREEN (else the grader is vacuous and the RED mutants prove nothing)
@@ -59,4 +62,5 @@ done
 
 echo "native-codegen link48 mutation (homestead): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link48 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link48 homestead MUTATION proof -- nogrow/noclear/eager each RED on silicon + assert_homestead False; M-eager = full output, zero demand commits)"

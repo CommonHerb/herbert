@@ -38,6 +38,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -62,15 +63,18 @@ two_boot() { # kernel-elf diskimg x boot2out [prober]
     local port; port=$(free_port); local d="$b2.d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$x" --hold 12 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link54 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 60 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$pr" -debugcon file:"$b2.b1" \
         -drive file="$img",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$b2.b1.qerr"
+        grep -qvE 'terminating on signal' "$b2.b1.qerr" 2>/dev/null && { echo "FAIL: link54 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$b2.b1.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
     timeout 40 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$READER" -debugcon file:"$b2" \
         -drive file="$img",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -serial none -monitor none -m 64M >/dev/null 2>&1
+        -serial none -monitor none -m 64M >/dev/null 2>"$b2.qerr"
+        grep -qvE 'terminating on signal' "$b2.qerr" 2>/dev/null && { echo "FAIL: link54 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$b2.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
 }
 gg() { python3 "$REF" gradedur "$1" "$2" "$3" >/dev/null 2>&1; }              # two-boot GREEN (BOOT-2 == X)?
 
@@ -80,10 +84,12 @@ hostile_run() { # kernel-elf diskimg prober inspect-lba inspect-off  -> echoes t
     local port; port=$(free_port); local d="$img.hr.d"; mkdir -p "$d"
     python3 "$feeder" "$port" 1 --hold 10 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link54 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 40 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$pr" -debugcon file:"$d/b1" \
         -drive file="$img",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$d/b1.qerr"
+        grep -qvE 'terminating on signal' "$d/b1.qerr" 2>/dev/null && { echo "FAIL: link54 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$d/b1.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
     dd if="$img" bs=1 skip=$((ilba * 512 + ioff)) count=1 status=none 2>/dev/null | od -An -tu1 | tr -d ' '
 }
@@ -211,4 +217,5 @@ done
 
 echo "native-codegen link54 durable MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link54 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link54 durable MUTATION proof -- control GREEN (the two-boot reads back the late-bound author-unknown X persisted across a reboot; every hostile write is REJECTED -- the forbidden out-of-window LBA sector + the durable sector both still hold the seeded sentinel; assert_durability TRUE); M-nowrite the PRIMARY DURABILITY DIFFERENTIAL: the same genuine kernel with ONLY the ATA write+flush (d) severed -> BOOT-2 reads a stale 0 != X -> two-boot RED + assert_durability FALSE (the WRITE/rep-outsw/CACHE-FLUSH sequence is gone); M-nowboundscheck the KEY WRITE-LBA sandbox-break: the WRITE-LBA access_ok dropped -- OUTPUT-INVISIBLE on the benign in-window two-boot (still GREEN, the output grade alone CANNOT catch it) -- caught by the HOSTILE-LBA leg (a writer to an OUT-OF-WINDOW LBA, the MBR, now LANDS -> the forbidden sector is MODIFIED, a write-anywhere escape strictly WORSE than the read leak) AND by the white-box assert_durability FALSE (the cmp ebx,WLO/WHI bound guards / their pinned jcc targets are gone); M-nowecxcheck the OFFSET sandbox-break: the OFFSET access_ok (cmp ecx,512 ; jae) dropped -- OUTPUT-INVISIBLE on the benign two-boot (still GREEN, the writer uses ECX=0) -- caught by the HOSTILE-ECX leg (a writer with a VALID in-window LBA but ECX>=512 does mov [ecx+diskbuf],DL past the 512B diskbuf, an arbitrary kernel write, AND still writes the sector -> the seeded durable sector CHANGES) AND by the white-box assert_durability FALSE (the cmp ecx,512 is gone); M-nowcld the DIRECTION-FLAG sandbox-break: the two clds (before rep stosd + before rep outsw) dropped -- OUTPUT-INVISIBLE on the benign two-boot (still GREEN, the writer's DF=0 + offset 0) -- caught by the HOSTILE-DF leg (a writer that does std=DF=1 then a benign in-window write at off>=2: the kernel inherits DF=1, the backward rep stosd zeroes the page tables below diskbuf AND the backward rep outsw sends the wrong sector content, so the sentinel never lands at that disk offset) AND by the white-box assert_durability FALSE (the FC F3 AB / FC 66 F3 6F cld adjacencies are gone). The hostile sectors are seeded with a known sentinel per-run so an escape is observable.)"

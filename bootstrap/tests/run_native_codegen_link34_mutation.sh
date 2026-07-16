@@ -33,6 +33,7 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 [[ -f "$REF" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing trikon_ref.py)"; exit 1; }
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead/timed-out QEMU run trips this -> hard fail at end
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
@@ -45,7 +46,11 @@ qemu_grade() { # elf mod kend golden kind -> 0 if grader GREEN, 1 if RED
     local elf="$1" mod="$2" kend="$3" gb="$4" kind="$5" out="$work/e9.bin"
     timeout 60 qemu-system-x86_64 -kernel "$elf" -initrd "$mod" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -monitor none -cpu qemu64 -m 64M >/dev/null 2>&1 || true
+        -monitor none -cpu qemu64 -m 64M >/dev/null 2>"$out.qerr"
+    # fail-closed: a QEMU LAUNCH failure writes to stderr, while a clean run -- even a guest fault or a
+    # hang-is-the-bite mutant -- leaves stderr EMPTY. Non-empty stderr is an unambiguous HARNESS failure, NOT
+    # a bite. (rc is NOT usable: isa-debug-exit yields arbitrary odd exit codes >124 on legit completions.)
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link34 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     python3 "$REF" grade "$out" "$kend" "$gb" "$kind" >/dev/null 2>&1
 }
 
@@ -86,5 +91,6 @@ mutate_red hardcodeaddr "$work/mod_fat.bin" 5A benign "fixed alloc literal -> re
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link34 mutation sub-test(s) failed."; exit 1; fi
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link34 HARNESS FAILURE -- a QEMU run was dead/timed-out (empty output); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link34 mutation / trikonderoga: control clean build GREEN on benign+hostile + 11 mutations each RED on the dual-substrate host grader -- ring entry (M-dpl0frame/M-callcpl0), syscall exit gate (M-gatedpl0), privileged-op isolation (M-iopl3frame/M-iomap/M-tssesp0), resume path (M-resumeorder/M-wrongcell), honest allocation (M-noexclude/M-noexclbuf/M-hardcodeaddr); $pass checks)"
 exit 0

@@ -175,8 +175,13 @@ if mint_mutant "$mfrag" "$mutc"; then
     m="$tmp/m_notco.elf"
     if compile_with "$mutc" "$T1D_SRC" "$m"; then
         boot "$m"
-        if [[ "$GOT_RC" -ne 227 || "$GOT_E9" != "de40ad" ]]; then
-            echo "M-notco bit RED: tail detection disabled -> 1,000,000-deep tail run did NOT complete (rc=$GOT_RC e9='${GOT_E9}'; genuine de40ad/227)"
+        # fail-closed (GATE-TEETH A4, as M-reclaim already does): a dead/timed-out QEMU also shows rc!=227 /
+        # e9!='' -- gate the RED on a CLEAN launch (debugcon attached + no QEMU stderr) and a non-timeout rc,
+        # so an emulator/harness failure is a HARD FAIL, never mistaken for the overflow bite.
+        if ! boot_launched_cleanly || [[ "$GOT_RC" -eq 124 ]]; then
+            fail_test "M-notco: HARNESS failure (QEMU not cleanly launched / timed out: rc=$GOT_RC debugcon=$GOT_DEBUGCON err='$GOT_ERR') -- NOT a bite"
+        elif [[ "$GOT_RC" -ne 227 || "$GOT_E9" != "de40ad" ]]; then
+            echo "M-notco bit RED: tail detection disabled -> 1,000,000-deep tail run did NOT complete (rc=$GOT_RC e9='${GOT_E9}'; genuine de40ad/227), and QEMU launched cleanly (not a harness failure)"
             pass=$((pass + 1))
         else
             fail_test "M-notco: deep tail run STILL completed genuinely with detection disabled"
@@ -287,10 +292,14 @@ forge shuffle "$base_t3d" "$tmp/m_shuffle.elf" && {
 forge wrongtarget "$base_t1t" "$tmp/m_wt.elf" && {
     wb "$tmp/m_wt.elf" t1t; expect_red $? "M-wrongtarget (white-box: E9 target is not a callee entry)"
     boot "$tmp/m_wt.elf"
-    if [[ "$GOT_E9" == "de06ad" && "$GOT_RC" -eq 111 ]]; then
+    # fail-closed (GATE-TEETH A4, as M-reclaim already does): a dead/timed-out QEMU also shows e9!=de06ad /
+    # rc!=111 -- gate the RED on a CLEAN launch + non-timeout rc so a harness failure is a HARD FAIL, not a bite.
+    if ! boot_launched_cleanly || [[ "$GOT_RC" -eq 124 ]]; then
+        fail_test "M-wrongtarget: HARNESS failure (QEMU not cleanly launched / timed out: rc=$GOT_RC debugcon=$GOT_DEBUGCON err='$GOT_ERR') -- NOT a bite"
+    elif [[ "$GOT_E9" == "de06ad" && "$GOT_RC" -eq 111 ]]; then
         fail_test "M-wrongtarget: mis-targeted tail jmp STILL graded genuinely"
     else
-        echo "M-wrongtarget bit RED: tail jmp into the prologue interior diverged (rc=$GOT_RC e9='${GOT_E9}'; genuine de06ad/111)"
+        echo "M-wrongtarget bit RED: tail jmp into the prologue interior diverged (rc=$GOT_RC e9='${GOT_E9}'; genuine de06ad/111), and QEMU launched cleanly (not a harness failure)"
         pass=$((pass + 1))
     fi
 }

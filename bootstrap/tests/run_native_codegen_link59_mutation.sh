@@ -39,6 +39,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -57,10 +58,12 @@ boot_feed() { # kernel mod out diskimg stream...
     local port; port=$(free_port); local d="$out.d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$@" --hold 16 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link59 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 70 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$mod" -debugcon file:"$out" \
         -drive file="$img",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link59 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
 }
 boot_feed_emit() { # kernel mod out diskimg stream...  (retry the genuine get until it emits; flake-robust)
@@ -144,4 +147,5 @@ done
 
 echo "native-codegen link59 backfill MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link59 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link59 backfill MUTATION proof -- control GREEN (the 4-boot capacity-exhaustion reuse leaves the on-disk FS == the first-free expected state via the raw reuseok oracle: the three NEW records occupy the freed holes {0,i,j} lowest-first with 1:1 data_lba + the freed sectors carry the new payloads + every survivor UNCHANGED; all NEW records GET-resolve by name across the reboot; assert_backfill + assert_delete TRUE); M-scanfrom1: the first-free scan starts at slot 1 (mov ecx,1) -> the slot-0 hole is NEVER reused -> reuseok RED + assert_backfill FALSE (the cross-model leg found this forge; the slot-0 forcing leg + the assert_backfill 31 C9 scan-from-0 pin catch it); M-append: allocate by count(valid==1) (the D22 bug) -> after DELeting three slots PUT writes slot count=FS_D-3 (a LIVE survivor) and clobbers it -> reuseok RED + assert_backfill FALSE; M-tailappend: slot=(highest valid index)+1 -> tail=FS_D under capacity exhaustion -> reject -> the new record is not stored -> reuseok RED + assert_backfill FALSE; M-decoupled: first-free slot but data_lba FIXED at FS_DATA_LO -> the new payload overwrites a LIVE survivor's data sector + the reused slot's data_lba != FS_DATA_LO+slot -> reuseok RED + assert_backfill FALSE; M-wrongscan: pick the FIRST valid==1 slot -> overwrite a live survivor -> reuseok RED + assert_backfill FALSE; M-nocarrycheck + M-fsnocld: the inherited FS access_ok carry-check / clds dropped -> OUTPUT-INVISIBLE on the benign reuse -> caught WHITE-BOX by assert_delete FALSE (its D2 carry guard / D3 cld-led name-compare in the DEL arm; their hostile near-4GiB-name_ptr / std=DF=1 output legs live in the frozen cairn + delete gates, which run on every CI; backfill does not change the access_ok/cld).)"

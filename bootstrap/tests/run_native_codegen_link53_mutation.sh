@@ -50,6 +50,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead/timed-out QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -119,7 +120,11 @@ qrun() { # kernel-elf out timeout prober
     timeout "$to" qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$pr" -debugcon file:"$out" \
         -drive file="$QIMG",format=raw,if=ide,index=0,media=disk \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -serial none -monitor none -m 64M >/dev/null 2>&1
+        -serial none -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    # fail-closed: a QEMU LAUNCH failure (bad drive/args/OOM/binary) writes to stderr, while a clean run --
+    # even a guest fault -- leaves stderr EMPTY. Non-empty stderr is an unambiguous HARNESS failure, NOT a bite.
+    # (rc is NOT usable: isa-debug-exit yields arbitrary odd exit codes >124 on legit completions.)
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link53 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
 }
 gg() { python3 "$REF" gradedisk "$1" "$2" "$CHASEMAP" >/dev/null 2>&1; }       # benign chase GREEN?
 gh() { python3 "$REF" gradehostile "$1" "$2" >/dev/null 2>&1; }               # hostile-LBA leg GREEN (all sentinel 0)?
@@ -234,4 +239,5 @@ done
 
 echo "native-codegen link53 platter MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link53 HARNESS FAILURE -- a QEMU run was dead/timed-out (empty output); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link53 platter MUTATION proof -- control GREEN (the emitted chain == disk_chase_expect(chasemap) on a per-run AUTHOR-UNKNOWN chasemap dd'd into the reserved window after freeze; every hostile out-of-window LBA returns the sentinel 0; assert_platter TRUE); M-fixedlba RED on the chase (ignore EBX -> every hop reads the same sector -> the chase collapses -- the read is not ADDRESSED by the module; ATA+bounds intact so assert_platter stays TRUE, the OUTPUT grade is the discriminator); M-noread RED on the chase (the ATA PIO sequence dropped -> diskbuf stays zero -> emits zeros) + assert_platter False; M-noboundscheck the KEY LBA sandbox-break: the LBA access_ok dropped -- OUTPUT-INVISIBLE on the benign window chase (still GREEN, the silicon grade alone CANNOT catch it) -- caught by the HOSTILE-LBA leg (a prober asking for an OUT-OF-WINDOW LBA, LBA 0=the MBR / FAT sectors, now gets a real NONZERO disk byte instead of the sentinel 0 -> grade_disk_hostile RED, the OUTPUT witness of the leak) AND by the white-box assert_platter False (the two cmp ebx,LO/HI bound guards are gone). The hostile sectors are seeded nonzero per-run so the leak is observable. M-noecxcheck the OFFSET sandbox-break (the SECOND untrusted scalar, the info-leak Codex caught): the OFFSET access_ok (cmp ecx,512 ; jae reject) dropped -- OUTPUT-INVISIBLE on the benign chase (still GREEN, the prober uses ECX=0) -- caught by the HOSTILE-ECX leg (a prober with a VALID in-window LBA but ECX>=512 mapping to a nonzero kernel byte just past the 512B diskbuf, now gets that real kernel byte back instead of the sentinel 0 -> grade_disk_hostile_ecx RED, the arbitrary-one-byte-kernel-read leak) AND by the white-box assert_platter False (the cmp ecx,512 is gone). M-nocld the DIRECTION-FLAG sandbox-break (the THIRD untrusted bit of state, the cld completeness item): the cld before rep insw dropped -- OUTPUT-INVISIBLE on the benign chase (still GREEN, the prober's DF=0 ambiently) -- caught by the HOSTILE-DF leg (a prober that does std (DF=1) before a valid in-window int 0x30 makes rep insw walk BACKWARD from diskbuf, corrupting kernel memory below it and giving the WRONG byte -> grade_disk_hostile_df RED) AND by the white-box assert_platter False (the cld-before-rep-insw adjacency is gone). The GENUINE kernel cld's, so build_elf(none) is byte-UNCHANGED -- M-nocld is a build_elf MUTANT variant only, no re-reseed.)"

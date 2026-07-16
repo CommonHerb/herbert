@@ -118,7 +118,11 @@ assess() { # image -> GREEN / CAUGHT:<why>
     : > "$mtmp/e9"
     timeout 30 qemu-system-x86_64 -kernel "$img" -debugcon file:"$mtmp/e9" -display none \
         -no-reboot -serial none -monitor none -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-        -cpu qemu64 -m 64M >/dev/null 2>&1
+        -cpu qemu64 -m 64M >/dev/null 2>"$mtmp/e9.qerr"
+    # F1: HARNESS-death via QEMU stderr -- a launch/host failure writes a NON-timeout stderr line; a clean run
+    # (even a guest triple fault or a timeout-kill) does not. An empty e9 after a CLEAN launch is a GENUINE
+    # no-frame bite (triple fault / no byte emitted), NOT a harness failure.
+    if grep -qvE 'terminating on signal' "$mtmp/e9.qerr" 2>/dev/null; then echo "HARNESS:qemu-launch-fail($(grep -vE 'terminating on signal' "$mtmp/e9.qerr" | head -1))"; return; fi
     local hx; hx=$(xxd -p "$mtmp/e9" 2>/dev/null | tr -d '\n')
     if [[ "$hx" =~ ^de([0-9a-f][0-9a-f])ad$ ]]; then
         local b=$(( 16#${BASH_REMATCH[1]} ))
@@ -176,8 +180,10 @@ run_forge() { # name new_image [specific_catch_substr]
     local name="$1" img="$2" want="${3:-}"
     [[ -f "$img" ]] || { fail_test "$name: forge image not produced"; return; }
     PROV_ON=1; local v1; v1=$(assess "$img")
+    [[ "$v1" == HARNESS:* ]] && { fail_test "$name: harness/emulator failure ($v1) -- NOT a genuine bite"; return; }
     if [[ "$v1" != CAUGHT:* ]]; then fail_test "$name: forge escaped the FULL gate (verdict=$v1)"; return; fi
     PROV_ON=0; local v2; v2=$(assess "$img"); PROV_ON=1
+    [[ "$v2" == HARNESS:* ]] && { fail_test "$name: harness/emulator failure ($v2) -- NOT a genuine bite"; return; }
     if [[ "$v2" != CAUGHT:* ]]; then fail_test "$name: forge escaped the gate with provenance OFF (verdict=$v2) -- only the catch-all caught it"; return; fi
     if [[ -n "$want" ]] && [[ "$v2" != *"$want"* ]]; then
         fail_test "$name: provenance-off catch ($v2) is not the expected specific defense ($want)"; return

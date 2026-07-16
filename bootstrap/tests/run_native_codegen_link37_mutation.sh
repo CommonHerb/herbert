@@ -38,6 +38,7 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 [[ -f "$feeder" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing feeder)"; exit 1; }
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
@@ -66,9 +67,11 @@ grade_benign() { # elf module fedbyte kind mutname -> 0 GREEN, 1 RED
     local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --hold 6 >"$work/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$work/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$work/feed.log" 2>/dev/null || { echo "FAIL: link37 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 60 qemu-system-x86_64 -kernel "$elf" -initrd "$mod" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link37 harness failure -- QEMU launch error (socket run): $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure
     wait "$fp" 2>/dev/null
     python3 "$REF" grade "$out" "$k" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1
 }
@@ -78,21 +81,30 @@ grade_hostile() { # elf module faultkind mutname [cr2] -> 0 GREEN, 1 RED
     local elf="$1" mod="$2" kind="$3" mn="$4" cr2="${5:-}"
     local out="$work/e9.bin"; local k; k=$(python3 "$REF" kend "$mn")
     timeout 60 qemu-system-x86_64 -kernel "$elf" -initrd "$mod" -debugcon file:"$out" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>&1 || true
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    # fail-closed: a QEMU LAUNCH failure writes to stderr, while a clean run -- even a guest fault -- leaves
+    # stderr EMPTY. Non-empty stderr is an unambiguous HARNESS failure, NOT a bite. (rc is NOT usable:
+    # isa-debug-exit yields arbitrary odd exit codes >124 on legit completions.)
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link37 harness failure -- QEMU launch error in grade_hostile: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # only a NON-timeout stderr line is a launch failure
     python3 "$REF" gradefaultcont "$out" "$k" "$kind" $cr2 >/dev/null 2>&1
 }
 # geeking: the runaway victim (EB FE) must be ASYNC-KILLED at CPL3. No feeder (never syscalls). RED = not killed.
 grade_victim() { # elf mutname -> 0 GREEN(killed), 1 RED(not killed / wrong frame)
     local elf="$1" mn="$2"; local out="$work/e9.bin"; local k; k=$(python3 "$REF" kend "$mn")
     timeout 60 qemu-system-x86_64 -kernel "$elf" -initrd "$work/mod_vict.bin" -debugcon file:"$out" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>&1 || true
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link37 harness failure -- QEMU launch error in grade_victim: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure
     python3 "$REF" gradevictim "$out" "$k" >/dev/null 2>&1
 }
 # geeking: a generalized CPL3 fault (TF/#DB) must be NAMED+continued. RED = halted (panic+shutdown).
 grade_generic() { # elf module mutname -> 0 GREEN(continued), 1 RED(halted)
     local elf="$1" mod="$2" mn="$3"; local out="$work/e9.bin"; local k; k=$(python3 "$REF" kend "$mn")
     timeout 60 qemu-system-x86_64 -kernel "$elf" -initrd "$mod" -debugcon file:"$out" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>&1 || true
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    # fail-closed: a QEMU LAUNCH failure writes to stderr, while a clean run -- even a guest fault -- leaves
+    # stderr EMPTY. Non-empty stderr is an unambiguous HARNESS failure, NOT a bite. (rc is NOT usable:
+    # isa-debug-exit yields arbitrary odd exit codes >124 on legit completions.)
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link37 harness failure -- QEMU launch error in grade_generic: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # only a NON-timeout stderr line is a launch failure
     python3 "$REF" gradegeneric "$out" "$k" >/dev/null 2>&1
 }
 
@@ -190,9 +202,11 @@ design_kills_benign_red() { # design label
     local out="$work/e9.bin"; local port; port=$(free_port)
     python3 "$feeder" "$port" "$FX" --delay 2 --hold 6 >"$work/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$work/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$work/feed.log" 2>/dev/null || { echo "FAIL: link37 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 60 qemu-system-x86_64 -kernel "$work/$design.elf" -initrd "$work/mod_echo.bin" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link37 harness failure -- QEMU launch error (socket run): $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure
     wait "$fp" 2>/dev/null
     if python3 "$REF" gradebenign "$out" "$k" "$(printf '%x' "$FX")" echo >/dev/null 2>&1; then
         fail_test "M-$design ($label): SLOW-fed benign SURVIVED -- the drain/one-shot is NOT load-bearing (no stale-tick kill)"
@@ -209,9 +223,11 @@ slow_benign_clean_green() {
     local out="$work/e9.bin"; local k; k=$(python3 "$REF" kend -); local port; port=$(free_port)
     python3 "$feeder" "$port" "$FX" --delay 2 --hold 6 >"$work/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$work/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$work/feed.log" 2>/dev/null || { echo "FAIL: link37 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 60 qemu-system-x86_64 -kernel "$work/clean.elf" -initrd "$work/mod_echo.bin" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link37 harness failure -- QEMU launch error (socket run): $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure
     wait "$fp" 2>/dev/null
     python3 "$REF" gradebenign "$out" "$k" "$(printf '%x' "$FX")" echo >/dev/null 2>&1
 }
@@ -232,14 +248,19 @@ python3 "$REF" mutate rplkey "$work/rplkey.elf"
 rk_k=$(python3 "$REF" kend rplkey); rk_out="$work/e9.bin"; rk_port=$(free_port)
 python3 "$feeder" "$rk_port" "$FX" --delay 2 --hold 6 >"$work/feed.log" 2>&1 & rk_fp=$!
 for i in $(seq 1 40); do grep -q LISTENING "$work/feed.log" && break; sleep 0.1; done
-timeout 60 qemu-system-x86_64 -kernel "$work/rplkey.elf" -initrd "$work/mod_echo.bin" -debugcon file:"$rk_out" \
-    -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-    -chardev socket,id=s0,host=127.0.0.1,port="$rk_port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
-wait "$rk_fp" 2>/dev/null
-if python3 "$REF" gradebenign "$rk_out" "$rk_k" "$(printf '%x' "$FX")" echo >/dev/null 2>&1; then
-    fail_test "M-rplkey (drop RPL-key): SLOW-fed benign SURVIVED -- the RPL discard of a CPL0 tick is NOT load-bearing"
+if ! grep -q LISTENING "$work/feed.log" 2>/dev/null; then
+    echo "FAIL: link37 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$rk_fp" 2>/dev/null; wait "$rk_fp" 2>/dev/null   # F2c: kill+reap the feeder and SKIP QEMU/wait (never mark-and-continue -- hang risk)
 else
-    pass=$((pass + 1))
+    timeout 60 qemu-system-x86_64 -kernel "$work/rplkey.elf" -initrd "$work/mod_echo.bin" -debugcon file:"$rk_out" \
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
+        -chardev socket,id=s0,host=127.0.0.1,port="$rk_port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$rk_out.qerr"
+    grep -qvE 'terminating on signal' "$rk_out.qerr" 2>/dev/null && { echo "FAIL: link37 harness failure -- QEMU launch error (rplkey run): $(grep -vE 'terminating on signal' "$rk_out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure
+    wait "$rk_fp" 2>/dev/null
+    if python3 "$REF" gradebenign "$rk_out" "$rk_k" "$(printf '%x' "$FX")" echo >/dev/null 2>&1; then
+        fail_test "M-rplkey (drop RPL-key): SLOW-fed benign SURVIVED -- the RPL discard of a CPL0 tick is NOT load-bearing"
+    else
+        pass=$((pass + 1))
+    fi
 fi
 # M-killnoeoi: WHITE-BOX-RED, silicon-silent (post-kill IF=0 -> no further delivery, so the missing EOI is
 # invisible on silicon -- the honest split). The proof is that it perturbs the byte-pinned prefix, so the
@@ -279,5 +300,6 @@ mutate_benign_red  hardcodeaddr "$work/mod_fat.bin" "$FX"  echo   "fixed alloc l
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link37 mutation sub-test(s) failed."; exit 1; fi
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link37 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link37 mutation / geeking: control clean build GREEN on benign+hostin+hostile-out/write/read/PT (fault-continue) + the runaway KILL + a generalized #DB continue + $((pass)) checks -- THE KERNEL OUTLIVES ITS MODULE: M-naive/M-oneshot_nodrain (stale tick kills the slow-fed benign -> the drain is load-bearing), M-ifzero/M-nokill/M-wrongkillcell (runaway not killed / wrong status), M-rplkey (a CPL0 tick kills the benign -> the RPL discard is load-bearing), M-panicshutdown (a CPL3 #DB halts the box -> the generalized fault->continue is load-bearing), M-shutdowngp/M-shutdownpf (#GP/#PF not named+continued), M-killnoeoi (white-box-RED: perturbs the byte-pinned prefix; silicon-silent honest split); PLUS the carried sitopia round-trip (M-noiret/M-fakeread/M-nodispatch/M-iopl3frame+hostin), the two-byte differential (M-constbl) + disasm body-scan (M-bodyio), the ring/gate/priv-op isolation (M-iopl3frame/M-iomap/M-callcpl0/M-dpl0frame/M-gatedpl0/M-tssesp0/M-wrongcell), the paging U/S partition (M-nopaging/M-canaryuser/M-nomodflip/M-nostackflip/M-pdesup/M-ptuser), and honest allocation (M-noexclude/M-noexclbuf/M-hardcodeaddr) each RED on the dual-substrate host grader / white-box scan)"
 exit 0

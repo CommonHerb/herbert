@@ -32,6 +32,7 @@ if ! have_qemu; then
 fi
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 fail=0; fail_test() { echo "FAIL: link31 mutation ($1)"; fail=$((fail + 1)); }
 
@@ -57,11 +58,16 @@ emit_for() { # elf byte -> captured e9 frame hex (e.g. de58ad) or "none"
     local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --hold 6 > "$W/f.log" 2>&1 &
     local fp=$!; local i; for i in $(seq 1 80); do grep -q LISTENING "$W/f.log" && break; sleep 0.1; done
+    grep -q LISTENING "$W/f.log" 2>/dev/null || { echo "FAIL: link31 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 60 qemu-system-x86_64 -kernel "$elf" -debugcon file:"$W/e9.bin" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 \
-        -monitor none -cpu qemu64 -m 64M >/dev/null 2>&1
+        -monitor none -cpu qemu64 -m 64M >/dev/null 2>"$W/qerr"
     wait "$fp" 2>/dev/null
+    # fail-closed: a QEMU LAUNCH failure (socket/args/binary) writes to stderr, while a clean run -- even
+    # M-decoyB's fast triple-fault to "none" -- leaves stderr EMPTY. Non-empty stderr is an unambiguous HARNESS
+    # failure, NOT the "none" bite. (rc is NOT usable: isa-debug-exit yields arbitrary odd exit codes >124.)
+    grep -qvE 'terminating on signal' "$W/qerr" 2>/dev/null && { echo "FAIL: link31 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$W/qerr" | head -1)" >&2; : > "$HVMARK"; }   # only a NON-timeout stderr line is a launch failure
     local got; got=$(xxd -p "$W/e9.bin" 2>/dev/null | tr -d '\n'); rm -rf "$W"
     [[ -n "$got" ]] && echo "$got" || echo "none"
 }
@@ -153,5 +159,6 @@ else fail_test "M-thresh: expected SILENT de58ad/de2ead (white-box only), got X=
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail link31 mutation leg(s) failed."; exit 1; fi
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link31 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: link31 mutation proof (contigo / f1 data-dependent scheduling): control shows the genuine input-driven schedule (in=65->de58ad task A, in=200->de2ead task B); SILICON-RED -- M-blind (jae->nop) collapses to always-A, M-readlit (read literal) + M-noinput (no device read) make the decision input-independent, M-swap (jae->jb) inverts the schedule, M-decoyB (seedB.eip garbage) triple-faults task B; WHITE-BOX-RED (silicon SILENT, gate catches) -- M-noeoi removes the EOI (P-sched pin gone), M-eflags flips IF=0->1 (P-seeds eflags bind), M-thresh shifts 128->100 (P-sched cmp-imm bind). Each load-bearing byte bites: the scheduler genuinely consults input-derived state to select the dispatched task."
 exit 0

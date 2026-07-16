@@ -43,6 +43,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -62,10 +63,12 @@ boot_feed() { # kernel mod out diskimg stream...
     local port; port=$(free_port); local d="$out.d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$@" --hold 16 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link55 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 70 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$mod" -debugcon file:"$out" \
         -drive file="$img",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link55 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
 }
 
@@ -268,4 +271,5 @@ done
 
 echo "native-codegen link55 cairn MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link55 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link55 cairn MUTATION proof -- control GREEN (the late-bound two-boot two-query named lookup resolves the TARGET -> P_T AND the DECOY -> P_D per-name correctly, forcing the full 16-byte compare + the per-entry data_lba; the hostile data_lba=0 (MBR) GET is REJECTED with no leak; the hostile near-4GiB dst_ptr GET is REJECTED cleanly so the getter survives + emits the found/len envelope; assert_cairn TRUE); M-returnfirst: ignore the query name, return the FIRST valid slot -> querying the DECOY emits the TARGET's payload (decoy-after-target makes 'first valid' = the target) -> RED on the DECOY query (the two-query design is what catches it -- a single TARGET query would be GREEN); M-fixedlba: ignore the matched entry's stored data_lba, always read FS_DATA_LO -> querying the DECOY reads the TARGET's sector -> wrong payload -> RED on the DECOY query; M-nolbabound: drop the data_lba BY-VALUE bound -- OUTPUT-INVISIBLE on the benign two-query (still GREEN, the records' data_lba are in-window) -- caught by the HOSTILE-data_lba leg (a crafted dir entry naming data_lba=0, the MBR, is now READ + LEAKED -- the seeded MBR sentinel comes back) AND by the white-box assert_cairn FALSE (the cmp eax,FS_DATA_LO/HI bound on the loaded data_lba is gone); M-nocarrycheck: drop the access_ok +len/+16 carry-checks -- OUTPUT-INVISIBLE on the benign two-query (still GREEN, the records' pointers don't wrap) -- caught by the HOSTILE-CARRY leg (a GET of a VALID name with a dst_ptr near 4 GiB, so dst_ptr+len WRAPS, slips the cmp edx,hi and rep movsb's into 0xFFFFFFF8, an out-of-region kernel write -> the getter #PFs and emits nothing, where the genuine kernel rejects cleanly + emits the found/len envelope); M-fsnocld (GAP-2): drop the FS string-op clds (the GET name-compare cmpsb, the GET/PUT movsb's, the PUT stosd, the FS sector insw/outsw) -- OUTPUT-INVISIBLE on the benign two-query (still GREEN, the probers' ambient DF=0) -- caught by the HOSTILE-DF leg (a getter that does std=DF=1 before SYS_FS_GET of a VALID name: the cld-less FS reps inherit DF=1 and walk BACKWARD off diskbuf/dirbuf into the page tables -> wrong resolution / a kernel-memory leak -> RED, where the genuine kernel cld's before every FS rep so it STILL resolves correctly FORWARD) AND by the white-box assert_cairn FALSE (the FC F3 A6 / FC F3 A4 / FC F3 AB cld-adjacency pin is gone); the control is proven GREEN on the SAME hostile-DF leg first so M-fsnocld's RED is attributable to the dropped clds. The hostile MBR is seeded with a known sentinel per-run so a leak is observable.)"

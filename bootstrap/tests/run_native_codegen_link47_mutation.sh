@@ -21,6 +21,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "  SKIP: qemu-system-x86_64 not found -- mutation proof needs the silicon gate"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead/timed-out QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -29,7 +30,11 @@ KEND="$(python3 "$REF" kend)"
 LIST=""; for i in $(seq 0 $((N-1))); do w="$work/tw$i.bin"; python3 "$REF" modworker_ten "$w" "$N" "$i"; [[ -z "$LIST" ]] && LIST="$w" || LIST="$LIST,$w"; done
 boot() { # kelf out
     timeout 60 qemu-system-x86_64 -cpu qemu64 -kernel "$1" -initrd "$LIST" -debugcon file:"$2" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -monitor none -m 64M >/dev/null 2>&1
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -monitor none -m 64M >/dev/null 2>"$2.qerr"
+    # fail-closed: a QEMU LAUNCH failure writes to stderr, while a clean run -- even a hang-is-the-bite mutant --
+    # leaves stderr EMPTY. Non-empty stderr is an unambiguous HARNESS failure, NOT a bite. (rc is NOT usable:
+    # isa-debug-exit yields odd codes >124 on legit completions, and hang bites legitimately time out at 124.)
+    grep -qvE 'terminating on signal' "$2.qerr" 2>/dev/null && { echo "FAIL: link47 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$2.qerr" | head -1)" >&2; : > "$HVMARK"; }   # only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
 }
 # control: the canonical kernel must be GREEN (else the grader is vacuous and the RED mutants prove nothing)
 python3 "$REF" kernelelf "$work/k_none.elf" none full >/dev/null
@@ -51,4 +56,5 @@ done
 
 echo "native-codegen link47 mutation (tenement): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link47 HARNESS FAILURE -- a QEMU run was dead/timed-out (empty output); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link47 tenement MUTATION proof -- noreclaim/noremap/noskip each RED on silicon + assert_tenement False)"

@@ -36,6 +36,7 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 [[ -f "$REF" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing lodger_ref.py)"; exit 1; }
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead/timed-out QEMU run trips this -> hard fail at end
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
@@ -48,7 +49,12 @@ qemu_grade() { # elf mod kend goldenhex -> 0 if grader GREEN, 1 if RED
     local elf="$1" mod="$2" kend="$3" gb="$4" out="$work/e9.bin"
     timeout 60 qemu-system-x86_64 -kernel "$elf" -initrd "$mod" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -monitor none -cpu qemu64 -m 64M >/dev/null 2>&1 || true
+        -monitor none -cpu qemu64 -m 64M >/dev/null 2>"$out.qerr"
+    # fail-closed: a QEMU LAUNCH failure (bad drive/args/OOM/binary/socket) writes to stderr, while a clean
+    # run -- even a guest fault or a hang-is-the-bite mutant -- leaves stderr EMPTY. So non-empty stderr is an
+    # unambiguous HARNESS failure, NOT a mutation bite. (rc is NOT usable here: isa-debug-exit yields arbitrary
+    # odd exit codes >124 on legit completions, and hang-bites legitimately time out at rc=124.)
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link33 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     python3 "$REF" grade "$out" "$kend" "$gb" - >/dev/null 2>&1
 }
 
@@ -84,5 +90,6 @@ mutate_red provlit      "$work/mod_x.bin"   "forged stack, clean dump -> witness
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link33 mutation sub-test(s) failed."; exit 1; fi
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link33 HARNESS FAILURE -- a QEMU run was dead/timed-out (empty output); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link33 mutation / lodger: control clean build GREEN + 7 mutations each RED on the dual-substrate host grader -- M-skipcall/M-modaddr SILICON-RED (the 0xE9 stream itself changes -- witness frame absent), M-aliasframe/M-provlit/M-noexclude/M-noexclbuf/M-hardcodeaddr HOST-RED (the run completes; the host witness [esp==alloc_hi] + allocator-policy recompute catch it); honest split, $pass checks)"
 exit 0

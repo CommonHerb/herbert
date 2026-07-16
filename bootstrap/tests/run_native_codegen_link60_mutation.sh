@@ -29,6 +29,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -45,10 +46,12 @@ boot_feed() { # kernel mod out diskimg stream...
     local port; port=$(free_port); local d="$out.d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$@" --hold 16 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link60 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 80 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$mod" -debugcon file:"$out" \
         -drive file="$img",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link60 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
 }
 boot_feed_emit() { # kernel mod out diskimg stream...  (retry until a ring-3 write-frame appears; flake-robust)
@@ -127,4 +130,5 @@ fi
 
 echo "native-codegen link60 tract MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link60 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link60 tract MUTATION proof -- control GREEN (the 4-boot multi-sector reuse leaves the on-disk FS == the variable-size first-fit-by-LBA expected state via the raw reuseok oracle: N0 byte-exact across its run at LO+2 with last-sector padding==0, N1 at LO+6 split remainder, survivor R0 UNCHANGED; all three GET-reassemble by name across the reboot; assert_varsize + assert_delete TRUE); M-trunc: need=1 single-sector -> a >512 record truncates -> reuseok RED (N0 payload not byte-exact across its run); M-noceil: floor (drop +511) -> drops the partial last sector -> reuseok RED; M-decoupled: ignore the first-fit scan, runstart=FS_DATA_LO -> N0 CLOBBERS the lowest live survivor R0 (wrong placement + survivor changed) -> reuseok RED; M-nopadzero: skip the diskbuf zero -> N0's partial last sector leaks the prior sector's stale bytes (padding != 0) -> reuseok RED; M-overcopy: the GET copies 512 per sector (ignore len-offset) -> over-reads PAST dst+len, OUTPUT-INVISIBLE on the benign forcing (the module SYS_WRITEs only len) -> caught WHITE-BOX by assert_varsize FALSE (the GET copy-min sig 3D 00 02 00 00 0F 86 absent); M-norunbound: drop the GET run-window straddle guard -> a corrupt/oversized dir entry reads PAST the FS window, OUTPUT-INVISIBLE on the benign (valid) forcing -> caught WHITE-BOX by assert_varsize FALSE (the run-window sig 3D <TRACT_DATA_HI> 0F 87 absent).)"

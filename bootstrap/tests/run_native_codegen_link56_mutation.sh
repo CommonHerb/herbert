@@ -42,6 +42,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -56,10 +57,12 @@ boot_feed() { # kernel out stream...
     local port; port="$(free_port)"; local d="$out.d"; rm -rf "$d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$@" --hold 16 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link56 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 70 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$DRIVER" -debugcon file:"$out" \
         -drive file="$DISK",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link56 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
 }
 
@@ -209,4 +212,5 @@ fi
 
 echo "native-codegen link56 larder MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link56 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link56 larder MUTATION proof -- control GREEN (the late-bound author-unknown alloc/free witness emits the FIRST-FIT golden -- split + prev-coalesce + next-coalesce + non-MRU reuse, sentinels intact; the interior-ptr free is a clean no-op; alloc(0)/sub-4 sizes are rejected; assert_larder TRUE); M-bump: pure bump-pointer (no free-list / reuse) -> the offset trace diverges -> RED on the witness; M-freenoop: SYS_FREE never reclaims -> later allocs OOM where genuine reuses a freed span -> RED; M-nosplit: alloc the WHOLE chunk (never split) -> the remainder is lost, later allocs OOM -> RED; M-nocoalesce: free never merges -> the coalesce-fed allocs OOM -> RED; M-noprevmerge: merge only the NEXT neighbour -> the prev-merge-fed alloc OOMs -> RED; M-nonextmerge: merge only the PREV neighbour -> the next-merge-fed alloc OOMs -> RED; M-nosizewrap: drop the size reject -- OUTPUT-INVISIBLE on the benign witness (still GREEN, the sizes are in [4,pool]) -- caught by the alloc0 leg (alloc(0) now returns a NONZERO ptr to a 0-length chunk -> RED) AND the smallalloc leg (size<4 -> a ptr to a sub-sentinel chunk shorter than the 4-byte SYS_DUMP readback -> RED) AND the white-box assert_larder FALSE (the cmp ebx,4 / cmp ebx,[pool_size] -> la_oom branch-targets are gone); M-nointeriorfree: match a chunk by RANGE not EXACT base -- OUTPUT-INVISIBLE on the benign witness (still GREEN, it only frees by exact base) -- caught by the interior leg (an interior-ptr free now frees the CONTAINING chunk -> the live readback loses it -> RED) AND the white-box assert_larder FALSE (the mov eax,[esi] ; cmp eax,[al_ptr] ; jne exact-base match is gone); the control is proven GREEN on the SAME witness + hostile legs first so each mutant's RED is attributable to the mutation; a master structural byte-pin confirms every mutant kernel differs from genuine build_elf().)"

@@ -95,7 +95,11 @@ assess() {
     : > "$d/e9"
     timeout 30 qemu-system-x86_64 -kernel "$EMIT_IMG" -debugcon file:"$d/e9" -display none \
         -no-reboot -serial none -monitor none -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-        -cpu qemu64 -m 64M >/dev/null 2>&1
+        -cpu qemu64 -m 64M >/dev/null 2>"$d/e9.qerr"
+    # F1: HARNESS-death via QEMU stderr -- a launch/host failure writes a NON-timeout stderr line; a clean run
+    # (even a guest triple fault or a timeout-kill) does not. An empty e9 after a CLEAN launch is a GENUINE
+    # no-frame bite (triple fault / no byte emitted), NOT a harness failure.
+    if grep -qvE 'terminating on signal' "$d/e9.qerr" 2>/dev/null; then echo "HARNESS:qemu-launch-fail($(grep -vE 'terminating on signal' "$d/e9.qerr" | head -1))"; return; fi
     local hx; hx=$(xxd -p "$d/e9" 2>/dev/null | tr -d '\n')
     if [[ "$hx" =~ ^de([0-9a-f][0-9a-f])ad$ ]]; then
         local b=$((16#${BASH_REMATCH[1]}))
@@ -155,6 +159,7 @@ PY
     local gen1x; gen1x=$(seed_compile "$mut" "$tmp/gen1x.$name")
     if [[ -z "$gen1x" ]]; then fail_test "$name: seed could not compile the mutated backend (two-stage stage-1 failed)"; return; fi
     local v; v=$(assess "$gen1x")
+    [[ "$v" == HARNESS:* ]] && { fail_test "$name: harness/emulator failure ($v) -- NOT a genuine bite"; return; }
     if [[ "$v" != CAUGHT:* ]]; then
         fail_test "$name: mutant escaped ALL gates (verdict=$v) -- the gate does NOT bite"; return
     fi

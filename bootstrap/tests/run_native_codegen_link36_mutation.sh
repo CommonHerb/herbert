@@ -32,6 +32,7 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 [[ -f "$feeder" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing feeder)"; exit 1; }
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
@@ -57,9 +58,11 @@ grade_benign() { # elf module fedbyte kind mutname -> 0 GREEN, 1 RED
     local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --hold 6 >"$work/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$work/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$work/feed.log" 2>/dev/null || { echo "FAIL: link36 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 60 qemu-system-x86_64 -kernel "$elf" -initrd "$mod" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link36 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
     python3 "$REF" grade "$out" "$k" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1
 }
@@ -67,7 +70,8 @@ grade_hostile() { # elf module kind mutname [cr2] -> 0 GREEN, 1 RED
     local elf="$1" mod="$2" kind="$3" mn="$4" cr2="${5:-}"
     local out="$work/e9.bin"; local k; k=$(python3 "$REF" kend "$mn")
     timeout 60 qemu-system-x86_64 -kernel "$elf" -initrd "$mod" -debugcon file:"$out" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>&1 || true
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link36 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     python3 "$REF" grade "$out" "$k" 00 "$kind" $cr2 >/dev/null 2>&1
 }
 
@@ -160,5 +164,6 @@ mutate_benign_red  hardcodeaddr "$work/mod_fat.bin" "$FX"  echo   "fixed alloc l
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link36 mutation sub-test(s) failed."; exit 1; fi
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link36 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link36 mutation / sitopia: control clean build GREEN on benign+hostin+hostile-out+write+read+PT + $((pass)) checks -- the new round-trip (M-noiret/M-fakeread/M-nodispatch/M-iopl3frame+hostin), the two-byte differential vs a dead module (M-constbl) + the disasm body-scan (M-bodyio), the carried ring/gate/priv-op isolation (M-iopl3frame/M-iomap/M-callcpl0/M-dpl0frame/M-gatedpl0/M-tssesp0/M-wrongcell), the paging U/S partition (M-nopaging/M-canaryuser/M-nomodflip/M-nostackflip/M-pdesup/M-ptuser), and honest allocation (M-noexclude/M-noexclbuf/M-hardcodeaddr) each RED on the dual-substrate host grader / white-box scan)"
 exit 0

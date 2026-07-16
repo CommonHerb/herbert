@@ -19,6 +19,7 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 REF="$script_dir/tandem_ref.py"; feeder="$script_dir/kernel_input_feed.py"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok(){ echo "  PASS: $1"; pass=$((pass+1)); }
 bad(){ echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail+1)); }
@@ -44,14 +45,17 @@ feed_run(){ # kelf modA modB kind out
     local port; port=$(free_port); local d="$out.d"; mkdir -p "$d"
     python3 "$feeder" "$port" $stream --hold 12 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link44 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 120 qemu-system-x86_64 -kernel "$kelf" -initrd "$ma,$mb" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link44 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
 }
 host_run(){ # kelf hostileA modB out
     timeout 60 qemu-system-x86_64 -kernel "$1" -initrd "$2,$3" -debugcon file:"$4" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>&1
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>"$4.qerr"
+        grep -qvE 'terminating on signal' "$4.qerr" 2>/dev/null && { echo "FAIL: link44 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$4.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
 }
 
 # control: genuine kernel + genuine modules is GREEN (the mutations are the only RED)
@@ -80,4 +84,5 @@ else ok "M-noswap is RED ($(python3 "$REF" grade "$work/nsw.out" "$KEND" gx 2>&1
 
 echo "mutation: pass=$pass fail=$fail"
 [[ $fail -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link44 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link44 tandem mutation proof)"

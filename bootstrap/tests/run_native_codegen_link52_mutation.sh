@@ -30,6 +30,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -40,9 +41,11 @@ qrun() { # kernel out timeout prober
     local kel="$1" out="$2" to="$3" pr="${4:-$PROBER}"; local P; P="$(free_port)"
     python3 "$script_dir/kernel_input_feed.py" "$P" "$SEED" --delay 1 --hold 12 > "$work/feed.log" 2>&1 &
     local fp=$!; local i; for i in $(seq 1 50); do grep -q LISTENING "$work/feed.log" 2>/dev/null && break; sleep 0.05; done
+    grep -q LISTENING "$work/feed.log" 2>/dev/null || { echo "FAIL: link52 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout "$to" qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$pr" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$P",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$P",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link52 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
 }
 gg() { python3 "$REF" gradelethe "$1" "$2" "$SEED" >/dev/null 2>&1; }   # GREEN?
@@ -94,4 +97,5 @@ done
 
 echo "native-codegen link52 lethe MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link52 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link52 lethe MUTATION proof -- control GREEN (A==x F UNCHANGED, V==y, B==y) + assert_lethe TRUE; no-warm DIFFERENTIAL RED (drop the warm and even the genuine kernel grades RED -- A reads an un-populated F -- proving the warm is the load-bearing setup); M-noinstall/noremap/sameframe/noinvlpg each RED on output + assert_lethe False; M-cr3insteadofinvlpg the KEY: a cr3 FULL flush is GREEN on output -- the silicon grade alone cannot catch it -- but assert_lethe REJECTS it (mov cr3 in the remap arm, no invlpg of V), proving the TARGETED primitive, not the heavy flush, is load-bearing; M-noinvlpg the canonical bug: the stale V->F entry survives so the post-remap write y lands in the GHOST frame F and corrupts the witness alias A -- the ghost corruption is observed in A, a DIFFERENT alias than the one written, WITHIN one execution)"

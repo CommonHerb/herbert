@@ -27,6 +27,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -42,10 +43,12 @@ boot_feed() { # kernel out ram seed [prober]
     local port; port="$(free_port)"; local d="$out.d"; rm -rf "$d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$seed" --hold 16 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link61 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 70 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$prb" -debugcon file:"$out" \
         -drive file="$DISK",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m "${ram}M" >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m "${ram}M" >/dev/null 2>"$out.qerr"
+    grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link61 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure
     wait "$fp" 2>/dev/null
 }
 is_struct_flake() { echo "$1" | grep -qiE 'MAGIC banner not found|truncated|no HWDUMP|alloc entries|hwdump entries'; }
@@ -110,10 +113,21 @@ for spec in \
   "hwbakedaddr:emit a FIXED baked address instead of the runtime top-down frame -> fails the per-run-random -m expectation -> RED"; do
     m="${spec%%:*}"; desc="${spec#*:}"
     V="$(mutant_verdict "$m" "$RAM" "$SEED")"
-    case "$V" in
-      DIVERGE)    ok "M-$m witness RED (deterministic DIVERGENCE) -- $desc" ;;
-      CONSISTENT) ok "M-$m witness RED (deterministic break: RED on every attempt, never GREEN) -- $desc" ;;
-      *)          fail_test "M-$m did NOT deterministically bite -- a GREEN appeared across retries (vacuous / flake-masked): $desc" ;;
+    case "$m" in
+      hwbumpup|hwsingleframe|hwbakedaddr)
+        # F2b (link57 DIVERGE-only stance): these are VALUE-divergence forges (baked wrong address/frame). Their
+        # bite MUST materialize as a DIVERGE (a real value-mismatch RED). CONSISTENT (RED-every-try but never a
+        # materialized divergence -- e.g. all-flake/no-trace) is a DEAD-HARNESS masquerade, NOT the bite.
+        case "$V" in
+          DIVERGE) ok "M-$m witness RED (materialized value DIVERGENCE) -- $desc" ;;
+          *)       fail_test "M-$m did NOT materialize a value DIVERGENCE (verdict=$V) -- CONSISTENT/EQUIVALENT is a dead-harness masquerade, not a genuine value bite: $desc" ;;
+        esac ;;
+      *)
+        case "$V" in
+          DIVERGE)    ok "M-$m witness RED (deterministic DIVERGENCE) -- $desc" ;;
+          CONSISTENT) ok "M-$m witness RED (deterministic break: RED on every attempt, never GREEN) -- $desc" ;;
+          *)          fail_test "M-$m did NOT deterministically bite -- a GREEN appeared across retries (vacuous / flake-masked): $desc" ;;
+        esac ;;
     esac
 done
 
@@ -133,13 +147,16 @@ for i in 1 2 3 4; do
     echo "$g" | grep -qE 'NOT enforced|> HW_MAXFRAMES' && { nc_v=DIVERGE; break; }
     nc_v=CONSISTENT
 done
-if echo "$HC" | grep -q '^GREEN' && [[ "$nc_v" != EQUIVALENT ]]; then
+if echo "$HC" | grep -q '^GREEN' && [[ "$nc_v" == DIVERGE ]]; then
+    # F2b: hwnocap must materialize its EXPLICIT over-cap divergence reason ('NOT enforced' / '> HW_MAXFRAMES').
+    # CONSISTENT (RED-every-try without that explicit reason) is a dead-harness masquerade, NOT the bite.
     note=""; [[ "$nb_benign" -eq 1 ]] && note="OUTPUT-INVISIBLE on the benign N=6 witness (still GREEN, 6<cap) yet " || note="(this run's benign witness was also non-GREEN) "
     ok "M-hwnocap the per-boot-cap drop is ${note}a hostile over-cap prober's allocs now proceed past HW_MAXFRAMES -> MORE than HW_MAXFRAMES non-zero FALLOC frames (the hw_frames[] overrun / kernel-descent path) -> RED ($nc_v); the genuine kernel CAPS (control hostile GREEN)"
 else
-    fail_test "M-hwnocap did not deterministically bite (control hostile=$(echo "$HC"|grep -oE '^(GREEN|RED)'); M-hwnocap verdict=$nc_v) -- EQUIVALENT means a GREEN appeared (vacuous / flake-masked)"
+    fail_test "M-hwnocap did not materialize its explicit over-cap divergence (control hostile=$(echo "$HC"|grep -oE '^(GREEN|RED)'); M-hwnocap verdict=$nc_v) -- only an explicit 'NOT enforced'/'> HW_MAXFRAMES' RED (DIVERGE) counts; CONSISTENT/EQUIVALENT is a dead-harness masquerade"
 fi
 
 echo "native-codegen link61 highwater MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link61 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link61 highwater MUTATION proof -- control GREEN (the author-unknown -m witness emits N top-down frames @ region_hi(-m), each holding its late-bound seed-derived payload; assert_highwater TRUE); M-hwnoinvlpg: drop the targeted invlpg -> the stale V->lastframe TLB entry serves every SYS_HWDUMP readback -> all collapse to the last payload -> RED (invlpg is load-bearing); M-hwbumpup: allocate bottom-up from a baked low base -> author-KNOWN addresses != region_hi(-m) top-down -> RED; M-hwsingleframe: one baked frame for every alloc -> every readback collapses (one shared frame, not distinct RAM) -> RED; M-hwbakedaddr: emit a fixed baked address -> fails a per-run-random -m -> RED; a master structural byte-pin confirms every mutant kernel differs from genuine build_elf() AND assert_highwater rejects each; the control is proven GREEN on the SAME author-unknown witness first so each mutant's RED is attributable to the mutation.)"

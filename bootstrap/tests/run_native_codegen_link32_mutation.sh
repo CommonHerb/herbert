@@ -36,6 +36,7 @@ if ! have_qemu; then
 fi
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 fail=0; fail_test() { echo "FAIL: link32 mutation ($1)"; fail=$((fail + 1)); }
 le32_val() { local h="${1:$2:8}"; echo $(( 16#${h:6:2}${h:4:2}${h:2:2}${h:0:2} )); }
@@ -68,10 +69,12 @@ trace_for() { # elf byte -> captured e9 trace hex (e.g. de59ad...) or "none"
     local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --hold 6 > "$W/f.log" 2>&1 &
     local fp=$!; local i; for i in $(seq 1 80); do grep -q LISTENING "$W/f.log" && break; sleep 0.1; done
+    grep -q LISTENING "$W/f.log" 2>/dev/null || { echo "FAIL: link32 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 60 qemu-system-x86_64 -kernel "$elf" -debugcon file:"$W/e9.bin" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 \
-        -monitor none -cpu qemu64 -m 64M >/dev/null 2>&1
+        -monitor none -cpu qemu64 -m 64M >/dev/null 2>"$W/e9.bin.qerr"
+        grep -qvE 'terminating on signal' "$W/e9.bin.qerr" 2>/dev/null && { echo "FAIL: link32 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$W/e9.bin.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
     # cap the capture: a stuck-schedule mutation (M-nohlt) emits unboundedly until the timeout; we only
     # need enough to distinguish from the K-frame golden, and a multi-MB hex string chokes bash.
@@ -166,5 +169,6 @@ else fail_test "M-provzero: expected SILENT $TX/$TY (white-box only), got X=$pX 
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail link32 mutation leg(s) failed."; exit 1; fi
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link32 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: link32 mutation proof (cloggard / data-dependent multi-quantum schedule): control shows the genuine input-driven schedule (in=0x0A->A,B,A,B; in=0x05->B,A,B,A); SILICON-RED -- M-cold (NOP warm-save) collapses the trace, M-nohlt (NOP hlt) stalls the schedule, M-blind (and eax,0) collapses the input-dependence to always-A, M-readlit (read literal) makes the schedule input-independent, M-decoyB (seedB.eip garbage) breaks task B's iret; WHITE-BOX-RED (silicon SILENT, gate catches) -- M-interlock removes the done-flag check (P-sched pin gone), M-provzero seeds a nonzero accumulator (P-seeds 8-zero-GP provenance pin RED). Each load-bearing byte bites: the scheduler genuinely consults input-derived state each quantum and warm-dispatches a SEQUENCE of tasks, with warmth bound white-box by the provenance pin."
 exit 0

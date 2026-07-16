@@ -29,6 +29,7 @@ if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mi
 
 source "$script_dir/native_codegen_oracle.sh"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -52,9 +53,11 @@ boot() { # modfile byte -> sets OUT (debugcon stream)
     local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --hold 6 > "$W/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$W/feed.log" 2>/dev/null || { echo "FAIL: link41 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 60 qemu-system-x86_64 -kernel "$REFK" -initrd "$mod" -debugcon file:"$OUT" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$OUT.qerr"
+        grep -qvE 'terminating on signal' "$OUT.qerr" 2>/dev/null && { echo "FAIL: link41 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$OUT.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
 }
 grade_green() { python3 "$REF" grade "$OUT" "$KEND" "$1" down >/dev/null 2>&1; }   # 0 == GREEN
@@ -109,4 +112,5 @@ PY
 then pass=$((pass + 1)); else fail_test "M-forge: assert_backward_call found a backward E8 in the non-recursive forge"; fi
 
 echo "mmj mutation proof: pass=$pass fail=$fail"
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link41 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 if [[ "$fail" -eq 0 ]]; then echo "PASS"; exit 0; else exit 1; fi

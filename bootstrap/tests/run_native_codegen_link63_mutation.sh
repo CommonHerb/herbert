@@ -77,16 +77,45 @@ python3 "$PY" "$base" noinput "$tmp/m_noin.elf"
 # (a) input white-box must fail on the forged image
 if input_wb_ok "$tmp/m_noin.elf"; then fail_test "M-noinput (input white-box) did not bite"; else pass=$((pass + 1)); fi
 # (b) runtime: feed b=8 -> genuine tri(8)=36=0x24 (de24ad). Forged pushes 0 -> tri(0)=0 -> de00ad, NOT de24ad.
+# FAIL-CLOSED (ported from link64's run_duplex): the feeder MUST reach LISTENING before we grade, and a
+# dead feeder / crashed QEMU (empty debugcon) is a HARNESS FAILURE, never a bite. The bite is the POSITIVE
+# forged outcome (the de00ad frame -- tri(0)=0), not the mere ABSENCE of de24ad (which an empty stream from
+# a dead harness would also satisfy). A runtime CONTROL boots the genuine base first so this leg is provably
+# non-vacuous (the input path is live) and M-noinput's de00ad is attributable to the forge.
 feeder="$script_dir/kernel_input_feed.py"
-port=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
-python3 "$feeder" "$port" 8 --hold 6 > "$tmp/mn.feed" 2>&1 &
-fp=$!; for i in $(seq 1 40); do grep -q LISTENING "$tmp/mn.feed" && break; sleep 0.1; done
-timeout 60 qemu-system-x86_64 -kernel "$tmp/m_noin.elf" -debugcon file:"$tmp/mn.bin" \
-    -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-    -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -cpu qemu64 -m 64M >/dev/null 2>&1
-wait "$fp" 2>/dev/null
-got=$(xxd -p "$tmp/mn.bin" 2>/dev/null | tr -d '\n')
-if echo "$got" | grep -q 'de24ad'; then fail_test "M-noinput (runtime) did not bite: forged image still emitted de24ad"; else pass=$((pass + 1)); fi
+# run_input(elf, byte) -> sets GOT_E9 GOT_RC; returns 1 on harness failure (feeder never LISTENING).
+run_input() {
+    local elf="$1" byte="$2" W; W="$(mktemp -d "$tmp/ri.XXXX")"
+    local port; port=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
+    python3 "$feeder" "$port" "$byte" --hold 6 > "$W/feed.log" 2>&1 &
+    local fp=$!
+    local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" 2>/dev/null && break; sleep 0.1; done
+    grep -q LISTENING "$W/feed.log" 2>/dev/null || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }   # feeder never LISTENING -> kill + synchronous reap -> harness failure
+    timeout 60 qemu-system-x86_64 -kernel "$elf" -debugcon file:"$W/e9.bin" \
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -cpu qemu64 -m 64M >/dev/null 2>&1
+    GOT_RC=$?
+    wait "$fp" 2>/dev/null
+    GOT_E9=$(xxd -p "$W/e9.bin" 2>/dev/null | tr -d '\n')
+    return 0
+}
+# runtime CONTROL: the GENUINE base with b=8 must emit de24ad (tri(8)=36) -> the input path is live and this
+# runtime leg is non-vacuous. A harness failure here is a hard FAIL (not a silent skip that would let the
+# M-noinput leg pass on a dead harness).
+if run_input "$base" 8; then
+    if [[ "$GOT_E9" == "de24ad" ]]; then echo "runtime control: genuine base (b=8) emits de24ad (tri(8)=36) -- the input path is live, the M-noinput runtime leg is non-vacuous"; pass=$((pass + 1));
+    else fail_test "runtime control: genuine base (b=8) expected de24ad, got '${GOT_E9:-EMPTY}' (rc=$GOT_RC) -- the harness/input path is broken"; fi
+else
+    fail_test "runtime control: HARNESS FAILURE (feeder never LISTENING) booting the genuine base -- the runtime leg cannot be trusted"
+fi
+# M-noinput runtime bite: assert the POSITIVE forged frame de00ad (tri(0)=0), NOT merely the absence of de24ad.
+if run_input "$tmp/m_noin.elf" 8; then
+    if [[ "$GOT_E9" == "de00ad" ]]; then pass=$((pass + 1));   # forged: input baked to 0 -> tri(0)=0 -> de00ad
+    elif [[ "$GOT_E9" == "de24ad" ]]; then fail_test "M-noinput (runtime) did not bite: forged image still emitted de24ad";
+    else fail_test "M-noinput (runtime): expected the POSITIVE forged frame de00ad, got '${GOT_E9:-EMPTY}' (rc=$GOT_RC) -- an empty/garbage stream is a DEAD HARNESS, NOT a bite"; fi
+else
+    fail_test "M-noinput (runtime): HARNESS FAILURE (feeder never LISTENING) -- NOT a bite"
+fi
 
 # --- M-nouart: zero the uart block -> input white-box (uart-present) must fail
 python3 "$PY" "$base" nouart "$tmp/m_nouart.elf"

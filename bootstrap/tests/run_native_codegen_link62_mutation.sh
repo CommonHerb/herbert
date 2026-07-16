@@ -31,6 +31,7 @@ backend="$repo_root/stack/native_compile_fragment.herb"
 source "$script_dir/native_codegen_oracle.sh"
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead/timed-out QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: link62-mutation ($1)"; fail=$((fail + 1)); }
@@ -241,14 +242,45 @@ cp "$base" "$tmp/m_gold.elf"; printf '\xff' | dd of="$tmp/m_gold.elf" bs=1 seek=
 got_forged=$(sha256sum "$tmp/m_gold.elf" | cut -d' ' -f1)
 if [[ "$got_base" == "$want_g" && "$got_forged" != "$want_g" ]]; then pass=$((pass + 1)); else fail_test "M-golden: golden-hash leg vacuous (base==golden:$([[ "$got_base" == "$want_g" ]] && echo yes || echo NO) forged!=golden:$([[ "$got_forged" != "$want_g" ]] && echo yes || echo NO))"; fi
 
-# M-value: perturb the graded result -> QEMU proof byte changes (boot must NOT produce de01ad/exit97)
+# runtime CONTROL (fail-closed non-vacuity): the UNFORGED base must boot to the golden proof (rc=97 + de01ad)
+# through the SAME QEMU path, so the M-value leg is provably live and a dead/timed-out QEMU cannot masquerade
+# as the M-value bite (the fail-open bug: there was NO runtime control, so rc=124/empty scored the bite).
+timeout 60 qemu-system-x86_64 -kernel "$base" -debugcon file:"$tmp/cv.bin" \
+    -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -serial none -monitor none -cpu qemu64 -m 64M >/dev/null 2>"$tmp/cv.qerr"
+crc=$?; c_e9=$(xxd -p "$tmp/cv.bin" 2>/dev/null | tr -d '\n'); cframes=$(echo "$c_e9" | grep -o 'de01ad' | wc -l | tr -d ' ')
+c_clean=1; grep -qvE 'terminating on signal' "$tmp/cv.qerr" 2>/dev/null && c_clean=0   # F1/F3: a NON-timeout stderr line = QEMU launch failure (rc is NOT usable: isa-debug-exit yields odd codes to 255)
+if [[ "$c_clean" -eq 1 && "$crc" -eq 97 && "$c_e9" == "de01ad" ]]; then echo "runtime control: unforged base cleanly boots to EXACTLY de01ad/exit97 -- the runtime leg is live/non-vacuous"; pass=$((pass + 1));
+else fail_test "runtime control: unforged base did NOT cleanly boot to exactly de01ad/exit97 (rc=$crc e9='${c_e9:-EMPTY}' clean=$c_clean) -- HARNESS failure, the M-value leg cannot be trusted"; fi
+
+# M-value: perturb the graded result -> the boot proof byte changes. Assert the POSITIVE forged outcome (the
+# boot COMPLETED with a well-formed de..ad frame that DIVERGES from the golden de01ad/exit97), NOT the mere
+# absence of de01ad (which a dead/timed-out QEMU would also satisfy -- the fail-open bug).
 python3 "$PY" "$base" mk_value "$tmp/m_val.elf"
 timeout 60 qemu-system-x86_64 -kernel "$tmp/m_val.elf" -debugcon file:"$tmp/mv.bin" \
-    -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -serial none -monitor none -cpu qemu64 -m 64M >/dev/null 2>&1
-rc=$?; frames=$(xxd -p "$tmp/mv.bin" 2>/dev/null | tr -d '\n' | grep -o 'de01ad' | wc -l | tr -d ' ')
-if [[ "$rc" -ne 97 || "$frames" -eq 0 ]]; then pass=$((pass + 1)); else fail_test "M-value: forged result still graded as the golden byte (rc=$rc frames=$frames)"; fi
+    -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -serial none -monitor none -cpu qemu64 -m 64M >/dev/null 2>"$tmp/mv.qerr"
+rc=$?; mv_e9=$(xxd -p "$tmp/mv.bin" 2>/dev/null | tr -d '\n')
+mv_clean=1; grep -qvE 'terminating on signal' "$tmp/mv.qerr" 2>/dev/null && mv_clean=0    # F3/F1: a NON-timeout stderr line = QEMU launch failure
+# F3: NO bare rc>=124 test -- isa-debug-exit yields odd, result-dependent exit codes up to 255, so rc alone is
+# NOT a harness signal (124-vs-legit collides). A genuine M-value bite REQUIRES the e9 stream to be EXACTLY ONE
+# well-formed de..ad frame whose byte is NON-golden (!= 01) AND whose isa-debug-exit code matches that byte
+# (rc == ((byte^0x31)&0x7f)<<1|1, link62's host_qemu_exit formula) -- a golden frame with an abnormal exit
+# (selective emulator death AFTER the frame landed) is a HARNESS failure, NOT the bite; so is a dead/timed-out
+# QEMU (no frame) or a launch error (non-timeout stderr).
+mv_byte=""; [[ "$mv_e9" =~ ^de([0-9a-f][0-9a-f])ad$ ]] && mv_byte="${BASH_REMATCH[1]}"
+if [[ "$mv_clean" -eq 0 ]]; then
+    fail_test "M-value: HARNESS failure -- QEMU launch error ($(grep -vE 'terminating on signal' "$tmp/mv.qerr" | head -1)); NOT a bite"
+elif [[ -z "$mv_byte" ]]; then
+    fail_test "M-value: HARNESS failure -- e9 stream is not exactly one well-formed de..ad frame (rc=$rc e9='${mv_e9:-EMPTY}'; dead/partial/timed-out QEMU); NOT a bite"
+elif [[ "$mv_byte" == "01" ]]; then
+    fail_test "M-value: forged result still graded as the golden byte de01ad (rc=$rc)"
+elif [[ "$rc" -ne $(( (((0x$mv_byte ^ 0x31) & 0x7f) << 1) | 1 )) ]]; then
+    fail_test "M-value: HARNESS failure -- divergent frame de${mv_byte}ad but exit code $rc mismatches its frame-derived expected $(( (((0x$mv_byte ^ 0x31) & 0x7f) << 1) | 1 )) (emulator died after the frame?); NOT a bite"
+else
+    pass=$((pass + 1))   # EXACTLY ONE non-golden frame + frame-coherent exit code -> genuine materialized divergence
+fi
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail link62-mutation sub-test(s) failed."; exit 1; fi
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link62 HARNESS FAILURE -- a QEMU run was dead/timed-out (empty output); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: link62-mutation ($pass legs: controls GREEN (base p1 passes the backward tail-E9 pin + the real-decode call-form whitelist) + mutations each bit RED: guard white-box, backward tail-E9 pin (M-fwdcall), reclamation-window pin (M-norecl), real-decode call-form whitelist (M-farcall), the masked-scan hole now closed (M-maskhole: 0x9A at a real instruction boundary the old scanner missed), golden hash, runtime value)"
 exit 0

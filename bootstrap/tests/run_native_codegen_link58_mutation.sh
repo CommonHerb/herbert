@@ -42,6 +42,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
 work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || true' EXIT   # scoped to THIS gate's own $work-referencing procs, never a system-wide `pkill bochs` (would false-RED a concurrent gate -- F4). This gate is QEMU-only (spawns no bochs); the scope is precautionary + reaps any hung own qemu. (Packet A item 3, 2026-07-05.)
+HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -62,10 +63,12 @@ boot_feed() { # kernel mod out diskimg stream...
     local port; port=$(free_port); local d="$out.d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$@" --hold 16 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
+    grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link58 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
     timeout 70 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$mod" -debugcon file:"$out" \
         -drive file="$img",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+        grep -qvE 'terminating on signal' "$out.qerr" 2>/dev/null && { echo "FAIL: link58 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$out.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
 }
 
@@ -215,4 +218,5 @@ fi
 
 echo "native-codegen link58 delete MUTATION proof: pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link58 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link58 delete MUTATION proof -- control GREEN (the late-bound PUT->DEL->GET 3-phase deletes the DECOY + leaves the TARGET, the hostile std=DF=1 DEL still tombstones forward, the hostile near-4GiB name_ptr DEL is rejected cleanly so the deleter survives + emits the envelope, assert_delete TRUE); M-noop: skip the tombstone -> BOOT-3 GET(DECOY) still resolves -> RED on the 3-phase + assert_delete FALSE; M-wipeall: tombstone EVERY slot -> the SURVIVOR(TARGET) is cleared -> GET(TARGET) empty -> RED + assert_delete FALSE; M-positional: delete the FIRST valid slot (ignore the name) -> deletes the TARGET(slot0) not the DECOY(slot1) -> RED + assert_delete FALSE; M-noflush: drop the CACHE FLUSH -> OUTPUT-INVISIBLE on QEMU cache=writethrough (the write persists anyway) -- caught by the white-box assert_delete FALSE (the CACHE FLUSH after WRITE SECTORS is gone) AND the BOCHS 3-phase RED (the drive-cache substrate: without the flush the tombstone never reaches the medium -> after the reboot BOOT-3 GET(DECOY) still resolves; the control is proven GREEN on the same Bochs 3-phase first); M-nocarrycheck: drop the access_ok carry-check -> OUTPUT-INVISIBLE on the benign delete -- caught by the HOSTILE-CARRY-DEL leg (a SYS_FS_DEL with name_ptr near 4 GiB, name_ptr+16 WRAPS, slips the cmp and the cld;cmpsb reads 0xFFFFFFF8 -> the deleter #PFs/emits nothing where the genuine kernel rejects cleanly + emits the envelope) + assert_delete FALSE; M-fsnocld: drop the FS clds -> OUTPUT-INVISIBLE on the benign delete (the deleter's ambient DF=0) -- caught by the HOSTILE-DF-DEL leg (std=DF=1 before SYS_FS_DEL of a VALID name: the cld-less cmpsb walks BACKWARD -> wrong/no slot tombstoned -> the record SURVIVES) + assert_delete FALSE; the control is proven GREEN on the same hostile-DF-DEL leg so M-fsnocld's RED is attributable to the dropped cld.)"
