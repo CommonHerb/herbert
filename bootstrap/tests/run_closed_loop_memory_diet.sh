@@ -15,12 +15,16 @@ seed="$repo_root/bootstrap/seed/gen1.seed"
 backend="$repo_root/stack/native_compile_fragment.herb"
 time_bin="${TIME_BIN:-/usr/bin/time}"
 max_rss_kb="${CLOSED_LOOP_MAX_RSS_KB:-390000}"
+# Fail closed on the ceiling too: a malformed value errors the ceiling [[ -gt ]]
+# inside `if` without setting fail, silently skipping the check.
+[[ "$max_rss_kb" =~ ^[1-9][0-9]*$ ]] || { echo "FAIL: closed-loop-memory-diet (CLOSED_LOOP_MAX_RSS_KB='$max_rss_kb' is not a positive decimal)"; exit 1; }
 
 [[ -f "$seed" ]] || { echo "FAIL: closed-loop-memory-diet (missing seed $seed)"; exit 1; }
 [[ -f "$backend" ]] || { echo "FAIL: closed-loop-memory-diet (missing backend $backend)"; exit 1; }
 [[ -x "$time_bin" ]] || { echo "FAIL: closed-loop-memory-diet ($time_bin missing or not executable)"; exit 1; }
 
-tmp="$(mktemp -d)"
+tmp="$(mktemp -d)" || { echo "FAIL: closed-loop-memory-diet (mktemp -d failed)"; exit 1; }
+[[ -n "$tmp" && -d "$tmp" ]] || { echo "FAIL: closed-loop-memory-diet (mktemp -d returned no directory)"; exit 1; }
 trap 'rm -rf "$tmp"' EXIT
 
 kib_to_mib() {
@@ -34,16 +38,27 @@ run_profile() {
     chmod +x "$outdir/seedbin"
 
     set +e
-    ( cd "$outdir" && "$time_bin" -v ./seedbin < "$input" > stdout.txt 2> time.txt )
+    ( cd "$outdir" && "$time_bin" -v -o time.txt ./seedbin < "$input" > stdout.txt 2> stderr.txt )
     local rc=$?
     set -e
 
     local rss elapsed
-    rss="$(awk -F: '/Maximum resident set size/ {gsub(/^[ \t]+/, "", $2); print $2}' "$outdir/time.txt")"
+    # time -o isolates the time(1) report from the child's own stderr (a child that
+    # prints a look-alike RSS line must not be able to forge the measurement), and the
+    # awk prints only on EXACTLY one matching record -- command substitution strips
+    # trailing newlines, so the exactly-one count has to happen inside awk.
+    rss="$(awk -F: '/Maximum resident set size/ {gsub(/^[ \t]+/, "", $2); v=$2; c++} END { if (c == 1) print v }' "$outdir/time.txt")"
     elapsed="$(awk '/Elapsed \(wall clock\) time/ {sub(/^.*\): /, ""); print; exit}' "$outdir/time.txt")"
-    rss="${rss:-0}"
+    # Fail closed on measurement: the RSS must be exactly one positive decimal line, or
+    # the gate fails. Defaulting an unparsed time(1) output to 0 would pass the ceiling
+    # check with no measurement at all (and a multi-line match would error out of the
+    # ceiling [[ ]] without setting fail).
+    if ! [[ "$rss" =~ ^[1-9][0-9]*$ ]]; then
+        echo "FAIL: closed-loop-memory-diet ($label leg: RSS not measured -- expected exactly one positive decimal 'Maximum resident set size' line in time -v output, got '${rss:-<empty>}')"
+        exit 1
+    fi
     elapsed="${elapsed:-unknown}"
-    printf '%s_rc=%s\n%s_rss_kb=%s\n%s_elapsed=%s\n' "$label" "$rc" "$label" "$rss" "$label" "$elapsed" > "$outdir/profile.env"
+    printf '%s_rc=%s\n%s_rss_kb=%s\n%s_elapsed=%q\n' "$label" "$rc" "$label" "$rss" "$label" "$elapsed" > "$outdir/profile.env"
 }
 
 ast_source="$tmp/ast-dump-source.herb"
