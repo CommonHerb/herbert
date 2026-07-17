@@ -46,7 +46,14 @@ concurrency:
 
 jobs:
   l1-dual-substrate:
-    runs-on: ubuntu-24.04
+    # 2026-07-17: runner bumped ubuntu-24.04 -> ubuntu-26.04 (a PREVIEW image as of this date; a
+    # deliberate substrate change, not drift). 24.04's pinned QEMU 8.2.2 deterministically SIGABRTs
+    # the link34 mutation guest (FLAKE-LOG F8; run 29548360981 attempts 1/2/3 identical) -- an abort
+    # specific to the old CI/QEMU-8.2.2 substrate, not a miscompile. ubuntu-26.04 ships qemu 10.2.x,
+    # the locally validated emulator pair the FULL 45-harness suite is golden on (quiet host,
+    # 2026-07-16, SUITE-EXIT=0). The pinned-version asserts below fail closed on either asserted
+    # emulator package-version drift (other image components stay unpinned).
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
       - name: install emulators + boot tooling (TEST dependencies)
@@ -68,12 +75,16 @@ jobs:
           qemu-system-x86_64 --version | head -1
           bochs --help 2>&1 | head -1 || true
           grub-install --version | head -1
-          # 2026-06-19: pin bumped 1:8.2.2+ds-0ubuntu1.16 -> ...1.17 (a Debian PACKAGING revision of the
-          # SAME upstream QEMU 8.2.2 -- not an upstream behaviour change). Re-validated in situ: the kernel
-          # dual-substrate gates+mutations are re-run under .17 by this very push; their green IS the goldens
-          # holding under the new package. Deliberate update per this guard's own instruction.
-          test "$q" = "1:8.2.2+ds-0ubuntu1.17" || { echo "QEMU version drift: got $q, pinned 1:8.2.2+ds-0ubuntu1.17 -- update the pin deliberately after re-validating the goldens"; exit 1; }
-          test "$b" = "2.7+dfsg-4build5" || { echo "Bochs version drift: got $b, pinned 2.7+dfsg-4build5 -- update the pin deliberately after re-validating the goldens"; exit 1; }
+          # 2026-07-17: pins bumped qemu 1:8.2.2+ds-0ubuntu1.17 -> 1:10.2.1+ds-1ubuntu3.1 and
+          # bochs 2.7+dfsg-4build5 -> 2.8+dfsg-1, with the runner move to ubuntu-26.04 (see runs-on).
+          # NOT a silent drift: QEMU 8.2.2 deterministically aborts the link34 mutation guest
+          # (FLAKE-LOG F8, 3/3 identical), while the FULL 45-harness suite (links 17..65 + mutations,
+          # KERNEL_CODEGEN_REQUIRE_EMU=1) was re-validated GREEN on exactly this qemu+bochs pair on a
+          # quiet local host 2026-07-16 (SUITE-EXIT=0; link34 mutation 3/3 green run the CI way).
+          # Deliberate update per this guard's own instruction; this push's green is the goldens
+          # holding under the new packages. (Prior bump 2026-06-19: ...1.16 -> ...1.17.)
+          test "$q" = "1:10.2.1+ds-1ubuntu3.1" || { echo "QEMU version drift: got $q, pinned 1:10.2.1+ds-1ubuntu3.1 -- update the pin deliberately after re-validating the goldens"; exit 1; }
+          test "$b" = "2.8+dfsg-1" || { echo "Bochs version drift: got $b, pinned 2.8+dfsg-1 -- update the pin deliberately after re-validating the goldens"; exit 1; }
       - name: native-codegen QEMU diagnostics (emitter diag suite -- 2026-07-03 canon-cleanup §4; a verify-local suite CI never ran, runs here because it needs QEMU)
         run: bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
       - name: L1 dual-substrate gate (lingo -- boot and emit a byte)
