@@ -48,6 +48,12 @@ printf -- '-- emit: multiboot32-geeking\nfunc main(): return module_byte() end\n
 ( cd "$KCDIR" && "$NATIVE_CODEGEN_COMPILER" < k.herb >/dev/null 2>"$KCDIR/err" )
 [[ -f "$KCDIR/a.out" ]] || { echo "FAIL: stack/native_compile_fragment.herb (kernel emit failed)"; exit 1; }
 KELF="$work/geeking.elf"; cp "$KCDIR/a.out" "$KELF"
+# byte-pin the battery's host kernel (2026-07-17, discriminator-sweep tranche 1a / Codex change 1:
+# GREF was previously only existence-checked and KELF trusted unpinned -- a silent geeking-emit drift
+# would have run the whole mutation battery on an unverified kernel). Mirrors the main gate's L73-74.
+python3 "$GREF" cleanelf "$work/geeking_ref.elf"
+cmp -s "$KELF" "$work/geeking_ref.elf" || { echo "FAIL: stack/native_compile_fragment.herb (mutation harness: compiled geeking != geeking_ref.build_elf -- refusing to run mutants on an unpinned host kernel)"; exit 1; }
+KELF_SHA="$(sha256sum "$KELF" | cut -d' ' -f1)"
 KEND="$(printf '%x' "$(elf_meta "$KELF")")"
 
 boot_answer() { # modfile byte -> sets OUT (e9 file) and ANSWER (hex of the emitted DE<x>AD byte, or empty)
@@ -60,9 +66,18 @@ boot_answer() { # modfile byte -> sets OUT (e9 file) and ANSWER (hex of the emit
     timeout 60 qemu-system-x86_64 -kernel "$KELF" -initrd "$mod" -debugcon file:"$OUT" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$OUT.qerr"
-        grep -qvE 'terminating on signal' "$OUT.qerr" 2>/dev/null && { echo "FAIL: link39 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$OUT.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
+    local rc=$?
+    grep -qvE 'terminating on signal' "$OUT.qerr" 2>/dev/null && { echo "FAIL: link39 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$OUT.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
     wait "$fp" 2>/dev/null
     ANSWER=$(xxd -p "$OUT" 2>/dev/null | tr -d '\n' | grep -oE 'de..ad' | head -1 | sed -E 's/^de(..)ad$/\1/')
+    # completion witness (2026-07-17, tranche 1a): mutants here are MODULES run on the byte-pinned
+    # GENUINE geeking kernel, whose watchdog/fault-continue guarantees every boot reaches the emit tail
+    # (kill 'K' / fault 'G'|'P'|'F' / exit -- empirically re-pinned on qemu 10.2.1). A stream with NO
+    # byte-ALIGNED terminal DE..AD frame is therefore a QEMU/capture failure, NEVER a mutant behavior
+    # -- fail closed so a dead boot cannot score as a vacuous "bite".
+    if ! xxd -p "$OUT" 2>/dev/null | tr -d '\n' | grep -qE '^([0-9a-f]{2})*de[0-9a-f]{2}ad$'; then
+        echo "FAIL: link39 harness failure -- no completion witness (no terminal DE..AD frame in the debugcon stream; the geeking host kernel guarantees module termination, so an absent frame is a QEMU/capture failure, NOT a mutant behavior) rc=$rc" >&2; : > "$HVMARK"
+    fi
 }
 
 mutate_red() { # label modfile gradekind byte  -- boot the mutant, grade as <gradekind>, MUST be RED
@@ -113,10 +128,14 @@ mutate_red wrongrel  "$work/wrongrel.bin"  tri "$FX"   # corrupted backward call
 mutate_red constbake "$work/constbake.bin" tri "$FX"   # bakes 0x5A: answer != tri(fed)
 
 # ===== the X!=Y differential bites a const-baker: answer(FX)==answer(FY) for constbake =====
+cb_sha="$(sha256sum "$work/constbake.bin" | cut -d' ' -f1)"   # freeze the mutant blob across the two boots (hash-identity, Codex change 1)
 boot_answer "$work/constbake.bin" "$FX"; ax="$ANSWER"
 boot_answer "$work/constbake.bin" "$FY"; ay="$ANSWER"
+[[ "$(sha256sum "$work/constbake.bin" | cut -d' ' -f1)" == "$cb_sha" ]] || fail_test "M-differential: constbake module changed between the FX and FY boots -- hash-identity violated"
 if [[ -n "$ax" && "$ax" == "$ay" ]]; then pass=$((pass + 1)); else fail_test "M-differential: constbake answer(FX)=0x$ax answer(FY)=0x$ay -- expected equal (dead-module signature)"; fi
 
+# hash-identity: the pinned host kernel must be unchanged across the whole battery (Codex change 1).
+[[ "$(sha256sum "$KELF" | cut -d' ' -f1)" == "$KELF_SHA" ]] || fail_test "host kernel hash changed during the battery -- hash-identity violated"
 echo "ouroboros mutation proof: pass=$pass fail=$fail"
-if [[ -e "$HVMARK" ]]; then echo "FAIL: link39 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
+if [[ -e "$HVMARK" ]]; then echo "FAIL: link39 HARNESS FAILURE -- a harness failure was flagged (feeder never LISTENING, QEMU launch error, or a boot with no completion witness); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
 if [[ "$fail" -eq 0 ]]; then echo "PASS"; exit 0; else exit 1; fi

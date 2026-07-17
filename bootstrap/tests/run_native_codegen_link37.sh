@@ -45,8 +45,13 @@
 #      E2<eip><cs>E3 frame cs==UCODE3 + answer=='F'. Without the generalization a 3-byte module halts the box.
 #  (5) THE TWO-BYTE DIFFERENTIAL (the SOLE defense vs a dead/const-baking module, carried from sitopia): the
 #      benign echo/inc/xor fed X!=Y -> T(X)!=T(Y), sha-pinned byte-identical across the X and Y runs.
-#  (6) BENIGN-LEG ROBUSTNESS (link30): feeder LISTENING + SENT + exit-code bind -> a missing-byte flake
-#      (rc 124) is diagnosed as a FLAKE, not a kernel RED.
+#  (6) BENIGN-LEG ROBUSTNESS (link30) + THE SAME-INPUT REPLAY DISCRIMINATOR (parley; tranche 1a
+#      2026-07-17, audits/discriminator-sweep-2026-07-17/CHARTER.md): feeder LISTENING + SENT +
+#      exit-code bind on EVERY QEMU leg via the shared tri-state attempt API (replay_discriminator.sh)
+#      -- a COMPLETED boot grading RED gets ONE same-input replay (constant inputs + the byte-pinned
+#      kernel re-pose the exact question): recurrence -> hard RED with both signatures; non-recurrence
+#      -> GREEN + a hedged FLAKE-DISCRIMINATED marker. No-completion re-rolls boundedly and FAILS
+#      CLOSED on exhaustion; an UNADJUDICATED completed RED fails closed regardless of REQUIRE_EMU.
 #
 # HONEST SCOPE / RESIDUE (audited-assertion, named): CANONICAL-CODEGEN for the fixed probes; KILL-ONLY (a tick
 # at CPL3 is terminal -- no resume, no run queue, no second task, no quantum accounting beyond the per-entry
@@ -80,6 +85,7 @@ if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/replay_discriminator.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing replay_discriminator.sh)"; exit 1; }
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -107,6 +113,12 @@ python3 "$REF" module HOIN "$MODHIN"; python3 "$REF" module HOST "$MODH"
 python3 "$REF" module HOSW "$MODW"; python3 "$REF" module HOSR "$MODR"; python3 "$REF" module HOSPT "$MODPT"
 python3 "$REF" module VICTIM "$MODVICT"; python3 "$REF" module RTHV "$MODRTHV"
 python3 "$REF" module TF "$MODTF"; python3 "$REF" module DIV0 "$MODDIV0"; python3 "$REF" module BADOP "$MODBADOP"
+# artifact guard (2026-07-17, tranche 1a): a missing/empty module bin must fail HERE, loudly. Under the
+# replay driver a failed QEMU -initrd launch is classed a setup failure, so an unchecked generation
+# defect would otherwise surface as a re-rolled harness error instead of naming the broken artifact.
+for _mb in "$MODECHO" "$MODINC" "$MODXOR" "$MODHIN" "$MODH" "$MODW" "$MODR" "$MODPT" "$MODVICT" "$MODRTHV" "$MODTF" "$MODDIV0" "$MODBADOP"; do
+    [[ -s "$_mb" ]] || { echo "FAIL: stack/native_compile_fragment.herb (geeking_ref module generation produced no/empty $_mb)"; exit 1; }
+done
 declare -A MODF=([echo]="$MODECHO" [inc]="$MODINC" [xor]="$MODXOR")
 PTADDR="$(python3 "$REF" ptaddr)"
 PREFIX_LEN=24564
@@ -215,82 +227,132 @@ whitebox() { # label elf  (EXACT prefix + EXACT epilogue + disasm body scan vs s
     [[ "$ok" -eq 1 ]]
 }
 
-# QEMU benign round-trip with the late-bound socket COM1 feeder + exit-code bind (link30 robustness).
-qemu_benign() { # label kelf kind fedbyte -> 0 if GREEN + rc bound + frames present
-    local label="$1" kelf="$2" kind="$3" byte="$4"
+# QEMU benign round-trip with the late-bound socket COM1 feeder + exit-code bind (link30 robustness),
+# run through the shared same-input replay driver (replay_discriminator.sh -- see header bullet 6).
+attempt_benign() { # kelf kind fedbyte out  (tri-state: sets ATT/ATT_SIG/ATT_HERR/ATT_CTX, never fail_tests)
+    local kelf="$1" kind="$2" byte="$3" out="$4"
+    replay_capture_ctx "$kelf" "${MODF[$kind]}" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
     local f ex; f=$(host_T "$kind" "$byte"); ex=$(host_qemu_exit "$f")
-    local out="$work/$label.$kind.$byte.bin"; local port; port=$(free_port)
-    local W="$work/$label.$kind.$byte.d"; mkdir -p "$W"
-    python3 "$feeder" "$port" "$byte" --hold 6 > "$W/feed.log" 2>&1 &
-    local fp=$!
+    local W="$out.d"; mkdir -p "$W"; local port; port=$(free_port)
+    python3 "$feeder" "$port" "$byte" --hold 6 > "$W/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
+    if ! grep -q LISTENING "$W/feed.log" 2>/dev/null; then
+        kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
+        ATT=SETUP_FAILURE; ATT_HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; return 0
+    fi
     timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "${MODF[$kind]}" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?; wait "$fp" 2>/dev/null
+    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
-    # FLAKE guard: a missing byte spins to the 60s timeout (rc 124) with no read frame; report as a flake,
-    # not a kernel RED (link30 robustness -- distinguishes feeder failure from a kernel defect).
-    if ! grep -q SENT "$W/feed.log" 2>/dev/null; then fail_test "$label $kind byte=$byte: FEEDER FLAKE (never logged SENT; not a kernel verdict) rc=$rc"; return 1; fi
-    if [[ "$rc" -eq 124 ]]; then fail_test "$label $kind byte=$byte: 60s TIMEOUT (rc 124) -- feeder/timeout flake, not a kernel RED"; return 1; fi
-    if [[ "$rc" -ne "$ex" ]]; then fail_test "$label $kind byte=$byte: exit rc=$rc != host_qemu_exit(T=$f)=$ex"; return 1; fi
-    if python3 "$REF" grade "$out" "$kend" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1; then return 0; fi
-    fail_test "$label $kind byte=$byte: $(python3 "$REF" grade "$out" "$kend" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
+    local g grc; g="$(python3 "$REF" grade "$out" "$kend" "$(printf '%x' "$byte")" "$kind" 2>&1)"; grc=$?
+    if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; return 0; fi
+    ATT=COMPLETED_RED
+    ATT_SIG="rc=$rc want=$ex(T=$f) grade=$([[ "$grc" -eq 0 ]] && echo GREEN || echo "RED: $(echo "$g" | tr '\n' ' ')")"
+    return 0
+}
+qemu_benign() { # label kelf kind fedbyte -> 0 iff adjudicated GREEN (rc bound + grade, replay-discriminated)
+    local label="$1" kelf="$2" kind="$3" byte="$4"
+    run_qemu_leg "$label $kind byte=$byte" "$work/$label.$kind.$byte" attempt_benign "$kelf" "$kind" "$byte"
 }
 
 # geeking: a hostile probe now FAULTS *and the kernel CONTINUES* (fault->continue). So the grader is
 # gradefaultcont: the #GP/#PF witness frame BY VALUE (carried nokta pins) AND answer=='G'/'P' (DE47AD/DE50AD)
 # AND no SYS_EXIT breach. (sitopia graded these as "module never SYS_EXITs"; under geeking the kernel survives
 # the fault and names it -- a STRICTLY STRONGER positive assertion.)
+attempt_hostile() { # kelf mod faultkind cr2 out   (rc now CAPTURED and bound -- the ||-true discard is gone)
+    local kelf="$1" mod="$2" kind="$3" cr2="$4" out="$5"
+    replay_capture_ctx "$kelf" "$mod" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
+    local ans; case "$kind" in hostile|hostin) ans=71 ;; *) ans=80 ;; esac   # 'G'->237 / 'P'->195, empirically re-pinned 2026-07-17
+    local ex; ex=$(host_qemu_exit "$ans")
+    timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$mod" -debugcon file:"$out" \
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    local rc=$?
+    qemu_classify "$rc" "$out" "$out.qerr" "" || return 0
+    local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
+    local g grc; g="$(python3 "$REF" gradefaultcont "$out" "$kend" "$kind" $cr2 2>&1)"; grc=$?
+    if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; return 0; fi
+    ATT=COMPLETED_RED
+    ATT_SIG="rc=$rc want=$ex grade=$([[ "$grc" -eq 0 ]] && echo GREEN || echo "RED: $(echo "$g" | tr '\n' ' ')")"
+    return 0
+}
 qemu_hostile() { # label kelf modfile faultkind [cr2]   (faultkind: hostile|hostin|pfault|pfault_read|pfault_pt)
     local label="$1" kelf="$2" mod="$3" kind="$4" cr2="${5:-}"
-    local out="$work/$label.$kind.bin"
-    timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$mod" -debugcon file:"$out" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>&1 || true
-    local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
-    if python3 "$REF" gradefaultcont "$out" "$kend" "$kind" $cr2 >/dev/null 2>&1; then return 0; fi
-    fail_test "$label fault-continue $kind: $(python3 "$REF" gradefaultcont "$out" "$kend" "$kind" $cr2 2>&1 | tr '\n' ' ')"; return 1
+    run_qemu_leg "$label fault-continue $kind" "$work/$label.$kind" attempt_hostile "$kelf" "$mod" "$kind" "$cr2"
 }
 
 # geeking: the runaway VICTIM (EB FE) -- the async one-shot timer must fire AT CPL3 and KILL it (the first
 # CPU-authored async ring-cross frame). No feeder (the spinner never syscalls). gradevictim pins the kill
 # frame BY VALUE (eip==mod_start, cs==UCODE3, useresp==alloc_hi, eflags RF-masked==0x202, answer=='K').
-qemu_victim() { # label kelf
-    local label="$1" kelf="$2"; local out="$work/$label.victim.bin"
+attempt_victim() { # kelf out
+    local kelf="$1" out="$2"
+    replay_capture_ctx "$kelf" "$MODVICT" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
     timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$MODVICT" -debugcon file:"$out" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>&1 || true
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    local rc=$?
+    qemu_classify "$rc" "$out" "$out.qerr" "" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
-    if python3 "$REF" gradevictim "$out" "$kend" >/dev/null 2>&1; then return 0; fi
-    fail_test "$label victim: $(python3 "$REF" gradevictim "$out" "$kend" 2>&1 | tr '\n' ' ')"; return 1
+    local g grc; g="$(python3 "$REF" gradevictim "$out" "$kend" 2>&1)"; grc=$?
+    if [[ "$grc" -eq 0 && "$rc" -eq 245 ]]; then ATT=COMPLETED_GREEN; return 0; fi   # 245 = host_qemu_exit('K')
+    ATT=COMPLETED_RED
+    ATT_SIG="rc=$rc want=245 grade=$([[ "$grc" -eq 0 ]] && echo GREEN || echo "RED: $(echo "$g" | tr '\n' ' ')")"
+    return 0
+}
+qemu_victim() { # label kelf
+    local label="$1" kelf="$2"
+    run_qemu_leg "$label victim" "$work/$label.victim" attempt_victim "$kelf"
 }
 
 # geeking: READ-THEN-HANG -- the module does ONE round-trip SYS_READ (needs the feeder) then spins; proves the
 # watchdog is RE-ARMED by do_read's drain_then_rearm() and bites AFTER a syscall, not just on initial entry.
-qemu_readhang() { # label kelf fedbyte
-    local label="$1" kelf="$2" byte="$3"; local out="$work/$label.rthv.$byte.bin"
-    local W="$work/$label.rthv.$byte.d"; mkdir -p "$W"; local port; port=$(free_port)
+attempt_readhang() { # kelf fedbyte out
+    local kelf="$1" byte="$2" out="$3"
+    replay_capture_ctx "$kelf" "$MODRTHV" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
+    local W="$out.d"; mkdir -p "$W"; local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --hold 6 > "$W/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
+    if ! grep -q LISTENING "$W/feed.log" 2>/dev/null; then
+        kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
+        ATT=SETUP_FAILURE; ATT_HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; return 0
+    fi
     timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$MODRTHV" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1 || true
-    wait "$fp" 2>/dev/null
-    if ! grep -q SENT "$W/feed.log" 2>/dev/null; then fail_test "$label readhang byte=$byte: FEEDER FLAKE (no SENT)"; return 1; fi
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    local rc=$?; wait "$fp" 2>/dev/null
+    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
-    if python3 "$REF" gradereadhang "$out" "$kend" "$(printf '%x' "$byte")" >/dev/null 2>&1; then return 0; fi
-    fail_test "$label readhang byte=$byte: $(python3 "$REF" gradereadhang "$out" "$kend" "$(printf '%x' "$byte")" 2>&1 | tr '\n' ' ')"; return 1
+    local g grc; g="$(python3 "$REF" gradereadhang "$out" "$kend" "$(printf '%x' "$byte")" 2>&1)"; grc=$?
+    if [[ "$grc" -eq 0 && "$rc" -eq 245 ]]; then ATT=COMPLETED_GREEN; return 0; fi   # ends watchdog-killed -> 'K' -> 245
+    ATT=COMPLETED_RED
+    ATT_SIG="rc=$rc want=245 grade=$([[ "$grc" -eq 0 ]] && echo GREEN || echo "RED: $(echo "$g" | tr '\n' ' ')")"
+    return 0
+}
+qemu_readhang() { # label kelf fedbyte
+    local label="$1" kelf="$2" byte="$3"
+    run_qemu_leg "$label readhang byte=$byte" "$work/$label.rthv.$byte" attempt_readhang "$kelf" "$byte"
 }
 
 # geeking GENERALIZED fault->continue (Codex gift): a CPL3 CPU exception with NO dedicated handler
 # (#DB via TF, #DE div0, #UD bad opcode) -> named 'F'(0x46) + continue. gradegeneric pins the E2/E3 frame
 # cs==UCODE3 + answer==0x46. Without this generalization a 3-byte module halts the machine.
-qemu_generic() { # label kelf modfile probe
-    local label="$1" kelf="$2" mod="$3" probe="$4"; local out="$work/$label.gf.$probe.bin"
+attempt_generic() { # kelf modfile out
+    local kelf="$1" mod="$2" out="$3"
+    replay_capture_ctx "$kelf" "$mod" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
     timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$mod" -debugcon file:"$out" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>&1 || true
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    local rc=$?
+    qemu_classify "$rc" "$out" "$out.qerr" "" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
-    if python3 "$REF" gradegeneric "$out" "$kend" >/dev/null 2>&1; then return 0; fi
-    fail_test "$label generic-fault $probe: $(python3 "$REF" gradegeneric "$out" "$kend" 2>&1 | tr '\n' ' ')"; return 1
+    local g grc; g="$(python3 "$REF" gradegeneric "$out" "$kend" 2>&1)"; grc=$?
+    if [[ "$grc" -eq 0 && "$rc" -eq 239 ]]; then ATT=COMPLETED_GREEN; return 0; fi   # 239 = host_qemu_exit('F')
+    ATT=COMPLETED_RED
+    ATT_SIG="rc=$rc want=239 grade=$([[ "$grc" -eq 0 ]] && echo GREEN || echo "RED: $(echo "$g" | tr '\n' ' ')")"
+    return 0
+}
+qemu_generic() { # label kelf modfile probe
+    local label="$1" kelf="$2" mod="$3" probe="$4"
+    run_qemu_leg "$label generic-fault $probe" "$work/$label.gf.$probe" attempt_generic "$kelf" "$mod"
 }
 
 bochs_benign() { # label kelf kind byte  -> 0 if read+exit frames + answer match + clean shutdown
@@ -346,7 +408,7 @@ if i>=0:
     open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
 else: open(sys.argv[2],'wb').write(b'')
 PY
-    local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null || echo 0)
+    local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"   # no ||-echo: grep -c already prints 0 on no-match (the old `|| echo 0` emitted "0\n0", non-numeric in [[ -ge ]])
     local kend; kend=$(printf '%x' "$(elf_meta "$2")")
     if python3 "$REF" grade "$W/e9.bin" "$kend" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1 && [[ "$sd" -ge 1 ]]; then return 0; fi
     fail_test "$label Bochs $kind byte=$byte (shutdown=$sd): $(python3 "$REF" grade "$W/e9.bin" "$kend" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
@@ -405,7 +467,7 @@ if i>=0:
 else: open(sys.argv[2],'wb').write(b'')
 PY
     BX_E9="$W/e9.bin"
-    BX_SD=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null || echo 0)
+    BX_SD=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); BX_SD="${BX_SD:-0}"   # no ||-echo: grep -c already prints 0 on no-match (the old `|| echo 0` emitted "0\n0", non-numeric in [[ -ge ]])
     return 0
 }
 

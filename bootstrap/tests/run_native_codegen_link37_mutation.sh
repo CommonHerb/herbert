@@ -145,11 +145,15 @@ dd if="$work/bodyio.elf" of="$work/bodyio.body" bs=1 skip=$((4108+24564)) count=
 bio_io=$(objdump -D -b binary -m i386 -M att "$work/bodyio.body" 2>/dev/null | awk -F'\t' 'NF>=3{print $3}' | grep -cE '^(in|inb|inl|out|outb|outl|ins|insb|insl|insw|outs|outsb|outsl|outsw)\b')
 if [[ "$bio_io" -ge 1 ]]; then
     # confirm it ALSO grades GREEN on the host (proving the disasm scan -- not the host grader -- is the
-    # load-bearing control for the no-body-I/O property).
+    # load-bearing control for the no-body-I/O property). The confirmation GATES the pass (2026-07-17,
+    # discriminator-sweep tranche 1a: pass++ previously sat OUTSIDE this check, making the host-GREEN
+    # half decorative -- a RED here means the harness's "only the scan catches it" claim is broken).
     if grade_benign "$work/bodyio.elf" "$work/mod_echo.bin" "$FX" echo bodyio; then
         echo "  (M-bodyio: in al,0x3F in the body -> host grader GREEN but the disasm body-scan catches it, io_count=$bio_io)"
+        pass=$((pass+1))
+    else
+        fail_test "M-bodyio: host grader RED on the body-I/O forge (expected GREEN -- the disasm scan, not the host grader, is the load-bearing control; RED means the harness claim is broken or the boot failed)"
     fi
-    pass=$((pass+1))
 else
     fail_test "M-bodyio: injected body I/O not detected by the disasm scan (io_count=$bio_io) -- the body-scan does NOT bite"
 fi

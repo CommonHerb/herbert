@@ -26,6 +26,12 @@
 #  (5) The FROZEN host kernel is re-emitted from `-- emit: multiboot32-geeking` == geeking_ref.build_elf.
 # Graded on the far-axis DUAL-SUBSTRATE oracle (QEMU + Bochs); the held-back MUTATION proof
 # (run_native_codegen_link39_mutation.sh) proves the answer==host_T / X!=Y / recursion checks bite.
+# The QEMU benign legs run through the shared SAME-INPUT REPLAY DISCRIMINATOR (parley; tranche 1a
+# 2026-07-17, audits/discriminator-sweep-2026-07-17/CHARTER.md, replay_discriminator.sh): a COMPLETED
+# boot grading RED gets ONE same-input replay (constant fed bytes + the byte-pinned module/kernel);
+# recurrence -> hard RED, non-recurrence -> GREEN + a hedged FLAKE-DISCRIMINATED marker; no-completion
+# re-rolls boundedly and FAILS CLOSED on exhaustion; an UNADJUDICATED completed RED fails closed
+# regardless of REQUIRE_EMU.
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -46,6 +52,7 @@ if [[ ! -f "$GREF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (miss
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/replay_discriminator.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing replay_discriminator.sh)"; exit 1; }
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -115,22 +122,33 @@ reject_probe() { # label src
     if [[ -s "$cdir/a.out" ]]; then fail_test "reject $label: out-of-subset source emitted a module a.out"; else pass=$((pass + 1)); fi
 }
 
-# ---- QEMU benign round trip: boot frozen kernel + compiled module, feed byte, grade answer==host_T ----
-qemu_benign() { # kind byte
-    local kind="$1" byte="$2"; local out="$work/$kind.$byte.e9" W="$work/$kind.$byte.d"; mkdir -p "$W"
+# ---- QEMU benign round trip: boot frozen kernel + compiled module, feed byte, grade answer==host_T,
+#      through the shared same-input replay driver (replay_discriminator.sh -- see the header note) ----
+attempt_benign() { # kind byte out  (tri-state: sets ATT/ATT_SIG/ATT_HERR/ATT_CTX, never fail_tests)
+    local kind="$1" byte="$2" out="$3"
+    replay_capture_ctx "$KELF" "${MODF[$kind]}" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
     local f ex; f=$(python3 "$REF" hostT "$kind" "$byte"); ex=$(host_qemu_exit "$f")
-    local port; port=$(free_port)
+    local W="$out.d"; mkdir -p "$W"; local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --hold 6 > "$W/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
+    if ! grep -q LISTENING "$W/feed.log" 2>/dev/null; then
+        kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
+        ATT=SETUP_FAILURE; ATT_HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; return 0
+    fi
     timeout 60 qemu-system-x86_64 -kernel "$KELF" -initrd "${MODF[$kind]}" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?; wait "$fp" 2>/dev/null
-    if ! grep -q SENT "$W/feed.log" 2>/dev/null; then fail_test "$kind byte=$byte: FEEDER FLAKE (no SENT) rc=$rc"; return 1; fi
-    if [[ "$rc" -eq 124 ]]; then fail_test "$kind byte=$byte: 60s TIMEOUT (rc 124) -- feeder/timeout flake"; return 1; fi
-    if [[ "$rc" -ne "$ex" ]]; then fail_test "$kind byte=$byte: exit rc=$rc != host_qemu_exit(T=$f)=$ex"; return 1; fi
-    if python3 "$REF" grade "$out" "$KEND" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1; then return 0; fi
-    fail_test "$kind byte=$byte: $(python3 "$REF" grade "$out" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
+    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" || return 0
+    local g grc; g="$(python3 "$REF" grade "$out" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1)"; grc=$?
+    if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; return 0; fi
+    ATT=COMPLETED_RED
+    ATT_SIG="rc=$rc want=$ex(T=$f) grade=$([[ "$grc" -eq 0 ]] && echo GREEN || echo "RED: $(echo "$g" | tr '\n' ' ')")"
+    return 0
+}
+qemu_benign() { # kind byte -> 0 iff adjudicated GREEN (rc bound + grade, replay-discriminated)
+    local kind="$1" byte="$2"
+    run_qemu_leg "$kind byte=$byte" "$work/$kind.$byte" attempt_benign "$kind" "$byte"
 }
 
 # ---- Bochs benign round trip (independent second emulator): GRUB multiboot + module ----
@@ -182,7 +200,7 @@ if i>=0:
     open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
 else: open(sys.argv[2],'wb').write(b'')
 PY
-    local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null || echo 0)
+    local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"   # no ||-echo: grep -c already prints 0 on no-match (the old `|| echo 0` emitted "0\n0", non-numeric in [[ -ge ]])
     if python3 "$REF" grade "$W/e9.bin" "$KEND" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1 && [[ "$sd" -ge 1 ]]; then return 0; fi
     fail_test "$kind Bochs byte=$byte (shutdown=$sd): $(python3 "$REF" grade "$W/e9.bin" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
 }
