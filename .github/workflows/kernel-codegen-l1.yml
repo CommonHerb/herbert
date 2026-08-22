@@ -83,7 +83,13 @@ jobs:
           # quiet local host 2026-07-16 (SUITE-EXIT=0; link34 mutation 3/3 green run the CI way).
           # Deliberate update per this guard's own instruction; this push's green is the goldens
           # holding under the new packages. (Prior bump 2026-06-19: ...1.16 -> ...1.17.)
-          test "$q" = "1:10.2.1+ds-1ubuntu3.1" || { echo "QEMU version drift: got $q, pinned 1:10.2.1+ds-1ubuntu3.1 -- update the pin deliberately after re-validating the goldens"; exit 1; }
+          # 2026-08-22: qemu pin followed ...1ubuntu3.1 -> ...1ubuntu3.2 (runner package churn
+          # during the 5-week dormancy -- the F8-flagged preview-image tradeoff biting as designed;
+          # loud RED on run 32551779622, never silent reshaping). Same upstream QEMU 10.2.1,
+          # Ubuntu packaging revision only; bochs pin unchanged and holding. No local re-validation
+          # host exists this session (kingdom: qemu 8.2.2, no bochs) -- this run's full 45-harness
+          # dual-substrate suite IS the golden re-validation on the new package.
+          test "$q" = "1:10.2.1+ds-1ubuntu3.2" || { echo "QEMU version drift: got $q, pinned 1:10.2.1+ds-1ubuntu3.2 -- update the pin deliberately after re-validating the goldens"; exit 1; }
           test "$b" = "2.8+dfsg-1" || { echo "Bochs version drift: got $b, pinned 2.8+dfsg-1 -- update the pin deliberately after re-validating the goldens"; exit 1; }
       - name: native-codegen QEMU diagnostics (emitter diag suite -- 2026-07-03 canon-cleanup §4; a verify-local suite CI never ran, runs here because it needs QEMU)
         run: bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
