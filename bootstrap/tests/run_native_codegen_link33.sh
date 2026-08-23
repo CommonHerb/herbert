@@ -162,25 +162,59 @@ qemu_run() { # elf mod mem outfile
         -monitor none -cpu qemu64 -m "$3" >/dev/null 2>&1 || true
 }
 
-bochs_run() { # elf mod outfile  -> sets BOCHS_SHUTDOWN file
+# ---- F2-hardened Bochs harness (discriminator-sweep tranche 1b, per the 2026-07-04 F2 sweep ----
+# pattern + the tranche-1a fail-closed tightening). The 2026-07-17 CI flake (run 29594506346
+# attempt 1) was a HOST-side loop-mount race (`wrong fs type ... /dev/loop0p1`) that fed Bochs a
+# stale disk -> shutdown=0 -> mis-scored as a kernel RED. Now: every disk-build command is CHECKED
+# with explicit mount/loop cleanup on every exit path (no global `losetup -D`); a boot attempt is
+# CLASSIFIED (DISK-BUILD(step) / NO-OUTPUT / NO-SHUTDOWN vs COMPLETED); a harness failure re-rolls
+# on a FRESH disk up to 3 attempts; exhaustion emits a greppable HARNESS-ERROR marker (never the
+# `FAIL:` kernel-RED prefix) and FAILS CLOSED UNCONDITIONALLY (the tranche-1a-endorsed tightening --
+# a gate must not PASS with an attempted leg unadjudicated, regardless of REQUIRE_EMU). Only a boot
+# that ran THROUGH `shutdown requested` is graded as a kernel verdict.
+harness_fail=0
+harness_error() { # leg-label last-class
+    echo "HARNESS-ERROR: link33 $1 harness exhausted (3 fresh-disk attempts; last=$2) -- an emulator/host harness failure, NOT adjudicated as a kernel verdict; fail-closed"
+    harness_fail=$((harness_fail + 1))
+}
+
+bochs_attempt() { # elf mod outfile  -> stdout: COMPLETED | DISK-BUILD(step) | EXTRACT-FAILURE | NO-OUTPUT | NO-SHUTDOWN
     local elf="$1" mod="$2" outfile="$3"
+    : > "$outfile"   # truncate up front: no stale stream can ever be graded (Codex leg, change 1)
     local W; W="$(mktemp -d)"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
+    local BXBIOS BXSHARE VGABIOS
+    BXBIOS="$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)"
     VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then echo "0" > "$work/.bsd"; : > "$outfile"; rm -rf "$W"; return; fi
+    if [[ -z "$BXBIOS" || -z "$VGABIOS" ]]; then rm -rf "$W"; echo "DISK-BUILD(bios-images-missing)"; return; fi
+    BXSHARE="$(dirname "$BXBIOS")"   # dirname of a VERIFIED non-empty path (dirname "" would yield "." -- Codex leg, change 3)
+    local step
+    step=$(
+      cd "$W" || { echo "cd"; exit 1; }
+      LOOP=""; MOUNTED=0
+      cleanup() { [[ "$MOUNTED" -eq 1 ]] && { sudo umount mnt >/dev/null 2>&1 || sudo umount -l mnt >/dev/null 2>&1; }; [[ -n "$LOOP" ]] && sudo losetup -d "$LOOP" >/dev/null 2>&1; }
+      trap cleanup EXIT
+      dd if=/dev/zero of=disk.img bs=1M count=64 status=none || { echo "dd"; exit 1; }
+      parted -s disk.img mklabel msdos >/dev/null || { echo "parted-mklabel"; exit 1; }
+      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null || { echo "parted-mkpart"; exit 1; }
+      parted -s disk.img set 1 boot on >/dev/null || { echo "parted-setboot"; exit 1; }
+      LOOP="$(sudo losetup -fP --show disk.img)" || { LOOP=""; echo "losetup"; exit 1; }
+      [[ -n "$LOOP" && -e "${LOOP}p1" ]] || { echo "losetup-part"; exit 1; }
+      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1 || { echo "mkfs"; exit 1; }
+      mkdir -p mnt || { echo "mkdir-mnt"; exit 1; }
+      sudo mount "${LOOP}p1" mnt || { echo "mount"; exit 1; }
+      MOUNTED=1
+      { sudo mkdir -p mnt/boot/grub && sudo cp "$elf" mnt/boot/kernel.elf && sudo cp "$mod" mnt/boot/app.bin; } || { echo "copy"; exit 1; }
+      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null || { echo "grubcfg"; exit 1; }
+      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1 || { echo "grub-install"; exit 1; }
+      sudo umount mnt || { echo "umount"; exit 1; }
+      MOUNTED=0
+      sudo losetup -d "$LOOP" || { echo "losetup-detach"; exit 1; }
+      LOOP=""
+      trap - EXIT
+      exit 0
+    ) || { # never rm -rf a tree that may still hold a live mount (Codex leg, change 2)
+           if mountpoint -q "$W/mnt" 2>/dev/null; then echo "DISK-BUILD(cleanup-umount-stuck; tempdir $W LEAKED deliberately)"; else rm -rf "$W"; echo "DISK-BUILD(${step:-unknown})"; fi; return; }
     ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf; sudo cp "$mod" mnt/boot/app.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
       cat > bochsrc.txt <<BX
 romimage: file=$BXSHARE/BIOS-bochs-legacy
 vgaromimage: file=$VGABIOS
@@ -192,14 +226,33 @@ display_library: x
 panic: action=report
 BX
       xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null > "$work/.bsd"
-    # extract the binary 0xE9 stream: from the first 0x9C entry tag through the DE??AD answer frame.
-    python3 - "$W/bochs_out.txt" "$outfile" <<'PY'
+    if [[ ! -s "$W/bochs_out.txt" ]]; then rm -rf "$W"; echo "NO-OUTPUT"; return; fi
+    local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"
+    if [[ "$sd" -lt 1 ]]; then rm -rf "$W"; echo "NO-SHUTDOWN"; return; fi
+    # completed boot: extract the binary 0xE9 stream (first 0x9C entry tag through the DE??AD frame).
+    # An extractor FAILURE is a harness event, never a gradeable completion (Codex leg, change 1).
+    python3 - "$W/bochs_out.txt" "$outfile" <<'PY' || { rm -rf "$W"; echo "EXTRACT-FAILURE"; return; }
 import sys,re
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); m=re.search(rb'\xde.\xad', d[i:]) if i>=0 else None
 open(sys.argv[2],'wb').write(d[i:i+m.end()] if (i>=0 and m) else b'')
 PY
-    rm -rf "$W"
+    rm -rf "$W"; echo "COMPLETED"
+}
+
+bochs_leg() { # leg-label elf mod outfile kendhex goldenhex  -> 0 GREEN, 1 RED/harness-exhausted
+    local leg="$1" elf="$2" mod="$3" outfile="$4" khx="$5" gb="$6"
+    local attempt cls=""
+    for attempt in 1 2 3; do
+        cls="$(bochs_attempt "$elf" "$mod" "$outfile")"
+        if [[ "$cls" == "COMPLETED" ]]; then
+            if python3 "$REF" grade "$outfile" "$khx" "$gb" - >/dev/null 2>&1; then return 0; fi
+            fail_test "$leg RED (completed Bochs boot, shutdown witnessed): $(python3 "$REF" grade "$outfile" "$khx" "$gb" - 2>&1 | tr '\n' ' ')"
+            return 1
+        fi
+        echo "HARNESS re-roll: link33 $leg attempt $attempt = $cls (fresh disk retry)" >&2
+    done
+    harness_error "$leg" "$cls"
+    return 1
 }
 
 reject_probe() { # label directive "<body>"
@@ -242,10 +295,8 @@ for label in $ALL_PROBES; do
     qemu_run "$elf" "$MODFAT" 64M "$work/$label.qfat.bin"; python3 "$REF" grade "$work/$label.qfat.bin" "$kh" "$(printf '%x' "$bx")" - 64 >/dev/null 2>&1 || { fail_test "$label QEMU 64M FAT"; ok=0; }
     qemu_run "$elf" "$MODSTK" 64M "$work/$label.qstk.bin"; python3 "$REF" grade "$work/$label.qstk.bin" "$kh" "$(printf '%x' "$bx")" - 64 >/dev/null 2>&1 || { fail_test "$label QEMU 64M STACK"; ok=0; }
     if [[ "$run_bochs" -eq 1 ]]; then
-        bochs_run "$elf" "$MODX" "$work/$label.bx.bin"; bsd=$(cat "$work/.bsd" 2>/dev/null || echo 0)
-        { python3 "$REF" grade "$work/$label.bx.bin" "$kh" "$(printf '%x' "$bx")" - >/dev/null 2>&1 && [[ "$bsd" -ge 1 ]]; } || { fail_test "$label Bochs X (shutdown=$bsd): $(python3 "$REF" grade "$work/$label.bx.bin" "$kh" "$(printf '%x' "$bx")" - 2>&1 | tr '\n' ' ')"; ok=0; }
-        bochs_run "$elf" "$MODY" "$work/$label.by.bin"; bsd=$(cat "$work/.bsd" 2>/dev/null || echo 0)
-        { python3 "$REF" grade "$work/$label.by.bin" "$kh" "$(printf '%x' "$by")" - >/dev/null 2>&1 && [[ "$bsd" -ge 1 ]]; } || { fail_test "$label Bochs Y (shutdown=$bsd)"; ok=0; }
+        bochs_leg "$label Bochs X" "$elf" "$MODX" "$work/$label.bx.bin" "$kh" "$(printf '%x' "$bx")" || ok=0
+        bochs_leg "$label Bochs Y" "$elf" "$MODY" "$work/$label.by.bin" "$kh" "$(printf '%x' "$by")" || ok=0
     fi
     sha_after=$(sha256sum "$elf" | cut -d' ' -f1)
     [[ "$sha_before" == "$sha_after" ]] || { fail_test "$label: image changed between runs"; ok=0; }
@@ -272,6 +323,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]]; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+if [[ "$harness_fail" -ne 0 ]]; then echo "HARNESS-ERROR: $harness_fail link33 Bochs leg(s) exhausted their fresh-disk re-rolls -- emulator/host harness failure(s), fail-closed (NOT kernel verdicts)"; exit 1; fi
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link33 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link33 / lodger / seventeenth kernel-arc link: the PROGRAM-LIFECYCLE GERM -- the kernel runs ONE build-unknown Multiboot MODULE: discovers it via mbinfo at runtime, parses the memory map, bump-allocates ONE floored non-overlapping stack page (D20), indirect-calls the runtime-discovered entry, collects the answer, halts clean. SAME kernel ELF fed module X (0x5A) vs Y (0xA7) -> f(X) != f(Y), a baked answer impossible. $pass checks: static MB+MEMINFO, ELF-P12, white-box EXACT-1493-byte-head vs the silicon-proven lodger_ref, QEMU substrate (64M/256M/6G + FAT + deep-STACK modules; host re-derives the bump-allocator policy from the emitted ownership table and demands EQUALITY; the module emits a CA/FE WITNESS frame binding esp==alloc_hi + eip==mod_start+10), Bochs substrate (GRUB module, module at a DIFFERENT physical address -> runtime discovery forced; clean shutdown), 12 rejects with twins (calls/branches/zero-or-two-module_byte/main-arg out of subset; module_byte() outside the lodger mode rejected); graded vs a host-recompute + module-witness on the dual-substrate oracle -- a CANONICAL-CODEGEN proof for the fixed probes; pays D20's first installment)"
 exit 0
