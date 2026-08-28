@@ -34,6 +34,7 @@ if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/bochs_f2_harness.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -193,50 +194,25 @@ if i>=0:
 else: open(sys.argv[2],'wb').write(b'')
 PY
 }
-bochs_run() { # kelf mod e9out feedbyte
+bochs_extract() { extract_e9 "$1" "$2" || { fail_test "Bochs $(basename "$2") EXTRACT-FAILURE (completed boot; extractor itself failed -- fail-closed, not a graded verdict)"; return 1; }; }
+bochs_run() { # kelf mod e9out feedbyte  (F2-hardened via bochs_f2_harness.sh)
     local kelf; kelf="$(readlink -f "$1")"; local mod; mod="$(readlink -f "$2")"; local e9="$3" byte="$4"
     local d="$work/b.$(basename "$3").d"; mkdir -p "$d"
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 25 > "$d/feed.log" 2>&1 & local fp=$!
-    local i; for i in $(seq 1 40); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
-    local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    ( cd "$d"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp "$mod" mnt/boot/app.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
-    extract_e9 "$d/bochs_out.txt" "$e9"
+    f2_bochs_feed_leg "Bochs $(basename "$e9")" bochs_extract "$byte --hold 25" "$d/feed.log" "$d/bochs_out.txt" \
+        $(printf 'set timeout=0\\nset default=0\\nmenuentry "c" {\\n multiboot /boot/kernel.elf\\n module /boot/app.bin\\n boot\\n}\\n') \
+        90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$e9"
 }
 
 if have_bochs; then
     emu_ran=1
-    bochs_run "$KELF" "$CMOD" "$work/b.cx" "$FX"
-    if python3 "$REF" gradecompiled "$work/b.cx" "$KEND" "$FXH" >/dev/null 2>&1; then ok "Bochs compiled module relays le32(b)/le32(3b) BY VALUE, fed=0x$FXH (2nd substrate)"
-    else fail_test "Bochs compiled X -> $(python3 "$REF" gradecompiled "$work/b.cx" "$KEND" "$FXH" 2>&1 | tr '\n' ';')"; fi
-    bochs_run "$KELF" "$MHOWR" "$work/b.howr" "$FX"
-    if python3 "$REF" gradehostwrite "$work/b.howr" "$KEND" >/dev/null 2>&1; then ok "Bochs hostile kernel-ptr SYS_WRITE REJECTED (confused-deputy defense, 2nd substrate)"
-    else fail_test "Bochs hostwrite -> $(python3 "$REF" gradehostwrite "$work/b.howr" "$KEND" 2>&1 | tr '\n' ';')"; fi
+    if bochs_run "$KELF" "$CMOD" "$work/b.cx" "$FX"; then
+        if python3 "$REF" gradecompiled "$work/b.cx" "$KEND" "$FXH" >/dev/null 2>&1; then ok "Bochs compiled module relays le32(b)/le32(3b) BY VALUE, fed=0x$FXH (2nd substrate)"
+        else fail_test "Bochs compiled X -> $(python3 "$REF" gradecompiled "$work/b.cx" "$KEND" "$FXH" 2>&1 | tr '\n' ';')"; fi
+    fi
+    if bochs_run "$KELF" "$MHOWR" "$work/b.howr" "$FX"; then
+        if python3 "$REF" gradehostwrite "$work/b.howr" "$KEND" >/dev/null 2>&1; then ok "Bochs hostile kernel-ptr SYS_WRITE REJECTED (confused-deputy defense, 2nd substrate)"
+        else fail_test "Bochs hostwrite -> $(python3 "$REF" gradehostwrite "$work/b.howr" "$KEND" 2>&1 | tr '\n' ';')"; fi
+    fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required (KERNEL_CODEGEN_REQUIRE_EMU=1) but bochs/parted/grub-install/xvfb-run/sudo not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
@@ -245,6 +221,7 @@ if [[ "$REQUIRE_EMU" != "1" && "$emu_ran" -eq 0 ]]; then
     echo "  NOTE: no emulator ran; byte-pin + reject gates only (set KERNEL_CODEGEN_REQUIRE_EMU=1 for the silicon gate)"
 fi
 
+f2_harness_summary || exit 1
 echo "native-codegen link40 (holler / SYS_WRITE): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link40 holler / SYS_WRITE)"
