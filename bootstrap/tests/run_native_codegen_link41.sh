@@ -169,7 +169,7 @@ bochs_run() { # mod e9out feedbyte  (F2-hardened via bochs_f2_harness.sh)
     local kelf; kelf="$(readlink -f "$KELF")"
     local d="$work/b.$(basename "$2").d"; mkdir -p "$d"
     f2_bochs_feed_leg "Bochs $(basename "$e9")" bochs_extract "$byte --hold 25" "$d/feed.log" "$d/bochs_out.txt" \
-        $(printf 'set timeout=0\\nset default=0\\nmenuentry "c" {\\n multiboot /boot/kernel.elf\\n module /boot/app.bin\\n boot\\n}\\n') \
+        "$(printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n')" \
         90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$e9"
 }
 

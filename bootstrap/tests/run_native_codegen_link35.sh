@@ -182,7 +182,7 @@ bochs_run() { # elf mod outfile  (F2-hardened via bochs_f2_harness.sh)
     local elf; elf="$(readlink -f "$1")"; local mod; mod="$(readlink -f "$2")"; local outfile="$3"
     local blog="$work/.f2blog.$(basename "$outfile").txt"
     f2_bochs_leg "Bochs $(basename "$outfile")" bochs_extract "$blog" \
-        $(printf 'set timeout=0\\nset default=0\\nmenuentry "c" {\\n multiboot /boot/kernel.elf\\n module /boot/app.bin\\n boot\\n}\\n') \
+        "$(printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n')" \
         90 32 "$elf:boot/kernel.elf" "$mod:boot/app.bin" -- "$outfile"
 }
 

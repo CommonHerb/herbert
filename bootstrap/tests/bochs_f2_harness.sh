@@ -92,8 +92,10 @@ f2__disk_build_class() { # W grubcfg src:dest...  -> echoes "" on success, else 
       LOOP=""
       trap - EXIT
       exit 0
-    ) || { # never rm -rf a tree that may still hold a live mount
-           if mountpoint -q "$W/mnt" 2>/dev/null; then echo "DISK-BUILD(cleanup-umount-stuck; tempdir $W LEAKED deliberately)"; else echo "DISK-BUILD(${step:-unknown})"; fi; return 1; }
+    ) || { # never rm -rf a tree that may still hold a live mount or an attached loop backing file
+           if mountpoint -q "$W/mnt" 2>/dev/null; then echo "DISK-BUILD(cleanup-umount-stuck; tempdir $W LEAKED deliberately)"
+           elif [[ -n "$(losetup -j "$W/disk.img" 2>/dev/null)" ]]; then echo "DISK-BUILD(cleanup-loop-attached; tempdir $W LEAKED deliberately)"
+           else echo "DISK-BUILD(${step:-unknown})"; fi; return 1; }
     return 0
 }
 
@@ -128,7 +130,7 @@ f2__classify_boot() { # W outlog  -> echoes NO-OUTPUT | NO-SHUTDOWN | EXTRACT-FA
 
 f2_bochs_attempt() { # grubcfg timeout_s megs outlog src:dest...
     local grubcfg="$1" tmo="$2" megs="$3" outlog="$4"; shift 4
-    : > "$outlog"   # truncate up front: no stale output can ever be graded
+    : > "$outlog" 2>/dev/null || { echo "DISK-BUILD(log-init)"; return; }   # checked truncate: no stale output can ever be graded
     local W; W="$(mktemp -d)"
     f2__bios_find || { rm -rf "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
     local bcls
@@ -140,7 +142,7 @@ f2_bochs_attempt() { # grubcfg timeout_s megs outlog src:dest...
 
 f2_bochs_feed_attempt() { # feed_args feedlog grubcfg timeout_s megs outlog src:dest...
     local feed_args="$1" feedlog="$2" grubcfg="$3" tmo="$4" megs="$5" outlog="$6"; shift 6
-    : > "$outlog"; : > "$feedlog"
+    { : > "$outlog" && : > "$feedlog"; } 2>/dev/null || { echo "DISK-BUILD(log-init)"; return; }   # checked: a stale feed log must never authenticate a dead feeder
     local W; W="$(mktemp -d)"
     f2__bios_find || { rm -rf "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
     local bcls

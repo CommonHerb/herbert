@@ -187,7 +187,7 @@ bochs_run() { # kind e9out  (F2-hardened via bochs_f2_harness.sh)
     local stream; stream=$(python3 "$REF" stream "$kind")
     local d="$work/b.$kind.d"; mkdir -p "$d"
     f2_bochs_feed_leg "Bochs $kind" bochs_extract "$stream --hold 40" "$d/feed.log" "$d/bochs_out.txt" \
-        $(printf 'set timeout=0\\nset default=0\\nmenuentry "c" {\\n multiboot /boot/kernel.elf\\n module /boot/app.bin\\n boot\\n}\\n') \
+        "$(printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n')" \
         150 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$e9"
 }
 
