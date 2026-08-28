@@ -61,6 +61,7 @@ if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (m
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/bochs_f2_harness.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -302,51 +303,22 @@ qemu_run_byte() { # label elf byte expected_emit_byte -> 0 if e9==de<eb>ad and e
     fail_test "$label QEMU byte=$byte: exit=$rc(want $ex) e9=$got want=de${fh}ad nframes=$nframes"; return 1
 }
 
-bochs_run_byte() { # label elf byte expected_emit_byte
+bochs_grade() { # bochslog label byte fh   (kernel verdict on a COMPLETED+SENT boot only)
+    local blog="$1" label="$2" byte="$3" fh="$4"
+    hexdump -ve '1/1 "%02x"' "$blog" > "$blog.hex" 2>/dev/null
+    local nframes; nframes=$(grep -o "de${fh}ad" "$blog.hex" 2>/dev/null | wc -l | tr -d ' ')
+    [[ "$nframes" -eq 1 ]] && return 0
+    fail_test "$label Bochs byte=$byte RED (completed boot, shutdown+SENT witnessed): frames(de${fh}ad)=$nframes"
+    return 1
+}
+
+bochs_run_byte() { # label elf byte expected_emit_byte  (F2-hardened via bochs_f2_harness.sh)
     local label="$1" elf="$2" byte="$3" eb="$4"
     local fh; fh=$(printf '%02x' "$eb")
     local W="$work/$label.b.$byte"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; return 1; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP" )
-    # launch the feeder just before bochs (avoid the cold-runner accept-timeout flake), tie its
-    # lifetime past the bochs boot+read window.
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 30 > "$W/feed.log" 2>&1 &
-    local fp=$!; feeder_wait "$W/feed.log" || { fail_test "$label Bochs byte=$byte: feeder never LISTENING ($(tr '\n' ' ' < "$W/feed.log"))"; kill "$fp" 2>/dev/null; return 1; }
-    ( cd "$W"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    wait "$fp" 2>/dev/null
-    hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
-    local nframes shutdown
-    nframes=$(grep -o "de${fh}ad" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
-    shutdown=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null)
-    if [[ "$nframes" -eq 1 ]] && [[ "$shutdown" -ge 1 ]]; then return 0; fi
-    fail_test "$label Bochs byte=$byte: frames(de${fh}ad)=$nframes shutdown=$shutdown"; return 1
+    f2_bochs_feed_leg "$label Bochs byte=$byte" bochs_grade "$byte --hold 30" "$W/feed.log" "$W/bochs_out.txt" \
+        "$(printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n boot\n}\n')" \
+        90 32 "$elf:boot/kernel.elf" -- "$label" "$byte" "$fh"
 }
 
 reject_probe() { # label directive "<body>"
@@ -409,6 +381,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]]; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link31 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link31 / contigo / f1 / fifteenth kernel-arc link: the first DATA-DEPENDENT SCHEDULING DECISION -- a freestanding 32-bit image reads one late-bound COM1 byte into a state cell [inq], and the timer-IRQ0 SCHEDULER loads [inq] and takes cmp;jae to SELECT which of two iret-seeded tasks to dispatch; the same image fed X=65 dispatches task A (emits vA) and Y=200 dispatches task B (emits 46), so the SCHEDULE is a function of runtime input; $pass checks: static + ELF-P12 + white-box [P0 exact 174-byte head'; P-inq input->state->scheduler value-bind (head mov[inq] addr == scheduler mov eax,[inq] addr); P-sched exact 30-byte scheduler exactly-once + the two mov-esp immediates bound to seedA/seedB by value + THRESH==128; P-tasks 0xE9 frame-emit exactly twice (one per task body) + ZERO in head/scheduler + task B exact + the proven 58-byte epilogue; P-antimut the ONLY absolute store is mov[inq] + task A body free of absolute addresses (the cross-model seed-mutation forge closed); P-reach head ends eb fe (no fall-through) + seed eips bound to the two task entries (decoy seed fails); P-seeds 8 zero GP + cs 0x08 + eflags 0x002 IF=0 (one-shot, no double-emit); P-IDT vec-0x20 gate attr 0x8E interrupt-gate -> scheduler vaddr by value + loaded-IDTR bind; P-GDT flat 9Acf/92cf; M1 BOUNDED whole-code-span disasm whitelist + exactly TWO in (%dx),%al + ONE iret + ONE sti + ONE lgdt + ONE lidt, banning int/call/ret/rdtsc/pushf/popf/cpuid/ins], QEMU substrate (5 probes co_then/co_else/co_lit/co_nolocal/co_cap31, late-bound socket COM1, same image fed X->A and Y->B), Bochs substrate ($BOCHS_PROBES, socket com1, frame + clean shutdown), 12 rejects with twins (call/mainarg/div/mod/bitwise/32-local cap/input_byte-in-body); graded vs host-derived golden on the dual-substrate oracle with a late-bound input substrate -- a CANONICAL-CODEGEN proof for the fixed probes)"
 exit 0
