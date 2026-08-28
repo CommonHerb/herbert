@@ -47,6 +47,7 @@ if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (m
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing trikon_ref.py $REF)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/bochs_f2_harness.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -148,39 +149,8 @@ qemu_run() { # elf mod mem outfile
         -monitor none -cpu qemu64 -m "$3" >/dev/null 2>&1 || true
 }
 
-bochs_run() { # elf mod outfile  -> sets shutdown count in $work/.bsd
-    local elf; elf="$(readlink -f "$1")"; local mod; mod="$(readlink -f "$2")"; local outfile="$3"
-    local W; W="$(mktemp -d)"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then echo "0" > "$work/.bsd"; : > "$outfile"; rm -rf "$W"; return; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf; sudo cp "$mod" mnt/boot/app.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null > "$work/.bsd"
-    # extract the binary 0xE9 stream: first 0x9C entry tag through the benign DE??AD answer OR the hostile F0..F1 frame.
-    python3 - "$W/bochs_out.txt" "$outfile" <<'PY'
+bochs_extract() { # bochslog outfile  (verbatim frame extractor from the raw gate)
+    python3 - "$1" "$2" <<'PY'
 import sys,re
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); end=i
 if i>=0:
@@ -190,7 +160,16 @@ if i>=0:
     if g: end=max(end, i+g.end())
 open(sys.argv[2],'wb').write(d[i:end] if (i>=0 and end>i) else b'')
 PY
-    rm -rf "$W"
+    local prc=$?; [[ "$prc" -eq 0 ]] || { fail_test "Bochs extractor failed (rc=$prc; completed boot -- fail-closed, not a graded verdict)"; return 1; }
+    return 0
+}
+
+bochs_run() { # elf mod outfile  (F2-hardened via bochs_f2_harness.sh)
+    local elf; elf="$(readlink -f "$1")"; local mod; mod="$(readlink -f "$2")"; local outfile="$3"
+    local blog="$work/.f2blog.$(basename "$outfile").txt"
+    f2_bochs_leg "Bochs $(basename "$outfile")" bochs_extract "$blog" \
+        $(printf 'set timeout=0\\nset default=0\\nmenuentry "c" {\\n multiboot /boot/kernel.elf\\n module /boot/app.bin\\n boot\\n}\\n') \
+        90 32 "$elf:boot/kernel.elf" "$mod:boot/app.bin" -- "$outfile"
 }
 
 reject_probe() { # label directive "<body>"
@@ -233,10 +212,12 @@ for label in $ALL_PROBES; do
     # QEMU hostile: out 0xE9 at CPL3 -> #GP(0); host grades the CPU-authored frame.
     qemu_run "$elf" "$MODH" 64M "$work/$label.qh.bin"; python3 "$REF" grade "$work/$label.qh.bin" "$kh" 00 hostile >/dev/null 2>&1 || { fail_test "$label QEMU 64M HOSTILE: $(python3 "$REF" grade "$work/$label.qh.bin" "$kh" 00 hostile 2>&1 | tr '\n' ' ')"; ok=0; }
     if [[ "$run_bochs" -eq 1 ]]; then
-        bochs_run "$elf" "$MODX" "$work/$label.bx.bin"; bsd=$(cat "$work/.bsd" 2>/dev/null || echo 0)
-        { python3 "$REF" grade "$work/$label.bx.bin" "$kh" "$(printf '%x' "$bx")" benign >/dev/null 2>&1 && [[ "$bsd" -ge 1 ]]; } || { fail_test "$label Bochs X (shutdown=$bsd): $(python3 "$REF" grade "$work/$label.bx.bin" "$kh" "$(printf '%x' "$bx")" benign 2>&1 | tr '\n' ' ')"; ok=0; }
-        bochs_run "$elf" "$MODH" "$work/$label.bh.bin"; bsd=$(cat "$work/.bsd" 2>/dev/null || echo 0)
-        { python3 "$REF" grade "$work/$label.bh.bin" "$kh" 00 hostile >/dev/null 2>&1 && [[ "$bsd" -ge 1 ]]; } || { fail_test "$label Bochs HOSTILE (shutdown=$bsd)"; ok=0; }
+        if bochs_run "$elf" "$MODX" "$work/$label.bx.bin"; then
+            python3 "$REF" grade "$work/$label.bx.bin" "$kh" "$(printf '%x' "$bx")" benign >/dev/null 2>&1 || { fail_test "$label Bochs X RED (completed boot, shutdown witnessed): $(python3 "$REF" grade "$work/$label.bx.bin" "$kh" "$(printf '%x' "$bx")" benign 2>&1 | tr '\n' ' ')"; ok=0; }
+        else ok=0; fi
+        if bochs_run "$elf" "$MODH" "$work/$label.bh.bin"; then
+            python3 "$REF" grade "$work/$label.bh.bin" "$kh" 00 hostile >/dev/null 2>&1 || { fail_test "$label Bochs HOSTILE RED (completed boot, shutdown witnessed)"; ok=0; }
+        else ok=0; fi
     fi
     sha_after=$(sha256sum "$elf" | cut -d' ' -f1)
     [[ "$sha_before" == "$sha_after" ]] || { fail_test "$label: image changed between runs"; ok=0; }
@@ -260,6 +241,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]]; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link34 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link34 / trikonderoga / eighteenth kernel-arc link: the RING-3 PRIVILEGE BOUNDARY on the build-unknown module -- the kernel runs the discovered Multiboot MODULE at CPL 3 on the bump-allocated page; a BENIGN module exits via the DPL-3 int 0x30 syscall gate (status -> compiled body emits f(status)); a HOSTILE out 0xE9 faults #GP(0) at CPL3/IOPL=0 -> the kernel dumps the CPU-authored ring-cross frame. SAME kernel ELF fed X (0x5A) vs Y (0xA7) -> f(X) != f(Y). $pass checks: static MB+MEMINFO, ELF-P12, white-box EXACT-2410-byte-prefix + EXACT-58-byte-epilogue vs the silicon-proven trikon_ref, QEMU substrate (benign X 64M/256M/6G + Y + FAT; hostile #GP), Bochs substrate (GRUB module; benign + hostile; clean shutdown), 10 rejects with twins; graded vs the host benign-exit/hostile-#GP frame witness + lodger allocator-recompute on the dual-substrate oracle -- privileged-op isolation, memory isolation deferred to a paging-U/S link)"
 exit 0
