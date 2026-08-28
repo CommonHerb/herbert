@@ -52,6 +52,7 @@ if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (m
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/bochs_f2_harness.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -243,49 +244,22 @@ qemu_run_byte() { # label elf byte -> 0 if output == host f(byte) and exit match
     fail_test "$label QEMU byte=$byte: exit=$rc(want $ex) e9=$got want=de${fh}ad nframes=$nframes"; return 1
 }
 
-bochs_run_byte() { # label elf byte
+bochs_grade() { # bochslog label byte fh   (kernel verdict on a COMPLETED+SENT boot only)
+    local blog="$1" label="$2" byte="$3" fh="$4"
+    hexdump -ve '1/1 "%02x"' "$blog" > "$blog.hex" 2>/dev/null
+    local nframes; nframes=$(grep -o "de${fh}ad" "$blog.hex" 2>/dev/null | wc -l | tr -d ' ')
+    [[ "$nframes" -eq 1 ]] && return 0
+    fail_test "$label Bochs byte=$byte RED (completed boot, shutdown+SENT witnessed): frames(de${fh}ad)=$nframes"
+    return 1
+}
+
+bochs_run_byte() { # label elf byte  (F2-hardened via bochs_f2_harness.sh)
     local label="$1" elf="$2" byte="$3"
     local f fh; f=$(host_f "$label" "$byte"); fh=$(printf '%02x' "$f")
     local W="$work/$label.b.$byte"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; return 1; fi
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 25 > "$W/feed.log" 2>&1 &
-    local fp=$!
-    local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "i" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    wait "$fp" 2>/dev/null
-    hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
-    local nframes shutdown
-    nframes=$(grep -o "de${fh}ad" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
-    shutdown=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null)
-    if [[ "$nframes" -eq 1 ]] && [[ "$shutdown" -ge 1 ]]; then return 0; fi
-    fail_test "$label Bochs byte=$byte: frames(de${fh}ad)=$nframes shutdown=$shutdown"; return 1
+    f2_bochs_feed_leg "$label Bochs byte=$byte" bochs_grade "$byte --hold 25" "$W/feed.log" "$W/bochs_out.txt" \
+        "$(printf 'set timeout=0\nset default=0\nmenuentry "i" {\n multiboot /boot/kernel.elf\n boot\n}\n')" \
+        90 32 "$elf:boot/kernel.elf" -- "$label" "$byte" "$fh"
 }
 
 reject_probe() { # label directive "<body>"  -- must NOT emit a valid multiboot image
@@ -357,6 +331,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]]; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link30 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link30 / trukfit / f3 / fourteenth kernel-arc link: DEVICE INPUT -- a freestanding 32-bit image READS one late-bound byte from COM1 via in al,dx (0xEC), transforms it, and emits f(byte); $pass checks: static + ELF-P12 + white-box [mov esp; the exact 56-byte robust UART init pinned by value; (locals) rbp frame; M4 PROVENANCE body == host-derived lowering ending at the proven 58-byte epilogue; the LSR poll + RBR-read->movzx->push bound exactly-once so the byte traces to the RBR; M1 WHOLE-IMAGE disasm whitelist banning rdtsc/lgdt/lidt/sti/pushf/popf/iret/int/ins/call so no async/2nd-reader/nondeterminism re-sources the byte, exactly TWO in (%dx),%al], QEMU substrate (3 probes f3_echo/f3_inc/f3_mul, late-bound socket COM1 feeder, same image fed X and Y -> f(X) and f(Y), f(X)!=f(Y)), Bochs substrate ($BOCHS_PROBES, socket com1, frame + clean shutdown), 9 rejects with twins (near-axis/plain/idt input_byte, two-read, no-read, in+div/bitwise); graded vs host-derived golden on the dual-substrate oracle with a late-bound input substrate -- a CANONICAL-CODEGEN proof for the fixed probes)"
 exit 0
