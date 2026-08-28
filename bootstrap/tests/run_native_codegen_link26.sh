@@ -346,6 +346,7 @@ bochs_run() { # label v elf  (F2-hardened via bochs_f2_harness.sh)
     local p ph; p=$(host_proof "$v"); ph=$(printf '%02x' "$p")
     local W="$tmp/$label.b"; mkdir -p "$W"
     f2_bochs_leg "$label Bochs" bochs_grade "$W/bochs_out.txt" \
+        "$(printf 'set timeout=0\nset default=0\nmenuentry "s" {\n multiboot /boot/kernel.elf\n boot\n}\n')" \
         60 64 "$elf:boot/kernel.elf" -- "$label" "$ph"
 }
 
