@@ -74,6 +74,7 @@ if [[ ! -f "$backend" ]]; then
 fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/bochs_f2_harness.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -234,49 +235,21 @@ qemu_run() { # label byte elf
     return 1
 }
 
-bochs_run() { # label byte elf
+bochs_grade() { # bochslog label ph   (kernel verdict on a COMPLETED boot only)
+    local blog="$1" label="$2" ph="$3"
+    hexdump -ve '1/1 "%02x"' "$blog" > "$blog.hex" 2>/dev/null
+    local nframes; nframes=$(grep -o "de${ph}ad" "$blog.hex" 2>/dev/null | wc -l | tr -d ' ')
+    [[ "$nframes" -eq 1 ]] && return 0
+    fail_test "$label Bochs RED (completed boot, shutdown witnessed): frames(de${ph}ad)=$nframes"
+    return 1
+}
+
+bochs_run() { # label byte elf  (F2-hardened via bochs_f2_harness.sh)
     local label="$1" p="$2" elf="$3"
     local ph; ph=$(printf '%02x' "$p")
     local W="$tmp/$label.b"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS files missing"; return 1; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "s" {\n multiboot /boot/kernel.elf\n boot\n}\n' \
-          | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot \
-          --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 60 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1
-    )
-    hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
-    local nframes shutdown
-    nframes=$(grep -o "de${ph}ad" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
-    shutdown=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null)
-    if [[ "$nframes" -eq 1 ]] && [[ "$shutdown" -ge 1 ]]; then
-        return 0
-    fi
-    fail_test "$label Bochs: frames(de${ph}ad)=$nframes shutdown-evidence=$shutdown"
-    return 1
+    f2_bochs_leg "$label Bochs" bochs_grade "$W/bochs_out.txt" \
+        60 32 "$elf:boot/kernel.elf" -- "$label" "$ph"
 }
 
 reject_probe() { # label "<herbert program>"
@@ -339,6 +312,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]] && have_qemu; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then
     echo "$fail native-codegen-link21 sub-test(s) failed."; exit 1
 fi
