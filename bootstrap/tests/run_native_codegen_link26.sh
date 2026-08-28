@@ -95,6 +95,7 @@ if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" == "c" && ! -x "$HERBERT" ]]; then echo
 if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing backend)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/bochs_f2_harness.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -331,43 +332,21 @@ qemu_run() { # label v elf
     fail_test "$label QEMU: exit=$rc(want $ex) e9=$(xxd -p "$W/e9.bin" 2>/dev/null) want=de${ph}ad nframes=$nframes"; return 1
 }
 
-bochs_run() { # label v elf
+bochs_grade() { # bochslog label ph   (kernel verdict on a COMPLETED boot only)
+    local blog="$1" label="$2" ph="$3"
+    hexdump -ve '1/1 "%02x"' "$blog" > "$blog.hex" 2>/dev/null
+    local nframes; nframes=$(grep -o "de${ph}ad" "$blog.hex" 2>/dev/null | wc -l | tr -d ' ')
+    [[ "$nframes" -eq 1 ]] && return 0
+    fail_test "$label Bochs RED (completed boot, shutdown witnessed): frames(de${ph}ad)=$nframes"
+    return 1
+}
+
+bochs_run() { # label v elf  (F2-hardened via bochs_f2_harness.sh)
     local label="$1" v="$2" elf="$3"
     local p ph; p=$(host_proof "$v"); ph=$(printf '%02x' "$p")
     local W="$tmp/$label.b"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS files missing"; return 1; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "s" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 64
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 60 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
-    local nframes shutdown
-    nframes=$(grep -o "de${ph}ad" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
-    shutdown=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null)
-    if [[ "$nframes" -eq 1 ]] && [[ "$shutdown" -ge 1 ]]; then return 0; fi
-    fail_test "$label Bochs: frames(de${ph}ad)=$nframes shutdown-evidence=$shutdown"; return 1
+    f2_bochs_leg "$label Bochs" bochs_grade "$W/bochs_out.txt" \
+        60 64 "$elf:boot/kernel.elf" -- "$label" "$ph"
 }
 
 reject_probe() { # label "<herbert program>"
@@ -426,6 +405,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]] && have_qemu; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link26 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link26 / toggler / tenth kernel-arc link: the x86-64 BACKEND REUNIFICATION -- the freestanding image crosses into 64-bit long mode and runs a GENUINELY 64-bit COMPILED body lowered through the SAME near-axis 64-bit leaf emitters the Linux-ELF64 path uses, so the proof byte = the HIGH dword of the body's OWN 64-bit result [a product exceeding 2^32, wrong under 32-bit-width arithmetic]; $pass checks: static + white-box [code BEGINS with the exact 56-byte transition head exactly-once; ljmp target == long_entry V0+56; mov esp,esp_val (the rsp zero-extension) bound by value to the derived stack top; the 64-bit BODY bytes PINNED to the EXACT genuine 64-bit lowering of each probe's source (provenance: a forged/mutated body that reaches a nonzero high dword some other way is rejected) AND a {movabs/push/pop/imul/add/sub} whitelist with rax/rcx ONLY -- any 32-bit GPR rejected, pinning REX.W on every arithmetic op -- free of I/O/privileged/branch/call/memory/segment; the proof-byte data-flow 58 48c1e820 88c3 (pop rax; shr rax,0x20; mov bl,al) exactly-once so the byte IS the lowered body's high dword; GDT L=1 exactly-once + no non-L=1 code descriptor + GDTR base bound; the full PAE page-walk bound BY VALUE (CR3==PML4; PML4/PDPT entry0 + rest 0; all 512 PDEs == i*0x200000+0x83 -- virtual 0x10000c -> physical 0x10000c); the ENTRY+LOAD frame bound so the scanned bytes are the bytes that run; golden byte nonzero; single 0xE9 emit], QEMU substrate (4 probes: mul_add/mul_big/mul_add2/mul_sub, distinct nonzero 64-bit high-dword bytes), Bochs substrate ($BOCHS_PROBES, unique frame + clean shutdown), 8 out-of-subset rejects with twins (div/bitwise/call/mainarg -> ERR 500/501/502; the locals + if/else-branch rejects were RETIRED at link29 trikea/f2, which widens the 64-bit subset to admit them -> migrated to ACCEPTED probes there); graded vs host-derived golden on the dual-substrate oracle)"
 exit 0
