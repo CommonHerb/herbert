@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# rollcall_ref.py -- STEP-0 oracle + BYTE-EXACT emitter target for "the scheduler becomes a DATA STRUCTURE"
+# tenement_ref.py -- reference builder + grader for "tenement" (native-codegen link 47 / kernel-arc link 31); this link's CONTRACT is bootstrap/tests/run_native_codegen_link47.sh (+ its _mutation.sh). HEADER ANCESTRY (blind-audit A3, 2026-08-29): this file was cloned from rollcall_ref.py and the descriptive block that follows is the ANCESTOR's -- kept as provenance, NOT as this file's spec. Ancestor header:
 # (native-codegen Link 46 / kernel-arc link 30). RUNTIME-K PROCESS TABLE + RUN-QUEUE: the SAME kernel binary runs
 # an author-unknown number K of ring-3 programs (K read from mods_count at RUNTIME), generalizing tickover's
 # hardcoded-TWO (two TCBs UNROLLED, cur^=1) to a TCB ARRAY indexed by a round-robin run-queue loop. tickover is the

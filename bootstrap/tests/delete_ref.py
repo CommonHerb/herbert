@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# larder_ref.py -- PRODUCTION oracle + BYTE-EXACT emitter target for "larder": the first general-purpose DYNAMIC HEAP
+# delete_ref.py -- reference builder + grader for "delete" (native-codegen link 58 / kernel-arc link 42); this link's CONTRACT is bootstrap/tests/run_native_codegen_link58.sh (+ its _mutation.sh). HEADER ANCESTRY (blind-audit A3, 2026-08-29): this file was cloned from larder_ref.py and the descriptive block that follows is the ANCESTOR's -- kept as provenance, NOT as this file's spec. Ancestor header:
 # ALLOCATOR (kernel-arc link 40 / native-codegen link 56). ADDITIVE (TYPE-II) on the FROZEN cairn kernel (link 39):
 # this file is cairn_ref.py CLONED, with the validated STEP-0 larder allocator (larder_step0_ref.py) PORTED and
 # PRODUCTION-HARDENED. cairn's do_write/FS arms are preserved BYTE-FOR-BYTE so assert_cairn STILL PASSES on the larder

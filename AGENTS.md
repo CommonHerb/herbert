@@ -18,3 +18,14 @@ byte-identical gates, line-specific diffs, or source-verified invariants.
 If Grok is consulted, label the result as **unverified Grok advisory**. If Grok
 conflicts with local gates, canon, Codex, Claude, or source reality, ignore
 Grok.
+
+## Cross-model review provenance (commit-message convention, 2026-08-29)
+
+A herbert commit that cites a cross-model verdict (Codex `LAND` / `LAND-WITH-CHANGES(n)` /
+`CONFIRM-LAND` / `BLOCK`, or a Claude review) is a POINTER, not proof: the durable review
+artifact lives one repo up, under `MEWTWO/audits/<dir>/<file>.md` (CONSTITUTION A7: workflow
+transcripts are ephemeral; the verified artifact is what persists). From 2026-08-29 every such
+commit names that artifact path in its body, so a herbert-only reader can find the evidence
+instead of taking the verdict on faith -- the same bar this file already sets for Grok. Older
+commits (before this convention) are covered by the audit directories listed in
+`MEWTWO/audits/` by link name.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# lethe_ref.py -- STEP-0 oracle + BYTE-EXACT emitter target for "ALIAS-REMAP + TARGETED TLB INVALIDATION"
+# cairn_ref.py -- reference builder + grader for "cairn" (native-codegen link 55 / kernel-arc link 39); this link's CONTRACT is bootstrap/tests/run_native_codegen_link55.sh (+ its _mutation.sh). HEADER ANCESTRY (blind-audit A3, 2026-08-29): this file was cloned from lethe_ref.py and the descriptive block that follows is the ANCESTOR's -- kept as provenance, NOT as this file's spec. Ancestor header:
 # (native-codegen Link 52 / kernel-arc link 36). THE FIRST TIME THE KERNEL MUST INVALIDATE A STALE TLB ENTRY.
 # tessera (link 34) gave the stack non-identity ALIASING; cleave (link 35) gave on-demand COPY-ON-WRITE. Both reload
 # cr3 (a FULL TLB flush) after every page-table edit, so a STALE per-page TLB entry never had to be reasoned about.

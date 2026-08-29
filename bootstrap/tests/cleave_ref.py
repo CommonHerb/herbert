@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# tessera_ref.py -- STEP-0 oracle + BYTE-EXACT emitter target for "SHARED MEMORY via a NON-IDENTITY ALIASED FRAME"
+# cleave_ref.py -- reference builder + grader for "cleave" (native-codegen link 51 / kernel-arc link 35); this link's CONTRACT is bootstrap/tests/run_native_codegen_link51.sh (+ its _mutation.sh). HEADER ANCESTRY (blind-audit A3, 2026-08-29): this file was cloned from tessera_ref.py and the descriptive block that follows is the ANCESTOR's -- kept as provenance, NOT as this file's spec. Ancestor header:
 # (native-codegen Link 50 / kernel-arc link 34). THE FIRST TIME vaddr != paddr IN THE STACK. Every prior link mapped
 # virtual page g to physical frame g (identity: PTE[g]=g*4096+3); "memory" capabilities (U/S isolation, demand-commit,
 # region reclaim) were all permission/identity tricks an identity-backed reserve can forge. tessera installs, AT RUNTIME,
