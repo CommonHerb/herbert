@@ -49,6 +49,14 @@ pinned_proof() { # name -> 0 iff present + executable; else prints FAIL, scores 
     echo "FAIL: pinned proof $1 is missing or not executable (fail-closed: a proof that cannot run is a FAILED test, never a silent skip)"
     total=$((total + 1)); fail=$((fail + 1)); return 1
 }
+# The C re-seed mint mode is RETIRED too (no C interpreter exists to mint with), and the mint/grade
+# counters are OWNED by this suite's shims: inherited values are discarded so an external
+# NATIVE_CODEGEN_COMPILER_MINT_COUNT=1 cannot forge a "C-mint count: 1" PASS (Codex confirm leg 3).
+if [[ "${NATIVE_CODEGEN_ALLOW_C_MINT:-0}" == "1" ]]; then
+    echo "FAIL: NATIVE_CODEGEN_ALLOW_C_MINT=1 is retired -- the C bootstrap no longer exists; gen-1 is re-minted C-FREE by \`make reseed\` (reseed_gen1.sh), never by C. Refusing."
+    exit 1
+fi
+unset NATIVE_CODEGEN_COMPILER_MINT_COUNT NATIVE_CODEGEN_COMPILER_MINT_SECONDS
 # The opt-in native-vs-C faithfulness cross-checks are RETIRED (no C interpreter exists to cross-check
 # against; the gates skip the leg when $HERBERT is non-executable, so a PASS keyed on the env var alone
 # would claim a differential that never ran -- Codex confirm leg 2, blind-audit R3):
@@ -370,10 +378,12 @@ check_native_codegen_mint_count() {
     if [[ "$got" == "$want" ]]; then
         if [[ "$want" == "0" ]]; then
             echo "PASS: native-codegen gen-1 C-mint count: 0 (C-free seed -- the C interpreter did NOT mint the production compiler)"
+            pass=$((pass + 1))
         else
-            echo "PASS: native-codegen gen-1 C-mint count: 1 (re-seed mode; seconds=${NATIVE_CODEGEN_COMPILER_MINT_SECONDS:-unknown})"
+            # unreachable since the up-front refusal of NATIVE_CODEGEN_ALLOW_C_MINT=1; never a PASS for a C mint that cannot happen
+            echo "FAIL: native-codegen gen-1 C-mint count: re-seed-by-C mode is retired (no C interpreter exists; a count of 1 here could only be forged)"
+            fail=$((fail + 1))
         fi
-        pass=$((pass + 1))
     else
         echo "FAIL: native-codegen gen-1 C-mint count: $got (expected $want)"
         fail=$((fail + 1))
