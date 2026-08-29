@@ -19,6 +19,16 @@ cd "$(dirname "$0")"
 # path purely so set -u and the golden-mode native gates (which pass HERBERT= but
 # never invoke it) have a defined value; nothing in this suite runs the C interpreter.
 HERBERT="${HERBERT:-$(pwd)/../../build/herbert}"
+# The suite grades against the COMMITTED goldens only: an inherited goldens dir / manifest /
+# capture override would let an external artifact set forge a green (Codex confirm leg 4,
+# blind-audit R3). Refuse them here, BEFORE the oracle is sourced (it reads them as defaults).
+# capture_native_goldens.sh drives the gate scripts directly, never through this suite.
+for native_codegen_override in NATIVE_CODEGEN_GOLDENS_DIR NATIVE_CODEGEN_MANIFEST NATIVE_CODEGEN_ORACLE_CAPTURE NATIVE_CODEGEN_CAPTURE_MANIFEST; do
+    if [[ -n "${!native_codegen_override:-}" ]]; then
+        echo "FAIL: $native_codegen_override is set in the environment -- the suite pins the committed goldens (bootstrap/tests/native_codegen_goldens) and honors no override. Refusing."
+        exit 1
+    fi
+done
 source "./native_codegen_oracle.sh"
 
 fail=0
@@ -111,9 +121,11 @@ trap cleanup_run_tests EXIT
 # run-path C footprint SHRINKS rather than grows.
 turnstile_real_herbert="$HERBERT"
 turnstile_crosscheck="${HERBERT_C_GRADE_CROSSCHECK:-0}"
-turnstile_tmp="$(mktemp -d)"
+# The C-grade fences are FILE-BACKED counters; if the instrumentation cannot be created the fences
+# must not later print a vacuous "count: 0" PASS (Codex confirm leg 4) -- fail closed right here.
+turnstile_tmp="$(mktemp -d)" || { echo "FAIL: cannot create the grade-count scratch dir (mktemp -d failed; TMPDIR=${TMPDIR:-unset}) -- the C-grade fences would be unproven. Refusing."; exit 1; }
 turnstile_grade_count="$turnstile_tmp/frag_grade_count"
-: >"$turnstile_grade_count"
+: >"$turnstile_grade_count" || { echo "FAIL: cannot create $turnstile_grade_count -- the fragment C-grade fence would be unproven. Refusing."; exit 1; }
 turnstile_write_shim() {
     # Emit a counting-DELEGATING herbert shim: it records that a fragment gate
     # invoked the C interpreter as a grader, then DELEGATEs to the captured REAL
@@ -161,7 +173,7 @@ fi
 # ($HERBERT $backend/$driver/$probe/$fragment/$be), not a single grepped pattern.
 tollgate_oracle="${NATIVE_CODEGEN_ORACLE:-golden}"
 tollgate_grade_count="$turnstile_tmp/nc_grade_count"
-: >"$tollgate_grade_count"
+: >"$tollgate_grade_count" || { echo "FAIL: cannot create $tollgate_grade_count -- the native-codegen C-grade fence would be unproven. Refusing."; exit 1; }
 tollgate_grade_shim="$turnstile_tmp/herbert_nc_grade_shim.sh"
 turnstile_write_shim "$tollgate_grade_shim" "$tollgate_grade_count"
 if [[ "$tollgate_oracle" == "golden" ]]; then
@@ -205,7 +217,7 @@ fi
 # transition-era fence-mutation pretest retired with C.
 muster_crosscheck="${FOUNDATIONAL_C_GRADE_CROSSCHECK:-0}"
 muster_grade_count="$turnstile_tmp/foundational_grade_count"
-: >"$muster_grade_count"
+: >"$muster_grade_count" || { echo "FAIL: cannot create $muster_grade_count -- the foundational C-grade fence would be unproven. Refusing."; exit 1; }
 muster_grade_shim="$turnstile_tmp/herbert_foundational_grade_shim.sh"
 turnstile_write_shim "$muster_grade_shim" "$muster_grade_count"
 muster_manifest="$turnstile_tmp/foundational_manifest"
@@ -301,6 +313,10 @@ check_native_codegen_grade_count() {
         return
     fi
     local got
+    if [[ ! -r "$tollgate_grade_count" ]]; then   # instrumentation absent -> never a vacuous zero (Codex confirm leg 4)
+        echo "FAIL: native-codegen C-grade fence: counter file $tollgate_grade_count is missing/unreadable -- the fence cannot be proven"
+        fail=$((fail + 1)); return
+    fi
     got=$(grep -c 'C-GRADE' "$tollgate_grade_count" 2>/dev/null || true)
     [[ -n "$got" ]] || got=0
     if [[ "$got" -eq 0 ]]; then
@@ -406,6 +422,10 @@ check_fragment_grade_count() {
         return
     fi
     local got
+    if [[ ! -r "$turnstile_grade_count" ]]; then   # instrumentation absent -> never a vacuous zero (Codex confirm leg 4)
+        echo "FAIL: fragment-gate C-grade fence: counter file $turnstile_grade_count is missing/unreadable -- the fence cannot be proven"
+        fail=$((fail + 1)); return
+    fi
     got=$(grep -c 'C-GRADE' "$turnstile_grade_count" 2>/dev/null || true)
     [[ -n "$got" ]] || got=0
     if [[ "$got" -eq 0 ]]; then
@@ -482,6 +502,10 @@ check_foundational_grade_count() {
         return
     fi
     local got
+    if [[ ! -r "$muster_grade_count" ]]; then   # instrumentation absent -> never a vacuous zero (Codex confirm leg 4)
+        echo "FAIL: foundational C-grade fence: counter file $muster_grade_count is missing/unreadable -- the fence cannot be proven"
+        fail=$((fail + 1)); return
+    fi
     got=$(grep -c 'C-GRADE' "$muster_grade_count" 2>/dev/null || true)
     [[ -n "$got" ]] || got=0
     if [[ "$got" -eq 0 ]]; then
