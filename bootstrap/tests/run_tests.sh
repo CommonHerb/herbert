@@ -24,6 +24,45 @@ source "./native_codegen_oracle.sh"
 fail=0
 pass=0
 total=0
+
+# ---- PINNED PROOF SET (blind-audit R1, 2026-08-29) -----------------------------------------------
+# Every gate/proof script named here is REQUIRED: missing or non-executable = a FAILED test, never a
+# silent skip. Before R1 each was guarded by `[[ -x ... ]]`, so `chmod -x` on ONE mutation proof dropped
+# it from the dynamically computed denominator and the suite still printed `42 of 42 test(s) passed.`
+# rc 0 (two cross-family blind readers + the parent reproduced it). The suite TOTAL is pinned too
+# (kernel_verify.sh's `ran == exp` house style): adding a test is a deliberate bump of
+# EXPECTED_SUITE_TOTAL, never an accident, and losing one is RED. `make check` runs
+# `run_tests.sh --check-pinned` to catch execute-bit drift on this set without running the suite.
+PINNED_PROOFS=(
+    run_lexer_native.sh run_lexer_native_mutation.sh
+    run_parser_native.sh run_parser_native_mutation.sh
+    run_evaluator_native.sh run_evaluator_native_mutation.sh
+    run_aggregate_render_native.sh run_aggregate_render_native_mutation.sh
+    run_vm_native.sh run_vm_native_mutation.sh
+    run_klondike_native.sh run_klondike_native_mutation.sh
+    run_emitter_native.sh run_emitter_native_mutation.sh
+    run_switchover_cfree.sh run_switchover_cfree_mutation.sh
+)
+EXPECTED_SUITE_TOTAL=43
+pinned_proof() { # name -> 0 iff present + executable; else prints FAIL, scores a FAILED test, returns 1
+    if [[ -x "$PWD/$1" ]]; then return 0; fi
+    echo "FAIL: pinned proof $1 is missing or not executable (fail-closed: a proof that cannot run is a FAILED test, never a silent skip)"
+    total=$((total + 1)); fail=$((fail + 1)); return 1
+}
+# The C oracle mode is RETIRED (the C bootstrap is gone; NATIVE_CODEGEN_ORACLE=c cannot run and would
+# add a second 17-script pass that breaks the 43 pin -- cross-model Codex, blind-audit R1/R3): refuse it.
+if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" != "golden" ]]; then
+    echo "FAIL: NATIVE_CODEGEN_ORACLE='${NATIVE_CODEGEN_ORACLE}' is retired -- the C bootstrap no longer exists; the only oracle mode is 'golden' (committed C-derived goldens, LEDGER D24). Refusing."
+    exit 1
+fi
+if [[ "${1:-}" == "--check-pinned" ]]; then
+    pinned_bad=0
+    for pinned_s in "${PINNED_PROOFS[@]}"; do
+        [[ -x "$PWD/$pinned_s" ]] || { echo "FAIL: pinned proof $pinned_s is missing or not executable (bootstrap/tests/run_tests.sh PINNED_PROOFS)"; pinned_bad=1; }
+    done
+    [[ "$pinned_bad" -eq 0 ]] && echo "OK: ${#PINNED_PROOFS[@]} pinned proof scripts present + executable"
+    exit "$pinned_bad"
+fi
 SLOPE_TOL_NUM=3
 SLOPE_TOL_DEN=2
 test_14a_heap=
@@ -241,8 +280,9 @@ check_native_codegen_grade_count() {
     # grepped pattern -- strictly more complete than the prior presence grep.
     total=$((total + 1))
     if [[ "$tollgate_oracle" != "golden" ]]; then
-        echo "PASS: native-codegen C-grade fence: opt-in live-C cross-check ran (NATIVE_CODEGEN_ORACLE=$tollgate_oracle -- the native-vs-C differential was exercised by request; the C-free fence is not asserted in this mode)"
-        pass=$((pass + 1))
+        # unreachable since the up-front refusal above; never print a PASS for a differential that cannot run
+        echo "FAIL: native-codegen C-grade fence: NATIVE_CODEGEN_ORACLE=$tollgate_oracle is retired (no C bootstrap exists to cross-check against)"
+        fail=$((fail + 1))
         return
     fi
     local got
@@ -555,6 +595,13 @@ run_native_codegen_michoi_seed_check() {
 
 shopt -s nullglob
 
+# Golden provenance banner -- printed ONCE per suite here (subprocess gates stage their own seed and
+# would otherwise each print it; blind-audit R3 + Codex NIT): the default oracle for links 2..16 +
+# rejects is a FROZEN SNAPSHOT captured once from the retired C bootstrap, NOT a live differential and
+# NOT regenerable in this tree (MEWTWO LEDGER D24). Standalone gate runs still print their own line.
+echo "native-codegen: oracle mode=golden -- links 2..16 + rejects are graded against COMMITTED C-derived goldens (a frozen snapshot of the retired C bootstrap, NOT regenerable in this tree -- LEDGER D24); C is NOT run"
+export NATIVE_CODEGEN_GOLDEN_BANNER_SHOWN=1
+
 if [[ -d ../../stack ]]; then
     STACK_DIR="$(cd ../../stack && pwd)"
 
@@ -565,7 +612,7 @@ if [[ -d ../../stack ]]; then
     # output (RETIREABLE faithfulness guard). The FOURTH metacircular fragment to gain a
     # committed native execution path (after the evaluator, the VM, and the parser); the
     # lexer self-description test now survives C's deletion (only klondike remains).
-    if [[ -x "$PWD/run_lexer_native.sh" ]]; then
+    if pinned_proof run_lexer_native.sh; then
         total=$((total + 1))
         if LEXER_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_lexer_native.sh"; then
             pass=$((pass + 1))
@@ -577,7 +624,7 @@ if [[ -d ../../stack ]]; then
     # Prove the lexer native-execution gate BITES (RED-first): a mutated lex rule
     # (a character-class -> token-kind classification) still compiles natively but
     # makes the C-free ELF emit a divergent token stream.
-    if [[ -x "$PWD/run_lexer_native_mutation.sh" ]]; then
+    if pinned_proof run_lexer_native_mutation.sh; then
         total=$((total + 1))
         if "$PWD/run_lexer_native_mutation.sh"; then
             pass=$((pass + 1))
@@ -595,7 +642,7 @@ if [[ -d ../../stack ]]; then
     # output (RETIREABLE faithfulness guard). The THIRD metacircular fragment to gain a
     # committed native execution path (after the evaluator and the VM); the parser
     # self-description test now survives C's deletion.
-    if [[ -x "$PWD/run_parser_native.sh" ]]; then
+    if pinned_proof run_parser_native.sh; then
         total=$((total + 1))
         if PARSER_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_parser_native.sh"; then
             pass=$((pass + 1))
@@ -607,7 +654,7 @@ if [[ -d ../../stack ]]; then
     # Prove the parser native-execution gate BITES (RED-first): a mutated parse rule
     # (an operator -> AST-tag mapping) still compiles natively but makes the C-free
     # ELF emit a divergent S-expression.
-    if [[ -x "$PWD/run_parser_native_mutation.sh" ]]; then
+    if pinned_proof run_parser_native_mutation.sh; then
         total=$((total + 1))
         if "$PWD/run_parser_native_mutation.sh"; then
             pass=$((pass + 1))
@@ -624,7 +671,7 @@ if [[ -d ../../stack ]]; then
     # interpreter's output (RETIREABLE faithfulness guard). This is the first
     # metacircular fragment to gain a committed native execution path, so the
     # evaluator self-description test now survives C's deletion.
-    if [[ -x "$PWD/run_evaluator_native.sh" ]]; then
+    if pinned_proof run_evaluator_native.sh; then
         total=$((total + 1))
         if EVALUATOR_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_evaluator_native.sh"; then
             pass=$((pass + 1))
@@ -636,7 +683,7 @@ if [[ -d ../../stack ]]; then
     # Prove the evaluator native-execution gate BITES (RED-first): a mutated
     # evaluator rule still compiles natively but makes the C-free ELF diverge
     # from the oracle.
-    if [[ -x "$PWD/run_evaluator_native_mutation.sh" ]]; then
+    if pinned_proof run_evaluator_native_mutation.sh; then
         total=$((total + 1))
         if "$PWD/run_evaluator_native_mutation.sh"; then
             pass=$((pass + 1))
@@ -652,7 +699,7 @@ if [[ -d ../../stack ]]; then
     # RETIREABLE leg = faithfulness vs C (real HERBERT, NOT the fragment shim --
     # this gate is its own capability gate, under neither the turnstile fragment
     # fence nor the tollgate native-codegen fence).
-    if [[ -x "$PWD/run_aggregate_render_native.sh" ]]; then
+    if pinned_proof run_aggregate_render_native.sh; then
         total=$((total + 1))
         # muster (link 13): the enduring leg grades the 12 native-output foundational
         # tests C-FREE (AGGREGATE_RENDER_NATIVE_NO_C=1 default) under the counting shim,
@@ -668,7 +715,7 @@ if [[ -d ../../stack ]]; then
 
     # Prove the aggregate-render gate BITES (RED-first): a mutated renderer still
     # compiles but makes the rendered tuple diverge from the canonical key.
-    if [[ -x "$PWD/run_aggregate_render_native_mutation.sh" ]]; then
+    if pinned_proof run_aggregate_render_native_mutation.sh; then
         total=$((total + 1))
         if "$PWD/run_aggregate_render_native_mutation.sh"; then
             pass=$((pass + 1))
@@ -694,7 +741,7 @@ if [[ -d ../../stack ]]; then
     # interpreter's output (RETIREABLE faithfulness guard). The SECOND metacircular
     # fragment to gain a committed native execution path (after the evaluator); the
     # bytecode-VM self-description test now survives C's deletion.
-    if [[ -x "$PWD/run_vm_native.sh" ]]; then
+    if pinned_proof run_vm_native.sh; then
         total=$((total + 1))
         if VM_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_vm_native.sh"; then
             pass=$((pass + 1))
@@ -706,7 +753,7 @@ if [[ -d ../../stack ]]; then
     # Prove the VM native-execution gate BITES (RED-first): a mutated bytecode-VM
     # opcode handler still compiles natively but makes the C-free ELF diverge from
     # the oracle.
-    if [[ -x "$PWD/run_vm_native_mutation.sh" ]]; then
+    if pinned_proof run_vm_native_mutation.sh; then
         total=$((total + 1))
         if "$PWD/run_vm_native_mutation.sh"; then
             pass=$((pass + 1))
@@ -724,7 +771,7 @@ if [[ -d ../../stack ]]; then
     # guard). klondike.herb is byte-identical (the adapter is applied at gate time so
     # its meta-circular-suite role is preserved). With this, ALL FIVE metacircular
     # fragments survive C's deletion.
-    if [[ -x "$PWD/run_klondike_native.sh" ]]; then
+    if pinned_proof run_klondike_native.sh; then
         total=$((total + 1))
         if KLONDIKE_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_klondike_native.sh"; then
             pass=$((pass + 1))
@@ -736,7 +783,7 @@ if [[ -d ../../stack ]]; then
     # Prove the klondike native-execution gate BITES (RED-first): a mutated VM rule
     # (int_binop's + / < / == ) still compiles natively but makes the C-free ELF emit
     # a divergent result tuple.
-    if [[ -x "$PWD/run_klondike_native_mutation.sh" ]]; then
+    if pinned_proof run_klondike_native_mutation.sh; then
         total=$((total + 1))
         if "$PWD/run_klondike_native_mutation.sh"; then
             pass=$((pass + 1))
@@ -757,7 +804,7 @@ if [[ -d ../../stack ]]; then
     # The emitter is the only fragment that pins the lowering PRODUCT (codegen structure at
     # the instruction level), invisible to the five value-observing fragments. With this,
     # ALL SIX metacircular fragments survive C's deletion.
-    if [[ -x "$PWD/run_emitter_native.sh" ]]; then
+    if pinned_proof run_emitter_native.sh; then
         total=$((total + 1))
         if EMITTER_NATIVE_NO_C="$turnstile_frag_no_c" HERBERT="$turnstile_frag_herbert" "$PWD/run_emitter_native.sh"; then
             pass=$((pass + 1))
@@ -769,7 +816,7 @@ if [[ -d ../../stack ]]; then
     # Prove the emitter native-execution gate BITES (RED-first): a mutated reachable
     # LOWERING rule (an opcode mapping / a frame-slot allocation / a control-flow branch)
     # still compiles natively but makes the C-free ELF emit a divergent bytecode listing.
-    if [[ -x "$PWD/run_emitter_native_mutation.sh" ]]; then
+    if pinned_proof run_emitter_native_mutation.sh; then
         total=$((total + 1))
         if "$PWD/run_emitter_native_mutation.sh"; then
             pass=$((pass + 1))
@@ -1009,7 +1056,7 @@ fi
 #     PHYSICALLY ABSENT (no build/herbert; cc/gcc/as/ld unreachable) over a
 #     COMPLETE, frozen, whole-suite partition, and prove it BITES RED-first. The
 #     driver/bite-proof self-scrub C; nothing here touches the make-test $HERBERT.
-if [[ -x "$PWD/run_switchover_cfree.sh" ]]; then
+if pinned_proof run_switchover_cfree.sh; then
     total=$((total + 1))
     if bash "$PWD/run_switchover_cfree.sh" >/tmp/herbert_switchover.$$ 2>&1; then
         echo "PASS: $(grep -E '^PASS: switchover-cfree' /tmp/herbert_switchover.$$ | tail -1 | sed 's/^PASS: //')"
@@ -1021,7 +1068,7 @@ if [[ -x "$PWD/run_switchover_cfree.sh" ]]; then
     fi
     rm -f /tmp/herbert_switchover.$$
 fi
-if [[ -x "$PWD/run_switchover_cfree_mutation.sh" ]]; then
+if pinned_proof run_switchover_cfree_mutation.sh; then
     total=$((total + 1))
     if bash "$PWD/run_switchover_cfree_mutation.sh" >/tmp/herbert_switchover_bite.$$ 2>&1; then
         echo "PASS: switchover-cfree mutation proof (M-guard + M-gerrymander + M-modeenv + M-incomplete bite; control green; M-leak retired with C)"
@@ -1035,6 +1082,10 @@ if [[ -x "$PWD/run_switchover_cfree_mutation.sh" ]]; then
 fi
 
 echo
+if [[ $total -ne $EXPECTED_SUITE_TOTAL ]]; then
+    echo "FAIL: suite ran $total test(s) but the pinned set expects $EXPECTED_SUITE_TOTAL -- refusing a vacuous GREEN (a test silently dropped or added; bump EXPECTED_SUITE_TOTAL deliberately, in the same commit as the test)"
+    fail=$((fail + 1))
+fi
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $total test(s) failed."
     exit 1

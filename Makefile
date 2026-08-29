@@ -20,6 +20,7 @@ all: $(SCANNER)
 check: $(SCANNER)
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
+	@bash bootstrap/tests/run_tests.sh --check-pinned
 
 test:
 	@bash tools/check_full_test_host.sh
