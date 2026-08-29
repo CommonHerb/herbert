@@ -42,6 +42,7 @@ if [[ ! -f "$GREF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (miss
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/bochs_f2_harness.sh"
 source "$script_dir/native_codegen_qemu_diag.sh"
 
 work="$(mktemp -d)"
@@ -122,44 +123,14 @@ qemu_benign() { # kind byte
 }
 
 # ---- Bochs benign round trip (the independent second emulator): GRUB multiboot + module ----
-bochs_benign() { # kind byte
-    local kind="$1" byte="$2"
-    local kelf; kelf="$(readlink -f "$KELF")"; local mod; mod="$(readlink -f "${MODF[$kind]}")"
-    local W="$work/b.$kind.$byte"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$kind Bochs: BIOS/VGABIOS missing"; return 1; fi
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 25 > "$W/feed.log" 2>&1 & local fp=$!
-    local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp "$mod" mnt/boot/app.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    wait "$fp" 2>/dev/null
-    grep -q SENT "$W/feed.log" 2>/dev/null || { fail_test "$kind Bochs byte=$byte: FEEDER FLAKE (no SENT)"; return 1; }
-    python3 - "$W/bochs_out.txt" "$W/e9.bin" <<'PY'
+# ---- Bochs benign round trip: F2-HARDENED via bochs_f2_harness.sh (fleet-sweep census correction, 2026-08-29:
+#      link38 was a pre-link44 raw Bochs gate the 2026-08-28 sweep's census missed). Checked disk build +
+#      mount/loop cleanup, per-boot classification, fresh-disk re-rolls x3, HARNESS-ERROR fail-closed; only a
+#      COMPLETED (LISTENING + shutdown-complete + SENT) boot is graded. ----
+BX_GRUBCFG=$'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n'
+
+bochs_extract() { # bochslog e9out  (verbatim frame extractor from the raw gate; fail-closed on rc)
+    python3 - "$1" "$2" <<'PY'
 import sys,re
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); end=i
 if i>=0:
@@ -170,9 +141,23 @@ if i>=0:
     open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
 else: open(sys.argv[2],'wb').write(b'')
 PY
-    local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null || echo 0)
-    if python3 "$REF" grade "$W/e9.bin" "$KEND" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1 && [[ "$sd" -ge 1 ]]; then return 0; fi
-    fail_test "$kind Bochs byte=$byte (shutdown=$sd): $(python3 "$REF" grade "$W/e9.bin" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
+    local prc=$?; [[ "$prc" -eq 0 ]] || { fail_test "Bochs extractor failed (rc=$prc; completed boot -- fail-closed, not a graded verdict)"; return 1; }
+    return 0
+}
+
+bochs_grade() { # bochslog kind byte   (kernel verdict on a COMPLETED+SENT boot only)
+    local blog="$1" kind="$2" byte="$3"
+    bochs_extract "$blog" "$blog.e9" || return 1
+    python3 "$REF" grade "$blog.e9" "$KEND" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1 && return 0
+    fail_test "$kind Bochs byte=$byte RED (completed boot, shutdown+SENT witnessed): $(python3 "$REF" grade "$blog.e9" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
+}
+
+bochs_benign() { # kind byte  (F2-hardened via bochs_f2_harness.sh)
+    local kind="$1" byte="$2"
+    local kelf; kelf="$(readlink -f "$KELF")"; local mod; mod="$(readlink -f "${MODF[$kind]}")"
+    local W="$work/b.$kind.$byte"; mkdir -p "$W"
+    f2_bochs_feed_leg "$kind Bochs byte=$byte" bochs_grade "$byte --hold 25" "$W/feed.log" "$W/bochs_out.txt" \
+        "$BX_GRUBCFG" 90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$kind" "$byte"
 }
 
 # ===================== run =====================
@@ -232,4 +217,5 @@ else
 fi
 
 echo "coalgate gate: pass=$pass fail=$fail"
+f2_harness_summary || exit 1
 if [[ "$fail" -eq 0 ]]; then echo "PASS"; exit 0; else exit 1; fi
