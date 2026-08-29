@@ -49,6 +49,13 @@ pinned_proof() { # name -> 0 iff present + executable; else prints FAIL, scores 
     echo "FAIL: pinned proof $1 is missing or not executable (fail-closed: a proof that cannot run is a FAILED test, never a silent skip)"
     total=$((total + 1)); fail=$((fail + 1)); return 1
 }
+# The opt-in native-vs-C faithfulness cross-checks are RETIRED (no C interpreter exists to cross-check
+# against; the gates skip the leg when $HERBERT is non-executable, so a PASS keyed on the env var alone
+# would claim a differential that never ran -- Codex confirm leg 2, blind-audit R3):
+if [[ "${HERBERT_C_GRADE_CROSSCHECK:-0}" == "1" || "${FOUNDATIONAL_C_GRADE_CROSSCHECK:-0}" == "1" ]]; then
+    echo "FAIL: HERBERT_C_GRADE_CROSSCHECK / FOUNDATIONAL_C_GRADE_CROSSCHECK are retired -- the C bootstrap no longer exists, so no native-vs-C faithfulness leg can run. Refusing."
+    exit 1
+fi
 # The C oracle mode is RETIRED (the C bootstrap is gone; NATIVE_CODEGEN_ORACLE=c cannot run and would
 # add a second 17-script pass that breaks the 43 pin -- cross-model Codex, blind-audit R1/R3): refuse it.
 if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" != "golden" ]]; then
@@ -383,8 +390,9 @@ check_fragment_grade_count() {
     # analogue of the michoi "C did not MINT" mint-count fence ("C did not GRADE").
     total=$((total + 1))
     if [[ "$turnstile_crosscheck" == "1" ]]; then
-        echo "PASS: fragment-gate C-grade fence: opt-in cross-check ran (HERBERT_C_GRADE_CROSSCHECK=1 -- native-vs-C faithfulness exercised by request; the C-free fence is not asserted in this mode)"
-        pass=$((pass + 1))
+        # unreachable since the up-front refusal; never print a PASS for a differential that cannot run
+        echo "FAIL: fragment-gate C-grade fence: HERBERT_C_GRADE_CROSSCHECK=1 is retired (no C interpreter exists; the gates would skip the leg and this line would lie)"
+        fail=$((fail + 1))
         return
     fi
     local got
@@ -458,8 +466,9 @@ check_foundational_grade_count() {
     # OUTPUTS are the C-free survivors graded by the enduring leg.)
     total=$((total + 1))
     if [[ "$muster_crosscheck" == "1" ]]; then
-        echo "PASS: foundational C-grade fence: opt-in cross-check ran (FOUNDATIONAL_C_GRADE_CROSSCHECK=1 -- native-vs-C faithfulness exercised by request; the C-free fence is not asserted in this mode)"
-        pass=$((pass + 1))
+        # unreachable since the up-front refusal; never print a PASS for a differential that cannot run
+        echo "FAIL: foundational C-grade fence: FOUNDATIONAL_C_GRADE_CROSSCHECK=1 is retired (no C interpreter exists; the gate would skip the leg and this line would lie)"
+        fail=$((fail + 1))
         return
     fi
     local got
