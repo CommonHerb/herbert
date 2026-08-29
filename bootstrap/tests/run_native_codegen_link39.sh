@@ -31,7 +31,9 @@
 # boot grading RED gets ONE same-input replay (constant fed bytes + the byte-pinned module/kernel);
 # recurrence -> hard RED, non-recurrence -> GREEN + a hedged FLAKE-DISCRIMINATED marker; no-completion
 # re-rolls boundedly and FAILS CLOSED on exhaustion; an UNADJUDICATED completed RED fails closed
-# regardless of REQUIRE_EMU.
+# regardless of REQUIRE_EMU. Tranche 1b (2026-08-29): the Bochs benign leg rides the shared F2 harness
+# (bochs_f2_harness.sh: checked disk build + boot classification + fresh-disk re-rolls, HARNESS-ERROR
+# fail-closed) and gets the SAME same-input replay discriminator on the 2nd substrate.
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -53,6 +55,7 @@ if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mi
 
 source "$script_dir/native_codegen_oracle.sh"
 source "$script_dir/replay_discriminator.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing replay_discriminator.sh)"; exit 1; }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing bochs_f2_harness.sh)"; exit 1; }
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -151,45 +154,16 @@ qemu_benign() { # kind byte -> 0 iff adjudicated GREEN (rc bound + grade, replay
     run_qemu_leg "$kind byte=$byte" "$work/$kind.$byte" attempt_benign "$kind" "$byte"
 }
 
-# ---- Bochs benign round trip (independent second emulator): GRUB multiboot + module ----
-bochs_benign() { # kind byte
-    local kind="$1" byte="$2"
-    local kelf; kelf="$(readlink -f "$KELF")"; local mod; mod="$(readlink -f "${MODF[$kind]}")"
-    local W="$work/b.$kind.$byte"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$kind Bochs: BIOS/VGABIOS missing"; return 1; fi
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 25 > "$W/feed.log" 2>&1 & local fp=$!
-    local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp "$mod" mnt/boot/app.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    wait "$fp" 2>/dev/null
-    grep -q SENT "$W/feed.log" 2>/dev/null || { fail_test "$kind Bochs byte=$byte: FEEDER FLAKE (no SENT)"; return 1; }
-    python3 - "$W/bochs_out.txt" "$W/e9.bin" <<'PY'
+# ---- Bochs benign round trip (independent second emulator): GRUB multiboot + module. F2-HARDENED
+#      (bochs_f2_harness.sh: checked disk build + boot classification + fresh-disk re-rolls, HARNESS-ERROR
+#      fail-closed) + the SAME-INPUT REPLAY DISCRIMINATOR on the 2nd substrate (tranche 1b, 2026-08-29):
+#      a COMPLETED boot graded RED gets ONE same-input replay on a fresh disk (artifact identity
+#      hash-frozen); recurrence -> hard RED; non-recurrence -> GREEN + FLAKE-DISCRIMINATED; an
+#      UNADJUDICATED completed RED fails closed. bx_grade_benign NEVER fail_tests (driver adjudicates). ----
+BX_GRUBCFG=$'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n'   # byte-identical to the pre-1b text (trailing newline kept)
+
+bx_extract_e9() { # bochslog e9out
+    python3 - "$1" "$2" <<'PY'
 import sys,re
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); end=i
 if i>=0:
@@ -200,9 +174,21 @@ if i>=0:
     open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
 else: open(sys.argv[2],'wb').write(b'')
 PY
-    local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"   # no ||-echo: grep -c already prints 0 on no-match (the old `|| echo 0` emitted "0\n0", non-numeric in [[ -ge ]])
-    if python3 "$REF" grade "$W/e9.bin" "$KEND" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1 && [[ "$sd" -ge 1 ]]; then return 0; fi
-    fail_test "$kind Bochs byte=$byte (shutdown=$sd): $(python3 "$REF" grade "$W/e9.bin" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
+}
+
+bx_grade_benign() { # bochslog kind byte   (replay contract: 0 GREEN / nonzero RED, one-line signature on stdout, never fail_test)
+    local blog="$1" kind="$2" byte="$3"
+    bx_extract_e9 "$blog" "$blog.e9" || { echo "Bochs e9 extractor failed (rc=$?) on a completed boot"; return 2; }   # tri-state: 2 = harness class, re-rolled, never a grade
+    python3 "$REF" grade "$blog.e9" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' '
+    return "${PIPESTATUS[0]}"
+}
+
+bochs_benign() { # kind byte  -> 0 iff adjudicated GREEN
+    local kind="$1" byte="$2"
+    local kelf; kelf="$(readlink -f "$KELF")"; local mod; mod="$(readlink -f "${MODF[$kind]}")"
+    local W="$work/b.$kind.$byte"; mkdir -p "$W"
+    f2_bochs_feed_leg_replay "$kind Bochs byte=$byte" bx_grade_benign "$byte --hold 25" "$W/feed.log" "$W/bochs_out.txt" \
+        "$BX_GRUBCFG" 90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$kind" "$byte"
 }
 
 # ---- overflow safety: a deep recursion overflowing the 4 KiB stack page must FAULT CLEANLY (caught by
@@ -292,6 +278,14 @@ overflow_faults_clean
 
 # Bochs dual-substrate leg (authoritative under REQUIRE_EMU)
 if have_bochs; then
+    # a probe override must select >=1 KNOWN kind: an empty/whitespace/bogus L23_BOCHS_PROBES would run ZERO
+    # Bochs legs while the gate still prints PASS (cross-model Codex, tranche 1b) -- fail closed instead.
+    bx_n=0
+    for k in $BOCHS_PROBES; do
+        [[ " $KINDS " == *" $k "* ]] || { echo "FAIL: stack/native_compile_fragment.herb (L23_BOCHS_PROBES names unknown kind '$k' (known: $KINDS); fail-closed)"; exit 1; }
+        bx_n=$((bx_n + 1))
+    done
+    [[ "$bx_n" -ge 1 ]] || { echo "FAIL: stack/native_compile_fragment.herb (L23_BOCHS_PROBES='$BOCHS_PROBES' selects no Bochs probe -- the Bochs leg would be silently skipped; fail-closed)"; exit 1; }
     for k in $BOCHS_PROBES; do
         fx=$(python3 "$REF" fx "$k"); bochs_benign "$k" "$fx" && pass=$((pass + 1))
     done
@@ -302,4 +296,5 @@ else
 fi
 
 echo "ouroboros gate: pass=$pass fail=$fail"
+f2_harness_summary || exit 1
 if [[ "$fail" -eq 0 ]]; then echo "PASS"; exit 0; else exit 1; fi

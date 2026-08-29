@@ -52,6 +52,9 @@
 #      kernel re-pose the exact question): recurrence -> hard RED with both signatures; non-recurrence
 #      -> GREEN + a hedged FLAKE-DISCRIMINATED marker. No-completion re-rolls boundedly and FAILS
 #      CLOSED on exhaustion; an UNADJUDICATED completed RED fails closed regardless of REQUIRE_EMU.
+#      Tranche 1b (2026-08-29): the Bochs legs (benign/victim/generic) ride the shared F2 harness
+#      (bochs_f2_harness.sh: checked disk build + boot classification + fresh-disk re-rolls, HARNESS-ERROR
+#      fail-closed) and get the SAME same-input replay discriminator on the 2nd substrate.
 #
 # HONEST SCOPE / RESIDUE (audited-assertion, named): CANONICAL-CODEGEN for the fixed probes; KILL-ONLY (a tick
 # at CPL3 is terminal -- no resume, no run queue, no second task, no quantum accounting beyond the per-entry
@@ -86,6 +89,7 @@ if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mi
 
 source "$script_dir/native_codegen_oracle.sh"
 source "$script_dir/replay_discriminator.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing replay_discriminator.sh)"; exit 1; }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing bochs_f2_harness.sh)"; exit 1; }
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -355,140 +359,81 @@ qemu_generic() { # label kelf modfile probe
     run_qemu_leg "$label generic-fault $probe" "$work/$label.gf.$probe" attempt_generic "$kelf" "$mod"
 }
 
-bochs_benign() { # label kelf kind byte  -> 0 if read+exit frames + answer match + clean shutdown
+# ---- Bochs legs: F2-HARDENED (bochs_f2_harness.sh) + the SAME-INPUT REPLAY DISCRIMINATOR on the 2nd
+#      substrate (discriminator-sweep tranche 1b, 2026-08-29). Disk builds are CHECKED with mount/loop
+#      cleanup on every exit path; each boot is CLASSIFIED (DISK-BUILD(step)/FEED-NO-LISTEN/NO-OUTPUT/
+#      NO-SHUTDOWN/FEED-NO-SENT/EXTRACT-FAILURE vs COMPLETED) and ONLY a boot that ran THROUGH
+#      `shutdown requested` is graded; a COMPLETED RED gets ONE same-input replay on a fresh disk
+#      (artifact identity hash-frozen); harness exhaustion is HARNESS-ERROR / UNADJUDICATED, fail-closed
+#      unconditionally. The bx_grade_* functions NEVER fail_test (the driver adjudicates). ----
+BX_GRUBCFG=$'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n'   # byte-identical to the pre-1b text (trailing newline kept)
+
+bx_extract_e9() { # bochslog e9out  (the debugcon stream: cell block .. through all frames, like link35)
+    python3 - "$1" "$2" <<'PY'
+import sys,re
+d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); end=i
+if i>=0:
+    for pat in (rb'\xde.\xad', rb'\xc0.{1}.{4}.{4}.{4}\xc1', rb'\xe0.{1}.{4}.{4}.{4}\xe1',
+                rb'\xf0.{4}.{4}.{4}.{4}\xf1', rb'\xd0.{4}.{4}.{4}.{4}.{4}\xd1',
+                rb'\xca.{4}.{4}.{4}.{4}\xcb', rb'\xe2.{4}.{4}\xe3'):
+        m=None
+        for mm in re.finditer(pat, d[i:], re.S): m=mm
+        if m: end=max(end, i+m.end())
+    open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
+else: open(sys.argv[2],'wb').write(b'')
+PY
+}
+
+# replay-contract graders (0 GREEN / nonzero RED; one-line signature on stdout; never fail_test)
+bx_grade_benign() { # bochslog kelf kind byte
+    local blog="$1" kelf="$2" kind="$3" byte="$4"
+    bx_extract_e9 "$blog" "$blog.e9" || { echo "Bochs e9 extractor failed (rc=$?) on a completed boot"; return 2; }   # tri-state: 2 = harness class, re-rolled, never a grade
+    local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
+    python3 "$REF" grade "$blog.e9" "$kend" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' '
+    return "${PIPESTATUS[0]}"
+}
+bx_grade_victim() { # bochslog kelf
+    local blog="$1" kelf="$2"
+    bx_extract_e9 "$blog" "$blog.e9" || { echo "Bochs e9 extractor failed (rc=$?) on a completed boot"; return 2; }   # tri-state: 2 = harness class, re-rolled, never a grade
+    local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
+    python3 "$REF" gradevictim "$blog.e9" "$kend" 2>&1 | tr '\n' ' '
+    return "${PIPESTATUS[0]}"
+}
+bx_grade_generic() { # bochslog kelf
+    local blog="$1" kelf="$2"
+    bx_extract_e9 "$blog" "$blog.e9" || { echo "Bochs e9 extractor failed (rc=$?) on a completed boot"; return 2; }   # tri-state: 2 = harness class, re-rolled, never a grade
+    local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
+    python3 "$REF" gradegeneric "$blog.e9" "$kend" 2>&1 | tr '\n' ' '
+    return "${PIPESTATUS[0]}"
+}
+
+bochs_benign() { # label kelf kind byte  -> 0 iff adjudicated GREEN (read+exit frames + answer match on a shutdown-complete boot, replay-discriminated)
     local label="$1" kelf; kelf="$(readlink -f "$2")"; local kind="$3" byte="$4"
-    local f; f=$(host_T "$kind" "$byte")
-    local W="$work/$label.b.$kind.$byte"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; return 1; fi
     local mod; mod="$(readlink -f "${MODF[$kind]}")"
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 25 > "$W/feed.log" 2>&1 &
-    local fp=$!
-    local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp "$mod" mnt/boot/app.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    wait "$fp" 2>/dev/null
-    grep -q SENT "$W/feed.log" 2>/dev/null || { fail_test "$label Bochs $kind byte=$byte: FEEDER FLAKE (no SENT)"; return 1; }
-    # extract the debugcon stream (cell block .. through all frames) from the bochs log, like link35.
-    python3 - "$W/bochs_out.txt" "$W/e9.bin" <<'PY'
-import sys,re
-d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); end=i
-if i>=0:
-    for pat in (rb'\xde.\xad', rb'\xc0.{1}.{4}.{4}.{4}\xc1', rb'\xe0.{1}.{4}.{4}.{4}\xe1',
-                rb'\xf0.{4}.{4}.{4}.{4}\xf1', rb'\xd0.{4}.{4}.{4}.{4}.{4}\xd1',
-                rb'\xca.{4}.{4}.{4}.{4}\xcb', rb'\xe2.{4}.{4}\xe3'):
-        m=None
-        for mm in re.finditer(pat, d[i:], re.S): m=mm
-        if m: end=max(end, i+m.end())
-    open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
-else: open(sys.argv[2],'wb').write(b'')
-PY
-    local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"   # no ||-echo: grep -c already prints 0 on no-match (the old `|| echo 0` emitted "0\n0", non-numeric in [[ -ge ]])
-    local kend; kend=$(printf '%x' "$(elf_meta "$2")")
-    if python3 "$REF" grade "$W/e9.bin" "$kend" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1 && [[ "$sd" -ge 1 ]]; then return 0; fi
-    fail_test "$label Bochs $kind byte=$byte (shutdown=$sd): $(python3 "$REF" grade "$W/e9.bin" "$kend" "$(printf '%x' "$byte")" "$kind" 2>&1 | tr '\n' ' ')"; return 1
+    local W="$work/$label.b.$kind.$byte"; mkdir -p "$W"
+    f2_bochs_feed_leg_replay "$label Bochs $kind byte=$byte" bx_grade_benign "$byte --hold 25" "$W/feed.log" "$W/bochs_out.txt" \
+        "$BX_GRUBCFG" 90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$kelf" "$kind" "$byte"
 }
 
-# geeking: shared Bochs boot for a NON-reading module (victim / generalized-fault). A dummy feeder must still
-# LISTEN (com1 is socket-client -> Bochs blocks on connect), but the module never reads it (no SENT check).
-# Boots GRUB+module under Bochs, extracts the debugcon stream (incl. the CA/CB kill + E2/E3 generic frames),
-# returns the e9 path + shutdown count via globals BX_E9 / BX_SD.
-bochs_boot_noread() { # label kelf modfile
-    local label="$1" kelf; kelf="$(readlink -f "$2")"; local mod; mod="$(readlink -f "$3")"
-    local W="$work/$label.bx.$(basename "$3")"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; return 1; fi
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" 60 --hold 25 > "$W/feed.log" 2>&1 & local fp=$!
-    local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp "$mod" mnt/boot/app.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
-    python3 - "$W/bochs_out.txt" "$W/e9.bin" <<'PY'
-import sys,re
-d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); end=i
-if i>=0:
-    for pat in (rb'\xde.\xad', rb'\xc0.{1}.{4}.{4}.{4}\xc1', rb'\xe0.{1}.{4}.{4}.{4}\xe1',
-                rb'\xf0.{4}.{4}.{4}.{4}\xf1', rb'\xd0.{4}.{4}.{4}.{4}.{4}\xd1',
-                rb'\xca.{4}.{4}.{4}.{4}\xcb', rb'\xe2.{4}.{4}\xe3'):
-        m=None
-        for mm in re.finditer(pat, d[i:], re.S): m=mm
-        if m: end=max(end, i+m.end())
-    open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
-else: open(sys.argv[2],'wb').write(b'')
-PY
-    BX_E9="$W/e9.bin"
-    BX_SD=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); BX_SD="${BX_SD:-0}"   # no ||-echo: grep -c already prints 0 on no-match (the old `|| echo 0` emitted "0\n0", non-numeric in [[ -ge ]])
-    return 0
-}
-
+# geeking: NON-reading modules (victim / generalized-fault) still need a feeder that LISTENs (com1 is
+# socket-client -> Bochs blocks on connect); the dummy byte is delivered on connect (feeder-side SENT),
+# the module never reads it.
 # geeking: the async KILL on the 2nd substrate (the link's signature -- a CPU-authored async ring-cross frame
 # from CPL3 must reproduce on Bochs, not just QEMU/KVM).
 bochs_victim() { # label kelf
-    local label="$1" kelf="$2"
-    bochs_boot_noread "$label" "$kelf" "$MODVICT" || return 1
-    local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
-    if python3 "$REF" gradevictim "$BX_E9" "$kend" >/dev/null 2>&1 && [[ "$BX_SD" -ge 1 ]]; then return 0; fi
-    fail_test "$label Bochs victim (shutdown=$BX_SD): $(python3 "$REF" gradevictim "$BX_E9" "$kend" 2>&1 | tr '\n' ' ')"; return 1
+    local label="$1" kelf; kelf="$(readlink -f "$2")"; local mod; mod="$(readlink -f "$MODVICT")"
+    local W="$work/$label.bx.$(basename "$MODVICT")"; mkdir -p "$W"
+    f2_bochs_feed_leg_replay "$label Bochs victim" bx_grade_victim "60 --hold 25" "$W/feed.log" "$W/bochs_out.txt" \
+        "$BX_GRUBCFG" 90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$kelf"
 }
 
 # geeking: the generalized fault->continue on the 2nd substrate (the #DB single-step path -- the one with
 # genuine cross-substrate risk; Bochs is instruction-counted, QEMU/KVM wall-clock).
 bochs_generic() { # label kelf modfile probe
-    local label="$1" kelf="$2" mod="$3" probe="$4"
-    bochs_boot_noread "$label" "$kelf" "$mod" || return 1
-    local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
-    if python3 "$REF" gradegeneric "$BX_E9" "$kend" >/dev/null 2>&1 && [[ "$BX_SD" -ge 1 ]]; then return 0; fi
-    fail_test "$label Bochs generic-fault $probe (shutdown=$BX_SD): $(python3 "$REF" gradegeneric "$BX_E9" "$kend" 2>&1 | tr '\n' ' ')"; return 1
+    local label="$1" kelf; kelf="$(readlink -f "$2")"; local mod; mod="$(readlink -f "$3")"; local probe="$4"
+    local W="$work/$label.bx.$(basename "$3")"; mkdir -p "$W"
+    f2_bochs_feed_leg_replay "$label Bochs generic-fault $probe" bx_grade_generic "60 --hold 25" "$W/feed.log" "$W/bochs_out.txt" \
+        "$BX_GRUBCFG" 90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$kelf"
 }
 
 reject_probe() { # label directive "<body>"
@@ -509,6 +454,11 @@ if ! have_qemu; then
 fi
 run_bochs=0; have_bochs && run_bochs=1
 if [[ "$run_bochs" -eq 0 && "$REQUIRE_EMU" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (KERNEL_CODEGEN_REQUIRE_EMU=1 but Bochs/sudo prerequisites missing)"; exit 1; fi
+# the Bochs battery hangs off geek_echo only: a probe override that omits it would SKIP every Bochs leg while
+# the gate still prints PASS (cross-model Codex, tranche 1b) -- fail closed on a selection that runs nothing.
+if [[ "$run_bochs" -eq 1 && " $BOCHS_PROBES " != *" geek_echo "* ]]; then
+    echo "FAIL: stack/native_compile_fragment.herb (L21_BOCHS_PROBES='$BOCHS_PROBES' does not select geek_echo -- the Bochs legs would be silently skipped; fail-closed)"; exit 1
+fi
 
 # assert the differential is non-vacuous (T(X) != T(Y) for every benign module) BEFORE running.
 for kind in echo inc xor; do
@@ -577,6 +527,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]]; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link37 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link37 / geeking / twenty-first kernel-arc link: THE KERNEL OUTLIVES ITS MODULE -- on sitopia's resumable-syscall sandbox, the kernel now (i) ASYNC-KILLS a runaway module: with IF=1 at CPL3, a one-shot PIT + stale-IRR drain + RPL-keyed vec-0x20 handler fires the first CPU-authored ASYNC ring-cross frame and revokes the CPU from an EB FE spinner (kill-witness eip==mod_start, cs==UCODE3, useresp==alloc_hi, eflags RF-masked==0x202, answer 'K'), then CONTINUES to emit f(kill); and (ii) FAULT->CONTINUEs: #GP/#PF (hostile out/write/read/pt) and the generalized panic path for any other CPL3 exception (#DB via TF, #DE div0, #UD bad opcode) name the fault ('G'/'P'/'F') and the kernel survives instead of shutdown -- a genuine RPL0 kernel fault still panics. $pass checks: static MB+PAGE_ALIGN+MEMINFO, ELF-P12, white-box EXACT-${PREFIX_LEN}-byte-prefix (which BY VALUE pins the whole watchdog -- PIC/PIT/drain/vec-0x20 RPL-key/kill-path/seeded-IF/generalized-panic) + EXACT-58-byte-epilogue + DISASM body-scan (zero I/O, pure conduit) vs the silicon+KVM-proven geeking_ref, QEMU substrate (echo/inc/xor each fed X!=Y -> T(X)!=T(Y) per-syscall by-value witness frames + exit-code bind; runaway-KILL + read-then-hang re-arm + #DB/#DE/#UD generalized continue + hostile out/write/read/pt fault-continue; locals-conduit round-trip), Bochs substrate (merged GRUB module + com1 socket-client: the differential + the async KILL + the #DB generalized fault + clean shutdown), 10 rejects with twins; graded vs the host witness-frame oracle on the dual-substrate oracle -- a CANONICAL-CODEGEN proof for the fixed probes. Held-back mutation proof: run_native_codegen_link37_mutation.sh)"
 exit 0

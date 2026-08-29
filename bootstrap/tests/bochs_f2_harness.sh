@@ -155,6 +155,10 @@ f2_bochs_feed_attempt() { # feed_args feedlog grubcfg timeout_s megs outlog src:
     local i ok=0; for i in $(seq 1 50); do grep -q LISTENING "$feedlog" 2>/dev/null && { ok=1; break; }; sleep 0.1; done
     if [[ "$ok" -ne 1 ]]; then kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; rm -rf "$W"; echo "FEED-NO-LISTEN"; return; fi
     f2__boot "$W" "$tmo" "$megs" "com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port"
+    # bounded post-boot grace for the feeder-side SENT (a non-reading guest lets Bochs run the moment the TCP
+    # connect completes, possibly before a starved feeder returns from accept()+sendall(); cross-model Codex,
+    # tranche 1b): no wait at all on the normal path (SENT is already logged), at most 2s otherwise.
+    for i in $(seq 1 20); do grep -q '^SENT' "$feedlog" 2>/dev/null && break; sleep 0.1; done
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     local cls; cls="$(f2__classify_boot "$W" "$outlog")"
     rm -rf "$W"
@@ -202,4 +206,104 @@ f2_harness_summary() {
         return 1
     fi
     return 0
+}
+
+# ---- SAME-INPUT REPLAY variants (discriminator-sweep tranche 1b, 2026-08-29: the link37/link39
+# Bochs-leg replay item of audits/discriminator-sweep-2026-07-17/CHARTER.md). The SAME harness
+# classes + fresh-disk re-rolls as f2_bochs_leg / f2_bochs_feed_leg, PLUS the parley same-input
+# replay discriminator (replay_discriminator.sh semantics, ported to the Bochs substrate):
+#   - a COMPLETED boot graded RED gets ONE same-input replay on a FRESH disk against the SAME
+#     artifact bytes (identity = sha256 of every SRC file, captured PRE-LAUNCH on every attempt;
+#     an unhashable artifact refuses to boot and is classed a harness failure); recurrence -> hard
+#     RED quoting BOTH signatures + the identity + the Bochs banner; non-recurrence -> GREEN + the
+#     hedged FLAKE-DISCRIMINATED marker (NOT proof against an intermittent same-input race and NOT
+#     a receipt proof; F4/F7 load-correlated Bochs stalls are exactly what a replay cannot
+#     separate -- run quiet);
+#   - harness classes never consume the replay budget; the 3rd harness failure exhausts the leg:
+#     with a pending completed RED -> UNADJUDICATED, fail_test'd (fail-closed unconditionally);
+#     without one -> the HARNESS-ERROR marker (fail-closed via f2_harness_summary);
+#   - a replay GREEN may clear a RED ONLY against identical artifact bytes (hash-freeze; a mismatch
+#     fail_tests and never clears).
+#   GRADE_FN contract for these variants DIFFERS from f2_bochs_leg: it must NOT call fail_test (only
+#   the driver adjudicates); it is TRI-STATE -- returns 0 GREEN, 2 for a gate-side extraction/harness
+#   failure on the completed log (classed EXTRACT-FAILURE(grade): re-rolled, never a kernel grade, never
+#   consumes the replay budget), any other nonzero RED -- and prints its one-line signature (the
+#   grader's own output) on stdout; the driver quotes it in the REPLAY announcement (mirroring the QEMU
+#   driver) and again, paired with the replay's, at the terminal adjudication.
+#   f2_bochs_leg_replay LEG_LABEL GRADE_FN OUTLOG GRUBCFG TIMEOUT_S MEGS SRC:DEST... [-- GRADE_ARGS...]
+#   f2_bochs_feed_leg_replay LEG_LABEL GRADE_FN FEED_ARGS FEEDLOG OUTLOG GRUBCFG TIMEOUT_S MEGS SRC:DEST... [-- GRADE_ARGS...]
+#       -> 0 = adjudicated GREEN; 1 = hard RED / unadjudicated completed RED / harness-exhausted (reported)
+
+f2__replay_ctx() { # src:dest... -> echoes "sha256=<h1>,<h2>,..." (rc 0) or nothing + rc 1 on an unreadable artifact
+    local spec h out=""
+    for spec in "$@"; do
+        h=$(sha256sum "${spec%%:*}" 2>/dev/null | cut -d' ' -f1)
+        [[ -n "$h" ]] || return 1
+        out="${out:+$out,}$h"
+    done
+    echo "sha256=$out"
+}
+
+f2__replay_drive() { # mode(plain|feed) leg grade_fn feed_args feedlog outlog grubcfg timeout_s megs src:dest... [-- grade_args...]
+    local mode="$1" leg="$2" gfn="$3" fargs="$4" feedlog="$5" outlog="$6" grubcfg="$7" tmo="$8" megs="$9"; shift 9
+    local files=()
+    while [[ $# -gt 0 && "$1" != "--" ]]; do files+=("$1"); shift; done
+    [[ "${1:-}" == "--" ]] && shift
+    local retry="fresh disk retry"; [[ "$mode" == feed ]] && retry="fresh disk + fresh feeder retry"
+    local state=idle a1sig="" a1ctx="" hfail=0 attempt=0 cls ctx sig
+    while :; do
+        attempt=$((attempt + 1))
+        if ! ctx="$(f2__replay_ctx "${files[@]}")"; then   # identity PRE-LAUNCH (TOCTOU guard): unhashable -> refuse to boot
+            cls="DISK-BUILD(artifact-hash-unobtainable)"
+        elif [[ "$mode" == feed ]]; then
+            cls="$(f2_bochs_feed_attempt "$fargs" "$feedlog" "$grubcfg" "$tmo" "$megs" "$outlog" "${files[@]}")"
+        else
+            cls="$(f2_bochs_attempt "$grubcfg" "$tmo" "$megs" "$outlog" "${files[@]}")"
+        fi
+        if [[ "$cls" == "COMPLETED" ]]; then
+            local grc=0
+            sig="$("$gfn" "$outlog" "$@" 2>&1)" || grc=$?
+            sig="${sig//$'\n'/ }"
+            if [[ "$grc" -eq 2 ]]; then   # gate-side extraction failure on a completed log: harness class, not a grade
+                cls="EXTRACT-FAILURE(grade: ${sig:-<no detail>})"
+            elif [[ "$grc" -eq 0 ]]; then
+                if [[ "$state" == replay ]]; then
+                    if [[ -z "$ctx" || "$ctx" != "$a1ctx" ]]; then
+                        fail_test "$leg replay completed GREEN but the artifact identity does not match attempt-1 (attempt-1 [$a1ctx] vs replay [${ctx:-MISSING}]) -- hash-freeze violated, REFUSING to clear the completed RED (a RED may only be cleared against the SAME bytes; fail closed)"
+                        return 1
+                    fi
+                    echo "  NOTE: $leg [FLAKE-DISCRIMINATED: a completed Bochs RED (${a1sig:-<no signature>}) did NOT recur under one same-input replay on a fresh disk -- no deterministic same-input RED reproduced; classed a one-shot transport/capture miss, NOT proof against an intermittent same-input race]"
+                fi
+                return 0
+            else
+            if [[ "$state" == replay ]]; then
+                fail_test "$leg REPRODUCED under same-input Bochs replay -> hard RED: deterministic same-input kernel/substrate failure, not a one-shot transport miss (attempt-1: ${a1sig:-<no signature>} [$a1ctx]; replay: ${sig:-<no signature>} [$ctx]; $(grep -a -m1 -o 'Bochs x86 Emulator [0-9.]*' "$outlog" 2>/dev/null || echo 'Bochs banner absent'))"
+                return 1
+            fi
+            state=replay; a1sig="$sig"; a1ctx="$ctx"
+            echo "  REPLAY $leg: completed Bochs boot graded RED (${sig:-<no signature>}) -- running ONE same-input replay on a fresh disk (same-input discriminator: byte-pinned artifacts [$ctx] + constant input; recurrence -> deterministic RED, non-recurrence -> transport/capture-class miss)" >&2
+            continue
+            fi
+        fi
+        hfail=$((hfail + 1))
+        echo "HARNESS re-roll: ${F2_GATE} $leg attempt $attempt = $cls ($retry; NOT a kernel grade, does not consume the replay budget)" >&2
+        if [[ "$hfail" -ge 3 ]]; then
+            if [[ "$state" == replay ]]; then
+                fail_test "$leg completed Bochs RED (${a1sig:-<no signature>}; $a1ctx) but its same-input replay never completed within the harness budget (last: $cls) -- UNADJUDICATED completed RED, FAILED CLOSED (never cleared; a completed RED that cannot be reproduced-or-refuted stays a failure regardless of KERNEL_CODEGEN_REQUIRE_EMU)"
+                return 1
+            fi
+            f2_harness_error "$leg" "$cls"
+            return 1
+        fi
+    done
+}
+
+f2_bochs_leg_replay() { # leg-label grade_fn outlog grubcfg timeout_s megs src:dest... [-- grade_args...]
+    local leg="$1" gfn="$2" outlog="$3" grubcfg="$4" tmo="$5" megs="$6"; shift 6
+    f2__replay_drive plain "$leg" "$gfn" "" "" "$outlog" "$grubcfg" "$tmo" "$megs" "$@"
+}
+
+f2_bochs_feed_leg_replay() { # leg-label grade_fn feed_args feedlog outlog grubcfg timeout_s megs src:dest... [-- grade_args...]
+    local leg="$1" gfn="$2" fargs="$3" feedlog="$4" outlog="$5" grubcfg="$6" tmo="$7" megs="$8"; shift 8
+    f2__replay_drive feed "$leg" "$gfn" "$fargs" "$feedlog" "$outlog" "$grubcfg" "$tmo" "$megs" "$@"
 }
