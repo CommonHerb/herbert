@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Native codegen Link 7 test: native value output via flogger, byte-for-byte
-# payload parity against the C bootstrap, exact reject codes, and a decisive
+# payload parity against the committed C-derived golden (C not run), exact reject codes, and a decisive
 # white-box gate for the 44-byte looping write lowering.
 set -u
 

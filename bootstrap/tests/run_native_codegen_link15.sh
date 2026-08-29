@@ -10,7 +10,7 @@
 # (a non-power-of-two modulus that needs REAL unsigned division, not a mask).
 #
 # Div/mod by zero must TRAP CLEANLY: the compiled program faults with a nonzero
-# exit and empty stdout (NO SIGFPE/#DE), matching the C bootstrap's exit status.
+# exit and empty stdout (NO SIGFPE/#DE), matching the C bootstrap's exit status as captured in the committed golden.
 # The native back end guards with `test rcx,rcx; jz <exit1>` before `div`.
 # (Exact-stderr text is deferred per the D13 fault-parity convention: C prints
 # `herbert: line N: division by zero`; native matches exit status + empty
@@ -80,7 +80,7 @@ compile_probe() {
 }
 
 # Accept probe: compile, run the ELF with $input on stdin, and require its
-# stdout to equal the C oracle's stdout byte-for-byte (canonical render). The
+# stdout to equal the committed C-derived golden's stdout byte-for-byte (canonical render; C not run). The
 # captured native stdout is stashed under $tmp/$label.native for cross-probe
 # precedence comparisons.
 check_diff() {

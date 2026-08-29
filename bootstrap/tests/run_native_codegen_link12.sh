@@ -78,8 +78,8 @@ check_bytepure() {
         fail_test "$label: file oracle failed"
         return
     fi
-    local nsz csz
-    nsz=$(wc -c <"$nd/a.out"); csz=$(wc -c <"$expected")
+    local nsz golden_sz
+    nsz=$(wc -c <"$nd/a.out"); golden_sz=$(wc -c <"$expected")
     if [[ "$nsz" -ne "$expect_size" ]]; then
         fail_test "$label: native a.out size $nsz != expected $expect_size (trailer present?)"
         return
@@ -87,7 +87,7 @@ check_bytepure() {
     if cmp -s "$nd/a.out" "$expected"; then
         pass=$((pass + 1))
     else
-        fail_test "$label: native a.out differs from C oracle a.out (native $nsz, C $csz)"
+        fail_test "$label: native a.out differs from the committed C-derived golden a.out (native $nsz, golden $golden_sz; golden mode, C not run)"
     fi
 }
 

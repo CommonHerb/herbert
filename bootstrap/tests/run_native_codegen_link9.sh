@@ -4,7 +4,7 @@
 # recognized structurally as type-bottom (bottom). Its sig-return must not be
 # forced onto callers, so the fault idiom -- used polymorphically across int /
 # string / tuple / bool return positions, and mid-expression -- now compiles and
-# runs byte-for-byte vs the C bootstrap (including the trap path, where both
+# runs byte-for-byte vs the committed C-derived golden (C not run) (including the trap path, where both
 # native and C fault with empty stdout). The recognition is structural, not
 # name-keyed: a renamed twin behaves identically. A white-box disasm gate
 # confirms `fault` is lowered as an ordinary `call` -- NOT tail-call-optimized
@@ -67,9 +67,9 @@ compile_probe() {
 le64() { python3 -c "import sys;sys.stdout.buffer.write(int(sys.argv[1]).to_bytes(8,'little'))" "$1"; }
 byte() { python3 -c "import sys;sys.stdout.buffer.write(bytes([int(sys.argv[1])]))" "$1"; }
 
-# int-returning probe with a fault (trap) path. For an input byte the C bootstrap
+# int-returning probe with a fault (trap) path. For an input byte the C bootstrap (as captured in the committed golden)
 # runs to a value, native's 8-byte LE return word must equal LE64(C decimal); for
-# an input byte that drives the fault path, the C bootstrap traps (nonzero exit,
+# an input byte that drives the fault path, the C bootstrap trapped (nonzero exit,
 # empty stdout) and native must trap the same way (nonzero exit, empty stdout).
 check_return_or_trap() {
     local label="$1" probe="$2" elf="$3" b="$4"
@@ -202,7 +202,7 @@ HERB
 # byte 5 drives the fault (trap) path; 10/32/100/128/255 are value paths.
 bytes="5 10 32 100 128 255"
 
-# ---- accept + run byte-exact vs C (incl. trap path) ---------------------
+# ---- accept + run byte-exact vs the committed C-derived golden (incl. trap path) ----
 compile_probe accept_poly "$tmp/accept_poly.herb" "$tmp/accept_poly.elf" || true
 if [[ -x "$tmp/accept_poly.elf" ]]; then
     for b in $bytes; do check_return_or_trap accept_poly "$tmp/accept_poly.herb" "$tmp/accept_poly.elf" "$b"; done

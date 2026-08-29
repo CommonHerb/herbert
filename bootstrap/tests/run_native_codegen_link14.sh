@@ -67,7 +67,7 @@ compile_probe() {
 }
 
 # Accept probe: compile, run the ELF with $input on stdin, and require its
-# stdout to equal the C oracle's stdout byte-for-byte (canonical render).
+# stdout to equal the committed C-derived golden's stdout byte-for-byte (canonical render; C not run).
 check_diff() {
     local label="$1" probe="$2" input="$3"
     local elf="$tmp/$label.elf"
@@ -93,7 +93,7 @@ check_diff() {
 # wrote no a.out). $3 is an ERE the diagnostic MUST match (e.g. "ERR 442").
 #
 # Stream contract (verified on silicon): the compiler reports rejections through
-# its own `flogger` to STDOUT (fd 1, both in the C oracle and the emitted ELF) and
+# its own `flogger` to STDOUT (fd 1, both in the golden's captured C run and the emitted ELF) and
 # returns 0 from main -- so a clean reject is exit 0 + diagnostic-on-stdout + no
 # a.out. A crash is the opposite: a nonzero exit from the C runtime with the
 # `get:`/`out of range` abort text on STDERR and no diagnostic on stdout. We assert

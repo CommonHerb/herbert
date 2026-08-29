@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Native codegen Link 13: accepted-program native runtime faults must match the
-# C bootstrap's stdout, stderr, and exit status for located index/get/append OOB.
+# C bootstrap's stdout, stderr, and exit status (as captured in the committed goldens; C not run) for located index/get/append OOB.
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"

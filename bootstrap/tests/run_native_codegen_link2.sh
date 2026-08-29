@@ -95,7 +95,7 @@ done
 # ====================================================================
 # Oracle: the committed C-derived golden (captured once from the real C bootstrap; not Python arithmetic)
 # Run build/herbert probe.herb < RT, parse its stdout, pack to LE64.
-# C bootstrap prints: int -> unsigned decimal; bool -> true/false.
+# The C bootstrap printed (captured in the golden): int -> unsigned decimal; bool -> true/false.
 # Pack: int value -> 8 LE bytes; bool true -> 01 00 00 00 00 00 00 00 ;
 #       bool false -> 00 00 00 00 00 00 00 00.
 # ====================================================================

@@ -92,7 +92,7 @@ compile_probe_bounded() {
 }
 
 # Bounded large-literal accept probe: compile within the bound, then require the
-# compiled program's canonical-decimal stdout to equal the C oracle's, byte for
+# compiled program's canonical-decimal stdout to equal the committed C-derived golden's, byte for
 # byte (one sub-test: bounded compile + byte-exact correctness together).
 check_bounded() {
     local label="$1" probe="$2" input="$3"
