@@ -28,10 +28,10 @@ bytes) is the deferred Oberon-ideal hardening.
 - Freestanding **static EXEC** ELF64, x86-64, entry `0x400078`, one `PT_LOAD`
   program header, zero sections, no `PT_INTERP`, raw Linux syscalls. No dynamic
   linker, no libc.
-- Integrity is pinned by `gen1.seed.sha256`
-  (`a3378031aa1314d522f68b0580e8c9723348ea8fd429b0c479edbb8777b11167`).
-  The suite validates magic + sha256 before use and fails
-  closed if either is wrong.
+- Integrity is pinned by `gen1.seed.sha256` -- that file is the single authority for the
+  value (it is NOT repeated here: a hash copied into prose rots on every legitimate
+  reseed, and this README carried a stale one until the 2026-08-29 blind audit).
+  The suite validates magic + sha256 before use and fails closed if either is wrong.
 
 ## Re-seeding (when the backend legitimately changes)
 

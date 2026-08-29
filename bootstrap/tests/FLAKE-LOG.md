@@ -3,8 +3,10 @@
 **Purpose.** A standing record of *known* flake classes on the kernel-arc gates (`run_native_codegen_link17..65.sh`
 + `_mutation.sh`), so a RED is adjudicated against evidence: "is this a known re-rollable flake, or a real
 miscompile?" A miscompile changes the emitted bytes (the seed sha moves, or a byte-pin/white-box gate fails). A
-flake is a transient emulator/harness event on an **unchanged, byte-identical** kernel (the seed sha stays
-`8d08fe53…`; QEMU-TCG/KVM/Bochs disagree on a run that later passes clean). **When in doubt, re-roll once and
+flake is a transient emulator/harness event on an **unchanged, byte-identical** kernel (the seed sha stays equal to
+the live pin in `bootstrap/seed/gen1.seed.sha256` -- NEVER a literal copied into prose, which rots on every legitimate
+reseed (blind-audit R2, 2026-08-29: two stale literals were found here); historical rows below quote the value current
+at their date; QEMU-TCG/KVM/Bochs disagree on a run that later passes clean). **When in doubt, re-roll once and
 compare** — a real bug reproduces deterministically; a flake does not.
 
 **How to use.** On a CI/local RED: (1) find the failing step + signature; (2) match it below; (3) if it's a known
@@ -30,7 +32,8 @@ deterministically, treat it as real and investigate before landing/declaring gre
 
 ## The invariant that separates flake from bug
 
-- **Real miscompile:** the emitted bytes changed. Symptoms: the gen-1 seed sha moves off `8d08fe53…`; a full-image
+- **Real miscompile:** the emitted bytes changed. Symptoms: the gen-1 seed sha moves off the value pinned in
+  `bootstrap/seed/gen1.seed.sha256` (the michoi seed gate in `make test` goes RED -- read the file, not this prose); a full-image
   byte-pin (`… image != committed golden`) fails; a white-box `assert_*` fails; a mutation FAILS TO BITE
   *deterministically* across re-rolls. Investigate — do NOT re-roll away.
 - **Flake:** the kernel is byte-identical (seed sha stable, byte-pins pass) and the disagreement is a substrate/harness
