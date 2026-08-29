@@ -188,5 +188,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link10: $pass sub-tests: benign complementary partial aggregate compiles+runs byte-exact vs C, self-compile self-host probe byte-exact (byte-pure files, direct cmp), tito self-hosting FIXPOINT gen2==gen1 (byte-pure direct cmp, no trailer strip))"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link10: $pass sub-tests: benign complementary partial aggregate compiles+runs byte-exact vs the committed C-derived golden (golden mode, C not run), self-compile self-host probe byte-exact (byte-pure files, direct cmp), tito self-hosting FIXPOINT gen2==gen1 (byte-pure direct cmp, no trailer strip))"
 exit 0

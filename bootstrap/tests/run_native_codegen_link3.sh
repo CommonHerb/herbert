@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Native codegen Link 3 test: control flow, bools, not, and short-circuit
-# compile to native x86-64 branches and match the real C bootstrap oracle.
+# compile to native x86-64 branches and match the committed C-derived golden (captured once from the real C bootstrap; golden mode, C not run).
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -123,7 +123,7 @@ run_diff() {
     local expected="$tmp/expected_${probe_name}_${b0}_${b1}.bin"
     write_rt "$rt" "$b0" "$b1"
     if ! oracle_le64 "$tmp/$probe_name.herb" "$rt" "$expected"; then
-        fail_test "$label (C bootstrap oracle failed)"
+        fail_test "$label (golden oracle lookup failed, mode=$NATIVE_CODEGEN_ORACLE)"
         return
     fi
     if ! "$tmp/$probe_name.elf" <"$rt" >"$actual" 2>/dev/null; then
@@ -292,7 +292,7 @@ check_accept() {
     chmod +x "$elf"
     printf '%b' "$(echo "$rt_hex" | sed 's/\(..\)/\\x\1/g')" >"$rt"
     if ! oracle_le64 "$probe" "$rt" "$expected"; then
-        fail_test "accept $label: C bootstrap oracle failed"
+        fail_test "accept $label: golden oracle lookup failed (mode=$NATIVE_CODEGEN_ORACLE)"
         return
     fi
     if ! "$elf" <"$rt" >"$actual" 2>/dev/null; then
@@ -451,5 +451,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link3: $pass sub-tests: if/elif/else and bool/short-circuit differentials vs C bootstrap; 17-probe rejection battery; 5 anti-over-rejection probes; disassembly gate; string/tuple/inline-clogger/nonlit-index rejects retired -- in-subset at mercer Link 5; flogger literal reject retired at Link 7)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link3: $pass sub-tests: if/elif/else and bool/short-circuit differentials vs the committed C-derived goldens (golden mode, C not run); 17-probe rejection battery; 5 anti-over-rejection probes; disassembly gate; string/tuple/inline-clogger/nonlit-index rejects retired -- in-subset at mercer Link 5; flogger literal reject retired at Link 7)"
 exit 0

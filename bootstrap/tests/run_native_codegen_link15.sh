@@ -4,7 +4,7 @@
 # `+ -` and looser than prefix-unary `not`/`~`.
 #
 # Accept probes are compiled with the gen-1 (native) compiler, run, and diffed
-# byte-for-byte against the C bootstrap oracle (the native program renders its
+# byte-for-byte against the committed C-derived golden (captured once from the C bootstrap; golden mode) (the native program renders its
 # return value as canonical decimal directly to stdout, per D14). The Adler-32
 # probe is the differential centerpiece -- it exercises `+`, `*`, and `% 65521`
 # (a non-power-of-two modulus that needs REAL unsigned division, not a mask).
@@ -158,7 +158,7 @@ check_trap_pair() {
 }
 
 # Precedence proof: `a + b * c` (prec_mul_add) must DIFFER from `(a + b) * c`
-# (prec_paren_add) on the same input. Both are already graded byte-exact vs C by
+# (prec_paren_add) on the same input. Both are already graded byte-exact vs the committed C-derived golden by
 # check_diff; here we assert their native results are not equal, which can only
 # hold if `*` binds tighter than `+` (a parser that bound them equally would
 # make the two probes agree).

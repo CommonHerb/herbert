@@ -36,7 +36,8 @@ native_codegen_oracle_begin() {
     native_codegen_oracle_script="$1"
     native_codegen_oracle_consumed="$(mktemp)"
     case "$NATIVE_CODEGEN_ORACLE" in
-        ""|c|golden) ;;
+        ""|golden) ;;
+        c) native_codegen_oracle_fail "NATIVE_CODEGEN_ORACLE=c is RETIRED -- the C bootstrap no longer exists (capture_native_goldens.sh is a historical record; the goldens are a frozen snapshot, LEDGER D24)"; return 1 ;;
         *) native_codegen_oracle_fail "unknown NATIVE_CODEGEN_ORACLE=$NATIVE_CODEGEN_ORACLE"; return 1 ;;
     esac
     if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" ]]; then
@@ -185,6 +186,14 @@ native_codegen_seed_acquire() {
     fi
     export NATIVE_CODEGEN_COMPILER="$compiler"
     echo "native-codegen: acquired C-free gen-1 seed at $NATIVE_CODEGEN_COMPILER (sha256=$got; C interpreter NOT invoked)"
+    # Golden provenance, stated once where the oracle is staged (blind-audit R3, 2026-08-29): the
+    # default oracle for links 2..16 + rejects is a FROZEN SNAPSHOT captured from the retired C
+    # bootstrap (capture_native_goldens.sh needs the deleted build/herbert), so a green here is
+    # byte-equality with a committed C-derived golden -- NOT a live differential against C, and NOT
+    # regenerable in this tree (MEWTWO LEDGER D24). The C mode is inert dead code.
+    if [[ "$NATIVE_CODEGEN_ORACLE" == "golden" && -z "${NATIVE_CODEGEN_GOLDEN_BANNER_SHOWN:-}" ]]; then
+        echo "native-codegen: oracle mode=golden -- links 2..16 + rejects are graded against COMMITTED C-derived goldens ($NATIVE_CODEGEN_MANIFEST; a frozen snapshot of the retired C bootstrap, NOT regenerable in this tree -- LEDGER D24); C is NOT run"
+    fi
 }
 
 native_codegen_ensure_compiler() {

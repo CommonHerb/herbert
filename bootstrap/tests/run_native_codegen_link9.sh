@@ -266,5 +266,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link9: $pass sub-tests: fault-as-bottom idiom compiles+runs byte-exact vs C across int/string/tuple/bool + mid-expression contexts incl. the trap path, renamed twin byte-identical, disasm gate fault=call-not-TCO'd)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link9: $pass sub-tests: fault-as-bottom idiom compiles+runs byte-exact vs the committed C-derived goldens (golden mode, C not run) across int/string/tuple/bool + mid-expression contexts incl. the trap path, renamed twin byte-identical, disasm gate fault=call-not-TCO'd)"
 exit 0

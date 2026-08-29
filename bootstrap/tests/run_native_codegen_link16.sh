@@ -13,7 +13,7 @@
 # bound (the forcing bite -- revert the helpers and these go RED via timeout),
 # the new O(1) encoder finishes in well under a second. The compiled program
 # renders the literal as canonical decimal (D14); its stdout is graded
-# byte-for-byte against the C bootstrap oracle, so a wrong byte value/order in
+# byte-for-byte against the committed C-derived golden (captured once from the C bootstrap), so a wrong byte value/order in
 # the fast encoder is caught too. Distinct byte patterns (zero+0xFF mix, all
 # 0xFF, all-distinct-ascending) guard against a value-fitted or endianness bug.
 set -u
@@ -125,5 +125,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link16: $pass sub-tests: bounded large-literal PUSH_INT encoding -- 0xFFFFFFFF80000000 (higher-half kernel base), 2^64-1, 0x0102030405060708 -- each compiles within ${compile_bound} (an O(value) hang pre-throne) and renders byte-exact canonical decimal vs C (D15))"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link16: $pass sub-tests: bounded large-literal PUSH_INT encoding -- 0xFFFFFFFF80000000 (higher-half kernel base), 2^64-1, 0x0102030405060708 -- each compiles within ${compile_bound} (an O(value) hang pre-throne) and renders byte-exact canonical decimal vs the committed C-derived golden (golden mode, C not run) (D15))"
 exit 0

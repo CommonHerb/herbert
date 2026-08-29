@@ -134,7 +134,7 @@ run_return_diff() {
     local expected="$tmp/${label}.expected"
     local actual="$tmp/${label}.actual"
     compile_probe "$label" "$probe" "$elf" || return
-    oracle_le64 "$probe" "$rt" "$expected" || { fail_test "$label C oracle failed"; return; }
+    oracle_le64 "$probe" "$rt" "$expected" || { fail_test "$label golden oracle lookup failed"; return; }
     "$elf" <"$rt" >"$actual" 2>/dev/null || { fail_test "$label native failed"; return; }
     if ! cmp -s "$expected" "$actual"; then
         fail_test "$label return mismatch: expected=$(xxd -p "$expected" | tr -d '\n') actual=$(xxd -p "$actual" | tr -d '\n')"

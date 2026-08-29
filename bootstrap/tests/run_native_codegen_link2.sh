@@ -6,7 +6,7 @@
 # Probes use the input-ALIAS form:
 #   let input = clogger()
 #   ... index(input,0) ...
-# The differential oracle is the REAL C bootstrap (build/herbert), restored after
+# The differential oracle is the committed C-derived golden (captured ONCE from the C bootstrap, build/herbert -- now deleted; golden mode, C not run), restored after
 # the first build's Python-oracle regression was caught at conductor reconciliation.
 set -u
 
@@ -93,7 +93,7 @@ for probe_name in p1 p2 p3; do
 done
 
 # ====================================================================
-# Oracle: REAL C bootstrap (not Python arithmetic)
+# Oracle: the committed C-derived golden (captured once from the real C bootstrap; not Python arithmetic)
 # Run build/herbert probe.herb < RT, parse its stdout, pack to LE64.
 # C bootstrap prints: int -> unsigned decimal; bool -> true/false.
 # Pack: int value -> 8 LE bytes; bool true -> 01 00 00 00 00 00 00 00 ;
@@ -125,7 +125,7 @@ run_differential() {
     LC_ALL=C printf "\\$(printf '%03o' "$b0")\\$(printf '%03o' "$b1")" > "$rt"
 
     if ! oracle_le64 "$probe_file" "$rt" "$expected"; then
-        fail_test "$label (C bootstrap oracle failed)"
+        fail_test "$label (golden oracle lookup failed, mode=$NATIVE_CODEGEN_ORACLE)"
         return
     fi
     if ! "$elf" < "$rt" > "$actual" 2>/dev/null; then
@@ -332,7 +332,7 @@ check_reject "params"           "$tmp/rj12.herb"
 
 # ====================================================================
 # Anti-over-rejection: accepted probes compile and run
-# Expected values computed from C bootstrap oracle
+# Expected values = the committed C-derived goldens (captured once from the C bootstrap)
 # P1: 'A'(65)+'B'(66)=131 -> 83 00 00 00 00 00 00 00
 # P2: 0x01 < 0xff -> true -> 1 -> 01 00 00 00 00 00 00 00
 # P3: 0x00 - 0x01 = -1 (wrap) -> ff ff ff ff ff ff ff ff
@@ -361,9 +361,9 @@ check_accept() {
     chmod +x "$elf_file"
     printf '%b' "$(echo "$rt_hex" | sed 's/\(..\)/\\x\1/g')" > "$rt_file"
 
-    # Get expected from C bootstrap oracle
+    # Get expected from the committed C-derived golden
     if ! oracle_le64 "$probe_file" "$rt_file" "$expected_file"; then
-        fail_test "accept $label: C bootstrap oracle failed"
+        fail_test "accept $label: golden oracle lookup failed (mode=$NATIVE_CODEGEN_ORACLE)"
         return
     fi
     local oracle_hex
@@ -402,5 +402,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs C bootstrap oracle; disassembly gate; 6-probe rejection battery incl. double-clogger + 3 anti-over-rejection; string/tuple/length/nonlit-index/inline-clogger rejects retired -- now in-subset at mercer Link 5)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link2: $pass sub-tests: differential P1/P2/P3 x boundary inputs vs the committed C-derived goldens (golden mode: a frozen snapshot of the retired C bootstrap, C not run); disassembly gate; 6-probe rejection battery incl. double-clogger + 3 anti-over-rejection; string/tuple/length/nonlit-index/inline-clogger rejects retired -- now in-subset at mercer Link 5)"
 exit 0

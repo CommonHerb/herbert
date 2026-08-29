@@ -110,7 +110,7 @@ run_diff() {
     local actual="$tmp/${label}_${b0}_${b1}.actual"
     write_rt "$rt" "$b0" "$b1"
     if ! oracle_le64 "$probe" "$rt" "$expected"; then
-        fail_test "$label b0=$b0 b1=$b1 (C oracle failed)"
+        fail_test "$label b0=$b0 b1=$b1 (golden oracle lookup failed)"
         return
     fi
     if ! "$elf" <"$rt" >"$actual" 2>/dev/null; then
@@ -454,7 +454,7 @@ check_accept() {
     compile_probe "$label" "$probe" "$elf"
     printf '%b' "$(echo "$rt_hex" | sed 's/\(..\)/\\x\1/g')" >"$rt"
     if ! oracle_le64 "$probe" "$rt" "$expected"; then
-        fail_test "accept $label (C oracle failed)"
+        fail_test "accept $label (golden oracle lookup failed)"
         return
     fi
     if ! "$elf" <"$rt" >"$actual" 2>/dev/null; then

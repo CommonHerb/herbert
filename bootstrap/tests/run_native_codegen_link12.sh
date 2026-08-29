@@ -3,7 +3,7 @@
 # lowers `do fwriter(bytes)` to openat/write-loop/close syscalls, so a compiled
 # native program writes its bytes to a BYTE-PURE file "a.out" — every byte
 # Herbert-authored, no host trailer (the native return-word trailer goes to
-# stdout, a separate stream). The C bootstrap's bi_fwriter is the differential
+# stdout, a separate stream). The C bootstrap's bi_fwriter (captured once into the committed golden; golden mode, C not run) is the differential
 # oracle. The compiler's own main is UNCHANGED (still emits the ELF to stdout);
 # this link proves the capability the D12-payment link will use.
 set -u
@@ -177,5 +177,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link12: $pass sub-tests: fwriter byte-pure file differential vs C (hi/empty), openat/close/jmp-over-error disasm gate, renamed-twin + non-string rejects)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link12: $pass sub-tests: fwriter byte-pure file differential vs the committed C-derived goldens (golden mode, C not run) (hi/empty), openat/close/jmp-over-error disasm gate, renamed-twin + non-string rejects)"
 exit 0

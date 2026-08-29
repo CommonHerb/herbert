@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Native codegen Link 14 (iager): bitwise and shift operators -- & | ^ ~ << >>
 # on 64-bit unsigned ints. Accept probes are compiled, run, and diffed
-# byte-for-byte against the C bootstrap oracle (the native program renders its
+# byte-for-byte against the committed C-derived golden (captured once from the C bootstrap; golden mode) (the native program renders its
 # return value as canonical decimal/bool directly to stdout, per D14). Reject
 # probes (each with a renamed twin) must NOT compile to an ELF -- they cover the
 # int/bool split (~true, not 5) and the settled-precedence (c) class-mixing

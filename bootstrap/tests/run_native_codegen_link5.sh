@@ -56,7 +56,7 @@ run_diff() {
     total=$((total + 1))
     local expected="$tmp/${label}.expected" actual="$tmp/${label}.actual"
     if ! oracle_le64 "$probe" "$rt" "$expected"; then
-        fail_test "$label (C oracle failed)"
+        fail_test "$label (golden oracle lookup failed)"
         return
     fi
     if ! "$elf" <"$rt" >"$actual" 2>/dev/null; then
@@ -90,7 +90,7 @@ check_accept() {
         return
     fi
     if ! oracle_le64 "$probe" "$rt" "$expected"; then
-        fail_test "accept $label (C oracle failed)"
+        fail_test "accept $label (golden oracle lookup failed)"
         return
     fi
     if ! "$elf" <"$rt" >"$actual" 2>/dev/null; then
