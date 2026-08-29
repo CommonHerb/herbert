@@ -55,6 +55,7 @@ if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (m
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/bochs_f2_harness.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -335,47 +336,26 @@ qemu_trace() { # label elf byte -> echoes the captured 0xE9 trace hex (or "")
     xxd -p "$W/e9.bin" 2>/dev/null | tr -d '\n'
 }
 
-bochs_trace() { # label elf byte -> echoes the captured 0xE9 trace hex (best-effort) + sets BOCHS_SHUTDOWN
-    local label="$1" elf="$2" byte="$3"
+# ---- Bochs trace leg: F2-HARDENED via bochs_f2_harness.sh (fleet-sweep census correction, 2026-08-29: link32
+#      was a pre-link44 raw Bochs gate the 2026-08-28 sweep's census missed). Checked disk build + mount/loop
+#      cleanup, per-boot classification, fresh-disk re-rolls x3, HARNESS-ERROR fail-closed; the feeder is
+#      launched AFTER the disk build (as the raw leg already did); only a COMPLETED (LISTENING +
+#      shutdown-complete + SENT) boot is graded, by the same full-trace-run compare as before. ----
+BX_GRUBCFG=$'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n boot\n}\n'
+
+bochs_grade_trace() { # bochslog label axis byte want   (kernel verdict on a COMPLETED+SENT boot only)
+    local blog="$1" label="$2" axis="$3" byte="$4" want="$5"
+    # extract the contiguous trace run from the e9-hack log (frames "de XX ad" x K), as the raw leg did.
+    local got; got=$(hexdump -ve '1/1 "%02x"' "$blog" 2>/dev/null | grep -oE "(de[0-9a-f][0-9a-f]ad){$K}" | head -1)
+    [[ "$got" == "$want" ]] && return 0
+    fail_test "$label Bochs $axis=$byte RED (completed boot, shutdown+SENT witnessed): trace=$got want=$want"; return 1
+}
+
+bochs_run() { # label elf axis byte want  -> 0 iff the full trace matches on a shutdown-complete boot (F2-hardened)
+    local label="$1" elf; elf="$(readlink -f "$2")"; local axis="$3" byte="$4" want="$5"
     local W="$work/$label.b.$byte"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; echo ""; return; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP" )
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 30 > "$W/feed.log" 2>&1 &
-    local fp=$!; feeder_wait "$W/feed.log" || { fail_test "$label Bochs byte=$byte: feeder never LISTENING"; kill "$fp" 2>/dev/null; echo ""; return; }
-    ( cd "$W"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    wait "$fp" 2>/dev/null
-    # persist the shutdown count to a file (this fn runs in a command-substitution subshell, so a
-    # plain variable would not reach the caller).
-    grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null > "$work/.bochs_shutdown"
-    # extract the contiguous trace run from the e9-hack log (frames "de XX ad" x K).
-    hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" 2>/dev/null | grep -oE "(de[0-9a-f][0-9a-f]ad){$K}" | head -1
+    f2_bochs_feed_leg "$label Bochs $axis=$byte" bochs_grade_trace "$byte --hold 30" "$W/feed.log" "$W/bochs_out.txt" \
+        "$BX_GRUBCFG" 90 32 "$elf:boot/kernel.elf" -- "$label" "$axis" "$byte" "$want"
 }
 
 reject_probe() { # label directive "<body>"
@@ -411,10 +391,8 @@ for label in $ALL_PROBES; do
     gX=$(qemu_trace "$label" "$elf" "$X"); [[ "$gX" == "$tX" ]] || { fail_test "$label QEMU X=$X: trace=$gX want=$tX"; ok=0; }
     gY=$(qemu_trace "$label" "$elf" "$Y"); [[ "$gY" == "$tY" ]] || { fail_test "$label QEMU Y=$Y: trace=$gY want=$tY"; ok=0; }
     if [[ "$run_bochs" -eq 1 ]] && [[ " $BOCHS_PROBES " == *" $label "* ]]; then
-        bX=$(bochs_trace "$label" "$elf" "$X"); bsdX=$(cat "$work/.bochs_shutdown" 2>/dev/null || echo 0)
-        [[ "$bX" == "$tX" && "$bsdX" -ge 1 ]] || { fail_test "$label Bochs X=$X: trace=$bX want=$tX shutdown=$bsdX"; ok=0; }
-        bY=$(bochs_trace "$label" "$elf" "$Y"); bsdY=$(cat "$work/.bochs_shutdown" 2>/dev/null || echo 0)
-        [[ "$bY" == "$tY" && "$bsdY" -ge 1 ]] || { fail_test "$label Bochs Y=$Y: trace=$bY want=$tY shutdown=$bsdY"; ok=0; }
+        bochs_run "$label" "$elf" X "$X" "$tX" || ok=0
+        bochs_run "$label" "$elf" Y "$Y" "$tY" || ok=0
     fi
     sha_after=$(sha256sum "$elf" | cut -d' ' -f1)
     [[ "$sha_before" == "$sha_after" ]] || { fail_test "$label: image changed between the X and Y runs (not the same binary)"; ok=0; }
@@ -440,6 +418,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]]; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link32 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link32 / cloggard / sixteenth kernel-arc link: the first DATA-DEPENDENT MULTI-QUANTUM scheduler -- a timer-IRQ0 run-queue dispatches K=$K WARM tasks over multiple quanta, emitting an ordered TRACE on 0xE9; the schedule next=(inq>>pos)&1 is recomputed reading [inq] EACH quantum inside vec-0x20, so the same image fed X=0x0A produces schedule A,B,A,B and Y=0x05 produces B,A,B,A -- a DIFFERENT ordered byte sequence; warm accumulation is white-box-bound by the PROVENANCE pin (only writes to a tcb slot are the head init + the scheduler's single indexed save; each task's byte dataflows from a warm REGISTER accumulator + a fixed marker, never an indexed memory read -- closing the cold-re-dispatch-fakes-warmth forge); $pass checks: static + ELF-P12 + white-box [P0 exact 224-byte head; P-sched exact 128-byte scheduler exactly-once w/ the done-flag interlock + exit-gate K=$K + per-quantum bit-select pinned; P-cells head-init/scheduler cell addrs value-bound to the computed layout; P-prov warmth provenance (tcb save==restore slot, task bodies ref only [done]); P-tasks framed emit exactly twice + ZERO in head/scheduler + exact task glue; P-antimut all absolute stores target the cell range; P-reach head ends sti;jmp\$; P-seeds 8 zero GP + cs 0x08 + eflags 0x202 IF=1 + eips bound to the task entries; P-IDT vec-0x20 interrupt-gate -> scheduler + loaded-IDTR bind; P-GDT flat; M1 bounded disasm whitelist + 2 in + 2 iret + 1 pusha + 1 sti + 1 lgdt + 1 lidt + 3 hlt], QEMU substrate (5 probes, late-bound socket COM1, full-trace cmp vs host golden for X and Y), Bochs substrate ($BOCHS_PROBES, socket com1, full-trace + clean shutdown), 12 rejects with twins; graded vs host-derived golden on the dual-substrate oracle -- a CANONICAL-CODEGEN proof for the fixed probes)"
 exit 0
