@@ -50,7 +50,7 @@ tests, goldens, runners, and workflow logs.
 
 ## Near-Term Stabilization
 
-- Keep `make verify-local` fast, portable, and green on Darwin/arm64 and Linux.
+- Keep `make verify-local` fast and green on Linux/x86_64 (it is NOT portable: it depends on `make test` and the native ELF rungs; only `make check` / `make test-timeout` / `make lexer-copy-sync` run on Darwin/arm64 -- blind-audit R5, 2026-08-29).
 - Keep `make test` truthful about its Linux/x86_64 requirement.
 - Keep CI logs reviewable by separating portable checks, full non-emulator
   checks, and emulator-heavy kernel/module checks.

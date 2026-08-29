@@ -13,8 +13,10 @@ esac
 cat >&2 <<MSG
 FAIL: make test requires a Linux/x86_64 host.
 
-The full run mints and executes Linux ELF native-codegen artifacts. On this
-host ($os/$arch), use 'make verify-local' for the portable local ladder and run
-'make test' in Linux CI or an equivalent Linux/x86_64 environment.
+The full run mints and executes Linux ELF native-codegen artifacts, and the
+aggregate 'make verify-local' depends on this target, so neither runs on this
+host ($os/$arch). Portable here: 'make check', 'make test-timeout',
+'make lexer-copy-sync'. Run 'make test' / 'make verify-local' in Linux CI or an
+equivalent Linux/x86_64 environment (a VM is fine).
 MSG
 exit 1

@@ -31,7 +31,7 @@ Runs the main shell harness in `bootstrap/tests/run_tests.sh`.
 
 This target requires a Linux/x86_64 host because the native-codegen links mint and execute Linux ELF artifacts. The Makefile prepends `tools/` to `PATH`, so Linux hosts without GNU `timeout` can still run bounded test legs.
 
-On macOS or non-x86_64 hosts, use `make verify-local` for the portable local ladder and run `make test` in Linux CI or an equivalent Linux/x86_64 environment.
+On macOS or non-x86_64 hosts the aggregate `make verify-local` is NOT runnable: it depends on `make test` (which refuses such hosts) and on the native rungs, which mint and execute Linux/x86_64 ELF artifacts. The individually portable checks are `make check`, `make test-timeout`, and `make lexer-copy-sync`; run everything else in Linux CI or an equivalent Linux/x86_64 environment (a VM is fine).
 
 QEMU-emulated x86_64 Linux on Apple Silicon is useful for targeted reproduction,
 but it may be too slow for the default full-suite timeouts in deeper
