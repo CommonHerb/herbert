@@ -52,9 +52,13 @@ Local runs can silently shrink if emulator prerequisites are absent. Treat the w
 locally against the CI-pinned QEMU version when the distro package lags, set the durable knob:
 `QEMU_PREFIX=/opt/qemu-10.2.1 bash bootstrap/tests/run_native_codegen_linkNN.sh` (or the same on
 `make kernel-verify`). When set, `$QEMU_PREFIX/bin` must contain `qemu-system-x86_64` and is
-prepended to PATH by `native_codegen_oracle.sh`/`kernel_verify.sh`; if it does not, the run FAILS
+prepended to PATH; if it does not, the run FAILS
 LOUD rather than silently falling back to the system qemu (the silent-downgrade footgun the knob
-retires). The bare per-shell `PATH=/opt/qemu-10.2.1/bin:$PATH` prefix still works identically.
+retires). Coverage is now EVERY qemu-invoking gate: `native_codegen_oracle.sh` and `kernel_verify.sh`
+carry the block directly; the 25 `*_mutation.sh` gates source the shared `qemu_prefix.sh`; and
+`larder_phaseA_gate.sh` / `replay_discriminator.sh` carry it inline. **(Corrected 2026-08-31 — until
+then the knob lived only in the oracle, on the false premise that it was "the one file every gate
+sources"; those 27 gates silently IGNORED it. Found by the tranche-1b blind diff audit.)** The bare per-shell `PATH=/opt/qemu-10.2.1/bin:$PATH` prefix still works identically.
 The gates deliberately resolve `qemu-system-x86_64` from PATH —
 nothing in the tree hardcodes a host-local prefix, and CI (which sets neither) is unaffected. The local Bochs is
 2.7+dfsg-4build5 vs CI's pinned 2.8+dfsg-1: fine for smoke, and the CI run stays the authoritative

@@ -17,9 +17,13 @@ native_codegen_oracle__script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # QEMU_PREFIX knob (2026-08-31, Ben-greenlit): the durable alternative to the per-shell
 # PATH=/opt/qemu-X.Y.Z/bin convention for hosts whose system qemu is not the pinned emulator
 # (kingdom's system qemu is 8.2.2 -- the F8-aborting major). When set, $QEMU_PREFIX/bin is
-# prepended to PATH here (the one file every gate sources) and MUST contain qemu-system-x86_64:
+# prepended to PATH here and MUST contain qemu-system-x86_64:
 # fail LOUD, never fall silently back to a system qemu -- the silent-downgrade footgun this knob
 # retires. Unset => exactly the historical behavior (CI sets nothing and is untouched).
+# NOTE (2026-08-31): an earlier version of this comment claimed this was "the one file every gate
+# sources" and used that to justify putting the knob ONLY here. That was FALSE -- 25 *_mutation.sh
+# gates plus larder_phaseA_gate.sh and replay_discriminator.sh invoke qemu by bare name and source
+# no oracle, so they silently ignored the knob. They now carry it via qemu_prefix.sh (or inline).
 if [[ -n "${QEMU_PREFIX:-}" ]]; then
     if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
         echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2

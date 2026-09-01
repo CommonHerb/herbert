@@ -44,6 +44,15 @@
 # 2026-07-17 -- no regression vs the pre-discriminator gates, which shared the collision.)
 ATT=""; ATT_SIG=""; ATT_HERR=""; ATT_CTX=""
 
+# QEMU_PREFIX knob (2026-08-31): fail LOUD, never fall silently back to a system qemu.
+# Inline (not a `source`) because this file defines no script_dir. Same contract as qemu_prefix.sh.
+if [[ -n "${QEMU_PREFIX:-}" ]]; then
+    if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
+        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2
+        exit 1
+    fi
+    export PATH="$QEMU_PREFIX/bin:$PATH"
+fi
 boot_qemu() { # timeout-secs statusfile cmd args... -> rc: EXIT:n -> n verbatim; TIMEOUT -> 124;
     # SIGNAL:s -> 120 (even -- never an isa-debug-exit encoding, so it can never classify COMPLETED).
     # The status-preserving boot runner (tranche 1b): subprocess sees the real wait status (negative

@@ -15,6 +15,21 @@
 # (The byte-pin to build_elf() is in the main gate; this proves the construct is NON-VACUOUS.)
 set -u
 script_dir="$(cd "$(dirname "$0")" && pwd)"
+# QEMU_PREFIX knob (2026-08-31): when set, $QEMU_PREFIX/bin MUST hold an executable qemu-system-x86_64
+# and is prepended to PATH -- fail LOUD, never fall silently back to a system qemu (kingdom's system qemu
+# is 8.2.2, the F8-aborting major). Unset => byte-identical historical behavior; CI sets nothing.
+# Inlined per gate (not a shared sourced helper) so each gate is self-protecting when run STANDALONE --
+# the exact scenario the knob exists for -- and so the bootstrap allowlist does not grow. This block was
+# added because the knob originally lived ONLY in native_codegen_oracle.sh, justified by the comment
+# "the one file every gate sources", which was FALSE: this gate sources no oracle and silently ignored
+# the knob. Found by the tranche-1b blind diff audit, 2026-08-31.
+if [[ -n "${QEMU_PREFIX:-}" ]]; then
+    if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
+        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2
+        exit 1
+    fi
+    export PATH="$QEMU_PREFIX/bin:$PATH"
+fi
 REF="$script_dir/rollcall_ref.py"
 K="${ROLLCALL_MUT_K:-3}"
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then

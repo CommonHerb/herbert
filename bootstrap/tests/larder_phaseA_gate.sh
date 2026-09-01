@@ -12,6 +12,15 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || tr
 pass=0; fail=0
 ok(){ echo "  PASS: $1"; pass=$((pass+1)); }
 bad(){ echo "  FAIL: $1"; fail=$((fail+1)); }
+# QEMU_PREFIX knob (2026-08-31): fail LOUD, never fall silently back to a system qemu.
+# Inline (not a `source`) because this file defines no script_dir. Same contract as qemu_prefix.sh.
+if [[ -n "${QEMU_PREFIX:-}" ]]; then
+    if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
+        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2
+        exit 1
+    fi
+    export PATH="$QEMU_PREFIX/bin:$PATH"
+fi
 have_qemu(){ command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm(){ [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs(){ command -v bochs >/dev/null && command -v parted >/dev/null && command -v grub-install >/dev/null && command -v xvfb-run >/dev/null && sudo -n true 2>/dev/null; }
