@@ -13,6 +13,20 @@
 # no longer via a C mint. The default golden path is unchanged.
 
 native_codegen_oracle__script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# QEMU_PREFIX knob (2026-08-31, Ben-greenlit): the durable alternative to the per-shell
+# PATH=/opt/qemu-X.Y.Z/bin convention for hosts whose system qemu is not the pinned emulator
+# (kingdom's system qemu is 8.2.2 -- the F8-aborting major). When set, $QEMU_PREFIX/bin is
+# prepended to PATH here (the one file every gate sources) and MUST contain qemu-system-x86_64:
+# fail LOUD, never fall silently back to a system qemu -- the silent-downgrade footgun this knob
+# retires. Unset => exactly the historical behavior (CI sets nothing and is untouched).
+if [[ -n "${QEMU_PREFIX:-}" ]]; then
+    if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
+        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2
+        exit 1
+    fi
+    export PATH="$QEMU_PREFIX/bin:$PATH"
+fi
 NATIVE_CODEGEN_GOLDENS_DIR="${NATIVE_CODEGEN_GOLDENS_DIR:-$native_codegen_oracle__script_dir/native_codegen_goldens}"
 NATIVE_CODEGEN_ORACLE="${NATIVE_CODEGEN_ORACLE:-golden}"
 NATIVE_CODEGEN_CAPTURE="${NATIVE_CODEGEN_ORACLE_CAPTURE:-0}"

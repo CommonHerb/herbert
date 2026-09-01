@@ -33,14 +33,35 @@
 # that cannot be reproduced-or-refuted stays a failure. A replay may clear a RED ONLY against the SAME
 # artifact bytes: every completed attempt records kernel+module hashes and the clearing GREEN must
 # match attempt-1's (hash-freeze, fail closed on mismatch).
-# KNOWN RESIDUAL (named; deferred to tranche 1b with a status-preserving python boot runner): bash
-# cannot see WIFSIGNALED through timeout(1) -- coreutils folds a signal death into a plain exit code --
-# so an EXTERNAL signal killing QEMU in the handful of instructions between the terminal debugcon
-# write and the isa-debug-exit port write, with a signal number whose folded rc collides with a
-# debug-exit encoding, is indistinguishable from a completed boot. Nothing in this harness signals
-# QEMU, and the pre-discriminator gates accepted the same collision (rc+grade), so this is NO
-# regression -- cross-model reviewed (Codex LAND-WITH-CHANGES item 1) and accepted 2026-07-17.
+# RESIDUAL PAID (tranche 1b, 2026-08-31 -- was: "KNOWN RESIDUAL ... deferred to tranche 1b with a
+# status-preserving python boot runner"): bash cannot see WIFSIGNALED through timeout(1) -- coreutils
+# folds a signal death into a plain exit code -- so an EXTERNAL signal killing QEMU between the
+# terminal debugcon write and the isa-debug-exit port write, with a folded rc colliding with a
+# debug-exit encoding, was indistinguishable from a completed boot. The boot_qemu runner below now
+# preserves the wait status: a signal death is reported as SIGNAL:<n> in a status file (and rc 120,
+# an even value no debug-exit encoding can produce) and qemu_classify refuses it as NO_COMPLETION
+# whatever the folded rc would have been. (Original acceptance: Codex LAND-WITH-CHANGES item 1,
+# 2026-07-17 -- no regression vs the pre-discriminator gates, which shared the collision.)
 ATT=""; ATT_SIG=""; ATT_HERR=""; ATT_CTX=""
+
+boot_qemu() { # timeout-secs statusfile cmd args... -> rc: EXIT:n -> n verbatim; TIMEOUT -> 124;
+    # SIGNAL:s -> 120 (even -- never an isa-debug-exit encoding, so it can never classify COMPLETED).
+    # The status-preserving boot runner (tranche 1b): subprocess sees the real wait status (negative
+    # returncode = WIFSIGNALED), which timeout(1)+bash structurally cannot.
+    local tmo="$1" sf="$2"; shift 2
+    python3 - "$tmo" "$sf" "$@" <<'PY'
+import subprocess, sys
+tmo = int(sys.argv[1]); sf = sys.argv[2]; cmd = sys.argv[3:]
+try:
+    p = subprocess.run(cmd, timeout=tmo)
+    rc = p.returncode
+    if rc < 0:
+        open(sf, 'w').write('SIGNAL:%d\n' % -rc); sys.exit(120)
+    open(sf, 'w').write('EXIT:%d\n' % rc); sys.exit(rc & 0xFF)
+except subprocess.TimeoutExpired:
+    open(sf, 'w').write('TIMEOUT\n'); sys.exit(124)
+PY
+}
 
 replay_capture_ctx() { # kernel-elf module-file -> 0 + ATT_CTX set, or ATT=SETUP_FAILURE + 1 if unhashable.
     # Called PRE-LAUNCH by every attempt fn (Codex delta review): hashing after the boot leaves a
@@ -62,8 +83,14 @@ replay_final_frame() { # debugcon-file -> 0 iff the stream ENDS with a byte-ALIG
     xxd -p "$1" 2>/dev/null | tr -d '\n' | grep -qE '^([0-9a-f]{2})*de[0-9a-f]{2}ad$'
 }
 
-qemu_classify() { # rc debugcon qerr feedlog(""=no-feeder leg) -> 0 iff COMPLETED (caller grades); else sets ATT and returns 1
-    local rc="$1" out="$2" qerr="$3" flog="$4"
+qemu_classify() { # rc debugcon qerr feedlog(""=no-feeder leg) [bootstatusfile] -> 0 iff COMPLETED (caller grades); else sets ATT and returns 1
+    local rc="$1" out="$2" qerr="$3" flog="$4" bsf="${5:-}"
+    if [[ -n "$bsf" && -r "$bsf" ]]; then   # status-preserving runner verdict outranks the folded rc (tranche 1b)
+        local bst; bst="$(head -1 "$bsf" 2>/dev/null)"
+        if [[ "$bst" == SIGNAL:* ]]; then
+            ATT=NO_COMPLETION; ATT_HERR="QEMU died on ${bst} (WIFSIGNALED, status-preserving boot runner) -- a signal death is never a completion witness, whatever exit code it would fold to"; return 1
+        fi
+    fi
     if [[ -n "$flog" ]] && ! grep -q SENT "$flog" 2>/dev/null; then
         ATT=NO_COMPLETION; ATT_HERR="feeder never logged SENT (COM1 never connected/delivered -- the leg's question was never posed) rc=$rc"; return 1
     fi

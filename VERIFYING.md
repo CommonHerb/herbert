@@ -48,11 +48,15 @@ That workflow installs QEMU, Bochs, GRUB, Xvfb, and disk tooling on Linux, then 
 
 Local runs can silently shrink if emulator prerequisites are absent. Treat the workflow as the authoritative gate for those links.
 
-**Local emulator convention (2026-08-28):** to run kernel gates locally against the CI-pinned QEMU
-version when the distro package lags, prepend the pinned build to PATH per invocation:
-`PATH=/opt/qemu-10.2.1/bin:$PATH bash bootstrap/tests/run_native_codegen_linkNN.sh` (or the same
-prefix on `make kernel-verify`). The gates deliberately resolve `qemu-system-x86_64` from PATH —
-nothing in the tree hardcodes a host-local prefix, so CI is unaffected. The local Bochs is
+**Local emulator convention (2026-08-28; QEMU_PREFIX knob added 2026-08-31):** to run kernel gates
+locally against the CI-pinned QEMU version when the distro package lags, set the durable knob:
+`QEMU_PREFIX=/opt/qemu-10.2.1 bash bootstrap/tests/run_native_codegen_linkNN.sh` (or the same on
+`make kernel-verify`). When set, `$QEMU_PREFIX/bin` must contain `qemu-system-x86_64` and is
+prepended to PATH by `native_codegen_oracle.sh`/`kernel_verify.sh`; if it does not, the run FAILS
+LOUD rather than silently falling back to the system qemu (the silent-downgrade footgun the knob
+retires). The bare per-shell `PATH=/opt/qemu-10.2.1/bin:$PATH` prefix still works identically.
+The gates deliberately resolve `qemu-system-x86_64` from PATH —
+nothing in the tree hardcodes a host-local prefix, and CI (which sets neither) is unaffected. The local Bochs is
 2.7+dfsg-4build5 vs CI's pinned 2.8+dfsg-1: fine for smoke, and the CI run stays the authoritative
 substrate for Bochs legs. F2-hardened gates (bochs_f2_harness.sh) classify harness failures
 (missing grub-pc-bin, loop-mount races, dead feeders) instead of mis-scoring them as kernel REDs.

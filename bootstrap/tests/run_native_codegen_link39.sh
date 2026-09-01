@@ -138,11 +138,11 @@ attempt_benign() { # kind byte out  (tri-state: sets ATT/ATT_SIG/ATT_HERR/ATT_CT
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
         ATT=SETUP_FAILURE; ATT_HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; return 0
     fi
-    timeout 60 qemu-system-x86_64 -kernel "$KELF" -initrd "${MODF[$kind]}" -debugcon file:"$out" \
+    boot_qemu 60 "$out.bstat" qemu-system-x86_64 -kernel "$KELF" -initrd "${MODF[$kind]}" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?; wait "$fp" 2>/dev/null
-    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" || return 0
+    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" "$out.bstat" || return 0
     local g grc; g="$(python3 "$REF" grade "$out" "$KEND" "$(printf '%x' "$byte")" "$kind" 2>&1)"; grc=$?
     if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; return 0; fi
     ATT=COMPLETED_RED
@@ -191,26 +191,51 @@ bochs_benign() { # kind byte  -> 0 iff adjudicated GREEN
         "$BX_GRUBCFG" 90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin" -- "$kind" "$byte"
 }
 
-# ---- overflow safety: a deep recursion overflowing the 4 KiB stack page must FAULT CLEANLY (caught by
-#      geeking's fault->continue, answer = a fault status), NOT silently corrupt -- proving the one-page
-#      recursion bound is a SAFE capacity bound (code and stack are SEPARATE pages). ----
-overflow_faults_clean() {
+# ---- overflow containment: a deep recursion overflowing the 4 KiB stack page must end in the CPU's
+#      own CPL3 #PF taken MID-OVERFLOW (pf_esp below the stack base -- the genuine overflowed witness)
+#      with the kernel naming it 'P'=0x50 and OUTLIVING it -- never a watchdog kill, completion, #GP,
+#      generic fault, or kernel death. Graded by ouroboros_ref gradeoverflow (full witness chain).
+#      Tranche-1b grader repair (2026-08-31, charter Codex change 6 / Q3): the old accept-set (any
+#      fault status incl. 0x4B watchdog-KILL) was vacuous -- a stall-delayed descent could be killed
+#      BEFORE overflowing and still pass. HONESTY CORRECTION found by the repair's witness capture:
+#      the old "clean fault at the boundary / NOT silently corrupt" claim was an overclaim -- the
+#      stack page sits directly above the module's own writable code page (flat W+X, no guard), so
+#      the descent silently overwrites the MODULE'S OWN code before the wild #PF; what IS proven is
+#      KERNEL containment (U/S catches the wild access, the kernel keeps grading) + a genuine
+#      overflow (pf_esp < alloc_lo). Module self-integrity under overflow is NOT claimed. The leg
+#      runs through the shared same-input replay discriminator like the benign legs (rc bound to the
+#      P encoding; a completed RED gets ONE same-input replay; exhaustion fails closed). ----
+OVF_BYTE=250
+attempt_overflow() { # out  (tri-state: sets ATT/ATT_SIG/ATT_HERR/ATT_CTX, never fail_tests)
+    local out="$1"
+    replay_capture_ctx "$KELF" "$OVF_MOD" || return 0
+    local ex; ex=$(host_qemu_exit 0x50)   # 0x50 'P' stack #PF -- the ONLY accepted overflow outcome
+    local W="$out.d"; mkdir -p "$W"; local port; port=$(free_port)
+    python3 "$feeder" "$port" "$OVF_BYTE" --hold 6 > "$W/feed.log" 2>&1 & local fp=$!
+    local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
+    if ! grep -q LISTENING "$W/feed.log" 2>/dev/null; then
+        kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
+        ATT=SETUP_FAILURE; ATT_HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; return 0
+    fi
+    boot_qemu 60 "$out.bstat" qemu-system-x86_64 -kernel "$KELF" -initrd "$OVF_MOD" -debugcon file:"$out" \
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    local rc=$?; wait "$fp" 2>/dev/null
+    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" "$out.bstat" || return 0
+    local g grc; g="$(python3 "$REF" gradeoverflow "$out" "$KEND" "$(printf '%x' "$OVF_BYTE")" 2>&1)"; grc=$?
+    if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; return 0; fi
+    ATT=COMPLETED_RED
+    ATT_SIG="rc=$rc want=$ex(P=0x50) grade=$([[ "$grc" -eq 0 ]] && echo GREEN || echo "RED: $(echo "$g" | tr '\n' ' ')")"
+    return 0
+}
+overflow_contained() {
     local cdir="$work/ovf.d"; rm -rf "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32-ouroboros\n%s\n' "$(python3 "$REF" overflowsrc)" > "$cdir/m.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < m.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "overflow probe: did not compile ($(head -1 "$cdir/err" 2>/dev/null))"; return 1; fi
-    local W="$work/ovf.run"; mkdir -p "$W"; local byte=250; local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 6 > "$W/feed.log" 2>&1 & local fp=$!
-    local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
-    timeout 60 qemu-system-x86_64 -kernel "$KELF" -initrd "$cdir/a.out" -debugcon file:"$W/e9" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
-    wait "$fp" 2>/dev/null
-    local ans; ans=$(xxd -p "$W/e9" 2>/dev/null | tr -d '\n' | grep -oE 'de..ad' | head -1 | sed -E 's/^de(..)ad$/\1/')
-    if [[ -n "$ans" ]] && python3 "$REF" isfault "$ans" 2>/dev/null; then
-        echo "ouroboros: deep recursion (byte=$byte) overflows the stack page -> fault status 0x$ans (caught by fault->continue; safe capacity bound)"; pass=$((pass + 1))
-    else
-        fail_test "overflow probe byte=$byte: answer=0x${ans:-NONE} is NOT a fault status -- deep recursion may SILENTLY CORRUPT"
+    OVF_MOD="$work/ovf.bin"; cp "$cdir/a.out" "$OVF_MOD"
+    if run_qemu_leg "overflow byte=$OVF_BYTE" "$work/ovf" attempt_overflow; then
+        echo "ouroboros: deep recursion (byte=$OVF_BYTE) overflows the stack page -> genuine mid-overflow CPL3 #PF (answer 0x50, pf_esp<alloc_lo witness, no kill/exit frame; KERNEL containment proven -- module self-integrity not claimed)"; pass=$((pass + 1))
     fi
 }
 
@@ -273,8 +298,9 @@ for k in $KINDS; do
     if [[ "$sha_x" == "$sha_y" ]]; then pass=$((pass + 1)); else fail_test "$k: module image changed between the fx and fy runs"; fi
 done
 
-# overflow safety: deep recursion overflows the stack page -> clean fault, not silent corruption
-overflow_faults_clean
+# overflow containment: deep recursion overflows the stack page -> witnessed mid-overflow CPL3 #PF,
+# kernel contains and outlives it (module self-integrity NOT claimed -- see the leg's header)
+overflow_contained
 
 # Bochs dual-substrate leg (authoritative under REQUIRE_EMU)
 if have_bochs; then

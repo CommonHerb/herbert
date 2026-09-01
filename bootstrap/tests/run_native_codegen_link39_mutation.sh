@@ -12,6 +12,10 @@
 #                 collapses (answer(fx)==answer(fy)) -> the differential bites.
 # Negative controls fed as raw module blobs (ouroboros_ref mutant); the FROZEN geeking kernel runs them and
 # the ouroboros grader must reject. Run under KERNEL_CODEGEN_MUTATION=1 (CI) like every prior link.
+# Every boot is adjudicated only through the change-7 completion witness (charter 2026-07-17, built
+# 2026-08-31): parser-backed + rc-consistent via ouroboros_ref mutwitness -- see boot_witnessed below.
+# A dead/corrupt capture can no longer score as a vacuous "bite"; one-shot capture misses re-roll
+# boundedly on FRESH boots instead of hard-failing the whole battery (exhaustion stays fail-closed).
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -30,6 +34,7 @@ if [[ ! -f "$GREF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (miss
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/replay_discriminator.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing replay_discriminator.sh -- boot_qemu runner)"; exit 1; }
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$work/gen1" || exit 1
@@ -56,33 +61,54 @@ cmp -s "$KELF" "$work/geeking_ref.elf" || { echo "FAIL: stack/native_compile_fra
 KELF_SHA="$(sha256sum "$KELF" | cut -d' ' -f1)"
 KEND="$(printf '%x' "$(elf_meta "$KELF")")"
 
-boot_answer() { # modfile byte -> sets OUT (e9 file) and ANSWER (hex of the emitted DE<x>AD byte, or empty)
+boot_once() { # modfile byte -> 0 (boot ran: OUT + RC set) / 1 (proven pre-adjudication harness failure: HERR set)
     local mod="$1" byte="$2" W; W="$(mktemp -d "$work/run.XXXX")"
-    OUT="$W/e9"; ANSWER=""
+    OUT="$W/e9"; ANSWER=""; RC=""; HERR=""
     local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --hold 6 > "$W/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 40); do grep -q LISTENING "$W/feed.log" && break; sleep 0.1; done
-    grep -q LISTENING "$W/feed.log" 2>/dev/null || { echo "FAIL: link39 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }
-    timeout 60 qemu-system-x86_64 -kernel "$KELF" -initrd "$mod" -debugcon file:"$OUT" \
+    grep -q LISTENING "$W/feed.log" 2>/dev/null || { HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
+    boot_qemu 60 "$OUT.bstat" qemu-system-x86_64 -kernel "$KELF" -initrd "$mod" -debugcon file:"$OUT" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$OUT.qerr"
-    local rc=$?
-    grep -qvE 'terminating on signal' "$OUT.qerr" 2>/dev/null && { echo "FAIL: link39 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$OUT.qerr" | head -1)" >&2; : > "$HVMARK"; }   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill (hang bite) is left to the grader
+    RC=$?
     wait "$fp" 2>/dev/null
-    ANSWER=$(xxd -p "$OUT" 2>/dev/null | tr -d '\n' | grep -oE 'de..ad' | head -1 | sed -E 's/^de(..)ad$/\1/')
-    # completion witness (2026-07-17, tranche 1a): mutants here are MODULES run on the byte-pinned
-    # GENUINE geeking kernel, whose watchdog/fault-continue guarantees every boot reaches the emit tail
-    # (kill 'K' / fault 'G'|'P'|'F' / exit -- empirically re-pinned on qemu 10.2.1). A stream with NO
-    # byte-ALIGNED terminal DE..AD frame is therefore a QEMU/capture failure, NEVER a mutant behavior
-    # -- fail closed so a dead boot cannot score as a vacuous "bite".
-    if ! xxd -p "$OUT" 2>/dev/null | tr -d '\n' | grep -qE '^([0-9a-f]{2})*de[0-9a-f]{2}ad$'; then
-        echo "FAIL: link39 harness failure -- no completion witness (no terminal DE..AD frame in the debugcon stream; the geeking host kernel guarantees module termination, so an absent frame is a QEMU/capture failure, NOT a mutant behavior) rc=$rc" >&2; : > "$HVMARK"
+    local bst; bst="$(head -1 "$OUT.bstat" 2>/dev/null)"
+    if [[ "$bst" == SIGNAL:* ]]; then   # status-preserving runner (tranche 1b): a signal death is a proven harness class, never adjudicated
+        HERR="QEMU died on ${bst} (WIFSIGNALED, status-preserving boot runner)"; return 1
     fi
+    if grep -qvE 'terminating on signal' "$OUT.qerr" 2>/dev/null; then   # F2a: only a NON-timeout stderr line is a launch failure; a timeout-kill is left to the witness/grader
+        HERR="QEMU launch error: $(grep -vE 'terminating on signal' "$OUT.qerr" | head -1)"; return 1
+    fi
+    ANSWER=$(xxd -p "$OUT" 2>/dev/null | tr -d '\n' | grep -oE 'de..ad$' | sed -E 's/^de(..)ad$/\1/')   # TERMINAL frame only
+    return 0
 }
 
-mutate_red() { # label modfile gradekind byte  -- boot the mutant, grade as <gradekind>, MUST be RED
-    local label="$1" mod="$2" kind="$3" byte="$4"
-    boot_answer "$mod" "$byte"
+# completion witness (charter change 7, 2026-08-31 -- replaces the tranche-1a hex-regex minimal witness):
+# parser-backed + rc-consistent, via ouroboros_ref mutwitness (OWN table under the frozen-kernel pin; the
+# stream ENDS with the aligned terminal DE<answer>AD; rc == that answer's isa-debug-exit encoding; the
+# read-witness carries the fed byte; class 'full' = normal mutants must reach SYS_EXIT, class 'faultok' =
+# wrongrel may end in a named fault/kill). An UNWITNESSED attempt is a harness class: re-rolled on a FRESH
+# boot (bounded, 3 attempts), fail-closed on exhaustion. A WITNESSED completion is graded ONCE and NEVER
+# replayed -- a completed mutant RED is the expected bite, and a completed mutant GREEN is a scored FAIL;
+# neither is re-rollable (the change-7 rule).
+boot_witnessed() { # label modfile byte wclass -> 0 witnessed (OUT/RC/ANSWER/WITNESS set) / 1 exhausted (HVMARK)
+    local label="$1" mod="$2" byte="$3" wclass="$4" a w
+    for a in 1 2 3; do
+        if ! boot_once "$mod" "$byte"; then
+            echo "  HARNESS (link39m $label byte=$byte attempt $a/3): $HERR -- re-rolling (proven setup failure; no adjudication)" >&2; continue
+        fi
+        w="$(python3 "$REF" mutwitness "$OUT" "$KEND" "$(printf '%x' "$byte")" "$wclass" "$RC" 2>&1)"
+        if [[ $? -eq 0 ]]; then WITNESS="$w"; return 0; fi
+        echo "  HARNESS (link39m $label byte=$byte attempt $a/3): unwitnessed completion: $w -- re-rolling on a FRESH boot (the attempt is discarded whole; a witnessed completion is never replayed)" >&2
+    done
+    echo "FAIL: link39 harness failure -- $label byte=$byte never produced a witnessed completion in 3 attempts (fail-closed; NOT a mutation bite)" >&2
+    : > "$HVMARK"; return 1
+}
+
+mutate_red() { # label modfile gradekind byte wclass  -- boot witnessed, grade ONCE as <gradekind>, MUST be RED
+    local label="$1" mod="$2" kind="$3" byte="$4" wclass="$5"
+    boot_witnessed "M-$label" "$mod" "$byte" "$wclass" || return
     if python3 "$REF" grade "$OUT" "$KEND" "$(printf '%x' "$byte")" "$kind" >/dev/null 2>&1; then
         fail_test "M-$label: graded GREEN as '$kind' -- NOT load-bearing (answer=0x$ANSWER)"
     else
@@ -104,7 +130,7 @@ printf -- '-- emit: multiboot32-ouroboros\n%s\n' "$(python3 "$REF" src tri)" > "
 CTL="$work/ctl.bin"; cp "$CDIR/a.out" "$CTL"
 [[ "$(xxd -p "$CTL" | tr -d '\n')" == "$(python3 "$REF" hex tri)" ]] || { echo "FAIL: stack/native_compile_fragment.herb (control tri != target)"; exit 1; }
 for b in "$FX" "$FY"; do
-    boot_answer "$CTL" "$b"
+    boot_witnessed "CONTROL-tri" "$CTL" "$b" full || continue
     if python3 "$REF" grade "$OUT" "$KEND" "$(printf '%x' "$b")" tri >/dev/null 2>&1; then pass=$((pass + 1)); else fail_test "CONTROL tri byte=$b: clean module not GREEN -- grader vacuous (answer=0x$ANSWER)"; fi
 done
 
@@ -122,15 +148,16 @@ python3 "$REF" mutant noxform   "$work/noxform.bin"
 python3 "$REF" mutant baseflip  "$work/baseflip.bin"
 python3 "$REF" mutant wrongrel  "$work/wrongrel.bin"
 python3 "$REF" mutant constbake "$work/constbake.bin"
-mutate_red noxform   "$work/noxform.bin"   tri "$FX"   # echo: answer==fed != tri(fed) (recursion load-bearing)
-mutate_red baseflip  "$work/baseflip.bin"  tri "$FX"   # base returns 1: answer == tri(n)+1, wrong
-mutate_red wrongrel  "$work/wrongrel.bin"  tri "$FX"   # corrupted backward call rel32: wrong target/fault
-mutate_red constbake "$work/constbake.bin" tri "$FX"   # bakes 0x5A: answer != tri(fed)
+mutate_red noxform   "$work/noxform.bin"   tri "$FX" full     # echo: answer==fed != tri(fed) (recursion load-bearing)
+mutate_red baseflip  "$work/baseflip.bin"  tri "$FX" full     # base returns 1: answer == tri(n)+1, wrong
+mutate_red wrongrel  "$work/wrongrel.bin"  tri "$FX" faultok  # corrupted backward call rel32: wrong target/named fault
+mutate_red constbake "$work/constbake.bin" tri "$FX" full     # bakes 0x5A: answer != tri(fed)
 
 # ===== the X!=Y differential bites a const-baker: answer(FX)==answer(FY) for constbake =====
 cb_sha="$(sha256sum "$work/constbake.bin" | cut -d' ' -f1)"   # freeze the mutant blob across the two boots (hash-identity, Codex change 1)
-boot_answer "$work/constbake.bin" "$FX"; ax="$ANSWER"
-boot_answer "$work/constbake.bin" "$FY"; ay="$ANSWER"
+ax=""; ay=""
+boot_witnessed "M-differential-fx" "$work/constbake.bin" "$FX" full && ax="$ANSWER"
+boot_witnessed "M-differential-fy" "$work/constbake.bin" "$FY" full && ay="$ANSWER"
 [[ "$(sha256sum "$work/constbake.bin" | cut -d' ' -f1)" == "$cb_sha" ]] || fail_test "M-differential: constbake module changed between the FX and FY boots -- hash-identity violated"
 if [[ -n "$ax" && "$ax" == "$ay" ]]; then pass=$((pass + 1)); else fail_test "M-differential: constbake answer(FX)=0x$ax answer(FY)=0x$ay -- expected equal (dead-module signature)"; fi
 

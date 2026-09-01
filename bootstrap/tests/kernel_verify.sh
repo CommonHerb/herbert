@@ -32,6 +32,19 @@ if ! [[ "$LO" =~ ^[0-9]+$ && "$HI" =~ ^[0-9]+$ ]] || (( LO > HI )); then
     exit 1
 fi
 
+# QEMU_PREFIX knob (2026-08-31, Ben-greenlit; same contract as native_codegen_oracle.sh): when set,
+# $QEMU_PREFIX/bin must hold qemu-system-x86_64 and is prepended to PATH -- fail loud, never fall
+# silently back to a system qemu. The gates re-apply it themselves via the sourced oracle; this block
+# makes THIS script's own have_qemu/have_kvm probes and the banner see the same emulator.
+if [[ -n "${QEMU_PREFIX:-}" ]]; then
+    if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
+        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2
+        exit 1
+    fi
+    export PATH="$QEMU_PREFIX/bin:$PATH"
+    echo "kernel-verify: QEMU_PREFIX=$QEMU_PREFIX -> $(qemu-system-x86_64 --version | head -1)"
+fi
+
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # mirrors the gate scripts
 

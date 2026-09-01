@@ -244,11 +244,11 @@ attempt_benign() { # kelf kind fedbyte out  (tri-state: sets ATT/ATT_SIG/ATT_HER
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
         ATT=SETUP_FAILURE; ATT_HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; return 0
     fi
-    timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "${MODF[$kind]}" -debugcon file:"$out" \
+    boot_qemu 60 "$out.bstat" qemu-system-x86_64 -kernel "$kelf" -initrd "${MODF[$kind]}" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?; wait "$fp" 2>/dev/null
-    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" || return 0
+    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" "$out.bstat" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
     local g grc; g="$(python3 "$REF" grade "$out" "$kend" "$(printf '%x' "$byte")" "$kind" 2>&1)"; grc=$?
     if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; return 0; fi
@@ -270,10 +270,10 @@ attempt_hostile() { # kelf mod faultkind cr2 out   (rc now CAPTURED and bound --
     replay_capture_ctx "$kelf" "$mod" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
     local ans; case "$kind" in hostile|hostin) ans=71 ;; *) ans=80 ;; esac   # 'G'->237 / 'P'->195, empirically re-pinned 2026-07-17
     local ex; ex=$(host_qemu_exit "$ans")
-    timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$mod" -debugcon file:"$out" \
+    boot_qemu 60 "$out.bstat" qemu-system-x86_64 -kernel "$kelf" -initrd "$mod" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?
-    qemu_classify "$rc" "$out" "$out.qerr" "" || return 0
+    qemu_classify "$rc" "$out" "$out.qerr" "" "$out.bstat" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
     local g grc; g="$(python3 "$REF" gradefaultcont "$out" "$kend" "$kind" $cr2 2>&1)"; grc=$?
     if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; return 0; fi
@@ -292,10 +292,10 @@ qemu_hostile() { # label kelf modfile faultkind [cr2]   (faultkind: hostile|host
 attempt_victim() { # kelf out
     local kelf="$1" out="$2"
     replay_capture_ctx "$kelf" "$MODVICT" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
-    timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$MODVICT" -debugcon file:"$out" \
+    boot_qemu 60 "$out.bstat" qemu-system-x86_64 -kernel "$kelf" -initrd "$MODVICT" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?
-    qemu_classify "$rc" "$out" "$out.qerr" "" || return 0
+    qemu_classify "$rc" "$out" "$out.qerr" "" "$out.bstat" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
     local g grc; g="$(python3 "$REF" gradevictim "$out" "$kend" 2>&1)"; grc=$?
     if [[ "$grc" -eq 0 && "$rc" -eq 245 ]]; then ATT=COMPLETED_GREEN; return 0; fi   # 245 = host_qemu_exit('K')
@@ -320,11 +320,11 @@ attempt_readhang() { # kelf fedbyte out
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
         ATT=SETUP_FAILURE; ATT_HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; return 0
     fi
-    timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$MODRTHV" -debugcon file:"$out" \
+    boot_qemu 60 "$out.bstat" qemu-system-x86_64 -kernel "$kelf" -initrd "$MODRTHV" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?; wait "$fp" 2>/dev/null
-    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" || return 0
+    qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" "$out.bstat" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
     local g grc; g="$(python3 "$REF" gradereadhang "$out" "$kend" "$(printf '%x' "$byte")" 2>&1)"; grc=$?
     if [[ "$grc" -eq 0 && "$rc" -eq 245 ]]; then ATT=COMPLETED_GREEN; return 0; fi   # ends watchdog-killed -> 'K' -> 245
@@ -343,10 +343,10 @@ qemu_readhang() { # label kelf fedbyte
 attempt_generic() { # kelf modfile out
     local kelf="$1" mod="$2" out="$3"
     replay_capture_ctx "$kelf" "$mod" || return 0   # validated PRE-LAUNCH (TOCTOU + empty-hash guard, Codex)
-    timeout 60 qemu-system-x86_64 -kernel "$kelf" -initrd "$mod" -debugcon file:"$out" \
+    boot_qemu 60 "$out.bstat" qemu-system-x86_64 -kernel "$kelf" -initrd "$mod" -debugcon file:"$out" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 -serial null -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?
-    qemu_classify "$rc" "$out" "$out.qerr" "" || return 0
+    qemu_classify "$rc" "$out" "$out.qerr" "" "$out.bstat" || return 0
     local kend; kend=$(printf '%x' "$(elf_meta "$kelf")")
     local g grc; g="$(python3 "$REF" gradegeneric "$out" "$kend" 2>&1)"; grc=$?
     if [[ "$grc" -eq 0 && "$rc" -eq 239 ]]; then ATT=COMPLETED_GREEN; return 0; fi   # 239 = host_qemu_exit('F')
