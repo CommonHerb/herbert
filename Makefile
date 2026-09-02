@@ -104,6 +104,48 @@ switchover-dry-run:
 # appliance. It proves gen-1 emits a byte-identical gen-2 while staying under the
 # current bounded RSS ceiling, and prints an attribution cone for the front end vs
 # the rest of the self-compile.
+#
+# WHERE IT IS ENFORCED -- recorded 2026-09-02 because four independent review legs
+# read this wrong and concluded the ceiling was unenforced on every push path.
+# The TARGET below is genuinely not a verify-local prerequisite and is named in no
+# workflow. The SCRIPT is one of the 26 gates of the frozen C-free surface
+# (FROZEN_SURFACE in run_switchover_cfree.sh; its CFREE_SWITCHOVER row in
+# switchover_manifest.tsv), and run_switchover_cfree.sh runs that surface TWICE --
+# phase A/absent and phase B/tombstone. Two FULL-SURFACE paths inside verify-local
+# reach that driver: `make test` (via run_tests.sh) and the `switchover-cfree`
+# target above. (Other callers exist -- run_switchover_cfree_mutation.sh and
+# apply_switchover.sh -- but those do not add full-surface runs here.) verify-local
+# depends on BOTH, so it already runs this gate FOUR times (two driver invocations,
+# two phases each); adding the target to it would make five, not close a gap.
+# CI reaches it because the `check` job runs `make test`
+# (.github/workflows/check.yml) on push and pull_request, with no branch or path
+# filters. Two things still skip it, neither silent: an earlier step in the same job
+# failing (the job is RED regardless), and a `[skip ci]` commit message, which skips
+# the whole run (this repo has used one -- 2d8d369).
+#
+# PROVEN, not assumed, at 202c678 with CLOSED_LOOP_MAX_RSS_KB=1000. Two separate
+# runs, quoted with the provenance each line actually came from:
+#   `CLOSED_LOOP_MAX_RSS_KB=1000 make test` -> exit 2, and prints
+#       FAIL: switchover-cfree (the C-free production surface did NOT stand with C physically absent)
+#       1 of 43 test(s) failed.
+#     -- and NOTHING more specific: run_tests.sh captures the driver's output and
+#     echoes only `tail -20` of it, which the surface ledger fills, so the per-gate
+#     attribution below never reaches a `make test` transcript.
+#   `CLOSED_LOOP_MAX_RSS_KB=1000 bash bootstrap/tests/run_switchover_cfree.sh` -> exit 1:
+#       [A/absent] FAIL  run_closed_loop_memory_diet.sh
+#               | FAIL: closed-loop-memory-diet (rss 351920 kB > ceiling 1000 kB)
+#       [A/absent] 25/26 gates green
+#       [B/tombstone] FAIL  run_closed_loop_memory_diet.sh
+#               | FAIL: closed-loop-memory-diet (rss 351920 kB > ceiling 1000 kB)
+#       [B/tombstone] 25/26 gates green
+#
+# So: do NOT "wire it in" again -- grep the SCRIPT name, not the target name.
+# TWO RESIDUALS, surfaced not fixed: (1) an RSS-ceiling breach is REPORTED as the
+# C-free surface failing "with C physically absent" -- the gate bites but names the
+# wrong reason; (2) `make test` cannot say WHICH of the 26 gates broke. Both are
+# scoped changes to the reporting path, not wiring changes.
+# Full record incl. the two cross-model refutation legs that produced this comment:
+# MEWTWO/audits/step0-diet-gate-2026-09-02/REPORT.md.
 closed-loop-memory-diet:
 	@bash bootstrap/tests/run_closed_loop_memory_diet.sh
 
