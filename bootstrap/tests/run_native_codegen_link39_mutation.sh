@@ -10,6 +10,28 @@
 #                 call is load-bearing).
 #   M-constbake : a module that READS the byte then bakes 0x5A -> answer != host_T AND the X!=Y differential
 #                 collapses (answer(fx)==answer(fy)) -> the differential bites.
+#   M-ovfcross  : the A11-residual arm (2026-09-01). The gate's overflow leg was SINGLE-ENGINE until
+#                 2026-09-01, which is the only reason a QEMU-TCG-specific page-fault error code (0x5,
+#                 the load half of a lowered read-modify-write) nearly entered canon as hardware truth
+#                 -- KVM reports 0x7 for the WRITE on identical eip/esp/cr2. The gate now diffs the
+#                 engines against each other (ouroboros_ref overflow_cross). This arm proves that diff
+#                 BITES and, equally, that it does NOT false-RED on the legitimate engine-dependent
+#                 errcode: one REAL overflow boot, then three pure checks against it --
+#                   (a) EACH of the FOUR CROSS-DISCRIMINATING facts, mutated one at a time, makes
+#                       the comparator go RED and NAME that fact (cr2, the fault's offset into the
+#                       module, how far below its stack base the descent reached, and the fault
+#                       MECHANISM -- the errcode with only its W bit masked). Those four
+#                       are the whole discriminating set: grade_overflow already pins the other three
+#                       cross fields to constants PER STREAM, so two streams that both graded GREEN
+#                       can never disagree on them. Proving only one of the three -- the first
+#                       version of this arm -- let a comparator keeping just that one field still
+#                       pass (cross-model Codex BLOCK finding 3, 2026-09-01).
+#                   (b) ONLY the page-fault errcode changed 0x5<->0x7                            -> GREEN
+#                   (c) a SINGLE engine offered to the comparator                                -> RED
+#                   (d) the SAME capture handed in twice under two labels                        -> RED
+#                       (label uniqueness alone accepted it -- Codex BLOCK finding 1)
+#                 (c) is the residual's own tripwire: a future edit that drops the second engine can no
+#                 longer leave a silently single-engine leg behind a passing mutation proof.
 # Negative controls fed as raw module blobs (ouroboros_ref mutant); the FROZEN geeking kernel runs them and
 # the ouroboros grader must reject. Run under KERNEL_CODEGEN_MUTATION=1 (CI) like every prior link.
 # Every boot is adjudicated only through the change-7 completion witness (charter 2026-07-17, built
@@ -160,6 +182,205 @@ boot_witnessed "M-differential-fx" "$work/constbake.bin" "$FX" full && ax="$ANSW
 boot_witnessed "M-differential-fy" "$work/constbake.bin" "$FY" full && ay="$ANSWER"
 [[ "$(sha256sum "$work/constbake.bin" | cut -d' ' -f1)" == "$cb_sha" ]] || fail_test "M-differential: constbake module changed between the FX and FY boots -- hash-identity violated"
 if [[ -n "$ax" && "$ax" == "$ay" ]]; then pass=$((pass + 1)); else fail_test "M-differential: constbake answer(FX)=0x$ax answer(FY)=0x$ay -- expected equal (dead-module signature)"; fi
+
+# ===== M-ovfcross: the cross-ENGINE overflow agreement bites, and does not false-RED on the =====
+# =====             engine-dependent page-fault error code (A11 residual arm, 2026-09-01)     =====
+OVF_BYTE=250
+OVFD="$work/ovf.d"; mkdir -p "$OVFD"
+printf -- '-- emit: multiboot32-ouroboros\n%s\n' "$(python3 "$REF" overflowsrc)" > "$OVFD/m.herb"
+( cd "$OVFD" && "$NATIVE_CODEGEN_COMPILER" < m.herb >/dev/null 2>"$OVFD/err" )
+if [[ ! -f "$OVFD/a.out" ]]; then
+    fail_test "M-ovfcross: the overflow probe did not compile ($(head -1 "$OVFD/err" 2>/dev/null))"
+else
+    OVFM="$work/ovf.bin"; cp "$OVFD/a.out" "$OVFM"
+    # ONE real overflow boot (QEMU-TCG). Outcome class 'faultok': the module ends in the named CPL3
+    # #PF (answer 0x50), never SYS_EXIT -- the completion witness binds rc to that answer.
+    # The base boot is a CONTROL, not a mutant: it must grade GREEN as an overflow. The change-7
+    # rule ("a witnessed completion is graded ONCE and never replayed") was written for MUTANTS, where
+    # a completed RED is the expected bite. Here a witnessed-but-not-overflow boot is the watchdog-kill
+    # flake grade_overflow's own header documents, so give the CONTROL a bounded re-roll instead of
+    # turning one flake into a hard CI FAIL (blind Opus 5 finding 8, 2026-09-01). Exhaustion still
+    # fail-closes via the fail_test below.
+    OVFS="$work/ovf.base.e9"; ovf_base_ok=0
+    for _a in 1 2 3; do
+        boot_witnessed "M-ovfcross-base" "$OVFM" "$OVF_BYTE" faultok || break
+        cp "$OUT" "$OVFS"
+        if python3 "$REF" gradeoverflow "$OVFS" "$KEND" "$(printf '%x' "$OVF_BYTE")" >/dev/null 2>&1; then
+            ovf_base_ok=1; break
+        fi
+        echo "  HARNESS (M-ovfcross-base attempt $_a/3): the control boot completed but did not grade as an overflow ($(python3 "$REF" gradeoverflow "$OVFS" "$KEND" "$(printf '%x' "$OVF_BYTE")" 2>&1 | tr '\n' ' ')) -- re-rolling (a CONTROL, not a mutant; the documented watchdog-kill class)" >&2
+    done
+    if [[ "$ovf_base_ok" -eq 1 ]]; then
+        # CONTROL banked above: the captured stream IS a GREEN overflow witness, so the checks
+        # below are not vacuous (a comparator fed two ungradable streams would "agree" about garbage).
+        pass=$((pass + 1))
+        # Patch the #PF witness frame D0<err><eip><cs><cr2><esp>D1 in a COPY of the real stream.
+        # 'off' shifts the fault's offset into the module (an ENGINE-INDEPENDENT fact, and one that
+        # stays inside the module's User pages so the per-stream grader still passes -- the RED must
+        # come from the cross-engine diff, not from a stream that stopped grading).
+        # Patch one field of the #PF witness frame D0<err><eip><cs><cr2><esp>D1 in a COPY of the real
+        # stream. 'err' takes an ABSOLUTE value; every other field takes a DELTA, chosen so the
+        # patched stream STILL grades GREEN on its own (eip stays inside the module's User pages,
+        # esp stays below alloc_lo) -- the RED must come from the cross-engine diff, not from a
+        # stream that stopped being a valid overflow witness.
+        ovf_patch() { # src dst field value   (field: err|eip|cr2|esp)
+            python3 - "$1" "$2" "$3" "$4" <<'PY2'
+import sys, struct, re
+src, dst, field, val = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 0)
+d = bytearray(open(src,'rb').read())
+ms_ = list(re.finditer(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', bytes(d), re.S))
+# G.parse reads frames only from the post-OWN-table TAIL, so patching a D0..D1 that lies in the
+# table prefix would edit bytes the grader never reads. Require exactly one so the patcher and the
+# grader are provably looking at the same frame (blind Opus 5 finding 9, 2026-09-01).
+if len(ms_) != 1: sys.exit('expected exactly ONE #PF frame in the capture, found %d' % len(ms_))
+m = ms_[0]
+gi = {'err': 1, 'eip': 2, 'cs': 3, 'cr2': 4, 'esp': 5}[field]
+lo = m.start(gi); cur = struct.unpack('<I', bytes(d[lo:lo+4]))[0]
+new = val if field == 'err' else cur + val
+d[lo:lo+4] = struct.pack('<I', new & 0xFFFFFFFF)
+open(dst,'wb').write(bytes(d))
+print('patched %s 0x%x -> 0x%x' % (field, cur, new & 0xFFFFFFFF))
+PY2
+        }
+        FED_HEX="$(printf '%x' "$OVF_BYTE")"
+        # (a) MUST BITE, ONCE PER DISCRIMINATING FACT: mutate exactly one, keep the stream a valid
+        #     overflow witness, and require the comparator to go RED *and name that fact*.
+        #     frame-field : delta : the cross field it must name
+        # frame-field : delta : the cross field it must name. 'err' is absolute, not a delta:
+        # 0x5 -> 0x6 keeps the U bit but flips P to 0 (a NON-PRESENT fault -- a different mechanism),
+        # which the W-bit-only mask must catch (Codex finding 2 / Opus finding 4, 2026-09-01).
+        for _spec in "eip:1:pf_off_in_module" "cr2:1:cr2" "esp:-4:esp_below_alloc_lo" "err:6:pf_mechanism"; do
+            _fld="${_spec%%:*}"; _rest="${_spec#*:}"; _dlt="${_rest%%:*}"; _name="${_rest#*:}"
+            if ! ovf_patch "$OVFS" "$work/ovf.$_fld.e9" "$_fld" "$_dlt" >/dev/null 2>&1; then
+                fail_test "M-ovfcross(a/$_name): could not patch the #PF witness frame field '$_fld' (no D0..D1 frame in a stream that graded as an overflow?)"
+                continue
+            fi
+            # the patched stream must STILL grade GREEN alone, else this proves the per-stream
+            # grader bites, not the cross-engine diff (the whole point of the arm).
+            if ! python3 "$REF" gradeoverflow "$work/ovf.$_fld.e9" "$KEND" "$FED_HEX" >/dev/null 2>&1; then
+                fail_test "M-ovfcross(a/$_name): the mutated stream no longer grades GREEN on its own, so a RED below would prove the PER-STREAM grader bites, not the cross-engine diff -- pick a delta that keeps the witness valid"
+                continue
+            fi
+            xo="$(python3 "$REF" ovfcross "$KEND" "$FED_HEX" "tcg:qemu=$OVFS" "kvm:qemu=$work/ovf.$_fld.e9" 2>&1)"; xrc=$?
+            if [[ "$xrc" -ne 0 ]] && grep -q "engine disagreement on $_name" <<<"$xo"; then
+                pass=$((pass + 1))
+            else
+                fail_test "M-ovfcross(a/$_name): mutating the ENGINE-INDEPENDENT fact '$_name' (frame field $_fld, delta $_dlt) did NOT go RED with a named disagreement -- that field of the cross-engine diff is not load-bearing (rc=$xrc: $(echo "$xo" | tr '\n' ' '))"
+            fi
+        done
+        # (b) MUST NOT FALSE-RED: only the page-fault ERROR CODE differs (the real TCG 0x5 / KVM 0x7
+        #     divergence). Both carry the U bit; every engine-independent fact is untouched.
+        cur_err="$(python3 - "$OVFS" <<'PY3'
+import sys, struct, re
+d = open(sys.argv[1],'rb').read()
+m = re.search(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', d, re.S)
+print('0x%x' % struct.unpack('<I', m.group(1))[0] if m else '')
+PY3
+)"
+        other_err=0x7; [[ "$cur_err" == "0x7" ]] && other_err=0x5
+        if ovf_patch "$OVFS" "$work/ovf.errW.e9" err "$other_err" >/dev/null 2>&1; then
+            xo="$(python3 "$REF" ovfcross "$KEND" "$FED_HEX" "tcg:qemu=$OVFS" "kvm:qemu=$work/ovf.errW.e9" 2>&1)"; xrc=$?
+            if [[ "$xrc" -eq 0 ]]; then
+                echo "  M-ovfcross(b): W-bit-only errcode divergence ${cur_err} vs ${other_err} stays GREEN (the ONE bit correct engines may disagree on here; every other errcode bit IS compared -- see (a/pf_mechanism))"
+                pass=$((pass + 1))
+            else
+                fail_test "M-ovfcross(b): an errcode-ONLY divergence (${cur_err} vs ${other_err}, both U-bit set) went RED -- the comparator false-REDs on the documented TCG/KVM disagreement it was built to tolerate ($(echo "$xo" | tr '\n' ' '))"
+            fi
+        else
+            fail_test "M-ovfcross(b): could not patch the #PF errcode"
+        fi
+        # (c) the residual's tripwire: ONE engine is not two.
+        xo="$(python3 "$REF" ovfcross "$KEND" "$FED_HEX" "tcg:qemu=$OVFS" 2>&1)"; xrc=$?
+        if [[ "$xrc" -ne 0 ]] && grep -q 'needs >= 2 engines' <<<"$xo"; then
+            pass=$((pass + 1))
+        else
+            fail_test "M-ovfcross(c): a SINGLE-engine cross check was accepted (rc=$xrc) -- the A11 residual could silently reopen ($(echo "$xo" | tr '\n' ' '))"
+        fi
+        # (d) the same tripwire's forgeable twin: ONE capture FILE handed in twice under two labels
+        #     is not two engines either (label uniqueness alone accepted it -- Codex BLOCK finding 1).
+        #     Note what this deliberately does NOT do: it does not reject two BYTE-IDENTICAL captures.
+        #     tcg and kvm differ only in the page-fault W bit, so rejecting byte-identity would make
+        #     this leg depend on the very errcode divergence the oracle refuses to trust, and would
+        #     hard-RED the day an engine stops diverging (blind Opus 5 finding 2, 2026-09-01).
+        for _dspec in "same-path:$OVFS" "hardlink:$work/ovf.hard.e9"; do
+            _dlbl="${_dspec%%:*}"; _dpath="${_dspec#*:}"
+            [[ "$_dlbl" == hardlink ]] && { rm -f "$_dpath"; ln "$OVFS" "$_dpath" 2>/dev/null || { echo "  NOTE: M-ovfcross(d/hardlink) skipped -- this filesystem refused a hard link" >&2; continue; }; }
+            xo="$(python3 "$REF" ovfcross "$KEND" "$FED_HEX" "tcg:qemu=$OVFS" "kvm:qemu=$_dpath" 2>&1)"; xrc=$?
+            if [[ "$xrc" -ne 0 ]] && grep -q 'SAME capture' <<<"$xo"; then
+                pass=$((pass + 1))
+            else
+                fail_test "M-ovfcross(d/$_dlbl): one capture under two labels was accepted as two engines (rc=$xrc) -- the two-engine requirement is forgeable ($(echo "$xo" | tr '\n' ' '))"
+            fi
+        done
+        # (f)/(g) the SAME-LOADER absolute-address check must bite, and must NOT fire across loaders.
+        #     A uniform +0x1000 shift of the OWN table's modstart/modend/alloc_lo/alloc_hi AND the #PF
+        #     frame's eip/esp moves every ABSOLUTE address while leaving every NORMALIZED fact equal
+        #     (offset, depth, span, gap, cr2, mechanism) -- and the shifted stream still grades GREEN
+        #     on its own. So it isolates exactly the check under test. Without this the same-loader
+        #     comparison was decoration: deleting OVF_SAME_LOADER_FIELDS left every other check passing
+        #     (cross-model Codex confirm-leg finding 3, 2026-09-02).
+        ovf_shift() { # src dst delta -- shift the module/alloc window and the #PF eip/esp together
+            python3 - "$1" "$2" "$3" <<'PY4'
+import sys, struct, re
+src, dst, delta = sys.argv[1], sys.argv[2], int(sys.argv[3], 0)
+d = bytearray(open(src,'rb').read())
+i = 0
+while i < len(d) and d[i] == 0x9C and i + 25 <= len(d): i += 25   # skip the mmap entries, as G.parse does
+if i >= len(d) or d[i] != 0x9A: sys.exit('no OWN table marker (0x9A) where G.parse expects one')
+CELLBASE = i + 1 + 16                                            # marker + k0,k1,ma,ml
+CELLS = ['mbinfo','flags','modstart','modend','str','cmdline','elflo','elfhi',
+         'region_lo','region_hi','alloc_lo','alloc_hi','answer',
+         'mb_lo','mb_hi','st_lo','st_hi','cm_lo','cm_hi','mm_lo','mm_hi']
+for nm in ('modstart','modend','alloc_lo','alloc_hi'):
+    o = CELLBASE + CELLS.index(nm)*4
+    v = struct.unpack('<I', bytes(d[o:o+4]))[0]
+    d[o:o+4] = struct.pack('<I', (v + delta) & 0xFFFFFFFF)
+ms_ = list(re.finditer(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', bytes(d), re.S))
+if len(ms_) != 1: sys.exit('expected exactly ONE #PF frame, found %d' % len(ms_))
+m = ms_[0]
+for gi in (2, 5):                                                # eip, esp
+    o = m.start(gi)
+    v = struct.unpack('<I', bytes(d[o:o+4]))[0]
+    d[o:o+4] = struct.pack('<I', (v + delta) & 0xFFFFFFFF)
+open(dst,'wb').write(bytes(d))
+PY4
+        }
+        if ovf_shift "$OVFS" "$work/ovf.shift.e9" 0x1000 >/dev/null 2>&1 \
+           && python3 "$REF" gradeoverflow "$work/ovf.shift.e9" "$KEND" "$FED_HEX" >/dev/null 2>&1; then
+            # (f) SAME loader -> the absolute addresses must be compared, so this MUST be RED.
+            xo="$(python3 "$REF" ovfcross "$KEND" "$FED_HEX" "tcg:qemu=$OVFS" "kvm:qemu=$work/ovf.shift.e9" 2>&1)"; xrc=$?
+            if [[ "$xrc" -ne 0 ]] && grep -q 'same-loader (qemu) disagreement' <<<"$xo"; then
+                pass=$((pass + 1))
+            else
+                fail_test "M-ovfcross(f): two arms of the SAME loader disagreed on every ABSOLUTE address and it was NOT caught (rc=$xrc) -- the same-loader comparison is decoration ($(echo "$xo" | tr '\n' ' '))"
+            fi
+            # (g) DIFFERENT loaders -> absolute addresses legitimately differ (this is the real Bochs
+            #     case: it lands the module a page lower), so this MUST stay GREEN.
+            xo="$(python3 "$REF" ovfcross "$KEND" "$FED_HEX" "tcg:qemu=$OVFS" "bochs:grub=$work/ovf.shift.e9" 2>&1)"; xrc=$?
+            if [[ "$xrc" -eq 0 ]]; then
+                pass=$((pass + 1))
+            else
+                fail_test "M-ovfcross(g): two arms on DIFFERENT loaders were REDded for differing absolute addresses (rc=$xrc) -- this is the real Bochs placement and must not false-RED ($(echo "$xo" | tr '\n' ' '))"
+            fi
+        else
+            fail_test "M-ovfcross(f/g): could not build the uniform-shift stream, or it stopped grading GREEN on its own -- the same-loader check is left unproven, which is a failure, not a skip"
+        fi
+        # (e) a byte-identical COPY under a second label must NOT be rejected: two engines that agree
+        #     completely is legitimate. This is the anti-false-RED twin of (d).
+        cp "$OVFS" "$work/ovf.copy.e9"
+        xo="$(python3 "$REF" ovfcross "$KEND" "$FED_HEX" "tcg:qemu=$OVFS" "kvm:qemu=$work/ovf.copy.e9" 2>&1)"; xrc=$?
+        if [[ "$xrc" -eq 0 ]]; then
+            pass=$((pass + 1))
+        else
+            fail_test "M-ovfcross(e): two byte-identical captures in DIFFERENT files were rejected (rc=$xrc) -- engines that agree completely must not false-RED ($(echo "$xo" | tr '\n' ' '))"
+        fi
+    else
+        # FAIL CLOSED: no control capture means every check above was SKIPPED. A silently skipped
+        # arm that still lets the battery print PASS is the fail-open class this suite exists to
+        # refuse -- score it as a failure, never as "nothing to do".
+        fail_test "M-ovfcross: no GREEN control overflow capture in 3 attempts -- the whole cross-engine arm was skipped; refusing to score the battery as if it had run"
+    fi
+fi
 
 # hash-identity: the pinned host kernel must be unchanged across the whole battery (Codex change 1).
 [[ "$(sha256sum "$KELF" | cut -d' ' -f1)" == "$KELF_SHA" ]] || fail_test "host kernel hash changed during the battery -- hash-identity violated"

@@ -34,6 +34,9 @@
 # regardless of REQUIRE_EMU. Tranche 1b (2026-08-29): the Bochs benign leg rides the shared F2 harness
 # (bochs_f2_harness.sh: checked disk build + boot classification + fresh-disk re-rolls, HARNESS-ERROR
 # fail-closed) and gets the SAME same-input replay discriminator on the 2nd substrate.
+# A11 residual (2026-09-01): the OVERFLOW leg -- the one leg still single-engine after 1b -- is now
+# multi-engine too (QEMU-TCG + KVM where /dev/kvm is usable + Bochs), with a cross-engine agreement
+# check. See the overflow leg's own header, and overflow_cross's, for what is and is not compared.
 set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -64,6 +67,7 @@ pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
+have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # mirrors the links-44..65 tri-substrate gates
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 le32_val() { local h="${1:$2:8}"; echo $(( 16#${h:6:2}${h:4:2}${h:2:2}${h:0:2} )); }
@@ -204,8 +208,36 @@ bochs_benign() { # kind byte  -> 0 iff adjudicated GREEN
 #      KERNEL containment (U/S catches the wild access, the kernel keeps grading) + a genuine
 #      overflow (pf_esp < alloc_lo). Module self-integrity under overflow is NOT claimed. The leg
 #      runs through the shared same-input replay discriminator like the benign legs (rc bound to the
-#      P encoding; a completed RED gets ONE same-input replay; exhaustion fails closed). ----
+#      P encoding; a completed RED gets ONE same-input replay; exhaustion fails closed).
+#      A11 RESIDUAL CLOSED (2026-09-01): this leg was SINGLE-ENGINE (QEMU-TCG only) while every
+#      benign leg beside it was dual-substrate -- and that is the ONLY reason a TCG-specific
+#      reading of the fault ("errcode 0x5 == a user READ of a present Supervisor page") nearly
+#      entered canon as hardware truth. The smashed pair 00 00 == `add [eax],al` is a
+#      read-modify-WRITE; TCG lowers RMW to load-then-store so the LOAD half faults first (0x5)
+#      while KVM reports the WRITE (0x7) on IDENTICAL eip/esp/cr2. The leg now runs on every
+#      engine this host offers -- QEMU-TCG always, KVM when /dev/kvm is usable (real silicon,
+#      local-only: CI runners have none), Bochs through the same F2 replay harness the benign
+#      Bochs leg uses (CI's pinned Bochs 2.8 is the substrate of record; a local Bochs is smoke) --
+#      each arm INDEPENDENTLY graded by the full gradeoverflow witness chain, and then diffed
+#      against each other by ouroboros_ref overflow_cross. That diff is deliberately NOT a byte
+#      compare, in exactly two places: the page-fault error code is compared on every bit EXCEPT W
+#      (the one bit correct engines may legitimately disagree on here -- masking more than that let
+#      0x5-vs-0x6 count as agreement, found by BOTH verifiers 2026-09-01), and ABSOLUTE addresses are
+#      compared only among arms sharing a LOADER (tcg+kvm), with cross-loader arms compared on the
+#      normalized shape. Every engine's full errcode and its module/stack placement are PRINTED, so
+#      the divergence that started this is visible in the gate's own output rather than inferred.
+#      Read the comparator's own header for what it cannot check (engine identity is caller-asserted;
+#      the per-stream errcode pin is still U-bit-only and its tightening is a recorded residual). ----
 OVF_BYTE=250
+OVF_ACC=(-cpu qemu64)   # accel flags for the CURRENT arm (overflow_arm sets these)
+OVF_STREAM=""           # debugcon path of the arm's adjudicated-GREEN boot (set by attempt_overflow)
+declare -A OVF_STREAMS  # engine-label -> graded stream path; the cross-engine comparator's inputs
+# Carried into the gate's OWN summary line. Under REQUIRE_EMU=0 a host with neither KVM nor a Bochs
+# toolchain legitimately runs the leg on ONE engine and the gate still exits 0 -- that is the same
+# degraded mode every other leg here has. What must NOT happen is that run printing a bare "PASS"
+# that a reader could later quote as evidence the A11 residual is closed. So the terminal line says
+# which it was (cross-model Codex confirm-leg finding 6, 2026-09-02).
+OVF_CROSS_STATUS="not run"
 attempt_overflow() { # out  (tri-state: sets ATT/ATT_SIG/ATT_HERR/ATT_CTX, never fail_tests)
     local out="$1"
     replay_capture_ctx "$KELF" "$OVF_MOD" || return 0
@@ -218,25 +250,89 @@ attempt_overflow() { # out  (tri-state: sets ATT/ATT_SIG/ATT_HERR/ATT_CTX, never
         ATT=SETUP_FAILURE; ATT_HERR="feeder never reached LISTENING (socket-bind failure; QEMU not launched)"; return 0
     fi
     boot_qemu 60 "$out.bstat" qemu-system-x86_64 -kernel "$KELF" -initrd "$OVF_MOD" -debugcon file:"$out" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none -cpu qemu64 \
+        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none "${OVF_ACC[@]}" \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
     local rc=$?; wait "$fp" 2>/dev/null
     qemu_classify "$rc" "$out" "$out.qerr" "$W/feed.log" "$out.bstat" || return 0
     local g grc; g="$(python3 "$REF" gradeoverflow "$out" "$KEND" "$(printf '%x' "$OVF_BYTE")" 2>&1)"; grc=$?
-    if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; return 0; fi
+    if [[ "$grc" -eq 0 && "$rc" -eq "$ex" ]]; then ATT=COMPLETED_GREEN; OVF_STREAM="$out"; return 0; fi
     ATT=COMPLETED_RED
     ATT_SIG="rc=$rc want=$ex(P=0x50) grade=$([[ "$grc" -eq 0 ]] && echo GREEN || echo "RED: $(echo "$g" | tr '\n' ' ')")"
     return 0
 }
-overflow_contained() {
+overflow_build() {
     local cdir="$work/ovf.d"; rm -rf "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32-ouroboros\n%s\n' "$(python3 "$REF" overflowsrc)" > "$cdir/m.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < m.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "overflow probe: did not compile ($(head -1 "$cdir/err" 2>/dev/null))"; return 1; fi
-    OVF_MOD="$work/ovf.bin"; cp "$cdir/a.out" "$OVF_MOD"
-    if run_qemu_leg "overflow byte=$OVF_BYTE" "$work/ovf" attempt_overflow; then
-        echo "ouroboros: deep recursion (byte=$OVF_BYTE) overflows the stack page -> genuine mid-overflow CPL3 #PF (answer 0x50, pf_esp<alloc_lo witness, no kill/exit frame; KERNEL containment proven -- module self-integrity not claimed)"; pass=$((pass + 1))
+    OVF_MOD="$work/ovf.bin"; cp "$cdir/a.out" "$OVF_MOD"; return 0
+}
+
+overflow_arm() { # engine-label accel-flag...   -- ONE engine's independently graded overflow witness
+    local eng="$1"; shift
+    OVF_ACC=("$@"); OVF_STREAM=""
+    if run_qemu_leg "overflow[$eng] byte=$OVF_BYTE" "$work/ovf.$eng" attempt_overflow; then
+        OVF_STREAMS[$eng]="$OVF_STREAM"
+        echo "ouroboros: overflow[$eng] deep recursion (byte=$OVF_BYTE) overflows the stack page -> genuine mid-overflow CPL3 #PF (answer 0x50, pf_esp<alloc_lo witness, no kill/exit frame; KERNEL containment proven -- module self-integrity not claimed)"
+        pass=$((pass + 1)); return 0
     fi
+    return 1
+}
+
+# Bochs overflow arm: the SAME F2 replay harness the benign Bochs leg rides, graded by the SAME
+# gradeoverflow witness chain. Contract: 0 GREEN / nonzero RED / 2 = harness class, never fail_test.
+bx_grade_overflow() { # bochslog
+    local blog="$1"
+    bx_extract_e9 "$blog" "$blog.e9" || { echo "Bochs e9 extractor failed (rc=$?) on a completed boot"; return 2; }
+    python3 "$REF" gradeoverflow "$blog.e9" "$KEND" "$(printf '%x' "$OVF_BYTE")" 2>&1 | tr '\n' ' '
+    return "${PIPESTATUS[0]}"
+}
+
+overflow_arm_bochs() {
+    local W="$work/b.ovf"; mkdir -p "$W"
+    local kelf mod; kelf="$(readlink -f "$KELF")"; mod="$(readlink -f "$OVF_MOD")"
+    if f2_bochs_feed_leg_replay "overflow[bochs] byte=$OVF_BYTE" bx_grade_overflow "$OVF_BYTE --hold 25" \
+        "$W/feed.log" "$W/bochs_out.txt" "$BX_GRUBCFG" 90 32 "$kelf:boot/kernel.elf" "$mod:boot/app.bin"; then
+        OVF_STREAMS[bochs]="$W/bochs_out.txt.e9"
+        echo "ouroboros: overflow[bochs] SECOND ENGINE (GRUB multiboot, independent emulator) -> the same genuine mid-overflow CPL3 #PF witness chain (local Bochs is SMOKE; CI's pinned Bochs 2.8 is the substrate of record)"
+        pass=$((pass + 1)); return 0
+    fi
+    return 1
+}
+
+# The A11 residual itself: >= 2 INDEPENDENT engines must have produced an adjudicated overflow
+# witness, and they must agree on the normalized facts + the fault mechanism (NOT on the page-fault
+# error code -- see the leg header and ouroboros_ref.overflow_cross).
+overflow_cross_engines() {
+    local eng args=() labels=() n=0
+    for eng in tcg kvm bochs; do
+        [[ -n "${OVF_STREAMS[$eng]:-}" ]] || continue
+        # LABEL:LOADER -- tcg and kvm share QEMU's loader/machine/placement; bochs boots via GRUB.
+        # The comparator compares ABSOLUTE addresses within a loader family and only the normalized
+        # shape across families (blind Opus 5 finding 6, 2026-09-01).
+        local ldr=qemu; [[ "$eng" == bochs ]] && ldr=grub
+        args+=("$eng:$ldr=${OVF_STREAMS[$eng]}"); labels+=("$eng"); n=$((n + 1))
+    done
+    if (( n < 2 )); then
+        OVF_CROSS_STATUS="NOT ESTABLISHED -- overflow leg ran SINGLE-ENGINE (${labels[*]:-none})"
+        if [[ "$REQUIRE_EMU" == "1" ]]; then
+            fail_test "overflow leg ran on ${n} engine(s) (${labels[*]:-none}) under KERNEL_CODEGEN_REQUIRE_EMU=1 -- the A11 residual (a SINGLE-engine overflow leg, the reason a TCG artifact nearly became canon) must never silently reopen"
+        else
+            echo "NOTE: overflow cross-engine agreement SKIPPED -- only ${n} engine(s) available here (${labels[*]:-none}); needs /dev/kvm or a Bochs toolchain. CI supplies Bochs and runs with KERNEL_CODEGEN_REQUIRE_EMU=1, where <2 engines is a hard FAIL. THIS RUN DOES NOT ESTABLISH the A11 second-engine property -- do not cite its PASS as evidence that it holds."
+        fi
+        return 1
+    fi
+    local o rc
+    o="$(python3 "$REF" ovfcross "$KEND" "$(printf '%x' "$OVF_BYTE")" "${args[@]}" 2>&1)"; rc=$?
+    echo "$o"
+    if [[ "$rc" -eq 0 ]]; then
+        echo "ouroboros: overflow CROSS-ENGINE agreement over ${n} engine arms (${labels[*]}) -- each arm independently graded by the full gradeoverflow witness chain, then diffed: identical cr2, fault OFFSET into the module, descent depth below the stack base, and page-fault MECHANISM (the errcode with only its W bit masked -- see the leg header for why W alone). Arms sharing a loader must also agree on the ABSOLUTE addresses. 'tcg' and 'kvm' are two EXECUTION engines on one loader; 'bochs' is the independent loader+engine (A11 residual closed 2026-09-01)"
+        OVF_CROSS_STATUS="ESTABLISHED over ${n} arms (${labels[*]})"
+        pass=$((pass + 1)); return 0
+    fi
+    OVF_CROSS_STATUS="DISAGREEMENT over ${labels[*]}"
+    fail_test "overflow cross-engine disagreement over ${labels[*]}: $(echo "$o" | tr '\n' ' ')"
+    return 1
 }
 
 # ===================== run =====================
@@ -299,8 +395,16 @@ for k in $KINDS; do
 done
 
 # overflow containment: deep recursion overflows the stack page -> witnessed mid-overflow CPL3 #PF,
-# kernel contains and outlives it (module self-integrity NOT claimed -- see the leg's header)
-overflow_contained
+# kernel contains and outlives it (module self-integrity NOT claimed -- see the leg's header).
+# ONE arm per engine, each independently graded; the cross-engine diff runs after the Bochs block.
+if overflow_build; then
+    overflow_arm tcg -cpu qemu64
+    if have_kvm; then
+        overflow_arm kvm -enable-kvm -cpu host
+    else
+        echo "  NOTE: /dev/kvm not available -- the overflow leg's KVM real-silicon arm is skipped (CI runners have no /dev/kvm; Bochs is the second engine there)"
+    fi
+fi
 
 # Bochs dual-substrate leg (authoritative under REQUIRE_EMU)
 if have_bochs; then
@@ -315,12 +419,16 @@ if have_bochs; then
     for k in $BOCHS_PROBES; do
         fx=$(python3 "$REF" fx "$k"); bochs_benign "$k" "$fx" && pass=$((pass + 1))
     done
+    [[ -n "${OVF_MOD:-}" ]] && overflow_arm_bochs
 elif [[ "$REQUIRE_EMU" == "1" ]]; then
     echo "FAIL: stack/native_compile_fragment.herb (Bochs required under KERNEL_CODEGEN_REQUIRE_EMU=1)"; exit 1
 else
     echo "NOTE: Bochs leg skipped (no bochs/parted/grub/xvfb/sudo locally); QEMU is authoritative locally, CI runs Bochs."
 fi
 
-echo "ouroboros gate: pass=$pass fail=$fail"
+# A11 residual: the overflow leg is no longer single-engine -- diff the engines against each other.
+[[ -n "${OVF_MOD:-}" ]] && overflow_cross_engines
+
+echo "ouroboros gate: pass=$pass fail=$fail (overflow cross-engine agreement: ${OVF_CROSS_STATUS})"
 f2_harness_summary || exit 1
 if [[ "$fail" -eq 0 ]]; then echo "PASS"; exit 0; else exit 1; fi

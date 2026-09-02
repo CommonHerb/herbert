@@ -56,18 +56,41 @@ have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # mirrors the g
 GATE_LO=17; GATE_HI=65
 mutation_expected() { local n="$1"; (( n >= 18 && n <= GATE_HI )); }
 
-# --- which requested links carry a KVM real-silicon leg (links 44..65; link62/taproot gained it 2026-07-03).
-#     The KVM REQUIREMENT and the GREEN banner's KVM claim apply ONLY when the requested range includes one:
-#     a 17..18 smoke has no KVM leg, so requiring or claiming KVM there would be a false guarantee. If a
-#     future link past 62 lands without a KVM leg, RAISE nothing here; if it lands WITH one, bump KVM_HI.
-#     RESIDUAL (cross-model Codex, 2026-07-03): this is a RANGE assumption, not per-gate proof -- kernel-verify
-#     verifies each 44..65 gate EXISTS + exits 0 (3a), but not that it actually ran its -enable-kvm leg. So a
-#     FUTURE gate silently dropping its KVM branch while still exiting 0 would let the banner over-claim
-#     "+ KVM". Accepted for now: each gate's KVM leg is byte-pinned in that gate, and this full run empirically
-#     REQUIRES KVM. A stronger closure (a machine-readable KVM-ran sentinel per gate, or a
-#     KERNEL_CODEGEN_REQUIRE_KVM=1 the [44,65] gates honor) is a future hardening, out of this pass's scope. ---
-KVM_LO=44; KVM_HI=65
-range_has_kvm_leg=0; (( LO <= KVM_HI && HI >= KVM_LO )) && range_has_kvm_leg=1
+# --- which requested links carry a KVM real-silicon leg. An explicit MEMBER SET, NOT a contiguous range
+#     (changed 2026-09-01): link39 (ouroboros) gained a KVM arm when its SINGLE-ENGINE overflow leg was
+#     closed -- the A11 residual -- while links 40..43 still have none, so writing this as "39..65" would
+#     OVER-CLAIM four links in the banner below. links 44..65 are the original tri-substrate members
+#     (link62/taproot joined 2026-07-03). The KVM REQUIREMENT and the GREEN banner's KVM claim apply ONLY
+#     when the requested range contains a MEMBER: a 17..18 smoke has none, so requiring or claiming KVM
+#     there would be a false guarantee. A gate that GAINS a KVM leg is added here by number; never widen
+#     this back into a range to make the arithmetic simpler.
+#     RESIDUAL (cross-model Codex, 2026-07-03; unchanged in substance by the 2026-09-01 edit): this is a
+#     MEMBERSHIP assumption, not per-gate proof -- kernel-verify verifies each member gate EXISTS + exits 0
+#     (3a), but not that it actually ran its -enable-kvm leg. So a FUTURE gate silently dropping its KVM
+#     branch while still exiting 0 would let the banner over-claim "+ KVM". Accepted for now: each gate's
+#     KVM leg is byte-pinned in that gate, and this full run empirically REQUIRES KVM. Do NOT read
+#     link39's own in-gate tripwire as closing this: that tripwire requires TWO ENGINES, not KVM, and
+#     under REQUIRE_EMU=1 Bochs is already mandatory -- so tcg+bochs satisfies it and link39 could lose
+#     its -enable-kvm arm entirely while this script still stamps "+ KVM (real silicon)". The residual
+#     is unchanged in substance (blind Opus 5 finding 3, 2026-09-01). A stronger closure
+#     (a machine-readable KVM-ran sentinel per gate, or a KERNEL_CODEGEN_REQUIRE_KVM=1 the member gates
+#     honor) remains a future hardening, out of scope here. ---
+KVM_LINKS="39 $(seq -s' ' 44 65)"
+kvm_links_desc() {   # compact the member set for the banner -- DERIVED from KVM_LINKS, so the text a
+                     # reader sees can never drift from the set the requirement is computed on.
+    local n out="" s="" p=""
+    for n in $KVM_LINKS; do
+        if [[ -z "$s" ]]; then s="$n"; p="$n"; continue; fi
+        if (( n == p + 1 )); then p="$n"; continue; fi
+        out+="${out:+, }$s"; (( p > s )) && out+="..$p"
+        s="$n"; p="$n"
+    done
+    [[ -n "$s" ]] && { out+="${out:+, }$s"; (( p > s )) && out+="..$p"; }
+    echo "$out"
+}
+KVM_DESC="$(kvm_links_desc)"
+range_has_kvm_leg=0
+for _k in $KVM_LINKS; do (( _k >= LO && _k <= HI )) && { range_has_kvm_leg=1; break; }; done
 
 # expected counts for the requested range (its intersection with the canonical set)
 elo=$(( LO > GATE_LO ? LO : GATE_LO )); ehi=$(( HI < GATE_HI ? HI : GATE_HI ))
@@ -81,7 +104,7 @@ fi
 if [[ "$range_has_kvm_leg" -eq 1 && -e /dev/kvm ]]; then
     if have_kvm; then
         echo "kernel-verify: /dev/kvm present + r/w and qemu-system-x86_64 available -- the KVM real-silicon leg is REQUIRED this run"
-        echo "               (A11 tier-1; actual KVM acceleration runs when a tri-substrate gate boots -enable-kvm -- links ${KVM_LO}..${KVM_HI})."
+        echo "               (A11 tier-1; actual KVM acceleration runs when a member gate boots -enable-kvm -- links ${KVM_DESC})."
     else
         {
           echo "FAIL: /dev/kvm exists but is not usable (not r/w, or qemu-system-x86_64 missing)."
@@ -95,7 +118,7 @@ elif [[ "$range_has_kvm_leg" -eq 1 ]]; then
     echo "kernel-verify: /dev/kvm ABSENT -- running the CI-equivalent QEMU-TCG + Bochs gate ONLY (no real silicon)."
     echo "               Run on a KVM host before a kernel-arc push to exercise the A11 tier-1 real-silicon anchor."
 else
-    echo "kernel-verify: requested range ${LO}..${HI} contains no KVM-leg link (KVM legs are links ${KVM_LO}..${KVM_HI}) -- QEMU-TCG + Bochs only, no KVM required or claimed."
+    echo "kernel-verify: requested range ${LO}..${HI} contains no KVM-leg link (KVM legs are links ${KVM_DESC}) -- QEMU-TCG + Bochs only, no KVM required or claimed."
 fi
 
 fail=0; ran=0; ran_mut=0

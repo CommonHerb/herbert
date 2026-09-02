@@ -54,11 +54,21 @@ locally against the CI-pinned QEMU version when the distro package lags, set the
 `make kernel-verify`). When set, `$QEMU_PREFIX/bin` must contain `qemu-system-x86_64` and is
 prepended to PATH; if it does not, the run FAILS
 LOUD rather than silently falling back to the system qemu (the silent-downgrade footgun the knob
-retires). Coverage is now EVERY qemu-invoking gate: `native_codegen_oracle.sh` and `kernel_verify.sh`
-carry the block directly; the 25 `*_mutation.sh` gates source the shared `qemu_prefix.sh`; and
-`larder_phaseA_gate.sh` / `replay_discriminator.sh` carry it inline. **(Corrected 2026-08-31 — until
-then the knob lived only in the oracle, on the false premise that it was "the one file every gate
-sources"; those 27 gates silently IGNORED it. Found by the tranche-1b blind diff audit.)** The bare per-shell `PATH=/opt/qemu-10.2.1/bin:$PATH` prefix still works identically.
+retires). Coverage is now EVERY qemu-invoking gate, by two different routes. The block itself lives
+**INLINE in 29 files** — `native_codegen_oracle.sh`, `kernel_verify.sh`, `replay_discriminator.sh`,
+`larder_phaseA_gate.sh`, and the 25 `*_mutation.sh` gates — which are exactly the files that invoke
+qemu while sourcing no oracle. Every OTHER qemu-invoking gate (the `run_native_codegen_linkNN.sh`
+gates, none of which carry the block themselves) inherits it by **sourcing**
+`native_codegen_oracle.sh`. There is **no shared `qemu_prefix.sh` helper** — a DRY helper was
+written and deliberately dropped: it would be a new git-tracked non-`.herb` file, and
+`BOOTSTRAP-ALLOWLIST` says the list "shrinks toward empty as Herbert becomes able to host itself"
+and that "adding a line here is a deliberate, reviewable act, never incidental" — so growing it is
+a call to be made deliberately, not a bug-fix side effect. Inline also keeps each of those 29 files
+self-protecting when run STANDALONE, which is the exact scenario the knob exists for. Settled
+2026-09-01: keep inline, the boundary does not grow. **(Corrected 2026-08-31 — until then the knob lived only in the oracle, on the false premise
+that it was "the one file every gate sources"; those 27 gates silently IGNORED it. Found by the
+tranche-1b blind diff audit. Corrected again 2026-09-01 — the sentence that replaced it named a
+shared `qemu_prefix.sh` that was never committed and does not exist on disk.)** The bare per-shell `PATH=/opt/qemu-10.2.1/bin:$PATH` prefix still works identically.
 The gates deliberately resolve `qemu-system-x86_64` from PATH —
 nothing in the tree hardcodes a host-local prefix, and CI (which sets neither) is unaffected. The local Bochs is
 2.7+dfsg-4build5 vs CI's pinned 2.8+dfsg-1: fine for smoke, and the CI run stays the authoritative

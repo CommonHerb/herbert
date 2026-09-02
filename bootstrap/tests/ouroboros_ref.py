@@ -273,10 +273,36 @@ def grade(stream, kend_elf, fed, kind):
 # kernel. The module's stack page sits DIRECTLY ABOVE its code page and both are User+writable (flat
 # W+X, no guard page -- the taproot guard is a link-62 long64 invention), so the descent crosses the
 # stack base WITHOUT faulting, silently overwrites the module's OWN code page from the top down,
-# executes corrupted bytes, and dies on a wild access (observed: cr2=fed-byte, errcode 0x5 -- a user
-# READ of a present Supervisor page). The kernel-side claim holds (U/S catches the wild access; the
-# kernel names 'P' and keeps grading -- k1 pin + the OWN table witness that); the old "clean fault,
-# no silent corruption" claim was an OVERCLAIM at the module level and is retired in the gate's leg.
+# executes corrupted bytes, and dies on a wild access. The kernel-side claim holds (U/S catches the
+# wild access; the kernel names 'P' and keeps grading); the old "clean fault, no silent corruption"
+# claim was an OVERCLAIM at the module level and is retired in the gate's leg.
+#
+# TWO CORRECTIONS to the paragraph above, both found after it shipped (2026-09-01, A11 residual):
+#   (a) "observed: cr2=fed-byte" GENERALIZED FROM ONE BOOT and is false. The wild address is the
+#       module's own accumulator: cr2 == 5n. MEASURED, both boots on QEMU-TCG 2026-08-31 and
+#       recorded in MEWTWO/SITREP.md + audits/discriminator-sweep-2026-07-17/TRANCHE-1B-REMAINDER.md:
+#       fed=250 -> cr2=0xfa (250), which merely COINCIDES with the fed byte; fed=249 -> cr2=0xf5
+#       (245), not 249. Nothing in this file or the gate pins cr2 to the fed byte -- the coincidence
+#       was prose only. HONEST LIMIT on the formula: writing it as "n == fed - 200" fits those two
+#       points, but 200 is a MEASURED descent depth (a function of frame size, module length and
+#       where the loader put the module), not a pinned constant, and the gate only ever boots
+#       OVF_BYTE=250. Treat 5n as the mechanism and 200 as an observation of this build
+#       (blind Opus 5 finding 5, 2026-09-01) -- the cross-engine check compares cr2 between engines,
+#       which needs no formula at all.
+#   (b) "errcode 0x5 -- a user READ of a present Supervisor page" was a QEMU-TCG ARTIFACT read as
+#       hardware truth. The smashed pair is 00 00 == `add [eax],al`, a read-modify-WRITE; TCG lowers
+#       RMW to load-then-store so the LOAD half faults first (err 0x5), while KVM (real silicon)
+#       reports the WRITE (err 0x7) on the SAME eip/esp/cr2. Both are correct for their engine, so
+#       the page-fault error code is ENGINE-DEPENDENT here and the ONLY errcode fact this grader
+#       pins is the U bit (bit 2), which both engines assert. See overflow_cross below: the leg
+#       ran on ONE engine until 2026-09-01, which is the only reason the TCG reading nearly
+#       entered canon as hardware truth.
+#   (c) the retired sentence also credited "the OWN table witness" for the kernel-survived-the-fault
+#       claim. The OWN table cannot carry it: geeking dumps that table BEFORE it launches the
+#       module, so it witnesses only the PRE-fault kernel. What proves the kernel outlived the
+#       wild access is the TERMINAL DE<0x50>AD frame (plus its isa-debug-exit rc) -- emitted after
+#       the #PF was named -- together with the #PF witness frame itself. The k1 pin remains a pin
+#       on WHICH kernel booted, not on its post-fault health.
 # The honest, unforgeable overflow witness is pf_esp < alloc_lo: at fault time the user stack pointer
 # had genuinely descended BELOW its one page -- no kill, completion, or in-page fault can produce it.
 def _hx(v): return 'None' if v is None else '0x%x' % v
@@ -309,6 +335,168 @@ def grade_overflow(stream, kend_elf, fed):
     if r.get('answer') != 0x50:
         errs.append(f'answer {_hx(r.get("answer"))} != 0x50 (P) -- the ONLY accepted overflow outcome is the named CPL3 #PF (K/G/F and normal completion all excluded)')
     return errs
+
+# ============== cross-ENGINE overflow agreement (A11 residual, closed 2026-09-01) ==============
+# WHY THIS EXISTS. Until 2026-09-01 the overflow leg booted on exactly ONE engine (QEMU-TCG). That
+# single-engine posture is the ONLY reason a TCG-specific reading of the fault ("errcode 0x5 -- a
+# user READ of a present Supervisor page") reached a canon draft as if it were hardware truth: the
+# faulting instruction is the smashed pair 00 00 == `add [eax],al`, a read-modify-WRITE, and TCG
+# lowers RMW to load-then-store so the LOAD half faults first. KVM and Bochs both report the WRITE
+# (0x7). A11.1 requires the substrates to be diffed AGAINST EACH OTHER, not just each against the
+# grader; this comparator is that diff.
+#
+# WHAT IS COMPARED, AND WHAT IS NOT -- and why none of it is a naive byte-compare:
+#  * The page-fault error code is compared on EVERY BIT EXCEPT W (bit 1). The documented, legitimate
+#    TCG/KVM disagreement is the W bit and nothing else, so masking exactly that bit keeps the
+#    tolerance the leg needs while still catching a DIFFERENT FAULT MECHANISM (P=0 non-present,
+#    RSVD, instruction-fetch) masquerading as the same event. The first version of this comparator
+#    exempted the whole errcode and accepted 0x5-vs-0x6, 0x5-vs-0x4 and 0x5-vs-0x15 as agreement --
+#    found independently by BOTH verifiers (cross-model Codex finding 2; blind Opus 5 finding 4).
+#    The full value is still REPORTED per engine so any divergence is visible, never inferred.
+#    NAMED RESIDUAL, deliberately NOT fixed here: grade_overflow's PER-STREAM errcode pin is still
+#    the U bit alone, so two engines that BOTH report the same wrong mechanism (e.g. both 0x6) still
+#    pass -- so what is closed here is the engines-DISAGREE half, not the whole mechanism hole.
+#    Tightening it (pin P=1, RSVD=0) is a change to a pin that landed 2026-08-31 under a
+#    completed multi-round verification, is outside this packet's fence, and is unproven against
+#    CI's Bochs 2.8 -- it is recorded as a residual, not smuggled in on this push.
+#  * ABSOLUTE addresses are compared WITHIN a loader family and not across one. QEMU
+#    (-kernel/-initrd) and Bochs (GRUB multiboot) place the module at different addresses, so
+#    ms/al/ah/pf_eip/pf_esp legitimately differ ACROSS loaders -- but two arms of the SAME loader
+#    (tcg and kvm) must agree on them exactly, and throwing that evidence away would be a real loss
+#    (blind Opus 5 finding 6). Across loaders only the normalized shape is compared.
+#  * The normalized facts are NOT a proven invariant -- they are what all three engines MEASURED
+#    identically on 2026-09-01 (tcg/kvm/bochs: pf_off_in_module=0x99, esp_below_alloc_lo=0xf70,
+#    cr2=0xfa), each with the module page directly below its stack page (layout_gap=0). geeking's
+#    allocator is first-fit around the module, so a loader that placed the module far from the
+#    allocator's first free page would change all three -- and would ALSO make grade_overflow's
+#    own eip window unreachable, i.e. it is a substrate change that must be adjudicated by a human,
+#    not absorbed. layout_gap is therefore REPORTED per engine and called out when it differs, so
+#    a placement change announces itself instead of arriving disguised as a fault disagreement
+#    (blind Opus 5 finding 1).
+# Every stream is FIRST re-graded by grade_overflow (the full witness chain) -- the comparator never
+# compares two streams unless each independently proves a genuine mid-overflow CPL3 #PF, so
+# "the engines agree" can never mean "the engines agree about garbage".
+#
+# WHAT THIS CANNOT CHECK, stated plainly: engine identity is CALLER-ASSERTED. The comparator refuses
+# a duplicate label and refuses the SAME FILE handed in twice (the realistic accident, and the exact
+# forgery cross-model Codex finding 1 demonstrated), but it cannot tell a genuine KVM capture from a
+# copy of the TCG one. What makes the labels true is the gate: overflow_arm boots each label with
+# its own accelerator flags. Byte-identity between two captures is NOT treated as forgery -- two
+# engines agreeing completely is a legitimate outcome, and rejecting it would make this leg depend
+# on the very errcode divergence the file refuses to trust (blind Opus 5 finding 2).
+
+# The facts grade_overflow leaves FREE per stream, so a disagreement here means something:
+OVF_CROSS_DISCRIMINATING = ('cr2',                 # grade_overflow does not look at cr2 at all
+                            'pf_off_in_module',    # grade_overflow only bounds pf_eip to a page range
+                            'esp_below_alloc_lo',  # grade_overflow only requires pf_esp < alloc_lo
+                            'pf_mechanism')        # errcode minus the W bit; grade_overflow pins only U
+# Already pinned to CONSTANTS per stream by grade_overflow (answer==0x50, ah-al==0x1000,
+# rd_byte==fed). Two streams that both graded GREEN can never disagree on these, so comparing them
+# proves nothing today; kept only as defence in depth if that per-stream pin is ever loosened, and
+# never to be cited as this check's teeth:
+OVF_CROSS_REDUNDANT = ('answer', 'alloc_span', 'fed_byte')
+OVF_CROSS_FIELDS = OVF_CROSS_DISCRIMINATING + OVF_CROSS_REDUNDANT
+# Compared only among arms sharing a loader (identical placement is required there):
+OVF_SAME_LOADER_FIELDS = ('mod_start', 'alloc_lo', 'alloc_hi', 'pf_eip', 'pf_esp')
+PF_ERR_W = 0x2   # the ONE errcode bit two correct engines may legitimately disagree on here
+# Loader names are a CLOSED set on purpose: an arbitrary string would let a caller declare the two
+# QEMU arms as different loaders and silently skip the same-loader absolute-address comparison
+# (cross-model Codex confirm-leg finding 5).
+OVF_KNOWN_LOADERS = frozenset(('qemu', 'grub'))
+OVF_MEASURED_GAP = 0   # the module page sat directly below its stack page on all 3 engines, 2026-09-01
+
+def _ovf_facts(stream, kend_elf, fed):
+    errs = grade_overflow(stream, kend_elf, fed)
+    if errs: return None, None, errs
+    r = G.parse(stream)
+    # grade_overflow guarantees every field below EXCEPT mod_start: its eip-range check is written
+    # `if ms is not None and ...`, so a table with no ms SKIPS that check instead of failing it. Do
+    # not let that turn into a TypeError here -- fail CLOSED with a named error.
+    if r.get('ms') is None:
+        return None, None, ['OWN table carries no mod_start -- the module-relative facts this '
+                            'comparator compares cannot be computed; failing closed']
+    mp = r['ms'] & ~0xFFF
+    facts = {'answer':             r['answer'],
+             'cr2':                r['pf_cr2'],
+             'pf_off_in_module':   r['pf_eip'] - r['ms'],
+             'esp_below_alloc_lo': r['al'] - r['pf_esp'],
+             'pf_mechanism':       r['pf_err'] & ~PF_ERR_W,
+             'alloc_span':         r['ah'] - r['al'],
+             'fed_byte':           r['rd_byte'],
+             'mod_start':          r['ms'], 'alloc_lo': r['al'], 'alloc_hi': r['ah'],
+             'pf_eip':             r['pf_eip'], 'pf_esp': r['pf_esp']}
+    raw = {'pf_err': r['pf_err'], 'layout_gap': r['al'] - (mp + 0x1000)}
+    return facts, raw, []
+
+def overflow_cross(named_streams, kend_elf, fed):
+    """named_streams: [(label, loader, path, stream_bytes), ...]. -> (report_lines, errs)"""
+    if len(named_streams) < 2:
+        return ([], ['cross-engine agreement needs >= 2 engines, got %d -- a SINGLE-engine overflow '
+                     'leg is exactly the A11 residual this check exists to close' % len(named_streams)])
+    seen = set()
+    for label, _lo, _p, _d in named_streams:
+        if label in seen:
+            return ([], ['duplicate engine label %r -- two arms of the same engine are not two engines' % label])
+        seen.add(label)
+    # Identity is the capture's device+inode, so a symlink, a HARDLINK and a bind-mounted alias of
+    # one file are all caught; a plain `cp` is not, and is named as a limit in the header above.
+    for i in range(len(named_streams)):
+        for j in range(i + 1, len(named_streams)):
+            if named_streams[i][2] and named_streams[i][2] == named_streams[j][2]:
+                return ([], ['engines %r and %r were handed the SAME capture (one file, device:inode %s) '
+                             '-- one boot is not two engines'
+                             % (named_streams[i][0], named_streams[j][0], named_streams[i][2])])
+    facts = {}; raws = {}; errs = []
+    for label, _lo, _p, data in named_streams:
+        f, raw, e = _ovf_facts(data, kend_elf, fed)
+        if e: errs += ['[%s] %s' % (label, x) for x in e]
+        else: facts[label] = f; raws[label] = raw
+    if errs: return ([], errs)
+    lines = []
+    for label, loader, _p, _d in named_streams:
+        f, raw = facts[label], raws[label]
+        lines.append('  %-5s loader=%-5s pf_err=0x%x (W bit ENGINE-DEPENDENT, masked; the rest IS compared) '
+                     'cr2=0x%x pf_eip=0x%x pf_esp=0x%x mod_start=0x%x alloc=[0x%x,0x%x) layout_gap=%d'
+                     % (label, loader, raw['pf_err'], f['cr2'], f['pf_eip'], f['pf_esp'],
+                        f['mod_start'], f['alloc_lo'], f['alloc_hi'], raw['layout_gap']))
+    base = named_streams[0][0]
+    for label, _lo, _p, _d in named_streams[1:]:
+        for k in OVF_CROSS_FIELDS:   # the REDUNDANT half cannot fire; see the list's own comment
+            if facts[label][k] != facts[base][k]:
+                errs.append('engine disagreement on %s: %s=%s vs %s=%s -- a fact both engines must '
+                            'report identically' % (k, base, _hx(facts[base][k]), label, _hx(facts[label][k])))
+    # same-loader arms must additionally agree on the ABSOLUTE addresses (identical placement).
+    byloader = {}
+    for label, loader, _p, _d in named_streams: byloader.setdefault(loader, []).append(label)
+    for loader, labels in byloader.items():
+        for label in labels[1:]:
+            for k in OVF_SAME_LOADER_FIELDS:
+                if facts[label][k] != facts[labels[0]][k]:
+                    errs.append('same-loader (%s) disagreement on %s: %s=%s vs %s=%s -- arms sharing a '
+                                'loader must land the module at the SAME address'
+                                % (loader, k, labels[0], _hx(facts[labels[0]][k]), label, _hx(facts[label][k])))
+    pf_errs = sorted({raws[l]['pf_err'] for l, _lo, _p, _d in named_streams})
+    if len(pf_errs) > 1:
+        lines.append('  NOTE: the engines report DIFFERENT page-fault error codes (%s) for the SAME '
+                     'fault -- expected and tolerated ONLY in the W bit: the faulting instruction is a '
+                     'read-modify-write and engines may fault on either half. Every other errcode bit IS '
+                     'compared.' % ', '.join('0x%x' % e for e in pf_errs))
+    gaps = sorted({raws[l]['layout_gap'] for l, _lo, _p, _d in named_streams})
+    if len(gaps) == 1 and gaps[0] != OVF_MEASURED_GAP:
+        lines.append('  NOTE: every engine placed the module %d bytes from its stack page, not the %d this '
+                     'leg was validated against on 2026-09-01. The engines still AGREE, so nothing here is '
+                     'RED -- but the layout the normalization was justified on has moved, and that is a '
+                     'SUBSTRATE CHANGE to adjudicate by hand.' % (gaps[0], OVF_MEASURED_GAP))
+    if len(gaps) > 1:
+        lines.append('  NOTE: the engines placed the module at DIFFERENT distances from its stack page '
+                     '(layout_gap %s). The normalized facts above were measured on 2026-09-01 with gap=0 '
+                     'on all three engines; a nonzero or differing gap is a SUBSTRATE CHANGE to adjudicate '
+                     'by hand, not to absorb.' % ', '.join(str(g) for g in gaps))
+    if len(named_streams) == 2 and len(byloader) == 1:
+        lines.append('  NOTE: both arms share the %s loader, so this run compares two EXECUTION engines, '
+                     'not two independent loaders. The cross-loader half of the check needs a Bochs arm.'
+                     % next(iter(byloader)))
+    return (lines, errs)
 
 # ============== mutation-battery completion witness (charter change 7, 2026-08-31) ==============
 # The tranche-1a MINIMAL witness (a hex-regex "stream ends with DE..AD") left the mutation battery
@@ -472,9 +660,38 @@ if __name__ == '__main__':
         errs = grade_overflow(stream, kend, fed)
         if errs: print('RED'); [print('  -', e) for e in errs]; sys.exit(1)
         print('GREEN'); sys.exit(0)
+    elif cmd == 'ovfcross':
+        kend = int(sys.argv[2],16); fed = int(sys.argv[3],16)
+        named = []
+        for a in sys.argv[4:]:
+            head, sep, path = a.partition('=')
+            if not sep: raise SystemExit('ovfcross args are LABEL:LOADER=path (got %r)' % a)
+            lbl, _c, loader = head.partition(':')
+            if not loader: raise SystemExit('ovfcross args are LABEL:LOADER=path (got %r)' % a)
+            if not lbl: raise SystemExit('ovfcross: empty engine label in %r' % a)
+            if loader not in OVF_KNOWN_LOADERS:
+                raise SystemExit('ovfcross: unknown loader %r for engine %r (known: %s) -- an arbitrary '
+                                 'loader name would silently bypass the same-loader absolute-address '
+                                 'comparison' % (loader, lbl, ', '.join(sorted(OVF_KNOWN_LOADERS))))
+            try:
+                # Identity comes from the OPEN FD, and the bytes are read from that SAME fd: deriving
+                # it from the path after reading is TOCTOU, and a path compare misses a hardlink or a
+                # bind-mounted alias of one inode (cross-model Codex confirm-leg finding 1).
+                with open(path, 'rb') as fh:
+                    st = os.fstat(fh.fileno())
+                    ident = '%d:%d' % (st.st_dev, st.st_ino)
+                    data = fh.read()
+            except OSError as ex:   # a missing/unreadable capture is a HARNESS class, not a kernel grade
+                raise SystemExit('ovfcross: cannot read the %s capture at %s (%s) -- harness failure, '
+                                 'not an engine disagreement' % (lbl, path, ex))
+            named.append((lbl, loader, ident, data))
+        lines, errs = overflow_cross(named, kend, fed)
+        for l in lines: print(l)
+        if errs: print('RED'); [print('  -', e) for e in errs]; sys.exit(1)
+        print('GREEN'); sys.exit(0)
     elif cmd == 'mutwitness':
         stream = open(sys.argv[2],'rb').read(); kend = int(sys.argv[3],16)
         fed = int(sys.argv[4],16); wclass = sys.argv[5]; rc = int(sys.argv[6])
         code, msg = mut_witness(stream, kend, fed, wclass, rc)
         print(msg); sys.exit(code)
-    else: raise SystemExit('usage: module|mutant|hex|src|hostT|fx|fy|offsets|kernelelf|kend|grade|gradeoverflow|mutwitness')
+    else: raise SystemExit('usage: module|mutant|hex|src|hostT|fx|fy|offsets|kernelelf|kend|grade|gradeoverflow|ovfcross|mutwitness')

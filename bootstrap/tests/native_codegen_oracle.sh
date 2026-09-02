@@ -23,7 +23,13 @@ native_codegen_oracle__script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # NOTE (2026-08-31): an earlier version of this comment claimed this was "the one file every gate
 # sources" and used that to justify putting the knob ONLY here. That was FALSE -- 25 *_mutation.sh
 # gates plus larder_phaseA_gate.sh and replay_discriminator.sh invoke qemu by bare name and source
-# no oracle, so they silently ignored the knob. They now carry it via qemu_prefix.sh (or inline).
+# no oracle, so they silently ignored the knob. Those 27 now each carry this block INLINE (29 files
+# in all, counting this one and kernel_verify.sh); every OTHER qemu-invoking gate still inherits it
+# by SOURCING this file. There is no shared qemu_prefix.sh helper: a DRY one was written and
+# deliberately dropped -- it would be a new git-tracked non-.herb file, and BOOTSTRAP-ALLOWLIST says
+# the list "shrinks toward empty" and that "adding a line here is a deliberate, reviewable act,
+# never incidental", so growing it is a deliberate call, not a bug-fix side effect. Inline also
+# keeps those 29 self-protecting when run standalone. Settled 2026-09-01: keep inline.
 if [[ -n "${QEMU_PREFIX:-}" ]]; then
     if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
         echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2

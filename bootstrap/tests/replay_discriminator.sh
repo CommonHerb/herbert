@@ -45,7 +45,10 @@
 ATT=""; ATT_SIG=""; ATT_HERR=""; ATT_CTX=""
 
 # QEMU_PREFIX knob (2026-08-31): fail LOUD, never fall silently back to a system qemu.
-# Inline (not a `source`) because this file defines no script_dir. Same contract as qemu_prefix.sh.
+# Inline (not a `source`) because this file defines no script_dir -- and because there is no shared
+# helper to source: the 29 files that invoke qemu without sourcing an oracle each carry this same
+# block inline, by decision (2026-09-01), so the bootstrap allowlist does not grow. (Gates that DO
+# source native_codegen_oracle.sh inherit it from there.) Same contract as the oracle's copy.
 if [[ -n "${QEMU_PREFIX:-}" ]]; then
     if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
         echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2
