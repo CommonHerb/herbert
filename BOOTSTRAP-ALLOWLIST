@@ -453,3 +453,5 @@ tools/check_full_test_host.sh
 tools/timeout
 
 # --- bootstrap (host-language Herbert implementation: shrinks to zero) ---
+bootstrap/tests/run_native_codegen_link66.sh
+bootstrap/tests/longbuf_spec.py
