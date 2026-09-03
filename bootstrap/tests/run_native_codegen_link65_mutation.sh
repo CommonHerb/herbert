@@ -237,11 +237,17 @@ fi
 # --- M-604: PD loop 512->511 -> final code-length invariant (ERR 604)
 mfrag="$tmp/frag_604.herb"
 python3 - "$backend" "$mfrag" <<'PYEOF'
-import sys
+import sys, re
+# HARDENED 2026-09-03, same cause as link64's M-op53size: the old anchor pinned
+# nc_tap_emit_pd_loop's FULL SIGNATURE, so link66's second guard parameter broke it and this
+# mutation would have gone RED on a change that has nothing to do with the PD loop bound.
+# Anchor on the LOOP BOUND inside that function, whatever its parameter list is. The
+# mutation's meaning is unchanged: 512 -> 511 must trip the code-length invariant ERR 604.
 src=open(sys.argv[1]).read()
-old="func nc_tap_emit_pd_loop(buf, i, guard_2m):\n    if i >= 512:\n"
-assert src.count(old)==1, "nc_tap_emit_pd_loop site not found"
-open(sys.argv[2],'w').write(src.replace(old,old.replace("512","511"),1))
+m=re.search(r"func nc_tap_emit_pd_loop\([^)]*\):\n    if i >= 512:\n", src)
+assert m, "nc_tap_emit_pd_loop site not found"
+assert len(re.findall(r"func nc_tap_emit_pd_loop\(", src))==1, "nc_tap_emit_pd_loop not unique"
+open(sys.argv[2],'w').write(src[:m.start()] + m.group(0).replace("512","511",1) + src[m.end():])
 PYEOF
 mutc="$tmp/mutc_604"
 if mint_mutant "$mfrag" "$mutc"; then

@@ -161,11 +161,24 @@ want=$(cat "$goldens_dir/ro.sha256"); got=$(sha256sum "$tmp/m_golden.elf" | cut 
 mutfrag="$tmp/frag_op53size.herb"
 python3 - "$backend" "$mutfrag" <<'PYEOF'
 import sys
+# HARDENED 2026-09-03. The old anchor was the op-53 arm PLUS the table's trailing
+# `return nc64_op_size(op, is_last)` line, i.e. it depended on op 53 being the LAST entry
+# in nc_tap_op_size. link66 added ops 49/50/51 after it, the anchor stopped matching, and
+# CI run 33736740372 went RED with "AssertionError: op-53 size site not found" on a change
+# that had nothing to do with op 53. Anchor on the op-53 ENTRY ITSELF, located INSIDE
+# nc_tap_op_size, so any future table growth leaves this mutation alone. The mutation's
+# meaning is unchanged: nc_tap_op_size(53) 18 -> 17, which must trip ERR 610/611.
 src = open(sys.argv[1]).read()
-old = "    if op == 53:\n        return 18\n    end\n    return nc64_op_size(op, is_last)"
-new = "    if op == 53:\n        return 17\n    end\n    return nc64_op_size(op, is_last)"
-assert old in src, "op-53 size site not found"
-open(sys.argv[2], 'w').write(src.replace(old, new, 1))
+FN = "func nc_tap_op_size("
+i = src.find(FN)
+assert i >= 0, "nc_tap_op_size not found"
+j = src.find("\nend\n", i)
+assert j > i, "nc_tap_op_size end not found"
+body = src[i:j]
+old = "    if op == 53:\n        return 18\n    end"
+new = "    if op == 53:\n        return 17\n    end"
+assert body.count(old) == 1, "op-53 size site not found exactly once inside nc_tap_op_size"
+open(sys.argv[2], 'w').write(src[:i] + body.replace(old, new, 1) + src[j:])
 PYEOF
 mutc="$tmp/mutc"; mdir="$tmp/mut.d"; mkdir -p "$mdir"
 ( cd "$mdir" && "$NATIVE_CODEGEN_COMPILER" < "$mutfrag" >/dev/null 2>/dev/null && mv a.out "$mutc" ) || { fail_test "M-op53size: mutated fragment itself did not compile"; mutc=""; }
