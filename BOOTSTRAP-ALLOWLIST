@@ -234,6 +234,7 @@ bootstrap/tests/FLAKE-LOG.md
 bootstrap/tests/kernel_input_feed.py
 bootstrap/tests/kernel_io_feed.py
 bootstrap/tests/kernel_verify.sh
+bootstrap/tests/run_meas_n.sh
 bootstrap/tests/run_native_codegen_rejects.sh
 bootstrap/tests/run_tests.sh
 bootstrap/tests/switchover_manifest.tsv

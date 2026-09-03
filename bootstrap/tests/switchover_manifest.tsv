@@ -42,6 +42,12 @@
 #   HARNESS             the make-test orchestrator itself (C-present; its inline
 #                       retire-with-C residue is muster-frozen in run_tests.sh)
 #   SWITCHOVER_MACHINERY  the link-14 driver + bite-proof themselves
+#   CFREE_MEASUREMENT   NOT a gate: a C-free MEASUREMENT leg that returns numbers and
+#                       grades nothing. Seed-emit, far-axis (QEMU/KVM/Bochs), C
+#                       interpreter not invoked; run on demand, by no CI job and by
+#                       neither `make test` nor verify-local. Registered here because
+#                       the step-0 partition covers EVERY run_*.sh -- a measurement
+#                       leg is not a test, but it does not get to sit in limbo either.
 #
 # columns (TAB-separated): disposition  run-context  script  cfree-mode-env  reason
 CFREE_BITEPROOF	make-test	run_aggregate_render_native_mutation.sh	AGGREGATE_RENDER_MUTATION_NO_C=1	aggregate-render bite-proof, now C-FREE via a two-stage seed compile of the mutated backend (assay, link 15; was RETIRE_WITH_C); runs in make test; retireable C cross-check opt-out via AGGREGATE_RENDER_MUTATION_NO_C=1
@@ -168,6 +174,7 @@ CFREE_KERNEL	kernel-ci	run_native_codegen_qemu_diag_tests.sh	-	native-codegen ke
 CFREE_SWITCHOVER	switchover	run_native_codegen_rejects.sh	NATIVE_CODEGEN_ORACLE=golden	native-codegen verifier reject battery (seed-graded; C only opt-in ORACLE=c)
 CFREE_BITEPROOF	verify-local	run_parser_native_mutation.sh	PARSER_NATIVE_NO_C=1	parser gate RED-first bite-proof (seed; C-free)
 CFREE_SWITCHOVER	switchover	run_parser_native.sh	PARSER_NATIVE_NO_C=1	metacircular parser native execution (seed; C cross-check opt-in)
+CFREE_MEASUREMENT	measurement	run_meas_n.sh	-	MEAS-N: the black-box threshold measurement leg for the long64 buffer link (max reliable receive burst, one-byte-ack t_boot/t_fill/t_serve, sustainable (N,Q)); seed-emit, C interpreter not invoked; grades nothing
 SWITCHOVER_MACHINERY	-	run_switchover_cfree_mutation.sh	-	the C-absent driver RED-first bite-proof (sovereignty link 14)
 SWITCHOVER_MACHINERY	-	run_switchover_cfree.sh	-	the C-absent surface driver (sovereignty link 14); runs the frozen CFREE_SWITCHOVER set with C physically absent
 SWITCHOVER_MACHINERY	-	run_switchover_dryrun.sh	-	the switchover DRY-RUN (sovereignty link 17); proves the 7 C-free bite-proofs STILL BITE with C physically absent (hardened: extended poison + clean state + counting tombstone)

@@ -91,6 +91,18 @@ manifest_surface="$(printf '%s' "$manifest_surface" | grep -v '^$' | sort)"
 if [[ "$manifest_surface" != "$FROZEN_SURFACE" ]]; then
     die "manifest CFREE_SWITCHOVER set != the FROZEN surface (gerrymander/swap):"$'\n'"$(diff <(printf '%s\n' "$FROZEN_SURFACE") <(printf '%s\n' "$manifest_surface") | sed 's/^/    /')"
 fi
+# CFREE_MEASUREMENT is the one disposition that runs NOWHERE -- no CI job, not
+# `make test`, not verify-local. That is honest for a measurement leg and it is
+# exactly the shape a real gate could be parked in to leave the run surface while
+# the step-0 completeness check stays green. So the class is pinned by exact
+# membership, the same way the surface is: adding a second member is a deliberate,
+# reviewable act, never a quiet re-classification (blind refutation legs, MEAS-N,
+# 2026-09-02 -- both flagged the unbite-proofed affordance).
+FROZEN_MEASUREMENT="run_meas_n.sh"
+manifest_measurement="$(awk -F'\t' '$0 !~ /^#/ && $1=="CFREE_MEASUREMENT" {print $3}' "$manifest" | sort)"
+if [[ "$manifest_measurement" != "$FROZEN_MEASUREMENT" ]]; then
+    die "manifest CFREE_MEASUREMENT set != the FROZEN measurement list (a gate parked out of the run surface?):"$'\n'"$(diff <(printf '%s\n' "$FROZEN_MEASUREMENT") <(printf '%s\n' "$manifest_measurement") | sed 's/^/    /')"
+fi
 # Static anti-bypass: a surface gate must not reach C by a path the $HERBERT
 # tombstone count cannot see -- a hardcoded `build/herbert`, or an absolute C
 # toolchain (`/usr/bin/cc` etc.) the PATH-poison misses. A `${HERBERT:-...
@@ -193,6 +205,7 @@ register KERNEL_C_EMIT     "KERNEL_C_EMIT -- far-axis kernel gates that EMIT via
 register CFREE_BITEPROOF   "CFREE_BITEPROOF -- C-free RED-first bite-proofs (verify-local)"
 register RETIRE_WITH_C     "RETIRE-WITH-C -- needs the C interpreter; retires WHEN C is deleted"
 register RETIRE_AT_SWITCH  "RETIRE-AT-SWITCH -- inherently-C reference; retires AT the switchover"
+register CFREE_MEASUREMENT "CFREE_MEASUREMENT -- C-free measurement legs (not gates; they return numbers and grade nothing)"
 
 note ""
 if [[ "$fail" -eq 0 ]]; then
