@@ -13,7 +13,13 @@
 # run in scope memory bounded by a small constant independent of depth.
 set -u
 
-cd "$(dirname "$0")"
+# CDPATH is unset FIRST: `cd` with a RELATIVE operand searches $CDPATH before the current
+# directory, so an inherited CDPATH could send this suite into a decoy tree whose 16 pinned
+# proofs are `exit 0` stubs -- flipping a correctly RED `make check` (execute-bit drift on a
+# real proof) to a green rc 0. `|| exit 1` because a cd that fails must never leave the suite
+# grading whatever directory it happens to be in (parent delta refutation panel, 2026-09-02).
+unset CDPATH
+cd -- "$(dirname "$0")" || exit 1
 
 # The C interpreter is retired (the switchover). $HERBERT names a now-nonexistent
 # path purely so set -u and the golden-mode native gates (which pass HERBERT= but
@@ -29,7 +35,14 @@ for native_codegen_override in NATIVE_CODEGEN_GOLDENS_DIR NATIVE_CODEGEN_MANIFES
         exit 1
     fi
 done
-source "./native_codegen_oracle.sh"
+# GUARDED: this script sets `set -u` but never `set -e`, so a bare `source` of a missing oracle
+# printed its error and CONTINUED -- and `--check-pinned` needs nothing the oracle defines, so
+# `make check` still printed its green OK and exited 0 with the file every suite gate sources
+# gone. Fail closed instead (parent delta refutation panel, 2026-09-02).
+if ! source "./native_codegen_oracle.sh"; then
+    echo "FAIL: bootstrap/tests/native_codegen_oracle.sh could not be sourced (missing or unreadable) -- the shared oracle every native-codegen gate depends on is gone; refusing to grade anything, including --check-pinned"
+    exit 1
+fi
 
 fail=0
 pass=0

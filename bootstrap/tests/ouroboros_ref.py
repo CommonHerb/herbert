@@ -332,6 +332,28 @@ def grade_overflow(stream, kend_elf, fed):
     if 'ex_status' in r: errs.append('exit-witness frame present (the module COMPLETED -- the overflow question was never posed)')
     if 'gp_err' in r: errs.append('#GP witness frame present (a privileged-op fault, not a stack overflow)')
     if 'gf_eip' in r: errs.append('generic-fault witness frame present (#DB/#DE/#UD, not a stack overflow)')
+    # TERMINAL-ANSWER PIN (parent delta refutation panel, 2026-09-02; re-cut the same day after the
+    # Codex refutation leg broke the first attempt). G.parse keeps only the FIRST DE..AD match, so a
+    # stream carrying an early 0x50 and a later 0xD0 graded GREEN here while the sibling mut_witness
+    # REFUSED the identical stream, and the leg's rc pin cannot separate them: host_qemu_exit masks
+    # bit 7, so host_qemu_exit(0x50) == host_qemu_exit(0xD0) == 195.
+    # WHAT THIS PINS: the tail must END with a byte-aligned DE<answer>AD frame, and the answer G.parse
+    # bound must BE that terminal answer. Those are two of the three answer pins mut_witness carries
+    # (mut_witness lines "stream does not END with the byte-aligned terminal DE<answer>AD frame" and
+    # "parser answer ... != terminal answer ...").
+    # WHAT IT DELIBERATELY DOES NOT PIN, and why: mut_witness's third pin is a raw overlap-aware
+    # OCCURRENCE COUNT (`answer frame count != 1`). A first cut of this fix used exactly that and was
+    # REFUTED by the Codex leg with a genuine single-answer stream: a #PF frame whose cr2 is
+    # 0x00ad50de puts the bytes DE 50 AD inside the frame's own payload, which the count sees as a
+    # second answer -- a deterministic FALSE RED on a CPU-authored value. mut_witness can afford the
+    # count because it also partitions the tail into whole frames and cross-checks the two censuses;
+    # this grader does not, so it takes the pins that are immune to a payload byte window instead.
+    # Two IDENTICAL answer frames still pass -- they cannot forge a different accepted outcome, which
+    # is the property being defended.
+    if len(stream) < 3 or stream[-3] != 0xDE or stream[-1] != 0xAD:
+        errs.append('stream does not END with the byte-aligned terminal DE<answer>AD frame -- no terminal answer to grade (truncated or corrupt capture)')
+    elif r.get('answer') != stream[-2]:
+        errs.append(f'parser answer {_hx(r.get("answer"))} != terminal answer 0x{stream[-2]:x} -- conflicting DE..AD frames: the grader would read a different boot than the one that ended')
     if r.get('answer') != 0x50:
         errs.append(f'answer {_hx(r.get("answer"))} != 0x50 (P) -- the ONLY accepted overflow outcome is the named CPL3 #PF (K/G/F and normal completion all excluded)')
     return errs

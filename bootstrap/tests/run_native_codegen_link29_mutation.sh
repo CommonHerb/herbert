@@ -36,7 +36,11 @@
 # QEMU-only, gated behind KERNEL_CODEGEN_MUTATION=1 (or REQUIRE_EMU=1). Each anchor is located EXACTLY
 # ONCE in the code window, so a drifted anchor fails loudly.
 set -u
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH   # `cd` with a RELATIVE operand searches $CDPATH and ECHOES the resolved dir, so an
+               # inherited CDPATH made script_dir a TWO-LINE string, the source below fail, and this
+               # gate fall through to a green SKIP with a valid pinned QEMU (Codex refutation leg,
+               # 2026-09-02 -- it defeated the reorder fix landed the same day).
+script_dir="$(cd -- "$(dirname "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -45,12 +49,20 @@ RUN="${KERNEL_CODEGEN_MUTATION:-${KERNEL_CODEGEN_REQUIRE_EMU:-0}}"
 if [[ "$RUN" != "1" ]]; then
     echo "SKIP: native-codegen link29 mutation proof (set KERNEL_CODEGEN_MUTATION=1 to run)"; exit 0
 fi
+# The oracle is sourced BEFORE the qemu availability probe below. This gate carries no inline
+# QEMU_PREFIX block, so that source is the ONLY route by which the pinned-emulator knob reaches it;
+# probing first decided availability against the UNPINNED PATH, so a correctly pinned QEMU_PREFIX
+# made this gate SKIP green (or, under KERNEL_CODEGEN_REQUIRE_EMU=1, FAIL "requires QEMU") while
+# $QEMU_PREFIX/bin/qemu-system-x86_64 sat executable on disk. Order is therefore load-bearing:
+# establish the knob, THEN probe. Found by the parent delta refutation panel, 2026-09-02.
+if ! source "$script_dir/native_codegen_oracle.sh"; then
+    echo "FAIL: cannot source $script_dir/native_codegen_oracle.sh -- the shared oracle carries this gate's QEMU_PREFIX knob and its compiler helpers; refusing to grade (a failed source under set -u with no set -e used to fall through to a green SKIP)"; exit 1
+fi
+
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "${KERNEL_CODEGEN_REQUIRE_EMU:-0}" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: native-codegen link29 mutation proof (no qemu)"; exit 0
 fi
-
-source "$script_dir/native_codegen_oracle.sh"
 mtmp="$(mktemp -d)"; trap 'rm -rf "$mtmp"' EXIT
 native_codegen_ensure_compiler "$mtmp/gen1" || exit 1
 pass=0; fail=0

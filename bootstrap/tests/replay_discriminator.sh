@@ -33,15 +33,35 @@
 # that cannot be reproduced-or-refuted stays a failure. A replay may clear a RED ONLY against the SAME
 # artifact bytes: every completed attempt records kernel+module hashes and the clearing GREEN must
 # match attempt-1's (hash-freeze, fail closed on mismatch).
-# RESIDUAL PAID (tranche 1b, 2026-08-31 -- was: "KNOWN RESIDUAL ... deferred to tranche 1b with a
-# status-preserving python boot runner"): bash cannot see WIFSIGNALED through timeout(1) -- coreutils
-# folds a signal death into a plain exit code -- so an EXTERNAL signal killing QEMU between the
-# terminal debugcon write and the isa-debug-exit port write, with a folded rc colliding with a
-# debug-exit encoding, was indistinguishable from a completed boot. The boot_qemu runner below now
-# preserves the wait status: a signal death is reported as SIGNAL:<n> in a status file (and rc 120,
-# an even value no debug-exit encoding can produce) and qemu_classify refuses it as NO_COMPLETION
+# RESIDUAL (tranche 1b, 2026-08-31; SCOPE CORRECTED 2026-09-02 -- was flatly "RESIDUAL PAID"):
+# bash cannot see WIFSIGNALED through timeout(1) -- coreutils folds a signal death into a plain exit
+# code -- so an EXTERNAL signal killing QEMU between the terminal debugcon write and the
+# isa-debug-exit port write, with a folded rc colliding with a debug-exit encoding, was
+# indistinguishable from a completed boot. The boot_qemu runner below preserves the wait status of
+# THE PROCESS IT SPAWNS: a signal death is reported as SIGNAL:<n> in a status file (and rc 120, an
+# even value no debug-exit encoding can produce) and qemu_classify refuses it as NO_COMPLETION
 # whatever the folded rc would have been. (Original acceptance: Codex LAND-WITH-CHANGES item 1,
 # 2026-07-17 -- no regression vs the pre-discriminator gates, which shared the collision.)
+# WHAT THAT DOES AND DOES NOT COVER (parent delta refutation panel, 2026-09-02 -- the earlier
+# unqualified "RESIDUAL PAID" line overclaimed, and is retired):
+#   COVERED  the guest is boot_qemu's own child and dies on a signal, whether the runner survives
+#            (SIGNAL:<n>, rc 120) or is reaped with it (status file absent -> NO_COMPLETION, added
+#            2026-09-02). There are EIGHT boot_qemu call sites, not seven (an earlier draft of this
+#            comment miscounted -- blind Opus 5 refuter finding 3, 2026-09-02): link37 x5 (247, 273,
+#            295, 323, 346) and link39 x2 (145, 252) reach the verdict through qemu_classify below;
+#            the eighth, run_native_codegen_link39_mutation.sh:93 (boot_once), reads the status file
+#            ITSELF and carries the same missing-file test inline, added the same day.
+#   NOT COVERED  a NON-exec wrapper interposed between the runner and qemu: the wrapper's OWN exit is
+#            normal (128+n), so python3 sees a positive returncode and honestly records EXIT:137 --
+#            no layer below the runner can be seen. An `exec`-style wrapper preserves the status
+#            correctly; a plain one does not. Do NOT read this as "unreachable in practice": the
+#            project's own documented QEMU_PREFIX knob IS a PATH-shim mechanism, and the guard above
+#            requires only a REGULAR executable file, which a non-exec wrapper script satisfies --
+#            demonstrated end to end (guard ACCEPTED the wrapper prefix, then a SIGKILLed guest
+#            graded COMPLETED). Nothing in the tree ships such a wrapper (all eight sites invoke
+#            qemu-system-x86_64 by bare name), but the honest statement is "$QEMU_PREFIX/bin/
+#            qemu-system-x86_64 must be the real binary or an exec-style wrapper", which VERIFYING.md
+#            now says. Named, not silently absorbed, and NOT closed by this packet.
 ATT=""; ATT_SIG=""; ATT_HERR=""; ATT_CTX=""
 
 # QEMU_PREFIX knob (2026-08-31): fail LOUD, never fall silently back to a system qemu.
@@ -50,11 +70,27 @@ ATT=""; ATT_SIG=""; ATT_HERR=""; ATT_CTX=""
 # block inline, by decision (2026-09-01), so the bootstrap allowlist does not grow. (Gates that DO
 # source native_codegen_oracle.sh inherit it from there.) Same contract as the oracle's copy.
 if [[ -n "${QEMU_PREFIX:-}" ]]; then
-    if [[ ! -x "$QEMU_PREFIX/bin/qemu-system-x86_64" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $QEMU_PREFIX/bin/qemu-system-x86_64 is not executable -- refusing to fall back to a system qemu" >&2
+    qp_bin="$QEMU_PREFIX/bin/qemu-system-x86_64"
+    # -x alone is TRUE for a DIRECTORY and says nothing about the prefix being absolute, so a
+    # prefix that passed it could still leave PATH lookup resolving to the system qemu 8.2.2 --
+    # the exact silent downgrade this knob exists to retire (parent delta refutation panel,
+    # 2026-09-02). Require a REGULAR executable file at an ABSOLUTE path: a relative prefix
+    # installs a relative PATH entry that silently stops resolving after any `cd`.
+    if [[ "$QEMU_PREFIX" != /* || ! -f "$qp_bin" || ! -x "$qp_bin" ]]; then
+        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $qp_bin is not an executable REGULAR FILE at an ABSOLUTE path -- refusing to fall back to a system qemu" >&2
         exit 1
     fi
+    # A shell FUNCTION shadows PATH lookup entirely, so an inherited `export -f qemu-system-x86_64`
+    # silently restored the system 8.2.2 while this guard reported success (Codex refutation leg,
+    # 2026-09-02). Drop any such shadow, then PROVE the resolution instead of assuming it: the knob's
+    # promise is that the PINNED binary runs, and only `command -v` after the prepend establishes it.
+    unset -f qemu-system-x86_64 2>/dev/null || true
     export PATH="$QEMU_PREFIX/bin:$PATH"
+    qp_res="$(command -v qemu-system-x86_64 || true)"
+    if [[ "$qp_res" != "$qp_bin" ]]; then
+        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but qemu-system-x86_64 resolves to '${qp_res:-<nothing>}', not '$qp_bin' -- refusing to fall back to a system qemu" >&2
+        exit 1
+    fi
 fi
 boot_qemu() { # timeout-secs statusfile cmd args... -> rc: EXIT:n -> n verbatim; TIMEOUT -> 124;
     # SIGNAL:s -> 120 (even -- never an isa-debug-exit encoding, so it can never classify COMPLETED).
@@ -97,7 +133,37 @@ replay_final_frame() { # debugcon-file -> 0 iff the stream ENDS with a byte-ALIG
 
 qemu_classify() { # rc debugcon qerr feedlog(""=no-feeder leg) [bootstatusfile] -> 0 iff COMPLETED (caller grades); else sets ATT and returns 1
     local rc="$1" out="$2" qerr="$3" flog="$4" bsf="${5:-}"
-    if [[ -n "$bsf" && -r "$bsf" ]]; then   # status-preserving runner verdict outranks the folded rc (tranche 1b)
+    if [[ -n "$bsf" ]]; then   # status-preserving runner verdict outranks the folded rc (tranche 1b)
+        # A REQUESTED-but-ABSENT status file is NEVER a completion (parent delta refutation panel,
+        # 2026-09-02): the previous guard was `[[ -n "$bsf" && -r "$bsf" ]]`, so a missing file
+        # skipped the SIGNAL test entirely and a signal-killed boot fell through to the rc-parity
+        # backstop -- which an odd folded rc (137 = 128+SIGKILL) passes -- and then graded COMPLETED
+        # off a stale terminal DE..AD frame. Reachable whenever the RUNNER ITSELF is reaped: an
+        # external sweeping `pkill -f ...qemu-system-x86_64...` matches the python3 runner's own
+        # command line, which is exactly when its wait status is lost.
+        # WHEN THE FILE IS ABSENT, precisely (blind Opus 5 refuter finding 2, 2026-09-02 -- an
+        # earlier draft of this comment claimed boot_qemu "writes this file on every path it
+        # survives", which is FALSE): boot_qemu writes it on every path where subprocess.run returns
+        # or times out AND THE WRITE ITSELF SUCCEEDS. It does NOT write it when the runner is reaped
+        # with the guest, nor when python3 raises -- either before the child runs (a nonexistent
+        # command) or after it returns (a status path in a nonexistent directory: the guest ran, the
+        # open() then failed). Both were demonstrated (rc=1, no file, a Python traceback /
+        # FileNotFoundError on stderr; the second with the child's own stdout already printed, which
+        # is why "subprocess.run returns" alone was the wrong line to draw -- corrected here by the
+        # blind confirm leg, 2026-09-02). Every one of those is a broken harness, not a
+        # boot, which is why absence is graded rather than trusted. A PROVEN launch failure keeps
+        # its own diagnostic instead of being mislabelled a reaping.
+        # UNCONDITIONAL, not gated on KERNEL_CODEGEN_REQUIRE_EMU, because run_qemu_leg already fails
+        # closed on NO_COMPLETION exhaustion "regardless of KERNEL_CODEGEN_REQUIRE_EMU" -- gating it
+        # would have been strictly weaker with nothing gained.
+        if [[ ! -r "$bsf" ]]; then
+            if [[ "$rc" -eq 1 && ! -s "$out" && -s "$qerr" ]]; then
+                ATT=SETUP_FAILURE; ATT_HERR="QEMU launch error, no guest output AND no boot status file: $(head -1 "$qerr" | head -c 200)"
+            else
+                ATT=NO_COMPLETION; ATT_HERR="boot status file '$bsf' is missing or unreadable -- the status-preserving runner recorded no wait status, so nothing witnesses that this boot ENDED normally (the runner was reaped with the guest, or could not write the file); rc=$rc is then the folded status of a dead runner, not of the guest"
+            fi
+            return 1
+        fi
         local bst; bst="$(head -1 "$bsf" 2>/dev/null)"
         if [[ "$bst" == SIGNAL:* ]]; then
             ATT=NO_COMPLETION; ATT_HERR="QEMU died on ${bst} (WIFSIGNALED, status-preserving boot runner) -- a signal death is never a completion witness, whatever exit code it would fold to"; return 1

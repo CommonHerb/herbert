@@ -95,6 +95,15 @@ boot_once() { # modfile byte -> 0 (boot ran: OUT + RC set) / 1 (proven pre-adjud
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$OUT.qerr"
     RC=$?
     wait "$fp" 2>/dev/null
+    # A REQUESTED-but-ABSENT status file is a harness class here too, never a witnessed boot -- the
+    # eighth boot_qemu call site, and the one that does NOT go through qemu_classify (parent delta
+    # refutation panel finding, generalized by the blind Opus 5 refuter, 2026-09-02). boot_qemu does
+    # not write the file when the runner is reaped WITH the guest (a sweeping `pkill -f
+    # ...qemu-system-x86_64...` matches the python3 runner's own argv) or when python3 raises before
+    # the write; the folded rc alone cannot tell that from a completed boot.
+    if [[ ! -r "$OUT.bstat" ]]; then
+        HERR="boot status file missing or unreadable -- the status-preserving runner recorded no wait status (reaped with the guest, or unable to write); this boot is not a witness"; return 1
+    fi
     local bst; bst="$(head -1 "$OUT.bstat" 2>/dev/null)"
     if [[ "$bst" == SIGNAL:* ]]; then   # status-preserving runner (tranche 1b): a signal death is a proven harness class, never adjudicated
         HERR="QEMU died on ${bst} (WIFSIGNALED, status-preserving boot runner)"; return 1
