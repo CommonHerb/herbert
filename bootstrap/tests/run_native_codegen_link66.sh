@@ -66,7 +66,7 @@ pass=0; fail=0
 ok()  { pass=$((pass + 1)); echo "  ok   $1"; }
 bad() { fail=$((fail + 1)); echo "  FAIL $1"; }
 
-EXPECTED_LEGS=16          # A3.2 sib-exclusivity, A3.3 source-shape, A3-refutation pushints          # the static block's own leg count; a short block is a FAILURE
+EXPECTED_LEGS=16          # the static block's own leg count -- a short block is a FAILURE. 13 at slice 2; A3.2 added sib-exclusivity, A3.3 source-shape, and A3's own refutation pushints.
 
 # ---------------------------------------------------------------- the ratified pair + ladder
 #
@@ -720,21 +720,19 @@ for lbl in edge over under; do
     compiled_ok "$tmp/b_$lbl.d" || { bad "boundary-$lbl (probe did not compile cleanly: rc=$COMPILE_RC; $(head -1 "$tmp/b_$lbl.d/err.txt" 2>/dev/null))"; boundary_built=0; boot_legs=0; }
 done
 
-MARKER="41"   # output_byte(65) -- the probe's observable
-SENTHEX="5a"
-# The edge probe's main returns the sentinel it read back, so its completion frame and its
-# isa-debug-exit status are DERIVABLE, exactly as the draws' are -- through the SAME two spec
-# functions, so a leg cannot drift from the rule the draws are graded by. (v = 90 < 2^32, so
-# the published proof byte (v >> 32) & 0xff is 0 -- computed here rather than written down.)
-EDGE_DERIV="$(python3 -I - "$spec" "$SENTINEL" <<'EEOF'
-import importlib.util, sys
-_s = importlib.util.spec_from_file_location("longbuf_spec", sys.argv[1])
-L = importlib.util.module_from_spec(_s); _s.loader.exec_module(L)
-v = int(sys.argv[2]); pb = (v >> 32) & 0xFF
-print("%02x %d" % (pb, L.qemu_exit_for(pb)))
-EEOF
-)" || { echo "FAIL: link66 (cannot derive the edge probe's completion values)"; exit 1; }
-EDGE_PROOF="${EDGE_DERIV%% *}"; EDGE_EXIT="${EDGE_DERIV##* }"
+# ---------------------------------------------------------------- SLICE 4: the byte-pin
+#
+# The four committed goldens, per the landed convention (`gyre_goldens/<label>.sha256`, one bare
+# sha256 hex per file, each path in BOOTSTRAP-ALLOWLIST). CAPTURED HOST-SIDE from the compiled
+# images -- no boot is involved in a byte-pin, and pretending otherwise would make the capture
+# depend on an emulator it does not need.
+#
+# The hash is deliberately NOT in circuit for any other leg. `SCOPE-R3` draft 1 had six rows
+# "golden-disabled" and seven under the hash, which is backwards: rows that move the image would
+# trip the hash first and their named discriminator would never run. The landed scripts
+# (`link62_mutation.sh:173`, `link65_mutation.sh:139`) call each targeted leg directly and reserve
+# the hash for `M-golden` alone. These four legs are that hash, and nothing else consults it.
+goldens_dir="$script_dir/link66_goldens"
 
 # --- boundary-images: the three probes DECODED, not merely booted.
 #
@@ -797,6 +795,113 @@ print("BOUNDARY-STATIC " + ("; ".join(bad) if bad else
 sys.exit(1 if bad else 0)
 BEOF
 }
+
+if [[ "${LINK66_CAPTURE_GOLDENS:-0}" == "1" ]]; then
+    # Deliberate recapture, never called by `make test` -- the same shape as
+    # `capture_native_goldens.sh`. Guarded by an env var rather than a new tracked script,
+    # because the design's allowlist moves by its enumerated path list and no other.
+    #
+    # TWO REFUSALS, both closing holes a byte-pin invites rather than waiting to be told about them.
+    # (i) CI MUST NEVER REWRITE THE PIN. A capture that can run where the gate is authoritative is
+    #     not a pin, it is a rubber stamp: any image the compiler produced would become "correct".
+    if [[ "$REQUIRE_EMU" == "1" ]]; then
+        echo "FAIL: link66 capture (KERNEL_CODEGEN_REQUIRE_EMU=1 -- a golden recapture is a deliberate human act, never something an authoritative run does)"; exit 1
+    fi
+    # (ii) NEVER PIN AN IMAGE THE BATTERY JUST REJECTED. The static legs have already run by this
+    #      point, so a capture on a broken emitter would freeze the breakage into the goldens and
+    #      every later run would agree with it. Refuse unless the battery is clean.
+    if [[ "$fail" -ne 0 ]]; then
+        echo "FAIL: link66 capture ($fail static leg(s) FAILED -- refusing to pin an image the battery rejects)"; exit 1
+    fi
+    # (iii) NEVER PIN AN IMAGE THE BOUNDARY DECODER HAS NOT SEEN. A cross-family review leg found
+    #       that `boundary_static` runs LATER in the script than this block exits, so a compiler
+    #       that emitted all three boundary images while collapsing their constants would have had
+    #       them pinned here and the validator would never have run. Run it FIRST.
+    _bs="$(boundary_static 2>&1)"; _bsrc=$?
+    if [[ "$_bsrc" -ne 0 ]] || ! grep -q '^BOUNDARY-STATIC 3 images' <<<"$_bs"; then
+        echo "FAIL: link66 capture (boundary-images rejected the probes -- refusing to pin them: $_bs)"; exit 1
+    fi
+    mkdir -p "$goldens_dir"
+    # ATOMIC, AND EVERY STEP CHECKED. `sha256sum | cut > file` under `set -uo pipefail` with
+    # errexit OFF reports nothing when the hash, the cut or the redirection fails -- the same
+    # review leg's blocker: capture would print CAPTURE-COMPLETE and exit 0 over empty, stale or
+    # partial digest files. Each digest is computed, validated as 64 lowercase hex, and staged;
+    # nothing is published until all four have succeeded.
+    _stage="$tmp/goldens.stage"; rm -rf "$_stage"; mkdir -p "$_stage" || { echo "FAIL: link66 capture (cannot stage)"; exit 1; }
+    for _g in "forcing:$tmp/forcing.d/a.out" "boundary_edge:$tmp/b_edge.d/a.out" \
+              "boundary_over:$tmp/b_over.d/a.out" "boundary_under:$tmp/b_under.d/a.out"; do
+        _lbl="${_g%%:*}"; _img="${_g#*:}"
+        [[ -f "$_img" ]] || { echo "FAIL: link66 capture (missing image for $_lbl)"; exit 1; }
+        _h="$(sha256sum "$_img")" || { echo "FAIL: link66 capture (sha256sum failed for $_lbl)"; exit 1; }
+        _h="${_h%% *}"
+        [[ "$_h" =~ ^[0-9a-f]{64}$ ]] || { echo "FAIL: link66 capture ($_lbl digest is not 64 lowercase hex: '$_h')"; exit 1; }
+        printf '%s\n' "$_h" > "$_stage/$_lbl.sha256" || { echo "FAIL: link66 capture (cannot write $_lbl)"; exit 1; }
+    done
+    for _g in forcing boundary_edge boundary_over boundary_under; do
+        mv -f "$_stage/$_g.sha256" "$goldens_dir/$_g.sha256" || { echo "FAIL: link66 capture (cannot publish $_g)"; exit 1; }
+        echo "CAPTURED $_g.sha256 = $(cat "$goldens_dir/$_g.sha256")"
+    done
+    echo "CAPTURE-COMPLETE: 4 link66 goldens written to $goldens_dir"
+    exit 0
+fi
+
+golden_leg() { # label image
+    local lbl="$1" img="$2" want got
+    if [[ ! -f "$goldens_dir/$lbl.sha256" ]]; then
+        bad "golden-$lbl (missing committed golden $goldens_dir/$lbl.sha256 -- fail-closed, never a silent skip)"; return 1
+    fi
+    # THE FILE'S EXACT REPRESENTATION, not merely its stripped content. Bash command substitution
+    # strips ALL trailing newlines, so a digest followed by two or more blank lines compared equal
+    # -- a review leg's finding. A committed pin is 65 bytes: 64 lowercase hex and one newline.
+    if [[ "$(stat -c%s "$goldens_dir/$lbl.sha256")" -ne 65 ]]; then
+        bad "golden-$lbl (committed golden is not exactly 65 bytes -- a pin is 64 lowercase hex + one newline)"; return 1
+    fi
+    want="$(cat "$goldens_dir/$lbl.sha256")"
+    [[ "$want" =~ ^[0-9a-f]{64}$ ]] || { bad "golden-$lbl (committed golden is not 64 lowercase hex)"; return 1; }
+    got="$(sha256sum "$img")" || { bad "golden-$lbl (sha256sum failed)"; return 1; }
+    got="${got%% *}"
+    if [[ "$want" == "$got" ]]; then ok "golden-$lbl"; return 0; fi
+    bad "golden-$lbl (image != committed golden: $got != $want)"; return 1
+}
+# The two fault addresses the boundary claims name, DERIVED rather than written down. A
+# `bufget(b, k)` addresses `buf_2m + 8k`, so index 262144 lands on `guard_hi` and index 2^64-1
+# lands on `buf_2m - 8`, inside `guard_lo`. Slice 3 could only observe that a fault HAPPENED;
+# slice 4 pins WHERE (see `fault_attribution` below).
+FAULT_ADDRS="$(python3 -I - "$spec" "$tmp/forcing.d/a.out" <<'FEOF'
+import importlib.util, sys
+_s = importlib.util.spec_from_file_location("longbuf_spec", sys.argv[1])
+L = importlib.util.module_from_spec(_s); _s.loader.exec_module(L)
+img = L.Image(sys.argv[2])
+over = img.buf_2m + 8 * 262144                       # == guard_hi
+under = (img.buf_2m + 8 * ((1 << 64) - 1)) % (1 << 64)   # == buf_2m - 8, inside guard_lo
+assert over == img.guard_hi, (over, img.guard_hi)
+assert img.guard_lo <= under < img.buf_2m, (under, img.guard_lo, img.buf_2m)
+print("%016x %016x" % (over, under))
+FEOF
+)" || { echo "FAIL: link66 (cannot derive the guard fault addresses)"; exit 1; }
+CR2_OVER="${FAULT_ADDRS%% *}"; CR2_UNDER="${FAULT_ADDRS##* }"
+
+golden_leg forcing        "$tmp/forcing.d/a.out"
+golden_leg boundary_edge  "$tmp/b_edge.d/a.out"
+golden_leg boundary_over  "$tmp/b_over.d/a.out"
+golden_leg boundary_under "$tmp/b_under.d/a.out"
+
+MARKER="41"   # output_byte(65) -- the probe's observable
+SENTHEX="5a"
+# The edge probe's main returns the sentinel it read back, so its completion frame and its
+# isa-debug-exit status are DERIVABLE, exactly as the draws' are -- through the SAME two spec
+# functions, so a leg cannot drift from the rule the draws are graded by. (v = 90 < 2^32, so
+# the published proof byte (v >> 32) & 0xff is 0 -- computed here rather than written down.)
+EDGE_DERIV="$(python3 -I - "$spec" "$SENTINEL" <<'EEOF'
+import importlib.util, sys
+_s = importlib.util.spec_from_file_location("longbuf_spec", sys.argv[1])
+L = importlib.util.module_from_spec(_s); _s.loader.exec_module(L)
+v = int(sys.argv[2]); pb = (v >> 32) & 0xFF
+print("%02x %d" % (pb, L.qemu_exit_for(pb)))
+EEOF
+)" || { echo "FAIL: link66 (cannot derive the edge probe's completion values)"; exit 1; }
+EDGE_PROOF="${EDGE_DERIV%% *}"; EDGE_EXIT="${EDGE_DERIV##* }"
+
 
 # NOT gated on an emulator: this leg needs three compiled IMAGES and nothing else. A review leg:
 # "with no QEMU, a compiler may collapse or corrupt all three boundary immediates ... The decoder
@@ -871,6 +976,38 @@ DEOF
 
 # --- a GRADED draw on QEMU. The driver draws the master seed ONCE (above) and passes it in;
 #     the harness prints it back and the driver compares (seed-echo, already green statically).
+# ---- FAULT ATTRIBUTION (slice-4 carry-over). Slice 3 attributed the guard fault by EXIT STATUS
+#      and an EMPTY debugcon file, and a blind refutation leg was right that this is satisfied by
+#      ANY fault, not by the one the claim names. QEMU-TCG's `-d int` records the real thing:
+#
+#        check_exception old: 0xffffffff new 0xe
+#             0: v=0e e=0000 i=0 cpl=0 ... CR2=0000000000600000
+#        check_exception old: 0xe new 0xd            <- #PF escalates to #DF
+#        check_exception old: 0x8 new 0xd            <- and #DF to a triple fault
+#
+#      So the leg now requires a PAGE FAULT (v=0e) whose CR2 is the DERIVED address, escalating to
+#      a double fault. WHERE THE SUBSTRATE PERMITS, and that qualifier is load-bearing and measured:
+#      under KVM the exceptions are handled in-kernel and QEMU traces NONE of them (the same run
+#      produced no `v=0e` line at all, and the only CR2 in the log is `CR2=00000000` from the
+#      post-reset dump). Bochs has no equivalent knob and the shared harness discards its log for a
+#      non-completed boot. So this closure is QEMU-TCG only; KVM and Bochs keep the weaker
+#      signature, and the legs say which they are using rather than implying they are the same.
+fault_attribution() { # label qemulog want_cr2 -> 0 if a #PF at want_cr2 escalated to #DF
+    local label="$1" log="$2" want="$3"
+    if [[ ! -s "$log" ]]; then
+        bad "$label fault-attribution (no interrupt trace -- expected with -d int on TCG)"; return 1
+    fi
+    local pf; pf="$(grep -aoE "v=0e [^\n]*CR2=[0-9a-f]{16}" "$log" | grep -oE "CR2=[0-9a-f]{16}" | sort -u)"
+    if [[ "$pf" != "CR2=$want" ]]; then
+        bad "$label fault-attribution (page-fault CR2 set is '${pf:-<none>}', want exactly 'CR2=$want' -- the fault must be AT the derived guard address, not merely somewhere)"; return 1
+    fi
+    if ! grep -aq "check_exception old: 0xe new 0xd" "$log"; then
+        bad "$label fault-attribution (the #PF did not escalate to a #DF -- a handled or unrelated fault is not the guard witness)"; return 1
+    fi
+    echo "    $label fault-attribution :: #PF v=0e CR2=$want -> #DF -> triple fault (QEMU-TCG interrupt trace)"
+    return 0
+}
+
 qemu_draw() { # label elf N Q draw [kvm]
     local label="$1" elf="$2" N="$3" Q="$4" d="$5" kvm="${6:-}"
     local acc=(-cpu qemu64); [[ -n "$kvm" ]] && acc=(-enable-kvm -cpu host)
@@ -888,10 +1025,19 @@ qemu_draw() { # label elf N Q draw [kvm]
         --witness --cap "$W/cap.bin" > "$W/feed.log" 2>&1 &
     local fp=$!
     feeder_wait "$W/feed.log" || { bad "$label: feeder never LISTENING (HARNESS-ERROR, not a compiler RED)"; kill "$fp" 2>/dev/null; return 1; }
+    # BRIEF B, CLOSED WHERE THE SUBSTRATE PERMITS: `logfile=` makes QEMU ITSELF write the wire
+    # record. A blind refutation leg's finding was that `cap.bin` is `rxbuf` -- the harness's own
+    # record of what it believes it received, written by the very process being distrusted -- so a
+    # fully lying harness could compute the driver's expected transcript from the seeds it was
+    # handed and write THAT to `--cap`. An emulator-authored record cannot be forged by the
+    # harness, so grading it is what actually ties the bytes to the guest.
+    # `-d int,cpu_reset` is TCG-only (see fault_attribution); under KVM it produces no exception
+    # trace at all, so it is not requested there.
+    local dbg=(); [[ -z "$kvm" ]] && dbg=(-d int,cpu_reset -D "$W/qemu.log")
     timeout 120 "$QEMU_BIN" -kernel "$elf" -debugcon file:"$W/e9.bin" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 \
-        -monitor none "${acc[@]}" -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off,logfile="$W/wire.log" \
+        -serial chardev:s0 -monitor none "${acc[@]}" -m 64M "${dbg[@]}" >/dev/null 2>&1
     local rc=$?; wait "$fp" 2>/dev/null; local frc=$?
     local gl; gl="$(grep -E '^GRADE ' "$W/feed.log" | tail -1)"
     local sl; sl="$(sed -n 's/^LINK66_SEED=\([0-9a-f]*\).*/\1/p' "$W/feed.log" | tail -1)"
@@ -907,6 +1053,16 @@ qemu_draw() { # label elf N Q draw [kvm]
     # (1) THE INDEPENDENT TRANSCRIPT. Byte-for-byte against the driver's own derivation. This
     #     does not trust the feeder's ok= at all: it is the only leg that survives a harness
     #     that echoes the seed truthfully and then generates from something else.
+    # (1a) THE EMULATOR-AUTHORED RECORD is what the transcript leg grades now. The harness's own
+    #      cap.bin is still compared -- to the same derivation AND to QEMU's record -- so a
+    #      divergence between the two is itself a RED rather than an unnoticed substitution.
+    local cw; cw="$(check_capture "$W/wire.log" "$d" 2>&1)"
+    if [[ $? -ne 0 ]]; then
+        bad "$label transcript/emulator-record ($cw)"; return 1
+    fi
+    if ! cmp -s "$W/cap.bin" "$W/wire.log"; then
+        bad "$label transcript (the harness's cap.bin and QEMU's own wire record DIFFER -- one of them is not the wire)"; return 1
+    fi
     local cc; cc="$(check_capture "$W/cap.bin" "$d" 2>&1)"
     if [[ $? -ne 0 ]]; then
         bad "$label transcript ($cc)"; return 1
@@ -950,14 +1106,20 @@ qemu_draw() { # label elf N Q draw [kvm]
     if [[ "$rc" -ne 0 ]]; then
         bad "$label guard-witness (qemu rc=$rc, want 0 for a triple fault under -no-reboot$( [[ "$rc" -eq 124 ]] && echo ' -- 124 is the 120 s KILL, not a fault'))"; return 1
     fi
+    # (5) WHERE the fault happened, not merely that one did -- TCG only, stated as such.
+    if [[ -z "$kvm" ]]; then
+        fault_attribution "$label" "$W/qemu.log" "$CR2_OVER" || return 1
+    else
+        echo "    $label fault-attribution :: SKIPPED on KVM -- exceptions are handled in-kernel and QEMU traces none of them (measured: no v=0e line, CR2=00000000 in the post-reset dump only). The KVM leg carries the weaker exit-status signature."
+    fi
     ok "$label"; return 0
 }
 
 # --- a boundary probe on QEMU: MARKER SEEN, then NO completion frame (over/under), or a
 #     completed answer (edge). A probe that completes where it must fault, or emits no marker,
 #     is a compiler RED.
-qemu_boundary() { # label elf expect(fault|answer) [kvm]
-    local label="$1" elf="$2" expect="$3" kvm="${4:-}"
+qemu_boundary() { # label elf expect(fault|answer) want_cr2
+    local label="$1" elf="$2" expect="$3" want_cr2="${4:-}" kvm=""
     local acc=(-cpu qemu64); [[ -n "$kvm" ]] && acc=(-enable-kvm -cpu host)
     local W="$tmp/$label.q"; mkdir -p "$W"
     local port; port=$(free_port)
@@ -966,8 +1128,8 @@ qemu_boundary() { # label elf expect(fault|answer) [kvm]
     feeder_wait "$W/feed.log" || { bad "$label: feeder never LISTENING (HARNESS-ERROR)"; kill "$fp" 2>/dev/null; return 1; }
     timeout 120 "$QEMU_BIN" -kernel "$elf" -debugcon file:"$W/e9.bin" \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 \
-        -monitor none "${acc[@]}" -m 64M >/dev/null 2>&1
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off,logfile="$W/wire.log" \
+        -serial chardev:s0 -monitor none "${acc[@]}" -m 64M -d int,cpu_reset -D "$W/qemu.log" >/dev/null 2>&1
     local rc=$?; wait "$fp" 2>/dev/null; local frc=$?
     local cap; cap=$(xxd -p "$W/cap.bin" 2>/dev/null | tr -d '\n')
     local e9;  e9=$(xxd -p "$W/e9.bin" 2>/dev/null | tr -d '\n')
@@ -994,8 +1156,16 @@ qemu_boundary() { # label elf expect(fault|answer) [kvm]
         if [[ "$rc" -ne 0 ]]; then
             bad "$label (qemu rc=$rc, want 0 for a triple fault under -no-reboot$( [[ "$rc" -eq 124 ]] && echo ' -- 124 is the 120 s KILL: a guest that hangs before its access looks exactly like this'))"; return 1
         fi
-        if [[ "${#cap}" -eq 2 && -z "$e9" ]]; then ok "$label"; return 0; fi
-        bad "$label (expected marker-then-FAULT: no answer byte and no completion frame; cap=$cap e9=${e9:-EMPTY} rc=$rc)"; return 1
+        if [[ "${#cap}" -ne 2 || -n "$e9" ]]; then
+            bad "$label (expected marker-then-FAULT: no answer byte and no completion frame; cap=$cap e9=${e9:-EMPTY} rc=$rc)"; return 1
+        fi
+        # THE DESIGN'S OWN CLAIM, now proven rather than inferred from an absence: "index -1 faults
+        # into guard_lo, 262144 faults into guard_hi -- decided by the page tables rather than by a
+        # bounds check a program could omit." Slice 3 observed only that SOMETHING faulted; this
+        # pins the faulting address to the derived one, so the two probes -- which previously had
+        # the SAME pass condition -- now discriminate.
+        fault_attribution "$label" "$W/qemu.log" "$want_cr2" || return 1
+        ok "$label"; return 0
     fi
     # The EDGE probe stores the sentinel at the last addressable slot and reads it back, so the
     # answer byte is KNOWN -- and so are its completion frame and exit status, because its main
@@ -1121,8 +1291,8 @@ if [[ "$boot_legs" -eq 1 ]]; then
     qemu_draw draw1-qemu "$tmp/forcing.d/a.out" "$LINK66_N" "$LINK66_Q" 0
     qemu_draw draw2-qemu "$tmp/forcing.d/a.out" "$LINK66_N" "$LINK66_Q" 1
     qemu_boundary boundary-edge-qemu  "$tmp/b_edge.d/a.out"  answer
-    qemu_boundary boundary-over-qemu  "$tmp/b_over.d/a.out"  fault
-    qemu_boundary boundary-under-qemu "$tmp/b_under.d/a.out" fault
+    qemu_boundary boundary-over-qemu  "$tmp/b_over.d/a.out"  fault "$CR2_OVER"
+    qemu_boundary boundary-under-qemu "$tmp/b_under.d/a.out" fault "$CR2_UNDER"
     if have_kvm; then
         kvm_ran=1
         echo "  -- local KVM real-silicon leg (CI has no /dev/kvm; quoted from the pre-push run) --"
@@ -1296,22 +1466,23 @@ fi
 # RECOUNTED, because a blind refutation leg counted the strings and found the previous comment
 # wrong by exactly the amendment under review (it claimed 30/31 and was not updated when A3 added
 # legs, though EXPECTED_LEGS was). Counted from the strings below: STATIC_LEGS = 22 names,
-# BOOT_LEGS base = 5, Bochs adds 6, KVM adds 1 -> 33 in CI, 34 locally; slice 4's four `golden-*`
-# take it to 38. The design named 28. Every difference is an ADDITION forced by a review finding
+# BOOT_LEGS base = 5, Bochs adds 6, KVM adds 1. Slice 4's four `golden-*` are now IN
+# STATIC_LEGS, making it 26 names -> 37 in CI, 38 locally. The design named 28. Every difference is an ADDITION forced by a review finding
 # -- nothing chartered was dropped:
 #   + elf-header, geometry, windows, accept-oneidx  (slice 2's two review rounds)
 #   + boundary-images, bochs-harness                (slice 3's review round)
 #   + sib-exclusivity, source-shape                 (A3.2, A3.3)
 #   + pushints                                      (A3's own refutation: the 11-byte PUSH_INT
 #                                                    windows nothing read)
+#   + golden-forcing/-boundary_edge/-boundary_over/-boundary_under   (slice 4's byte-pin)
 # This comment is now the thing that has to stay true when a leg is added.
-STATIC_LEGS="elf-header, pmemsz, pd-guards, geometry, windows, counts, sites, rawdecode, sib-exclusivity, pushints, source-shape, bufbase-eq, displacements, seed-echo, frame-cardinality, frame-terminal, accept-oneidx, reject-nobufop, reject-singlefunc, seed-refusal, reject-twoframe, boundary-images"
+STATIC_LEGS="golden-forcing, golden-boundary_edge, golden-boundary_over, golden-boundary_under, elf-header, pmemsz, pd-guards, geometry, windows, counts, sites, rawdecode, sib-exclusivity, pushints, source-shape, bufbase-eq, displacements, seed-echo, frame-cardinality, frame-terminal, accept-oneidx, reject-nobufop, reject-singlefunc, seed-refusal, reject-twoframe, boundary-images"
 # BUILT FROM WHAT RAN, never a fixed string. BOTH review legs, independently, found the same
 # thing: on a host with QEMU but without Bochs and without /dev/kvm the gate printed the full
 # DUAL-SUBSTRATE banner and named six Bochs legs and a KVM leg individually, none of which had
 # executed. This file's own header calls that "the cheapest possible lie for a gate to tell", and
 # the two-banner split fixed only the NO-QEMU case; the partial-substrate case was left open.
-BOOT_LEGS="draw1-qemu, draw2-qemu (both GUARD-WITNESS: transcript + derived proof byte + triple fault), boundary-edge-qemu, boundary-over-qemu, boundary-under-qemu"
+BOOT_LEGS="draw1-qemu, draw2-qemu (both GUARD-WITNESS: emulator-authored wire record + derived proof byte + a #PF at the derived guard_hi escalating to #DF), boundary-edge-qemu, boundary-over-qemu, boundary-under-qemu (the two fault probes now discriminated by their FAULTING ADDRESS, not by a shared absence)"
 SUBSTRATES="QEMU-TCG"
 if [[ "$bochs_ran" -eq 1 ]]; then
     BOOT_LEGS="$BOOT_LEGS, draw1-bochs, draw2-bochs, boundary-edge-bochs, boundary-over-bochs, boundary-under-bochs, bochs-harness"
@@ -1349,5 +1520,5 @@ fi
 # strategy families, not a proven upper bound. What IS proof-shaped here is the completion
 # contract -- the driver derives the transcript, the accumulator's proof byte and the
 # isa-debug-exit status before the boot, and requires all three exactly.
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link66 / longbuf / 50th kernel-arc link -- RUNTIME-INDEXED MEMORY on the sovereign long64 target: a 2-MiB buffer between two non-present guard pages, indexed by a guest-assembled index, discriminated by a one-byte-ack black-box protocol whose TWO INDEPENDENT seeds the SUPERVISING DRIVER draws (A1) and whose $LINK66_Q queries are drawn WITHOUT REPLACEMENT over the full $LINK66_N-byte range; the driver INDEPENDENTLY DERIVES the $(( LINK66_N + 3 * LINK66_Q + 1 ))-byte receive stream -- the transcript plus the guest's own accumulator byte -- and requires it byte-exactly, so a harness that echoed the seed and generated from something else goes RED; every graded draw then ends in the A3 GUARD WITNESS -- bufget(b, 262144), one slot past the buffer into the non-present guard page, so an honest guest MUST triple-fault and any guest whose storage is not the real guarded buffer COMPLETES instead and goes RED; the rung is pinned to a ratified ladder row by exact membership at $LINK66_SENDS sends; the black-box result is a probabilistic discrimination against a 2^-64 seed floor and is NOT on its own a proof that an indexed load executed -- the guard witness, not the floor, is what ties the graded run to the guarded buffer; boot legs: $SUBSTRATES; legs: $STATIC_LEGS, $BOOT_LEGS; pass=$pass fail=0; goldens and the mutation suite are slices 4-5)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link66 / longbuf / 50th kernel-arc link -- RUNTIME-INDEXED MEMORY on the sovereign long64 target: a 2-MiB buffer between two non-present guard pages, indexed by a guest-assembled index, discriminated by a one-byte-ack black-box protocol whose TWO INDEPENDENT seeds the SUPERVISING DRIVER draws (A1) and whose $LINK66_Q queries are drawn WITHOUT REPLACEMENT over the full $LINK66_N-byte range; the driver INDEPENDENTLY DERIVES the $(( LINK66_N + 3 * LINK66_Q + 1 ))-byte receive stream -- the transcript plus the guest's own accumulator byte -- and requires it byte-exactly of QEMU's OWN chardev wire record (not merely of the harness's cap.bin, which the harness itself writes), so a harness that echoed the seed and generated from something else goes RED; every graded draw then ends in the A3 GUARD WITNESS -- bufget(b, 262144), one slot past the buffer into the non-present guard page, so an honest guest MUST triple-fault and any guest whose storage is not the real guarded buffer COMPLETES instead and goes RED; the rung is pinned to a ratified ladder row by exact membership at $LINK66_SENDS sends; the black-box result is a probabilistic discrimination against a 2^-64 seed floor and is NOT on its own a proof that an indexed load executed -- the guard witness, not the floor, is what ties the graded run to the guarded buffer; boot legs: $SUBSTRATES; legs: $STATIC_LEGS, $BOOT_LEGS; pass=$pass fail=0; the four images are BYTE-PINNED to committed goldens and the hash is in circuit for nothing else; the mutation suite is slice 5)"
 exit 0

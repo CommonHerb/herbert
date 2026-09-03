@@ -139,6 +139,66 @@ while i < len(args):
 port = int(rest[0])
 payload = bytes(int(x) & 0xFF for x in rest[1:])
 
+# ---------------------------------------------------------------- ARGUMENT VALIDATION
+#
+# Added after a cross-family review leg showed several ways a MALFORMED invocation reported
+# success. Every check below turns a silent, exit-0 wrong answer into a loud refusal; none of them
+# changes the behaviour of an invocation that was already valid, which is the property the landed
+# `--serve` consumers (link64 and its mutation suite) depend on and which is re-proven by running
+# them.
+def _die(msg):
+    print("ARGCHECK %s" % msg, flush=True)
+    sys.exit(4)
+
+# Two modes at once silently ran whichever was dispatched first (`--serve X --grade Y` ran grade).
+if serve is not None and grade is not None:
+    _die("--serve and --grade are mutually exclusive")
+# Flags that belong to a mode they were not given with were silently ignored.
+if witness and grade is None:
+    _die("--witness is meaningful only with --grade")
+if drain_mode not in ("eof", "quiet"):
+    _die("--drain-mode must be exactly eof or quiet, got %r" % drain_mode)
+if burst and serve is None:
+    _die("--burst is meaningful only with --serve")
+# `hold` is a wall-clock window; negative or NaN produced a zero-length receive loop that then
+# wrote an empty capture and exited 0.
+if not (hold == hold) or hold < 0 or hold == float("inf"):
+    _die("--hold must be finite and >= 0, got %r" % hold)
+if echo_timeout <= 0 or not (echo_timeout == echo_timeout):
+    _die("--echo-timeout must be finite and > 0, got %r" % echo_timeout)
+# The index channel is TWO BYTES, so an N above 65536 aliases distinct indices onto the same wire
+# pair (65536 and 0 both send 00 00) and an answer for one can be accepted for the other.
+# Negative counts made `range()` empty, so the feeder sent nothing and still printed ok=1.
+#
+# THE LOWER BOUND DIFFERS BY MODE, and getting this wrong is exactly the regression the
+# "purely additive" claim exists to prevent. `--serve 0:0` is a LANDED, LIVE invocation: MEAS-N's
+# bare-boot phase calls `run_one "$sub" bare 0 0 0 "$r"`, which reaches
+# `python3 "$feeder" "$port" --serve "$N:$Q" ...` with N=0 (`run_meas_n.sh:402`) to time a boot
+# with no fill and no queries. A blanket `1 <= N` would have broken that phase silently, so
+# `--serve` admits 0 and only `--grade` -- where a zero-length challenge is vacuous, and already
+# refused by GRADE_Q_TOO_SMALL -- requires at least one byte.
+for _label, _spec, _lo in (("--serve", serve, 0), ("--grade", grade, 1)):
+    if _spec is None:
+        continue
+    try:
+        _a, _b = _spec.split(":")
+        _N, _Q = int(_a), int(_b)
+    except (ValueError, TypeError):
+        _die("%s takes N:Q with integer N and Q, got %r" % (_label, _spec))
+    if not (_lo <= _N <= 65536):
+        _die("%s N must be in %d..65536 (the index channel is two bytes), got %d" % (_label, _lo, _N))
+    if _Q < 0 or _Q > _N:
+        _die("%s Q must be in 0..N, got %d (N=%d)" % (_label, _Q, _N))
+if burst_reps < 1:
+    _die("--burst-reps must be >= 1, got %d" % burst_reps)
+if burst and serve is not None:
+    _sN = int(serve.split(":")[0])
+    # `B = N // burst_reps` truncated, so a non-dividing repeat count sent FEWER than N fill bytes
+    # and the shortfall was swallowed by the drain -- the feeder still printed ok=1.
+    if _sN and _sN % burst_reps:
+        _die("--burst-reps %d does not divide N=%d; the truncating split would send %d of %d fill bytes"
+             % (burst_reps, _sN, (_sN // burst_reps) * burst_reps, _sN))
+
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", port))
@@ -450,8 +510,17 @@ if serve is not None:
         if t_hs == 0.0: t_hs = now
         if t_fill_end == 0.0: t_fill_end = now
         t_query_end = now
-    # Any byte past the expected count invalidates the measurement (it would mean
-    # the framing assumption -- exact count + strict alternation -- did not hold).
+    # WHAT THIS DRAIN ACTUALLY IS, corrected after a cross-family review leg showed the old
+    # sentence ("ANY byte past the expected count invalidates the measurement") was false of the
+    # code beneath it: a peer that completes the protocol, stays connected and emits one more byte
+    # after 0.8 s is not seen, because the window closes at 0.5 s and both the timeout and an
+    # OSError are swallowed. It is a FINITE 0.5-SECOND OBSERVATION WINDOW, not an invariant.
+    #
+    # It is deliberately NOT changed here. `--serve` is landed and has live consumers -- link64,
+    # its mutation suite and the MEAS-N leg -- whose measured numbers were taken under exactly this
+    # behaviour, so tightening it belongs with a re-measurement, not with a byte-pin slice. The
+    # `--grade` mode this link added does not inherit the defect: it drains to an authenticated EOF
+    # under a total deadline, and treats a timeout or a reset before EOF as a failure.
     extra = 0
     conn.settimeout(0.5)
     try:
