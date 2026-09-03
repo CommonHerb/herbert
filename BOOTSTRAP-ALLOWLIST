@@ -454,6 +454,7 @@ tools/timeout
 
 # --- bootstrap (host-language Herbert implementation: shrinks to zero) ---
 bootstrap/tests/run_native_codegen_link66.sh
+bootstrap/tests/run_native_codegen_link66_mutation.sh
 bootstrap/tests/link66_goldens/forcing.sha256
 bootstrap/tests/link66_goldens/boundary_edge.sha256
 bootstrap/tests/link66_goldens/boundary_over.sha256
