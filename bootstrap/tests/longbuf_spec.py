@@ -37,6 +37,7 @@ user-defined shadow of a builtin name. That count survives the golden pin being 
   upper bound on nothing -- use the emitted-window count instead.
 """
 
+import random
 import re
 import struct
 import sys
@@ -355,3 +356,303 @@ def parse_positional(stream, n_echo, n_query):
 def roundup_2m(v):
     r = v % 2097152
     return v if r == 0 else v + 2097152 - r
+
+
+# ============================================================ THE DRIVER'S OWN DERIVATION
+#
+# Everything below belongs to the SUPERVISING GATE DRIVER, not to the harness. It exists
+# because a blind cross-family review leg proved the `seed-echo` leg alone does not carry the
+# claim it was written for:
+#
+#     "a harness can print master_seed unchanged, but construct rp and rq from zero or
+#      another constant. Because it also grades against that substituted stream, it emits
+#      ok=1, and seed-echo passes."
+#
+# That is exactly right, and it is a hole no amount of seed-line comparison can close: the
+# echoed seed proves what the harness was HANDED, never what it GENERATED FROM. The only
+# thing that closes it is a SECOND, SEPARATE derivation of the expected receive transcript,
+# made by the process that drew the seed, and compared BYTE-FOR-BYTE against the bytes the
+# guest actually sent (`--cap`). A lying harness's capture cannot match a stream it did not
+# produce, whatever it prints or reports.
+#
+# THIS IS DELIBERATELY NOT IMPORTED BY kernel_io_feed.py, and that separation is the whole
+# point. The feeder keeps its own inline generator. Two independent restatements of the same
+# rule means a mutant that pins or substitutes ONE of them diverges from the other and the
+# byte comparison goes RED -- which is what M-seedpin-internal has to bite on. Sharing one
+# implementation would make both sides wrong together and the leg vacuous.
+
+
+def driver_streams(pay_seed, qry_seed, draw, n, q):
+    """The driver's own restatement of the two draws. Independent of the harness's copy.
+
+    One Random instance PER STREAM, instantiated OUTSIDE the comprehension, explicit integer
+    domain tags. A generator constructed INSIDE a comprehension is re-seeded per element and
+    has a single-point image -- 512 copies of one byte -- which is the defect a refutation leg
+    found in the design's first draft. The tag (seed<<2)|(d<<1)|kind is injective only for
+    d in {0,1}, so d is pinned to the two draws; a re-roll re-draws the SEEDS, never d.
+
+    Two INDEPENDENT 64-bit seeds, not one master: the fill phase reveals every payload byte to
+    the guest before the first query index is sent, so with both streams derived from one
+    64-bit seed the payload DETERMINES the query stream and the 512-byte challenge collapses
+    to the 8 bytes of state a guest can hold in a single frame.
+    """
+    if draw not in (0, 1):
+        raise ValueError("draw must be 0 or 1 (the domain tag is injective only there)")
+    if not (1 <= q <= n):
+        raise ValueError("q must satisfy 1 <= q <= n (q == 0 makes the whole grade vacuous)")
+    rp = random.Random((pay_seed << 2) | (draw << 1) | 0)
+    rq = random.Random((qry_seed << 2) | (draw << 1) | 1)
+    payload = bytes(rp.randrange(256) for _ in range(n))
+    queries = rq.sample(range(n), q)          # WITHOUT replacement, over the FULL range
+    return payload, queries
+
+
+def expected_transcript(pay_seed, qry_seed, draw, n, q, witness=False):
+    """The EXACT byte string the guest must send back, derived driver-side.
+
+    Strict alternation fixes every position, so the whole receive stream is determined:
+    n fill echoes, then per query a hi echo, a lo echo and the answer payload[idx].
+    Length is n + 3q -- 704 at the ratified (512, 64) -- and every byte of it is predicted.
+
+    AMENDMENT A3.1 -- the GUARD WITNESS. With `witness`, one more byte is predicted: the
+    guest's own whole-run accumulator, `sum(answers) & 0xff`, which the forcing program emits
+    with `output_byte(s)` before it takes the guard access. Op 53 outputs AL, so that byte is
+    exactly `(s * 2^32 >> 32) & 0xff` -- the byte the grading tail WOULD have put in a
+    `de<proof>ad` frame if the run were allowed to return.
+
+    Why it rides the wire instead of debugcon, stated because it is a real deviation from the
+    ruling's literal wording and was settled by measurement, not preference: nothing in the
+    source runs after the grading tail, and the tail runs only if `main` returns. A guest that
+    faults on the guard page therefore never emits a frame -- booted, `e9` comes back EMPTY on
+    an otherwise perfect run. Frame and fault are MUTUALLY EXCLUSIVE in one image. Emitting the
+    proof on the wire first keeps all three of the ruling's observables (exact transcript,
+    derived proof, triple fault) in the single graded image the ruling asked for.
+    """
+    payload, queries = driver_streams(pay_seed, qry_seed, draw, n, q)
+    out = bytearray(payload)
+    acc = 0
+    for idx in queries:
+        out.append((idx >> 8) & 0xFF)
+        out.append(idx & 0xFF)
+        out.append(payload[idx])
+        acc += payload[idx]
+    if witness:
+        out.append(acc & 0xFF)
+    return bytes(out), payload, queries
+
+
+def expected_proof_byte(pay_seed, qry_seed, draw, n, q):
+    """The debugcon frame's payload byte, predicted from the answers alone.
+
+    The forcing program's main returns `serve(b, q, 0) * 4294967296`, i.e. the whole-run
+    accumulator sum(answers) shifted into bits 32.. of the u64 result. The landed long64
+    grading tail publishes byte 4 of that result -- `(v >> 32) & 0xff`, the lineage's own
+    host_proof -- inside a `de <byte> ad` frame. So the driver can predict the guest's OWN
+    completion frame from the transcript it derived, without trusting the feeder at all.
+
+    This is the guest-side completion barrier the black-box protocol otherwise lacks: a guest
+    that answers all q queries correctly and then hangs, faults, or corrupts its return path
+    never emits this frame, and a guest whose accumulator is wrong emits a different one.
+    """
+    _, payload, queries = expected_transcript(pay_seed, qry_seed, draw, n, q)
+    return (sum(payload[i] for i in queries) >> 0) & 0xFF
+
+
+def qemu_exit_for(proof):
+    """The isa-debug-exit status QEMU reports for a given proof byte.
+
+    Restated from the landed long64 lineage's host_qemu_exit (run_native_codegen_link65.sh:83):
+    `(((p ^ 0x31) & 0x7f) << 1) | 1`. QEMU's isa-debug-exit device reports `(v << 1) | 1`, so
+    a TIMEOUT (124) or a signal can never be mistaken for a completed run -- which is the
+    point: a review leg showed the gate accepting rc=124 as success because the feeder had
+    already printed ok=1.
+    """
+    return (((proof ^ 0x31) & 0x7F) << 1) | 1
+
+
+# ---------------------------------------------------------------- A3.3: the source-shape rule
+#
+# Every `bufget`/`bufset` base must be the identifier bound directly to `bufbase()`.
+#
+# This exists because a booted measurement showed the pinned buffer geometry is NOT load-bearing
+# at runtime: ops 50/51 take their base as a RUNTIME value popped off the operand stack (op 49
+# merely PUSHES the constant), so `let s = b + 4194304` compiles and runs real indexed accesses
+# entirely outside the guarded buffer. That program is not a forgery -- it exercises the very
+# capability under test -- but it proves the guard pages bound only a `bufbase()`-rooted access.
+# The graded source is authored by the gate itself, so the honest closure is to make that
+# property CHECKED rather than true by inspection.
+#
+# The check is a bounded propagation, not a parse, and its limits are stated rather than implied:
+# it requires exactly one `bufbase()` bound by a `let`, requires every buf-op base argument to be
+# a BARE IDENTIFIER (any expression is a RED -- that is what kills the `b + 4194304` shape), and
+# propagates base-rootedness through positional call arguments to reach the `base` parameters of
+# `fill`/`serve`. It is sound for the sources THIS GATE AUTHORS and is not a general analysis.
+
+_FUNC_RE = re.compile(r"^func\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:", re.M)
+_CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+_LET_RE = re.compile(r"^\s*let\s+([A-Za-z_]\w*)\s*=\s*(.*)$")
+
+
+def _split_args(text, start):
+    """Top-level comma split of the argument list whose '(' is at `start`. Returns (args, end)."""
+    depth, cur, args, i = 0, [], [], start
+    while i < len(text):
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+            if depth == 1:
+                i += 1
+                continue
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                args.append("".join(cur).strip())
+                return [a for a in args if a != ""], i
+        if depth == 1 and ch == ",":
+            args.append("".join(cur).strip()); cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    return None, len(text)
+
+
+def _is_definition(body, name, m):
+    """True if this _CALL_RE match is the `func NAME(...)` DEFINITION line, not a call.
+
+    _CALL_RE matches definitions too, which is how a definition used to seed rootedness from its
+    own parameter names -- a blind refutation leg's finding."""
+    j = body.rfind("func", 0, m.start())
+    if j < 0:
+        return False
+    return re.match(r"func\s+%s\s*\(" % re.escape(name), body[j:m.end()]) is not None
+
+
+def _func_spans(body):
+    """(name, params, start, end) for each function, so names can be scoped to their own body."""
+    ms = list(_FUNC_RE.finditer(body))
+    out = []
+    for i, m in enumerate(ms):
+        end = ms[i + 1].start() if i + 1 < len(ms) else len(body)
+        out.append((m.group(1), [a.strip() for a in m.group(2).split(",") if a.strip()],
+                    m.end(), end))
+    return out
+
+
+def source_base_shape(src):
+    """Returns (ok, detail). ok iff every bufget/bufset base is bufbase()-rooted and bare.
+
+    SCOPED PER FUNCTION. The first version of this kept `rooted` as a FLAT SET OF NAMES, and a
+    blind refutation leg broke it three ways by execution, not by argument:
+
+      * `fill` and `serve` both name their first parameter `base`, so `fill(b, ...)` rooted the
+        NAME `base` globally and `serve`'s `bufget(base, ...)` passed however `serve` was called.
+        `let c = b + 4194304 ; let s = serve(c, 64, 0)` returned GREEN.
+      * `func evil(b, k): return bufget(b, k) end` with `let r = evil(s, 0)` returned GREEN,
+        because `evil`'s own parameter happened to be spelled `b`.
+      * A multi-hop rebinding through a helper that returns `base + 4194304` returned GREEN.
+
+    All three are exactly the shape this leg exists to kill. Rootedness is therefore a set of
+    (function, name) PAIRS now, seeded only inside the function holding the `let ... = bufbase()`,
+    propagated across calls as (caller, argument) -> (callee, parameter), and killed by any `let`
+    that rebinds a rooted name to an expression that is not itself a rooted bare identifier.
+    `func` DEFINITION lines are also skipped when scanning for calls -- `_CALL_RE` matches them
+    too, which was how a definition could seed rootedness from its own parameter names.
+
+    Still not a parse, and the limit is stated rather than implied: it is sound for the sources
+    THIS GATE AUTHORS -- no strings, no shadowing within a function, one call per line.
+    """
+    body = "\n".join(l.split("--", 1)[0] for l in src.splitlines())
+    funcs = _func_spans(body)
+    if not funcs:
+        return False, "no functions found"
+    fnames = {f[0]: f[1] for f in funcs}
+
+    def owner(pos):
+        for name, _params, st, en in funcs:
+            if st <= pos < en:
+                return name
+        return None
+
+    # seed: the single `let <id> = bufbase()`, scoped to the function that holds it
+    binds = [(m.start(), m.group(1)) for m in re.finditer(
+        r"\blet\s+([A-Za-z_]\w*)\s*=\s*bufbase\s*\(\s*\)", body)]
+    if len(binds) != 1:
+        return False, "expected exactly one `let <id> = bufbase()`, found %d" % len(binds)
+    rooted = {(owner(binds[0][0]), binds[0][1])}
+
+    # kill: any `let` that rebinds a name to something other than a rooted bare identifier
+    def rebinds_away():
+        killed = []
+        for line_start, line in _iter_lines(body):
+            m = _LET_RE.match(line)
+            if not m:
+                continue
+            fn, nm, rhs = owner(line_start), m.group(1), m.group(2).strip()
+            if (fn, nm) in rooted and not (re.fullmatch(r"[A-Za-z_]\w*", rhs)
+                                           and (fn, rhs) in rooted):
+                if rhs != "bufbase()":
+                    killed.append((fn, nm))
+        return killed
+
+    # A GREATEST fixpoint, not a least one: a parameter is rooted only if EVERY call site passes
+    # something rooted into that position. The "may" version -- root a parameter as soon as ONE
+    # call roots it -- still passed the refutation leg's third counterexample, where `use(b, 0)`
+    # roots `use.base` and a later `use(d, 1)` with `d = shift(b)` then rides that rooting. Start
+    # optimistic and remove, so a single unrooted call site un-roots the parameter for all of them.
+    for name, params, _st, _en in funcs:
+        for pm in params:
+            rooted.add((name, pm))
+    called = set()
+    for _ in range(len(funcs) + 3):
+        shrank = False
+        called.clear()
+        for m in _CALL_RE.finditer(body):
+            callee = m.group(1)
+            if callee not in fnames:
+                continue
+            if _is_definition(body, callee, m):
+                continue
+            caller = owner(m.start())
+            args, _end = _split_args(body, m.end() - 1)
+            if args is None:
+                return False, "unbalanced argument list in a call to %s" % callee
+            called.add(callee)
+            for i, a in enumerate(args):
+                if i >= len(fnames[callee]):
+                    continue
+                pair = (callee, fnames[callee][i])
+                arg_rooted = (re.fullmatch(r"[A-Za-z_]\w*", a) is not None
+                              and (caller, a) in rooted)
+                if not arg_rooted and pair in rooted:
+                    rooted.discard(pair); shrank = True
+        if not shrank:
+            break
+
+    killed = rebinds_away()
+    if killed:
+        return False, "rooted name(s) rebound away: %s" % ", ".join("%s.%s" % k for k in killed)
+
+    bad = []
+    for m in _CALL_RE.finditer(body):
+        if m.group(1) not in ("bufget", "bufset"):
+            continue
+        fn = owner(m.start())
+        args, _end = _split_args(body, m.end() - 1)
+        if not args:
+            bad.append("%s() with no arguments" % m.group(1)); continue
+        base = args[0]
+        if not re.fullmatch(r"[A-Za-z_]\w*", base):
+            bad.append("%s base `%s` is an EXPRESSION, not a bare identifier" % (m.group(1), base))
+        elif (fn, base) not in rooted:
+            bad.append("%s base `%s` is not rooted in bufbase() IN %s" % (m.group(1), base, fn))
+    if bad:
+        return False, "; ".join(bad[:3])
+    return True, ("one bufbase(); every bufget/bufset base is a bare identifier rooted in it, "
+                  "scoped per function (%s)" % ", ".join(sorted("%s.%s" % r for r in rooted)))
+
+
+def _iter_lines(body):
+    pos = 0
+    for line in body.split("\n"):
+        yield pos, line
+        pos += len(line) + 1
