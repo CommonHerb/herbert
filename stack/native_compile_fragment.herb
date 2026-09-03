@@ -20173,6 +20173,15 @@ func nc_tap_op_allowed(op):
     if op == 53:
         return true
     end
+    if op == 49:
+        return true
+    end
+    if op == 50:
+        return true
+    end
+    if op == 51:
+        return true
+    end
     return nc64_op_allowed(op)
 end
 
@@ -20186,6 +20195,15 @@ func nc_tap_pops(op, nargs):
     if op == 53:
         return 1
     end
+    if op == 49:
+        return 0
+    end
+    if op == 50:
+        return 2
+    end
+    if op == 51:
+        return 3
+    end
     return nc64_pops(op)
 end
 
@@ -20197,6 +20215,15 @@ func nc_tap_pushes(op):
         return 1
     end
     if op == 53:
+        return 1
+    end
+    if op == 49:
+        return 1
+    end
+    if op == 50:
+        return 1
+    end
+    if op == 51:
         return 1
     end
     return nc64_pushes(op)
@@ -20261,6 +20288,15 @@ func nc_tap_op_size(op, nargs, is_last):
     end
     if op == 53:
         return 18
+    end
+    if op == 49:
+        return 11
+    end
+    if op == 50:
+        return 7
+    end
+    if op == 51:
+        return 8
     end
     return nc64_op_size(op, is_last)
 end
@@ -20515,7 +20551,7 @@ end
 -- the constant-stack TAIL transition (nc_tap_emit_tail_call, E9 -- never E8) instead;
 -- the op-21 after a tail site is still emitted (dead but shape-preserving, the Linux
 -- lowering's discipline). NON-tail calls keep the E8 + cleanup + push rax form.
-func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases, funcs, is_main, nparams, frame):
+func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases, funcs, is_main, nparams, frame, buf_2m):
     if i >= n:
         return obuf
     end
@@ -20647,6 +20683,43 @@ func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases, funcs, is_main, npara
         do append(obuf, 116)   -- 74  jz
         do append(obuf, 247)   -- F7     rel8 -9 -> back to the mov dx,0x3FD
         do append(obuf, 83)    -- 53  push rbx (the full argument -- the op's value)
+    elif op == 49:
+        -- link66 op 49 bufbase(): push the 2-MiB-aligned base of the runtime-indexed buffer page as
+        -- an ABSOLUTE immediate. buf_2m is a LAYOUT fact derived below from the phdr's own load_end,
+        -- not a stack address -- long mode is flat and the buffer page is identity-mapped by the PD,
+        -- so no segment override and no frame dependence (contrast the i386 op 49, which pushes
+        -- [ebp+0] because its buffer lives in the module stack segment). movabs is the only 64-bit
+        -- immediate form; 11 bytes. This immediate is what the gate's bufbase-eq leg decodes and
+        -- compares against the phdr-derived base, and what M-basebias perturbs by +8.
+        do append(obuf, 72)    -- 48
+        do append(obuf, 184)   -- B8  movabs rax, imm64
+        obuf = nc_append_le64(obuf, buf_2m)
+        do append(obuf, 80)    -- 50  push rax
+    elif op == 50:
+        -- link66 op 50 bufget(base, k): TOS = k, next = base. The long64 analogue of the i386
+        -- chiefturbo lowering (:15274-15283), with the SS override dropped (flat long mode) and the
+        -- scale widened 4 -> 8 because a slot is a 64-bit word. 7 bytes, position-independent.
+        do append(obuf, 89)    -- 59  pop rcx  (k)
+        do append(obuf, 90)    -- 5A  pop rdx  (base)
+        do append(obuf, 72)    -- 48
+        do append(obuf, 139)   -- 8B
+        do append(obuf, 4)     -- 04
+        do append(obuf, 202)   -- CA  mov rax,[rdx+rcx*8]   (SIB scale bits 11 = x8)
+        do append(obuf, 80)    -- 50  push rax
+    elif op == 51:
+        -- link66 op 51 bufset(base, i, v): TOS = v, next = i, next = base. Mirrors the i386 op-51
+        -- register convention exactly (:15286-15294) -- pop v, pop i, pop base -- widened to 64-bit
+        -- slots with the SS override dropped. Pushes v BACK (52 push rdx), so bufset's value is the
+        -- word that was stored and the fill echo grades the store's own argument; removing that push
+        -- is M-op51noret, which is size-preserving because 52 and 90 are both one byte. 8 bytes.
+        do append(obuf, 90)    -- 5A  pop rdx  (v)
+        do append(obuf, 89)    -- 59  pop rcx  (i)
+        do append(obuf, 88)    -- 58  pop rax  (base)
+        do append(obuf, 72)    -- 48
+        do append(obuf, 137)   -- 89
+        do append(obuf, 20)    -- 14
+        do append(obuf, 200)   -- C8  mov [rax+rcx*8],rdx   (SIB scale bits 11 = x8)
+        do append(obuf, 82)    -- 52  push rdx
     elif op == 20:
         let callee = get(code, i).1
         let nargs = get(code, i).2
@@ -20683,7 +20756,7 @@ func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases, funcs, is_main, npara
             obuf = nc_append_le32(obuf, epi - endoff)
         end
     end
-    return nc_tap_lower_body(obuf, code, i + 1, n, offs, epi, bases, funcs, is_main, nparams, frame)
+    return nc_tap_lower_body(obuf, code, i + 1, n, offs, epi, bases, funcs, is_main, nparams, frame, buf_2m)
 end
 
 -- callee image bases (i starts at 1; bases[0] = main entry, already added).
@@ -20697,7 +20770,7 @@ func nc_tap_callee_bases(funcs, i, nf, cur, bases):
     return nc_tap_callee_bases(funcs, i + 1, nf, cur + nc_tap_func_total(fn, funcs, 0, frame), bases)
 end
 
-func nc_tap_emit_callees(buf, funcs, i, nf, bases):
+func nc_tap_emit_callees(buf, funcs, i, nf, bases, buf_2m):
     if i >= nf:
         return buf
     end
@@ -20710,9 +20783,9 @@ func nc_tap_emit_callees(buf, funcs, i, nf, bases):
     end
     let pbase = get(bases, i) + nc_tap_prologue_len(0, fn.2, frame)
     let lay = nc_tap_offsets_loop(code, 0, n, pbase, new_array(int), funcs, 0, fn.2, frame)
-    buf = nc_tap_lower_body(buf, code, 0, n, lay.0, lay.1, bases, funcs, 0, fn.2, frame)
+    buf = nc_tap_lower_body(buf, code, 0, n, lay.0, lay.1, bases, funcs, 0, fn.2, frame, buf_2m)
     buf = nc_tap_emit_epilogue(buf, 0, frame)
-    return nc_tap_emit_callees(buf, funcs, i + 1, nf, bases)
+    return nc_tap_emit_callees(buf, funcs, i + 1, nf, bases, buf_2m)
 end
 
 -- each call op targets an in-range NON-main function with matching arity.
@@ -20788,18 +20861,21 @@ end
 -- identity-map the low 1 GiB as 2-MiB PS pages EXCEPT the guard page (its 2-MiB slot left
 -- NON-PRESENT), so a stack overflow past the stack's own 2-MiB page faults instead of
 -- corrupting the page tables.
-func nc_tap_emit_pd_loop(buf, i, guard_2m):
+func nc_tap_emit_pd_loop(buf, i, guard_2m, guard_lo_2m):
     if i >= 512:
         return buf
     end
     if i * 2097152 == guard_2m:
         buf = nc_append_le32(buf, 0)
         buf = nc_append_le32(buf, 0)
+    elif i * 2097152 == guard_lo_2m:
+        buf = nc_append_le32(buf, 0)
+        buf = nc_append_le32(buf, 0)
     else:
         buf = nc_append_le32(buf, i * 2097152 + 131)
         buf = nc_append_le32(buf, 0)
     end
-    return nc_tap_emit_pd_loop(buf, i + 1, guard_2m)
+    return nc_tap_emit_pd_loop(buf, i + 1, guard_2m, guard_lo_2m)
 end
 
 -- hearken/riposte: any function body containing op 45 (input_byte) OR op 53 (output_byte)
@@ -20830,6 +20906,67 @@ func nc_tap_uses_uart(funcs, i, nf):
         return true
     end
     return nc_tap_uses_uart(funcs, i + 1, nf)
+end
+
+-- link66 BUFFER MODE, the exact mirror of the uart predicate above: any function body containing
+-- op 49 (bufbase), 50 (bufget) or 51 (bufset) means the image needs the runtime-indexed buffer, so
+-- the two-guard layout, the buffer page and the exact p_memsz are emitted. NONE of them anywhere ->
+-- buffer mode off -> the layout, the PD and p_memsz are byte-identical to taproot/hearken/riposte/
+-- gyre, which is why this change cannot move any of the 29 committed long64 goldens.
+func nc_tap_code_uses_buf(code, i, n):
+    if i >= n:
+        return false
+    end
+    let op = get(code, i).0
+    if op == 49:
+        return true
+    end
+    if op == 50:
+        return true
+    end
+    if op == 51:
+        return true
+    end
+    return nc_tap_code_uses_buf(code, i + 1, n)
+end
+
+func nc_tap_uses_buf(funcs, i, nf):
+    if i >= nf:
+        return false
+    end
+    let fn = get(funcs, i)
+    let code = fn.4
+    if nc_tap_code_uses_buf(code, 0, count(code)):
+        return true
+    end
+    return nc_tap_uses_buf(funcs, i + 1, nf)
+end
+
+-- the IR gate's census: how many INDEXED ops (50/51) the whole program contains. bufbase alone
+-- hands a program a live absolute pointer into a page it never indexes, which is buffer geometry
+-- bought and not used; the gate below refuses it.
+func nc_tap_code_idx_ops(code, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    let op = get(code, i).0
+    if op == 50:
+        acc = acc + 1
+    end
+    if op == 51:
+        acc = acc + 1
+    end
+    return nc_tap_code_idx_ops(code, i + 1, n, acc)
+end
+
+func nc_tap_idx_ops(funcs, i, nf, acc):
+    if i >= nf:
+        return acc
+    end
+    let fn = get(funcs, i)
+    let code = fn.4
+    acc = nc_tap_code_idx_ops(code, 0, count(code), acc)
+    return nc_tap_idx_ops(funcs, i + 1, nf, acc)
 end
 
 -- the taproot driver (count(funcs) > 1). Layout (vaddr V0=0x10000c):
@@ -20882,7 +21019,34 @@ func nc_tap_emit_program(funcs, mainidx):
     let pdpt_vaddr = pml4_vaddr + 4096
     let pd_vaddr = pdpt_vaddr + 4096
     let load_end = pd_vaddr + 4096
+    -- link66 BUFFER MODE. Off -> every line below is exactly what taproot/hearken/riposte/gyre
+    -- emit today, which is what keeps the 29 committed long64 goldens byte-identical.
+    let uses_buf = nc_tap_uses_buf(funcs, 0, nf)
+    if uses_buf:
+        -- THE IR GATE. Buffer mode buys a 2-MiB page, two non-present guards and an absolute base
+        -- immediate. A program that takes all of that and never indexes the page (bufbase() with no
+        -- bufget/bufset anywhere) is refused rather than quietly handed a live pointer it cannot use.
+        if nc_tap_idx_ops(funcs, 0, nf, 0) < 1:
+            let fb = nc_fail(655, 0, "multiboot32-long64: buffer mode needs at least one bufget/bufset")
+            return 0
+        end
+    end
+    -- guard_2m is the HIGH guard in both modes -- the stack's own overflow backstop -- so the stack
+    -- relationship never changes. In buffer mode a SECOND non-present 2-MiB slot (guard_lo_2m) is
+    -- opened below the buffer, giving the layout
+    --     load_end -> [guard_lo NON-PRESENT] [buf_2m 2 MiB PRESENT] [guard_hi NON-PRESENT] [stack]
+    -- so index -1 faults into guard_lo, index 262143 is the last live slot (2 MiB / 8 B = 262144
+    -- slots) and index 262144 faults into guard_hi. Those are SC3's three boundary probes, decided
+    -- by the page tables rather than by a bounds check the program could omit. Outside buffer mode
+    -- guard_lo_2m is -1, which no PD index can equal, so the PD is byte-identical to today's.
+    let guard_lo_2m = 0 - 1
+    let buf_2m = 0
     let guard_2m = nc_tap_roundup_2m(load_end)
+    if uses_buf:
+        guard_lo_2m = guard_2m
+        buf_2m = guard_lo_2m + 2097152
+        guard_2m = buf_2m + 2097152
+    end
     let stack_2m_base = guard_2m + 2097152
     let esp_val = stack_2m_base + 2097152
     if esp_val > 67108864:
@@ -20906,7 +21070,7 @@ func nc_tap_emit_program(funcs, mainidx):
         do append(cbuf, 8 * main_frame)
     end
     let mlay = nc_tap_offsets_loop(maincode, 0, mainn, main_body_base, new_array(int), funcs, 1, 0, main_frame)
-    cbuf = nc_tap_lower_body(cbuf, maincode, 0, mainn, mlay.0, mlay.1, bases, funcs, 1, 0, main_frame)
+    cbuf = nc_tap_lower_body(cbuf, maincode, 0, mainn, mlay.0, mlay.1, bases, funcs, 1, 0, main_frame, buf_2m)
     do append(cbuf, 72)    -- 48 C1 E8 20 shr rax,0x20 (grading tail)
     do append(cbuf, 193)
     do append(cbuf, 232)
@@ -20916,7 +21080,7 @@ func nc_tap_emit_program(funcs, mainidx):
         let f8 = nc_fail(610, 0, "multiboot32-long64: main block length invariant")
         return 0
     end
-    cbuf = nc_tap_emit_callees(cbuf, funcs, 1, nf, bases)
+    cbuf = nc_tap_emit_callees(cbuf, funcs, 1, nf, bases, buf_2m)
     if length(freeze(cbuf)) != gdt_off:
         let f9 = nc_fail(611, 0, "multiboot32-long64: callee block length invariant")
         return 0
@@ -20927,7 +21091,7 @@ func nc_tap_emit_program(funcs, mainidx):
     cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pml4)
     cbuf = nc32_long_emit_pml4(cbuf, pdpt_vaddr)
     cbuf = nc32_long_emit_pdpt(cbuf, pd_vaddr)
-    cbuf = nc_tap_emit_pd_loop(cbuf, 0, guard_2m)
+    cbuf = nc_tap_emit_pd_loop(cbuf, 0, guard_2m, guard_lo_2m)
     let frozen_code = freeze(cbuf)
     let code_len = length(frozen_code)
     if code_len != load_end - v0:
@@ -20937,7 +21101,16 @@ func nc_tap_emit_program(funcs, mainidx):
     let filesz = 12 + code_len
     let shoff = nc32_roundup4(4096 + 12 + code_len)
     let entry = 1048588
+    -- p_memsz. Outside buffer mode this stays the landed filesz+16384 (D23's known
+    -- under-declaration, deliberately untouched here so no golden moves). IN BUFFER MODE it is
+    -- EXACT: the segment reserves every byte from its own load address 0x100000 up to the high
+    -- guard, so the page the program indexes is DECLARED memory rather than memory the image merely
+    -- happens to find mapped. M-memsz reverts this to filesz+16384 and the static phdr assert
+    -- (p_memsz == guard_hi_2m - 0x100000) catches it without a boot.
     let memsz = filesz + 16384
+    if uses_buf:
+        memsz = guard_2m - 1048576
+    end
     let img = new_buffer()
     img = nc32_emit_ehdr(img, entry, shoff)
     img = nc32_emit_phdr(img, filesz, memsz)
