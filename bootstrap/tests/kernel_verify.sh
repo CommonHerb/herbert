@@ -16,7 +16,7 @@
 #     usable it FAILS LOUD rather than dropping the substrate. When /dev/kvm is genuinely absent
 #     it runs the CI-equivalent QEMU+Bochs gate and says so.
 #
-# Range override (for smoke tests): KERNEL_VERIFY_LO / KERNEL_VERIFY_HI (default 17..65).
+# Range override (for smoke tests): KERNEL_VERIFY_LO / KERNEL_VERIFY_HI (default 17..66).
 
 set -uo pipefail
 # CDPATH is unset FIRST and the cd is checked: `cd` with a RELATIVE operand searches $CDPATH before
@@ -159,7 +159,7 @@ fi
 
 fail=0; ran=0; ran_mut=0
 for n in $(seq "$LO" "$HI"); do
-    (( n >= GATE_LO && n <= GATE_HI )) || continue   # kernel-verify runs ONLY the canonical kernel-arc set (17..65)
+    (( n >= GATE_LO && n <= GATE_HI )) || continue   # kernel-verify runs ONLY the canonical kernel-arc set (17..66)
     g="bootstrap/tests/run_native_codegen_link${n}.sh"
     [[ -f "$g" ]] || { echo "FAIL: canonical kernel-arc gate $g is MISSING (deleted/renamed?) -- refusing a vacuous GREEN." >&2; fail=1; break; }
     echo "== link${n} gate (kernel-arc L$((n-16))) =="

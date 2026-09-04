@@ -1746,9 +1746,12 @@ fi
 # shellcheck source=/dev/null
 source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: link66-mutation (cannot source bochs_f2_harness.sh)"; exit 1; }
 F2_GATE="link66-mutation"; F2_HARNESS_FAIL=0
-# Same opt-in as the gate: this file's Bochs rows are boundary probes and a graded session, and
-# three of the four are the non-completing class the harness had no positive end for.
-export F2_FEED_END_BOOT=1
+# NOTE: link66 briefly opted in to a shared-harness Bochs terminator (herbert 8a23ba5). It was
+# REVERTED by parent ruling after CI run 33837860135 went RED, because a shared-harness edit had
+# been verified only against this link's own single-boot Bochs legs. The design, its unit test
+# and the pid-scoping lesson are in MEWTWO/audits/build-link66-2026-09/REPORT-SLICE6.md as a
+# chartered FOLLOW-UP whose entry price
+# is a FULL local `make kernel-verify`, not as landed code.
 if have_bochs && declare -F f2_bochs_feed_attempt >/dev/null; then
     bochs_ran=1
     echo "  -- A2's second engine: the same three rows plus their own named control, on Bochs 2.7 --"

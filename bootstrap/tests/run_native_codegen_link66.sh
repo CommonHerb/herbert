@@ -1201,10 +1201,12 @@ fi
 # shellcheck source=/dev/null
 source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: link66 (cannot source bochs_f2_harness.sh)"; exit 1; }
 F2_GATE="link66"; F2_HARNESS_FAIL=0
-# OPT IN to the shared harness's positive termination (default OFF for every other gate). Without
-# it a triple-faulting Bochs boot is bounded only by the 240 s attempt window -- measured 28.2 s on
-# local 2.7 and the FULL 241 s on CI 2.8, which is what killed link66's first CI run.
-export F2_FEED_END_BOOT=1
+# NOTE: link66 briefly opted in to a shared-harness Bochs terminator (herbert 8a23ba5). It was
+# REVERTED by parent ruling after CI run 33837860135 went RED, because a shared-harness edit had
+# been verified only against this link's own single-boot Bochs legs. The design, its unit test
+# and the pid-scoping lesson are in MEWTWO/audits/build-link66-2026-09/REPORT-SLICE6.md as a
+# chartered FOLLOW-UP whose entry price
+# is a FULL local `make kernel-verify`, not as landed code.
 
 # --- the Bochs completion-frame rule, extracted so `reject-twoframe` can exercise THE
 #     PRODUCTION function rather than a copy of it. QEMU's debugcon is a raw device file and is
