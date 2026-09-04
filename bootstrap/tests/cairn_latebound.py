@@ -29,7 +29,7 @@
 #     reads) -- a clean, syscall-survivable scratch buffer.
 #   * SYS_FS_PUT (eax=7): EBX=name_ptr(16), ECX=payload_ptr, EDX=len. SYS_FS_GET (eax=8): EBX=name_ptr(16 query),
 #     ECX=dst_ptr, EDX=dst_cap; returns eax=found, ecx=len. SYS_WRITE (eax=2): ECX=ptr, EDX=len.
-import os, sys
+import os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cairn_ref as C
 from cairn_ref import Asm, le32, FS_NAMELEN, FS_MAXLEN, SYS_READ, SYS_WRITE, SYS_FS_PUT, SYS_FS_GET, parse_head, _wframes, UCODE3, grade_fs
@@ -111,6 +111,27 @@ def module_fs_writer_latebound(nrecords=PUT_RECORDS, maxpaylen=FS_MAXLEN):
         m.raw(0x8B,0x94,0x24); m.blob(le32(LENSLOT))                    # mov edx,[esp+LENSLOT]    (len)
         m.raw(0xB8); m.blob(le32(SYS_FS_PUT))                           # mov eax,7 (SYS_FS_PUT)
         m.raw(0xCD,0x30)                                                # int 0x30 -> persist (eax=1 stored / 0 rejected)
+        # ---- BOOT-1 GUEST-SIDE RECEIPT (F5 residual, 2026-09-04) ----
+        # Echo back, byte-exactly, the two things this record READ over COM1: the 16 name bytes and the `len`
+        # payload bytes. The feeder's own SENT line is host-side and proves only that the HOST wrote the socket --
+        # F2 and F5 both say in terms that it is NOT guest receipt, and a lost/misframed BOOT-1 COM1 byte was
+        # therefore invisible to every leg that depends on BOOT-1. These two SYS_WRITEs are the guest saying what
+        # it actually got. STRICTLY ADDITIVE and STRICTLY AFTER the PUT: the read sequence and the SYS_FS_PUT sequence the gate's
+        # rigor rests on are byte-for-byte unchanged, and BOOT-1 consumes no extra COM1 bytes.
+        # THE AXIS THAT CLAIM DOES NOT COVER, stated rather than left implied: byte COUNT is unchanged, TIMING is
+        # not. These two writes sit between record 0's last payload byte and record 1's first name byte, so they
+        # add a pause in the middle of the RX stream -- and F5 is classified as a COM1 TIMING event. What bounds
+        # the risk is measured, not assumed: MEAS-N (2026-09-03, 327 boots) exhausted its ladder with B_clean >=
+        # 4096 bytes buffered clean on QEMU-TCG, KVM and Bochs, and the whole put stream here is ~114 bytes, two
+        # orders of magnitude under that floor. It is a floor, not a maximum, so this is a bound and not a proof.
+        m.raw(0x8D,0x8C,0x24); m.blob(le32(NAME_OFF))                   # lea ecx,[esp+NAME_OFF]   (the name it read)
+        m.raw(0xBA); m.blob(le32(FS_NAMELEN))                           # mov edx,16
+        m.raw(0xB8); m.blob(le32(SYS_WRITE))                            # mov eax,2 (SYS_WRITE)
+        m.raw(0xCD,0x30)                                                # int 0x30 -> receipt frame: the name
+        m.raw(0x8D,0x8C,0x24); m.blob(le32(PAY_OFF))                    # lea ecx,[esp+PAY_OFF]    (the payload it read)
+        m.raw(0x8B,0x94,0x24); m.blob(le32(LENSLOT))                    # mov edx,[esp+LENSLOT]    (the len it read)
+        m.raw(0xB8); m.blob(le32(SYS_WRITE))                            # mov eax,2 (SYS_WRITE)
+        m.raw(0xCD,0x30)                                                # int 0x30 -> receipt frame: the payload
     # restore the stack + SYS_EXIT
     m.raw(0x81,0xC4); m.blob(le32(BUFSZ))            # add esp, BUFSZ
     m.raw(0xB3,0x00); m.raw(0xB8,0x01,0x00,0x00,0x00); m.raw(0xCD,0x30)   # SYS_EXIT(0)
@@ -325,5 +346,97 @@ if __name__ == '__main__':
             print('NO-TABLE'); sys.exit(2)
         wfs = [w for w in _wframes(r['_tail']) if w['closed'] and w['cs'] == UCODE3 and (w['cs'] & 3) == 3]
         print((wfs[0]['body'] if wfs else b'').hex()); sys.exit(0)
+    elif cmd == 'emitframes':           # stream -> print "<n_closed_UCODE3_frames> <body0hex>"  (the LIVENESS receipt)
+        # emitbody CANNOT distinguish "one closed ZERO-LENGTH frame" (the genuine reject: the getter ran and
+        # SYS_WROTE len=0) from "ZERO frames" (the getter never emitted at all -- a #PF, a query that never
+        # arrived, a boot that never happened). Both print ''. A leg whose EXPECTED result is an empty emit must
+        # therefore grade on the FRAME COUNT, not on the empty string. (ORACLE-CORPUS-AUDIT finding 6 names the
+        # same conflation; this verb is the receipt half the F5 residual needs on the LBA leg.)
+        stream = open(sys.argv[2], 'rb').read(); r = parse_head(stream)
+        if not r:
+            print('NO-TABLE'); sys.exit(2)
+        wfs = [w for w in _wframes(r['_tail']) if w['closed'] and w['cs'] == UCODE3 and (w['cs'] & 3) == 3]
+        print(len(wfs), (wfs[0]['body'] if wfs else b'').hex()); sys.exit(0)
+    elif cmd == 'headonly':             # in out -> write the stream TRUNCATED to its table (zero write-frames)
+        # The POSITIVE-CONTROL stimulus, DERIVED FROM A REAL BOOT rather than synthesised: "the kernel booted and
+        # dumped its table, and the module emitted NOTHING". Every leg's accept test must go RED on it.
+        stream = open(sys.argv[2], 'rb').read(); r = parse_head(stream)
+        if not r:
+            print('NO-TABLE'); sys.exit(2)
+        head = stream[:len(stream) - len(r['_tail'])]
+        open(sys.argv[3], 'wb').write(head); print(len(head)); sys.exit(0)
+    elif cmd == 'b1receipt':            # b1stream tname tpay dname dpay (hex) -> OK, or a reason + exit 1
+        # THE BOOT-1 GUEST-SIDE RECEIPT CHECK. The putter echoes each record's name(16) then payload(len) right
+        # after its SYS_FS_PUT, so a correct BOOT-1 leaves EXACTLY four closed UCODE3 frames whose bodies are the
+        # four things the host sent, in order. A lost or misframed COM1 byte shifts the putter's reads and shows up
+        # here as a wrong body or a missing frame -- which is the whole point: before this, BOOT-1's only evidence
+        # was the feeder's host-side SENT, which cannot see a byte the guest never got.
+        stream = open(sys.argv[2], 'rb').read()
+        want = [bytes.fromhex(a) for a in sys.argv[3:7]]
+        r = parse_head(stream)
+        if not r:
+            print('NO-TABLE (BOOT-1 produced no table -- the kernel never dumped; boot dead/killed)'); sys.exit(1)
+        wfs = [w for w in _wframes(r['_tail']) if w['closed'] and w['cs'] == UCODE3 and (w['cs'] & 3) == 3]
+        if len(wfs) != len(want):
+            print('FRAMES=%d want=%d (BOOT-1 did not run through both records'
+                  ' -- a lost/misframed COM1 byte, or a boot that ended early)' % (len(wfs), len(want))); sys.exit(1)
+        names = ['tname', 'tpay', 'dname', 'dpay']
+        for i, (w, e) in enumerate(zip(wfs, want)):
+            if w['body'] != e:
+                print('MISMATCH at frame %d (%s): got=%s want=%s (BOOT-1 received DIFFERENT bytes than the host'
+                      ' sent -- a lost/duplicated/misframed COM1 byte)' % (i, names[i], w['body'].hex(), e.hex()))
+                sys.exit(1)
+        print('OK 4 frames byte-exact'); sys.exit(0)
+    elif cmd == 'b1storage':            # img fsdir fslo tname tpay dname dpay -> OK, or a reason + exit 1
+        # THE HALF THE ECHO CANNOT WITNESS. b1receipt proves the GUEST RECEIVED the bytes; it says nothing about
+        # the kernel STORING them or the MEDIUM HOLDING them, and the medium is the only thing BOOT-2 reads. (The
+        # putter cannot check the PUT's return either: the next instruction clobbers eax.) The kernel's ATA write
+        # path polls BSY and never reads ERR/DF, so a write that did not land still returns "stored". This reads
+        # the host image back directly -- boot-free, no module change, no extra boot -- and is what lets a BOOT-1
+        # failure be named at BOOT-1 instead of resurfacing as an unexplained empty emission two boots later.
+        img = sys.argv[2]; dir_lba = int(sys.argv[3]); lo = int(sys.argv[4])
+        want = [(bytes.fromhex(sys.argv[5]), bytes.fromhex(sys.argv[6])),
+                (bytes.fromhex(sys.argv[7]), bytes.fromhex(sys.argv[8]))]
+        with open(img, 'rb') as f:
+            f.seek(dir_lba * 512); dsec = f.read(512)
+            for i, (nm, pay) in enumerate(want):
+                ent = dsec[i * 28:(i + 1) * 28]
+                if len(ent) != 28:
+                    print('DIR-SHORT slot %d' % i); sys.exit(1)
+                valid, ln = struct.unpack('<II', ent[:8])
+                name = ent[8:24]
+                lba, = struct.unpack('<I', ent[24:28])
+                if valid != 1 or name != nm or ln != len(pay) or lba != lo + i:
+                    print('DIR-MISMATCH slot %d: valid=%d len=%d name=%s data_lba=%d ; want valid=1 len=%d '
+                          'name=%s data_lba=%d (the PUT did not land on the medium)'
+                          % (i, valid, ln, name.hex(), lba, len(pay), nm.hex(), lo + i)); sys.exit(1)
+                f.seek((lo + i) * 512); sec = f.read(512)
+                if sec[:len(pay)] != pay:
+                    print('DATA-MISMATCH slot %d: sector %d holds %s..., want %s... (the payload write did not '
+                          'land on the medium)' % (i, lo + i, sec[:16].hex(), pay[:16].hex())); sys.exit(1)
+        print('OK 2 dir entries + 2 data sectors byte-exact on the medium'); sys.exit(0)
+    elif cmd == 'faultwitness':         # stream -> "FAULT eip=.. cr2=.." | "NO-FAULT" | "NO-TABLE"
+        # The kernel's terminal-kill path emits outi(0xD0), five dword dumps ([esp],[esp+4],[esp+8],cr2,[esp+0x10]),
+        # then outi(0xD1) -- cairn_ref.py's `EXISTING terminal kill (cleave L782-789)`. The OWN table is dumped
+        # BEFORE the module runs, so a module #PF leaves table-present + ZERO write frames + this witness. Reading
+        # it is what separates "the getter FAULTED" (an adjudicated kernel grade) from "the getter emitted nothing"
+        # (which could be substrate). Same frame-regex idiom geeking_ref.py:693 already uses for its kill frame.
+        stream = open(sys.argv[2], 'rb').read(); r = parse_head(stream)
+        if not r:
+            print('NO-TABLE'); sys.exit(2)
+        import re as _re
+        m = _re.search(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', r['_tail'], _re.S)
+        if not m:
+            print('NO-FAULT'); sys.exit(1)
+        # FIELD ORDER. The emission is [esp],[esp+4],[esp+8],cr2,[esp+0x10] (cairn_ref.py:1186) and the CPU
+        # pushes the ERROR CODE first on a #PF, so the five dwords are err,eip,cs,cr2,esp -- exactly as the
+        # sibling parsers name them (holler_ref.py:968 `pf_err,pf_eip,pf_cs,pf_cr2,pf_esp`; cleave_ref.py:954
+        # `err,eip,cs,cr2,esp`). An earlier draft of THIS SAME uncommitted verb unpacked them as
+        # `eip,cs,err,...` and would have printed the #PF error code under the label `eip=`. Caught by a blind
+        # review leg and verified against the emission site before it was ever committed -- so it is a
+        # corrected draft, NOT a defect that ever shipped or ran in a landed gate.
+        err, eip, cs, cr2, esp = [struct.unpack('<I', m.group(k))[0] for k in (1, 2, 3, 4, 5)]
+        print('FAULT eip=0x%x cr2=0x%x err=0x%x' % (eip, cr2, err)); sys.exit(0)
     else:
-        raise SystemExit('usage: putter|getter|records|putstream|querystream|gradefs|emitbody')
+        raise SystemExit('usage: putter|getter|records|putstream|querystream|gradefs|emitbody|emitframes|'
+                         'headonly|b1receipt|b1storage|faultwitness')

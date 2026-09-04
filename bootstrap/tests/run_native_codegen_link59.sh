@@ -152,6 +152,8 @@ four_boot_reuse() { # kernel-elf fillseed newseed kvmflag label
 run_reuse_gate() { # kvmflag label substlabel
     local kvm="$1" lbl="$2" subst="$3"
     local fseed nseed; fseed="$(python3 -c 'import os;print(os.urandom(8).hex())')"; nseed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED nseed=$nseed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
+    echo "  SEED fseed=$fseed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     four_boot_reuse "$MKELF" "$fseed" "$nseed" "$kvm" "$lbl"
     local g_raw=1; python3 "$LB" reuseok "$DISK" "$fseed" "$nseed" >/dev/null 2>&1 && g_raw=0
     # FUNCTIONAL confirm: BOOT-4 GET each NEW record by name across a reboot -> its payload (the reuse produced findable records).
@@ -179,6 +181,8 @@ if have_qemu; then
     # After fill+DEL three holes {0,i,j}, count(valid==1)=FS_D-3; the BOOT-3 PUT writes slot FS_D-3 (a LIVE survivor) ->
     # clobbers it, then the 2nd PUT recomputes the same count -> clobbers again; the freed holes stay empty -> reuseok RED.
     DFSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"; DNSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED DNSEED=$DNSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
+    echo "  SEED DFSEED=$DFSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     four_boot_reuse "$DELK" "$DFSEED" "$DNSEED" "" ddiff
     if python3 "$LB" reuseok "$work/disk_ddiff.img" "$DFSEED" "$DNSEED" >/dev/null 2>&1; then
         fail_test "(C-DELETE-DIFF) the frozen delete kernel (append-by-count) produced the first-free expected state -- reuse is NOT genuinely new (the differential does not bite)"
@@ -189,9 +193,12 @@ if have_qemu; then
     # (C-SEEDDIFF) the SEED-DIFFERENTIAL: a fresh run with a DIFFERENT held-back newseed -> different new records;
     # grading run-2's disk under run-1's (fillseed,newseed) is RED -> the on-disk state follows the late-bound input.
     SF1="$(python3 -c 'import os;print(os.urandom(8).hex())')"; SN1="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED SN1=$SN1" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
+    echo "  SEED SF1=$SF1" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     four_boot_reuse "$MKELF" "$SF1" "$SN1" "" sd1
     cp "$work/disk_sd1.img" "$work/disk_sd1_saved.img"
     SF2="$SF1"; SN2="$(python3 -c 'import os;print(os.urandom(8).hex())')"   # SAME fill, DIFFERENT new records
+    echo "  SEED SN2=$SN2" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     four_boot_reuse "$MKELF" "$SF2" "$SN2" "" sd2
     if python3 "$LB" reuseok "$work/disk_sd2.img" "$SF1" "$SN1" >/dev/null 2>&1; then
         fail_test "(C-SEEDDIFF) run-2's disk graded GREEN under run-1's new-records -- the on-disk state is NOT following the late-bound input (a baked answer?), or the seeds collided"
@@ -207,6 +214,8 @@ if have_qemu; then
     # (FS_D live slots, all the original names, the 9th name ABSENT) AND the sector ONE PAST the data window is ALL-ZERO
     # (the first-free PUT does not bound fs_lba, so this proves slot<FS_D actually gates the write -- no out-of-window PUT).
     FRF="$(python3 -c 'import os;print(os.urandom(8).hex())')"; FRN="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED FRN=$FRN" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
+    echo "  SEED FRF=$FRF" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     DISK="$work/disk_fullrej.img"; build_raw_disk "$DISK"
     boot_feed "$MKELF" "$FILLER" "$work/fr.b1" "" $(python3 "$LB" fillstream "$FRF")     # fill all FS_D slots
     boot_feed "$MKELF" "$PUT1"   "$work/fr.b2" "" $(python3 "$LB" put1stream "$FRN")     # PUT a 9th record into the FULL dir
@@ -336,6 +345,8 @@ if have_bochs; then
     for attempt in 1 2 3; do
         BOCHS_HARNESS_ERR=""
         BF="$(python3 -c 'import os;print(os.urandom(8).hex())')"; BN="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+        echo "  SEED BN=$BN" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
+        echo "  SEED BF=$BF" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
         BFILL="$(python3 "$LB" fillstream "$BF")"; BDEL="$(python3 "$LB" delstream "$BF")"; BNEW="$(python3 "$LB" newstream "$BN")"
         if ! bochs_three_boot_reuse "$BFILL" "$BDEL" "$BNEW"; then
             echo "  HARNESS ERROR (Bochs 3-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the 3-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2

@@ -126,6 +126,7 @@ two_boot_two_query() { # kernel-elf label [emit_retry]
     local kel="$1" lbl="$2" emit_retry="${3:-}"
     local img="$work/disk_${lbl}.img"; build_raw_disk "$img"
     local seed getfn; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     read -r TWB_TN TWB_TP TWB_DN TWB_DP < <(python3 "$LB" records "$seed")
     local putstream qt qd
     putstream="$(python3 "$LB" putstream "$TWB_TN" "$TWB_TP" "$TWB_DN" "$TWB_DP")"
@@ -162,6 +163,7 @@ PY
 hostile_carry_run() { # kernel-elf [genuine]  -> echoes emitbody hex
     local kel="$1" genuine="${2:-}"; local img="$work/hc.img"; build_raw_disk "$img"
     local seed getfn; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     read -r TN TP DN DP < <(python3 "$LB" records "$seed")
     local put q
     put="$(python3 "$LB" putstream "$TN" "$TP" "$DN" "$DP")"; q="$(python3 "$LB" querystream "$TN")"
@@ -179,6 +181,7 @@ hostile_carry_run() { # kernel-elf [genuine]  -> echoes emitbody hex
 hostile_df_run() { # kernel-elf kend [genuine]  -> echoes GREEN | RED <emit>
     local kel="$1" kend="$2" genuine="${3:-}"; local img="$work/hdf.img"; build_raw_disk "$img"
     local seed getfn; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     local TN TP DN DP
     read -r TN TP DN DP < <(python3 "$LB" records "$seed")
     local put q

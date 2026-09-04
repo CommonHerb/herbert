@@ -238,6 +238,7 @@ if have_qemu; then
             echo "  NOTE: /dev/kvm unavailable -- KVM real-silicon leg skipped (a local pre-push leg; QEMU-TCG + Bochs are the CI substrates)"; continue
         fi
         SEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+        echo "  SEED SEED=$SEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
         echo "  ----- QEMU-$SUB  seed=$SEED -----"
         RES="$(run_witness_kel "$MKELF" "$SEED" "$KVMF")"
         if echo "$RES" | grep -q '^GREEN'; then ok "(C-$SUB) the LATE-BOUND author-unknown alloc/free witness on the EMITTED kernel: the kernel-emitted offset trace == the host FIRST-FIT golden (split + prev-coalesce + next-coalesce + non-MRU reuse exercised; the live readback's sentinels -- written THROUGH the returned ptrs -- match)"
@@ -288,6 +289,8 @@ if have_qemu; then
             # (GX/GY) SEED-DIFFERENTIAL: gx's genuine output graded against gy's golden must DIVERGE (the trace tracks the
             # late-bound seed). gx vs gx is the GREEN sanity control.
             GX="$(python3 -c 'import os;print(os.urandom(8).hex())')"; GY="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+            echo "  SEED GY=$GY" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
+            echo "  SEED GX=$GX" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
             sx="$(python3 "$LB" stream "$GX")"; gout="$work/gx.out"
             for try in 1 2 3 4; do boot_feed "$MKELF" "$gout" "$KVMF" $sx; g="$(python3 "$LB" grade "$gout" "$GX" 2>&1)"; is_struct_flake "$g" || break; done
             RES="$(python3 "$LB" grade "$gout" "$GY" 2>&1)"     # gx's REAL output vs gy's golden -> must mismatch
@@ -312,6 +315,7 @@ if have_bochs; then
     emu_ran=1
     KELF="$MKELF"
     SEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED SEED=$SEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     STREAM="$(python3 "$LB" stream "$SEED")"
     kelf="$(readlink -f "$KELF")"; drv="$(readlink -f "$DRIVER")"
     d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"
@@ -390,6 +394,7 @@ fi
 if have_qemu; then
     CKELF="$work/cairn_kernel.elf"; python3 "$CAIRN_REF" kernelelf "$CKELF" none full >/dev/null 2>&1
     DSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED DSEED=$DSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     dstream="$(python3 "$LB" stream "$DSEED")"
     boot_feed "$CKELF" "$work/diff.out" "" $dstream
     DRES="$(python3 "$LB" grade "$work/diff.out" "$DSEED" 2>&1)"

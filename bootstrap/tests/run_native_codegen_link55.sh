@@ -47,9 +47,13 @@
 #   (C-DURABLE) THE DURABLE DIFFERENTIAL: the FROZEN durable kernel + the cairn getter -> SYS_FS_GET (eax=8) is unknown ->
 #       falls to SYS_EXIT -> BOOT-2 exits before emitting -> RED (name resolution is genuinely new).
 #   (C-HOSTILE-LBA) a module PUTs (via a CRAFTED host dir) a dir entry naming data_lba OUTSIDE the FS window (=0=the MBR)
-#       then GETs -> REJECTED, no leak (the data_lba bound holds).
-#   (C-HOSTILE-CARRY) a getter passes a name_ptr near 4 GiB (0xFFFFFFF8) to GET -> REJECTED (the access_ok carry-check
-#       holds), no out-of-region access (BOOT-2 emits nothing / found=0).
+#       then GETs -> REJECTED, no leak (the data_lba bound holds). The getter RUNS and writes ZERO bytes, so the leg
+#       requires EXACTLY ONE closed zero-length write frame -- "no frame at all" is not the pass, it is a dead getter.
+#   (C-HOSTILE-CARRY) a getter passes a DST_PTR near 4 GiB (0xFFFFFFF8, so dst_ptr+len WRAPS) to GET of a VALID
+#       (matching) name -> REJECTED (the access_ok carry-check holds), no out-of-region access, and the getter
+#       SURVIVES to emit the (found,len)=(0,0) envelope. CORRECTED 2026-09-04: this line used to say "a name_ptr"
+#       and "BOOT-2 emits nothing", both of which are the opposite of what the leg grades -- a near-4GiB NAME_ptr
+#       just makes the compare miss, and an EMPTY emission is M-nocarrycheck's signature, not the genuine result.
 #   (C-HOSTILE-DF) GAP-2: a getter does `std` (DF=1) before SYS_FS_GET of a VALID name -> the GENUINE kernel cld's before
 #       EVERY FS rep (dir/data reads, the name-compare cmpsb, the dst-copy movsb), so it STILL resolves correctly (forward)
 #       -> emitted payload == expected -> GREEN. The FS-string-op cld is load-bearing (assert_cairn pins it; M-fsnocld
@@ -170,6 +174,108 @@ boot_feed_emit() { # kernel mod out kvm stream...   (retries the genuine getter 
     return 0   # fall through after retries; the caller's grade reports the (still-empty) failure honestly
 }
 
+# ---- BOOT-1 WITH A GUEST-SIDE RECEIPT **AND** A HOST-SIDE STORAGE READ-BACK (F5's NAMED RESIDUAL, 2026-09-04) ----
+# F5's residual, verbatim: "the main gate's hostile legs (C-HOSTILE-LBA/CARRY/DF) still lack BOOT-1 retry + the
+# same-seed replay the C-QEMU/C-Bochs legs have". The reason BOOT-1 never had a retry is that NOTHING COULD TELL IT
+# NEEDED ONE: the putter emitted nothing, so BOOT-1's only evidence was the feeder's HOST-side LISTENING/SENT -- and
+# F2 and F5 both say in terms that feeder-side SENT is not guest receipt (the emulator drains the socket into its UART
+# model whether or not the guest reads it). A lost/duplicated/misframed BOOT-1 COM1 byte was therefore invisible, and
+# surfaced two boots later as an EMPTY emission on a byte-identical kernel -- indistinguishable from a defect.
+#
+# TWO witnesses, because ONE of them is not enough and saying otherwise was this change's first defect:
+#   RECEIPT  the putter echoes each record's name(16) then payload(len) immediately AFTER its SYS_FS_PUT, so a
+#            correct BOOT-1 leaves EXACTLY four closed UCODE3 frames carrying the four things the host sent, in
+#            order. That proves THE GUEST RECEIVED THE BYTES -- and nothing more.
+#   STORAGE  the host then reads the disk image back: two dir entries (valid, name, len, data_lba) and the two
+#            payload sectors. That proves THE MEDIUM HOLDS THEM, which is the only thing BOOT-2 ever reads. The
+#            putter cannot check this itself (the instruction after SYS_FS_PUT clobbers eax), and the kernel cannot
+#            either: its ATA write path polls BSY and never reads ERR/DF, so it reports "stored" either way.
+#
+# THE RETRY BOUNDARY IS DRAWN WHERE THE REST OF THIS FILE DRAWS IT, not where it was convenient:
+#   ABSENT/SHORT receipt (no table, or fewer than four frames)  -> the transport class `boot_feed_emit` already
+#       re-rolls on, because an ABSENT answer is what a lost byte and a killed boot both look like. Budget 3.
+#   WRONG receipt (four frames, wrong bytes) or a receipt that is byte-exact while the MEDIUM disagrees
+#       -> NOT re-rolled. A wrong ANSWER is a completed, adjudicable observation: the echo path runs through the
+#       kernel's own do_read and do_write arms, both under test. It gets the ONE same-input replay `run_qemu_gate`
+#       and the Bochs leg give a completed RED, and then it is a hard kernel RED.
+# The medium is REBUILT and the debugcon TRUNCATED per attempt: a partial BOOT-1 must not leave half a record set
+# behind (PUT allocates by insertion order), and a QEMU that dies before opening the debugcon must not leave the
+# PREVIOUS attempt's frames to be read as this attempt's receipt.
+# Return: 0 = BOOT-1 proven good; 1 = ABSENT after the budget (transport class); 2 = a COMPLETED WRONG BOOT-1.
+B1_RECEIPT=""; B1_TRIES=0
+boot_feed_b1() { # kernel out kvm tname tpay dname dpay stream...    (DISK must already name this leg's image)
+    local kel="$1" out="$2" kvm="$3" tn="$4" tp="$5" dn="$6" dp="$7"; shift 7
+    local try
+    for try in 1 2 3; do
+        if [[ "$try" -gt 1 ]] && hostile_expired; then
+            B1_RECEIPT="BOOT-1 re-roll abandoned at the ${HOSTILE_DEADLINE_S}s budget after $((try-1)) attempt(s): $B1_RECEIPT"
+            echo "  BOOT-1 BUDGET EXHAUSTED: $B1_RECEIPT" >&2
+            return 1
+        fi
+        B1_TRIES="$try"
+        build_raw_disk "$DISK"
+        : > "$out"
+        boot_feed "$kel" "$PUTTER" "$out" "$kvm" "$@"
+        B1_RCPT="$(python3 "$LB" b1receipt "$out" "$tn" "$tp" "$dn" "$dp" 2>&1)"; b1r=$?
+        B1_STOR="$(python3 "$LB" b1storage "$DISK" "$FS_DIR" "$FS_LO" "$tn" "$tp" "$dn" "$dp" 2>&1)"; b1s=$?
+        if [[ "$b1r" -eq 0 && "$b1s" -eq 0 ]]; then
+            B1_RECEIPT="receipt byte-exact; $B1_STOR"
+            return 0
+        fi
+        # THE MEDIUM OUTRANKS THE RECEIPT, and it must be consulted BEFORE any conclusion about the boot.
+        # The receipt is read back through the SAME frame parser FLAKE-LOG F11 indicts: a seed-derived byte
+        # equal to 0xD4 inside the echoed record data makes `_wframes` mis-frame the receipt itself, at about
+        # 2.3% of seeds. Re-rolling cannot clear that -- the seed is fixed across attempts by design -- so the
+        # first cut of this loop turned an F11 parse artefact into `HARNESS-ERROR ... FAILED CLOSED` on a
+        # byte-identical kernel with a provably clean transport, roughly 4.5% of link55 runs. `b1storage`
+        # reads the DISK IMAGE directly, is immune to the parser, and is the stronger witness anyway, because
+        # the medium is the only thing BOOT-2 ever reads.
+        if [[ "$b1s" -eq 0 ]]; then
+            B1_RECEIPT="the receipt did not parse ($B1_RCPT) BUT the medium holds both records byte-exactly -- classed FLAKE-LOG F11 (the frame parser), NOT a BOOT-1 failure; $B1_STOR"
+            echo "  BOOT-1 RECEIPT UNREADABLE, MEDIUM CLEAN (attempt $try/3): $B1_RECEIPT" >&2
+            return 0
+        fi
+        if [[ "$b1r" -eq 0 ]]; then
+            B1_RECEIPT="receipt byte-exact but the MEDIUM disagrees -- $B1_STOR"
+            return 2
+        fi
+        B1_RECEIPT="$B1_RCPT"
+        case "$B1_RECEIPT" in
+            MISMATCH*) B1_RECEIPT="$B1_RECEIPT ; medium also disagrees: $B1_STOR"; return 2 ;;
+        esac
+        echo "  BOOT-1 RECEIPT ABSENT (attempt $try/3): $B1_RECEIPT -- re-running BOOT-1 on a fresh medium and a truncated debugcon (an ABSENT receipt is the transport class boot_feed_emit already re-rolls on; a WRONG receipt is NOT re-rolled)" >&2
+    done
+    return 1
+}
+
+# ---- the three hostile legs' ACCEPT TESTS, factored so the leg and its positive controls call the SAME predicate ----
+# A control that RE-TYPES the predicate defends a copy of it, and goes on passing after the leg it defends is edited.
+HLBA_WHY=""; HCARRY_WHY=""
+hlba_accept() { # debugcon -> 0 iff the getter RAN and deliberately wrote ZERO bytes (found=0)
+    local f="$1" fr n b rc
+    fr="$(python3 "$LB" emitframes "$f" 2>&1)"; rc=$?
+    if [[ "$rc" -ne 0 || -z "$fr" ]]; then HLBA_WHY="emitframes=[${fr:-<no output>}] rc=$rc"; return 1; fi
+    n="${fr%% *}"; b="${fr#* }"
+    HLBA_WHY="frames=$n body=[$b]"
+    # EXACTLY one closed frame, empty body -- `grade_fs` uses the same exact `len(wfs)!=1`; "one or more" would
+    # accept a stream carrying extra frames that no leg here can produce and none of them can explain.
+    [[ "$n" == "1" && -z "$b" ]]
+}
+hcarry_accept() { # debugcon -> 0 iff the getter emitted the EXACT (found,len)=(0,0) envelope
+    local f="$1" e
+    e="$(python3 "$LB" emitbody "$f" 2>&1)"
+    HCARRY_WHY="emitbody=[${e}]"
+    # THE VALUE, not merely non-emptiness. ORACLE-CORPUS-AUDIT finding 7 says a bare `-n` test grades a kernel that
+    # ACCEPTED the wrapped dst and copied as a PASS; that finding is owned by PACKET-ORACLE-CORPUS and would have
+    # been left alone -- except that THIS change made the leg newly forgeable by an artifact it introduced itself:
+    # BOOT-1 debugcons used to carry no write frames and now carry four, and a bare `-n` accepts one. Closing a hole
+    # I opened is not scope creep. The constant is the same one the C-PREFIX leg above already uses.
+    [[ "$e" == "0000000000000000" ]]
+}
+hdf_accept() { # debugcon wantpayloadhex -> 0 iff the hostile-DF GET resolved correctly
+    python3 "$LB" gradefs "$1" "$KEND" "$2" >/dev/null 2>&1
+}
+
 # full late-bound two-boot two-query for a given (kernel, seed, kvmflag, label): BOOT-1 putter, then GET TARGET + GET
 # DECOY. Sets globals: TWB_TP TWB_DP (the expected payloads), TWB_B2T TWB_B2D (the BOOT-2 debugcon files).
 two_boot_two_query() { # kernel-elf seedhex kvmflag label [emit_retry]
@@ -183,7 +289,20 @@ two_boot_two_query() { # kernel-elf seedhex kvmflag label [emit_retry]
     # the GENUINE-pass legs (emit_retry=1) retry the GETs until they emit (flake-robust); the differential legs (durable /
     # seed-run-2) pass emit_retry="" and use a single boot (their expected behavior may legitimately be empty/wrong).
     getfn=boot_feed; [[ "$emit_retry" == "1" ]] && getfn=boot_feed_emit
+    : > "$work/${lbl}.b1"
     boot_feed "$kel" "$PUTTER" "$work/${lbl}.b1" "$kvm" $putstream          # BOOT-1: PUT target then decoy
+    # RECORDED, NOT GRADED (F5 residual, 2026-09-04). The putter now emits its receipt on EVERY BOOT-1, so these
+    # legs can SAY whether BOOT-1 was clean even though their verdict machinery is deliberately unchanged -- this
+    # packet's scope is the three hostile legs. Leaving the evidence lying unread while the hostile legs act on it
+    # would be the inversion a review leg caught: the main legs would end up with LESS than the hostile ones while
+    # a comment claimed the opposite. No verdict below depends on this string; it rides in the REPLAY and hard-RED
+    # text so the next adjudication of a two-boot RED is not blind. (On the C-DURABLE leg it is EXPECTED to be
+    # absent: the frozen durable kernel has no SYS_FS_PUT, so its putter SYS_EXITs before emitting anything.)
+    if TWB_B1="$(python3 "$LB" b1receipt "$work/${lbl}.b1" "$TWB_TN" "$TWB_TP" "$TWB_DN" "$TWB_DP" 2>&1)"; then
+        TWB_B1="BOOT-1 receipt byte-exact; storage: $(python3 "$LB" b1storage "$DISK" "$FS_DIR" "$FS_LO" "$TWB_TN" "$TWB_TP" "$TWB_DN" "$TWB_DP" 2>&1)"
+    else
+        TWB_B1="BOOT-1 receipt NOT byte-exact -- $TWB_B1"
+    fi
     TWB_B2T="$work/${lbl}.b2t"; TWB_B2D="$work/${lbl}.b2d"
     "$getfn" "$kel" "$GETTER" "$TWB_B2T" "$kvm" $qt                         # BOOT-2(i): GET target
     "$getfn" "$kel" "$GETTER" "$TWB_B2D" "$kvm" $qd                         # BOOT-2(ii): GET decoy
@@ -202,6 +321,7 @@ two_boot_two_query() { # kernel-elf seedhex kvmflag label [emit_retry]
 run_qemu_gate() { # kvmflag label substlabel
     local kvm="$1" lbl="$2" subst="$3"
     local seed; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     local att a1sig="" et ed gt gd
     for att in 1 2; do
         two_boot_two_query "$MKELF" "$seed" "$kvm" "${lbl}.a${att}" 1     # emit_retry=1 (genuine getter must emit)
@@ -217,17 +337,26 @@ run_qemu_gate() { # kvmflag label substlabel
             return 0
         fi
         if [[ "$att" -eq 1 ]]; then
-            a1sig="TARGET=$([[ $gt -eq 0 ]] && echo GREEN || echo "RED emitted=${et:-EMPTY}") DECOY=$([[ $gd -eq 0 ]] && echo GREEN || echo "RED emitted=${ed:-EMPTY}")"
+            a1sig="TARGET=$([[ $gt -eq 0 ]] && echo GREEN || echo "RED emitted=${et:-EMPTY}") DECOY=$([[ $gd -eq 0 ]] && echo GREEN || echo "RED emitted=${ed:-EMPTY}") [$TWB_B1]"
             echo "  REPLAY (C-$subst): completed two-boot graded RED ($a1sig) -- running ONE same-seed replay (same-input discriminator: byte-pinned kernel + seed-derived data; recurrence -> deterministic RED, non-recurrence -> transport-class miss)" >&2
         fi
     done
-    fail_test "(C-$subst) late-bound two-boot REPRODUCED under same-seed replay -> hard RED: deterministic same-input kernel/substrate failure, not a one-shot transport miss (attempt-1: $a1sig; replay: TARGET grade=$([[ $gt -eq 0 ]] && echo GREEN || echo RED) (emitted=$et want=$TWB_TP) DECOY grade=$([[ $gd -eq 0 ]] && echo GREEN || echo RED) (emitted=$ed want=$TWB_DP))"
+    fail_test "(C-$subst) late-bound two-boot REPRODUCED under same-seed replay -> hard RED: deterministic same-input kernel/substrate failure, not a one-shot transport miss (attempt-1: $a1sig; replay BOOT-1: [$TWB_B1]; replay: TARGET grade=$([[ $gt -eq 0 ]] && echo GREEN || echo RED) (emitted=$et want=$TWB_TP) DECOY grade=$([[ $gd -eq 0 ]] && echo GREEN || echo RED) (emitted=$ed want=$TWB_DP))"
     return 1
 }
 
 if have_qemu; then
     emu_ran=1
     run_qemu_gate "" qtcg "QEMU"
+
+    # ---- the POSITIVE-CONTROL stimulus, derived from a REAL boot rather than synthesised ----
+    # The discipline this gate now owes its hostile legs (PACKET-ORACLE-CORPUS item 4, verbatim): "every leg needs a
+    # liveness receipt and a positive control that must go RED when the boot is absent". `headonly` truncates a real
+    # debugcon to its table, producing the exact stimulus the empty-emit legs cannot otherwise see: THE KERNEL BOOTED
+    # AND DUMPED ITS TABLE AND THE MODULE EMITTED NOTHING. Taken from the two-boot leg above, which has already run.
+    PC_TABLEONLY="$work/pc_tableonly.bin"
+    python3 "$LB" headonly "$work/qtcg.a1.b2t" "$PC_TABLEONLY" >/dev/null 2>&1 || PC_TABLEONLY=""
+    PC_ABSENT="$work/pc_absent.bin"; : > "$PC_ABSENT"     # a debugcon NO boot ever wrote
 
     # (C-PREFIX) THE FULL-16-BYTE-COMPARE leg (closes a cross-model/Codex hole: the decoy-after-target two-query alone
     # only rules out a PREFIX-only compare; it does NOT force the FULL 16-byte compare -- a kernel keying ONLY on the last
@@ -237,6 +366,7 @@ if have_qemu; then
     # TARGET's payload. So: the prefix-mismatch GET must be RED against P_T (and emit nothing). Together with the decoy
     # query (rules out prefix-only) this forces EVERY one of the 16 name bytes to matter.
     PXSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED PXSEED=$PXSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     PXDISK="$work/disk_prefix.img"; build_raw_disk "$PXDISK"; DISK="$PXDISK"
     read -r PXTN PXTP PXDN PXDP < <(python3 "$LB" records "$PXSEED")
     PXPUT="$(python3 "$LB" putstream "$PXTN" "$PXTP" "$PXDN" "$PXDP")"
@@ -259,9 +389,11 @@ if have_qemu; then
     # the second run's output under the FIRST run's expected payloads is RED -> the output follows the late-bound input,
     # not a baked answer. (We capture run-1's expected, run a fresh run-2, grade run-2's emit vs run-1's expected.)
     SD1="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED SD1=$SD1" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     two_boot_two_query "$MKELF" "$SD1" "" sd1            # only SD1's HOST-computed expected payloads are used (not its emit)
     SD1_TP="$TWB_TP"; SD1_DP="$TWB_DP"   # run-1's expected payloads
     SD2="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED SD2=$SD2" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     two_boot_two_query "$MKELF" "$SD2" "" sd2 1          # emit_retry=1: SD2's emit is graded (must emit; flake-robust)
     SD2_B2T="$TWB_B2T"; SD2_B2D="$TWB_B2D"
     # grade run-2's TARGET emit against run-1's TARGET expected -> must be RED (different held-back payloads)
@@ -283,6 +415,7 @@ if have_qemu; then
     if [[ -f "$DUR_REF" ]]; then
         DKELF="$work/durable_kernel.elf"; DKEND="$(python3 "$DUR_REF" kernelelf "$DKELF" none full)"
         DSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+        echo "  SEED DSEED=$DSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
         two_boot_two_query "$DKELF" "$DSEED" "" dur
         DURED="$(python3 "$LB" emitbody "$TWB_B2D" 2>/dev/null)"
         if python3 "$LB" gradefs "$TWB_B2D" "$DKEND" "$TWB_DP" >/dev/null 2>&1; then
@@ -292,13 +425,33 @@ if have_qemu; then
         fi
     fi
 
+    # ---- THE THREE HOSTILE LEGS (FLAKE-LOG F5's NAMED RESIDUAL, paid 2026-09-04) ----
+    # A WALL-CLOCK BUDGET -- and it is an ADMISSION GATE, not a hard ceiling. Say so plainly, because the
+    # first draft called it a ceiling and a review leg did the arithmetic: the check runs only BEFORE an outer
+    # attempt, and one admitted attempt can spend 3 BOOT-1 boots plus 4 boot_feed_emit boots at `timeout 70`
+    # each = 490 s, so an attempt admitted at 479 s finishes near 970 s. What the budget guarantees is that NO
+    # NEW attempt starts past it -- which is what keeps a failing leg from eating the quiet host every later
+    # run depends on (F4, F7 make quiet-host wall-clock the precondition for grading). It is checked inside
+    # the BOOT-1 retry loop as well, so the largest single overrun is one boot, not one whole attempt.
+    HOSTILE_DEADLINE_S=480
+    hostile_expired() { [[ -n "${HOSTILE_T0:-}" ]] && [[ $((SECONDS - HOSTILE_T0)) -gt "$HOSTILE_DEADLINE_S" ]]; }
+
     # (C-HOSTILE-LBA) the hostile-data_lba leg: craft a hostile directory sector on the HOST disk with a valid entry naming
     # data_lba=0 (the MBR), seed a distinctive sentinel into the MBR, then GET that name. The genuine kernel must REJECT
     # (the data_lba bound) -> found=0, ZERO bytes emitted, no MBR leak. (Reuses the cairn_step0_hostile mechanism.)
-    DISK="$work/disk_hlba.img"; build_raw_disk "$DISK"
-    printf '\xDE\xAD\xBE\xEF' | dd of="$DISK" bs=1 seek=0 conv=notrunc status=none 2>/dev/null   # seed the MBR
-    EVIL_HEX="$(python3 -c "print((b'EVIL'+b'\x00'*12).hex())")"
-    python3 - "$DISK" "$FS_DIR" <<'PY'
+    # F5 RESIDUAL: this leg has NO BOOT-1 -- the hostile directory sector is crafted on the HOST disk, so there is
+    # nothing there to retry. What it lacked instead is a LIVENESS RECEIPT. Its GREEN verdict was "the getter emitted
+    # nothing", and `emitbody` cannot tell that apart from "the getter never emitted at all" -- both print the empty
+    # string. It now grades on the closed-frame COUNT (`hlba_accept`), and it carries the ONE same-input replay the
+    # C-QEMU/C-Bochs legs have; here the "seed" is the deterministic crafted disk plus the fixed EVIL query, so the
+    # replay re-poses the BYTE-IDENTICAL question rather than rolling new data.
+    # A REPRODUCED no-emission is a KERNEL RED, not a harness event. The kernel's terminal-kill path emits a fault
+    # witness (0xD0 <5 dwords> 0xD1) BEFORE unwinding, and the OWN table is dumped before the module runs, so a module
+    # #PF leaves table-present + zero write frames + that witness. `faultwitness` reads it, and the RED says which.
+    hlba_build_disk() { # img
+        build_raw_disk "$1"
+        printf '\xDE\xAD\xBE\xEF' | dd of="$1" bs=1 seek=0 conv=notrunc status=none 2>/dev/null   # seed the MBR
+        python3 - "$1" "$FS_DIR" <<'PY'
 import sys, struct
 img=sys.argv[1]; dir_lba=int(sys.argv[2])
 name=b'EVIL'+b'\x00'*12
@@ -308,16 +461,44 @@ sec=ent+b'\x00'*(512-len(ent))
 with open(img,'r+b') as f:
     f.seek(dir_lba*512); f.write(sec)
 PY
+    }
+    EVIL_HEX="$(python3 -c "print((b'EVIL'+b'\x00'*12).hex())")"
     EVIL_Q="$(python3 "$LB" querystream "$EVIL_HEX")"
-    boot_feed "$MKELF" "$GETTER" "$work/hlba.b2" "" $EVIL_Q
-    HLBA_EMIT="$(python3 "$LB" emitbody "$work/hlba.b2" 2>/dev/null)"
-    # genuine: found=0 -> the getter SYS_WRITEs len=0 bytes (empty). A LEAK would emit the MBR bytes (DE AD BE EF).
-    if [[ -z "$HLBA_EMIT" || "$HLBA_EMIT" == "NO-TABLE" ]]; then
-        # empty is the genuine reject (found=0 -> 0-byte write). NO-TABLE would mean a fault (also no leak, but flag it).
-        if [[ "$HLBA_EMIT" == "NO-TABLE" ]]; then fail_test "(C-HOSTILE-LBA) the getter faulted (NO-TABLE) on the hostile data_lba=0 entry -- expected a clean reject (found=0, no emit)"
-        else ok "(C-HOSTILE-LBA) a GET of a dir entry naming data_lba=0 (the MBR) is REJECTED -- found=0, ZERO bytes emitted, no MBR leak (the data_lba BY-VALUE access_ok holds; the seeded MBR sentinel DE AD BE EF did NOT come back)"; fi
-    else
-        fail_test "(C-HOSTILE-LBA) the hostile GET LEAKED bytes (emitted=$HLBA_EMIT) -- the data_lba bound did NOT reject an attacker-named out-of-window sector (the seeded MBR sentinel may have leaked)"
+    HOSTILE_T0=$SECONDS
+    hlba_done=0; hlba_a1=""
+    for att in 1 2; do
+        if hostile_expired; then
+            echo "HARNESS-ERROR: (C-HOSTILE-LBA) the leg exceeded its ${HOSTILE_DEADLINE_S}s wall-clock ceiling before reaching a verdict -- FAILED CLOSED unconditionally (a wall-clock ceiling exists because F4/F7 make quiet-host wall-clock the precondition for grading)."
+            fail=$((fail + 1)); hlba_done=1; break
+        fi
+        DISK="$work/disk_hlba_a${att}.img"; hlba_build_disk "$DISK"
+        HLBAOUT="$work/hlba.b2.a${att}"; : > "$HLBAOUT"
+        boot_feed "$MKELF" "$GETTER" "$HLBAOUT" "" $EVIL_Q
+        if hlba_accept "$HLBAOUT"; then
+            hnote=""
+            [[ "$att" -eq 2 ]] && hnote=" [FLAKE-DISCRIMINATED: attempt-1 completed RED ($hlba_a1) did NOT recur under one same-input replay -- classed a one-shot transport/capture miss; NOT proof against an intermittent same-data race]"
+            ok "(C-HOSTILE-LBA) a GET of a dir entry naming data_lba=0 (the MBR) is REJECTED -- the getter RAN and emitted EXACTLY ONE closed ZERO-LENGTH write frame ($HLBA_WHY), no MBR leak (the data_lba BY-VALUE access_ok holds; the seeded MBR sentinel DE AD BE EF did NOT come back). The frame COUNT is the liveness receipt: an empty emission is graded GREEN only when the getter demonstrably emitted$hnote"
+            hlba_done=1; break
+        fi
+        if [[ "$att" -eq 1 ]]; then
+            hlba_a1="$HLBA_WHY"
+            echo "  REPLAY (C-HOSTILE-LBA): completed leg graded RED ($hlba_a1) -- running ONE same-input replay (byte-identical crafted disk + fixed EVIL query; recurrence -> deterministic RED, non-recurrence -> transport-class miss)" >&2
+            continue
+        fi
+        # REPRODUCED. Every branch below is a KERNEL RED with the FAIL: prefix -- a reproduced observation is an
+        # adjudicated grade, and the Bochs leg below uses the kernel prefix on exactly this shape "on purpose".
+        HLBA_FW="$(python3 "$LB" faultwitness "$HLBAOUT" 2>&1)"
+        case "$HLBA_WHY" in
+            frames=0*)
+                fail_test "(C-HOSTILE-LBA) the getter emitted NOTHING on BOTH attempts ($hlba_a1 ; replay $HLBA_WHY ; fault witness: $HLBA_FW) -- REPRODUCED, so this is an adjudicated kernel grade and not a transport miss: the genuine kernel must REJECT the hostile data_lba=0 entry by returning found=0 and writing zero bytes, which it can only do by running to the SYS_WRITE" ;;
+            *)
+                fail_test "(C-HOSTILE-LBA) the hostile GET LEAKED bytes, REPRODUCED under same-input replay -> hard RED (attempt-1: $hlba_a1 ; replay: $HLBA_WHY) -- the data_lba bound did NOT reject an attacker-named out-of-window sector (the seeded MBR sentinel may have leaked)" ;;
+        esac
+        hlba_done=1
+    done
+    if [[ "$hlba_done" -eq 0 ]]; then
+        echo "HARNESS-ERROR: (C-HOSTILE-LBA) the attempt loop ended with NO verdict -- FAILED CLOSED unconditionally."
+        fail=$((fail + 1))
     fi
 
     # (C-HOSTILE-CARRY) the access_ok carry leg: a getter that reads a VALID late-bound query name over COM1 (so it
@@ -326,23 +507,61 @@ PY
     # (found=0, NO out-of-region write); the getter SURVIVES and emits an 8-byte (found,len)=(0,0) envelope. M-nocarrycheck
     # DROPS the carry-check -> the wrapped dst slips `cmp edx,hi ; ja` (the wrap is small < hi) and the kernel `rep movsb`'s
     # into 0xFFFFFFF8 -- an out-of-region kernel WRITE that #PFs -> the getter FAULTS before emitting (empty). DISCRIMINATOR:
-    # genuine emits the non-empty envelope; M-nocarrycheck emits NOTHING (faulted). The dst carry is the OUTPUT-discriminating
+    # genuine emits the EXACT zero envelope; M-nocarrycheck emits NOTHING (faulted). The dst carry is the OUTPUT-discriminating
     # one (a near-4GiB name_ptr just makes the name-compare miss -> found=0 either way, so the dst carry is what bites).
+    # F5 RESIDUAL: BOOT-1 receipt + storage read-back + re-roll, and ONE same-seed replay. BOOT-1 matters as much here
+    # as on the DF leg -- the hostile getter must MATCH a record the putter PUT, so a lost BOOT-1 byte makes the
+    # name-compare miss and the leg's own PASS text ("a VALID (matching) name") becomes false while the old accept
+    # test still passed.
     HCARRY="$work/hostile_carry_getter.bin"; python3 "$LB" hostilecarry "$HCARRY"
-    DISK="$work/disk_carry.img"; build_raw_disk "$DISK"
     HCSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED HCSEED=$HCSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     read -r HCTN HCTP HCDN HCDP < <(python3 "$LB" records "$HCSEED")
     HCPUT="$(python3 "$LB" putstream "$HCTN" "$HCTP" "$HCDN" "$HCDP")"
     HCQ="$(python3 "$LB" querystream "$HCTN")"          # query the TARGET (a VALID, matching name)
-    boot_feed "$MKELF" "$PUTTER" "$work/carry.b1" "" $HCPUT
-    boot_feed_emit "$MKELF" "$HCARRY" "$work/carry.b2" "" $HCQ   # genuine must emit the envelope (flake-robust)
-    CARRY_EMIT="$(python3 "$LB" emitbody "$work/carry.b2" 2>/dev/null)"
-    if [[ -n "$CARRY_EMIT" && "$CARRY_EMIT" != "NO-TABLE" ]]; then
-        ok "(C-HOSTILE-CARRY) a GET of a VALID (matching) name with a dst_ptr near 4 GiB (0xFFFFFFF8, so dst_ptr+len WRAPS) is REJECTED by the access_ok carry-check (add edx,ebx ; jc reject) -- the getter SURVIVES and emits the (found,len)=(0,0) envelope (found=$CARRY_EMIT), no out-of-region kernel write (the carry-check holds; M-nocarrycheck would let the wrap slip the cmp edx,hi and #PF on the rep movsb to 0xFFFFFFF8)"
-    elif [[ "$CARRY_EMIT" == "NO-TABLE" ]]; then
-        fail_test "(C-HOSTILE-CARRY) the genuine getter FAULTED (NO-TABLE) on the near-4GiB dst_ptr -- expected a clean reject (the getter should survive + emit the found/len envelope)"
-    else
-        fail_test "(C-HOSTILE-CARRY) the genuine getter emitted NOTHING (it faulted) on the near-4GiB dst_ptr -- expected the carry-check to reject cleanly so the getter survives + emits the envelope"
+    HOSTILE_T0=$SECONDS
+    hc_done=0; hc_a1=""; HC_B1=""
+    for att in 1 2; do
+        if hostile_expired; then
+            echo "HARNESS-ERROR: (C-HOSTILE-CARRY) the leg exceeded its ${HOSTILE_DEADLINE_S}s wall-clock ceiling before reaching a verdict -- FAILED CLOSED unconditionally."
+            fail=$((fail + 1)); hc_done=1; break
+        fi
+        DISK="$work/disk_carry_a${att}.img"
+        boot_feed_b1 "$MKELF" "$work/carry.b1.a${att}" "" "$HCTN" "$HCTP" "$HCDN" "$HCDP" $HCPUT; b1rc=$?
+        HC_B1="BOOT-1 tries=$B1_TRIES: $B1_RECEIPT"
+        if [[ "$b1rc" -eq 1 ]]; then
+            echo "HARNESS-ERROR: (C-HOSTILE-CARRY) BOOT-1's receipt was ABSENT on all 3 attempts -- $B1_RECEIPT. The record the hostile getter must MATCH never provably reached the guest, so NO adjudicated kernel grade exists for this leg; FAILED CLOSED unconditionally."
+            fail=$((fail + 1)); hc_done=1; break
+        fi
+        if [[ "$b1rc" -eq 2 ]]; then
+            if [[ "$att" -eq 1 ]]; then
+                hc_a1="BOOT-1 COMPLETED WRONG ($B1_RECEIPT)"
+                echo "  REPLAY (C-HOSTILE-CARRY): $hc_a1 -- a WRONG answer is not the ABSENT class, so it is NOT re-rolled; running ONE same-seed replay" >&2
+                continue
+            fi
+            fail_test "(C-HOSTILE-CARRY) BOOT-1 completed with the WRONG bytes on BOTH attempts -> hard RED (attempt-1: $hc_a1 ; replay: $B1_RECEIPT) -- the echo path runs through the kernel's own do_read/do_write arms and the storage read-back reads the medium directly, so a reproduced disagreement is a kernel grade, not a transport miss"
+            hc_done=1; break
+        fi
+        CARRYOUT="$work/carry.b2.a${att}"; : > "$CARRYOUT"
+        boot_feed_emit "$MKELF" "$HCARRY" "$CARRYOUT" "" $HCQ   # genuine must emit the envelope (flake-robust)
+        if hcarry_accept "$CARRYOUT"; then
+            cnote=""
+            [[ "$att" -eq 2 ]] && cnote=" [FLAKE-DISCRIMINATED: attempt-1 completed RED ($hc_a1) did NOT recur under one same-seed replay -- classed a one-shot transport/capture miss; NOT proof against an intermittent same-data race]"
+            ok "(C-HOSTILE-CARRY) a GET of a VALID (matching) name with a dst_ptr near 4 GiB (0xFFFFFFF8, so dst_ptr+len WRAPS) is REJECTED by the access_ok carry-check (add edx,ebx ; jc reject) -- the getter SURVIVES and emits the EXACT (found,len)=(0,0) envelope ($HCARRY_WHY), no out-of-region kernel write (the carry-check holds; M-nocarrycheck would let the wrap slip the cmp edx,hi and #PF on the rep movsb to 0xFFFFFFF8). WHAT THE PASS RESTS ON, stated exactly: the emitted VALUE is the zero envelope, and BOOT-1's receipt was byte-exact AND the medium held both records ($HC_B1) -- so the query genuinely MATCHED a stored record. It is NOT proof against an intermittent same-data race$cnote"
+            hc_done=1; break
+        fi
+        if [[ "$att" -eq 1 ]]; then
+            hc_a1="$HCARRY_WHY"
+            echo "  REPLAY (C-HOSTILE-CARRY): completed leg graded RED ($hc_a1) -- $HC_B1, so this is not a lost BOOT-1 byte; running ONE same-seed replay (recurrence -> deterministic RED, non-recurrence -> transport-class miss on the BOOT-2 side)" >&2
+            continue
+        fi
+        CARRY_FW="$(python3 "$LB" faultwitness "$CARRYOUT" 2>&1)"
+        fail_test "(C-HOSTILE-CARRY) the getter did not emit the EXACT (found,len)=(0,0) envelope on the near-4GiB dst_ptr, REPRODUCED under same-seed replay -> hard RED (attempt-1: $hc_a1 ; replay: $HCARRY_WHY ; fault witness: $CARRY_FW) -- $HC_B1, so this is NOT a lost COM1 byte: the carry-check should reject cleanly so the getter survives and emits the zero envelope (an EMPTY emission is M-nocarrycheck's signature -- the wrapped rep movsb #PF'd)"
+        hc_done=1
+    done
+    if [[ "$hc_done" -eq 0 ]]; then
+        echo "HARNESS-ERROR: (C-HOSTILE-CARRY) the attempt loop ended with NO verdict -- FAILED CLOSED unconditionally."
+        fail=$((fail + 1))
     fi
 
     # (C-HOSTILE-DF) the DIRECTION-FLAG (cld) leg on the NEW FS string-ops (GAP-2): a hostile module does `std` (DF=1)
@@ -353,20 +572,116 @@ PY
     # M-fsnocld mutant). Without the clds (M-fsnocld) the FS reps walk BACKWARD off diskbuf/dirbuf into the page tables ->
     # wrong resolution / a kernel-memory leak. (Mirrors durable's hostile-DF leg.) An output-invisible confused-deputy op
     # needs an assert-pin + a hostile-DF leg + a mutant, because the byte-pin cannot see a bug its oracle shares.
+    # F5 RESIDUAL: this is the leg whose EMPTY emission on a byte-identical kernel was recorded as F5 on 2026-08-28 and
+    # again on 2026-09-04. It now carries the BOOT-1 receipt + storage read-back + re-roll and ONE same-seed replay. The
+    # seed is drawn ONCE and REUSED for the replay: that re-poses the EXACT question, which is strictly stronger than a
+    # fresh-seed re-roll, since a fresh seed rolls new data and can wash out a data-dependent defect.
     HDF="$work/hostile_df_getter.bin"; python3 "$LB" hostiledf "$HDF"
     DFSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
-    DFDISK="$work/disk_df.img"; build_raw_disk "$DFDISK"; DISK="$DFDISK"
+    echo "  SEED DFSEED=$DFSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     read -r DFTN DFTP DFDN DFDP < <(python3 "$LB" records "$DFSEED")
     DFPUT="$(python3 "$LB" putstream "$DFTN" "$DFTP" "$DFDN" "$DFDP")"
     DFQ="$(python3 "$LB" querystream "$DFTN")"           # query the TARGET (a VALID, matching name) under DF=1
-    boot_feed "$MKELF" "$PUTTER" "$work/df.b1" "" $DFPUT
-    boot_feed_emit "$MKELF" "$HDF" "$work/df.b2" "" $DFQ         # genuine must emit P_T (flake-robust)
-    DF_EMIT="$(python3 "$LB" emitbody "$work/df.b2" 2>/dev/null)"
-    if python3 "$LB" gradefs "$work/df.b2" "$KEND" "$DFTP" >/dev/null 2>&1; then
-        ok "(C-HOSTILE-DF) a SYS_FS_GET preceded by a hostile std (DF=1) of a VALID name STILL resolves correctly -- the genuine kernel cld's before EVERY FS rep (the dir/data reads, the 16-byte name-compare cmpsb, the dst-copy movsb), so the name-compare + payload-copy run FORWARD regardless of the module's direction flag and the emitted payload == P_T (${#DF_EMIT} hex chars); M-fsnocld would inherit DF=1 -> the FS reps walk BACKWARD off diskbuf/dirbuf into the page tables -> wrong resolution / a kernel-memory leak"
-    else
-        fail_test "(C-HOSTILE-DF) the genuine kernel mis-resolved under a hostile std=DF=1 (emitted=$DF_EMIT, want=$DFTP) -- the kernel did NOT cld before its FS reps, so DF=1 made the name-compare/copy walk BACKWARD (this should NEVER happen on the genuine kernel)"
+    HOSTILE_T0=$SECONDS
+    df_done=0; df_a1=""; DF_B1=""; DFOUT=""
+    for att in 1 2; do
+        if hostile_expired; then
+            echo "HARNESS-ERROR: (C-HOSTILE-DF) the leg exceeded its ${HOSTILE_DEADLINE_S}s wall-clock ceiling before reaching a verdict -- FAILED CLOSED unconditionally."
+            fail=$((fail + 1)); df_done=1; break
+        fi
+        DISK="$work/disk_df_a${att}.img"
+        boot_feed_b1 "$MKELF" "$work/df.b1.a${att}" "" "$DFTN" "$DFTP" "$DFDN" "$DFDP" $DFPUT; b1rc=$?
+        DF_B1="BOOT-1 tries=$B1_TRIES: $B1_RECEIPT"
+        if [[ "$b1rc" -eq 1 ]]; then
+            echo "HARNESS-ERROR: (C-HOSTILE-DF) BOOT-1's receipt was ABSENT on all 3 attempts -- $B1_RECEIPT. The records the getter must resolve never provably reached the guest, so NO adjudicated kernel grade exists for this leg; FAILED CLOSED unconditionally. (This is precisely the transport miss FLAKE-LOG F5 recorded twice as an unexplained EMPTY emission -- it is now named at the boot where it happens instead of two boots later.)"
+            fail=$((fail + 1)); df_done=1; break
+        fi
+        if [[ "$b1rc" -eq 2 ]]; then
+            if [[ "$att" -eq 1 ]]; then
+                df_a1="BOOT-1 COMPLETED WRONG ($B1_RECEIPT)"
+                echo "  REPLAY (C-HOSTILE-DF): $df_a1 -- a WRONG answer is not the ABSENT class, so it is NOT re-rolled; running ONE same-seed replay" >&2
+                continue
+            fi
+            fail_test "(C-HOSTILE-DF) BOOT-1 completed with the WRONG bytes on BOTH attempts -> hard RED (attempt-1: $df_a1 ; replay: $B1_RECEIPT) -- the echo path runs through the kernel's own do_read/do_write arms and the storage read-back reads the medium directly, so a reproduced disagreement is a kernel grade, not a transport miss"
+            df_done=1; break
+        fi
+        DFOUT="$work/df.b2.a${att}"; : > "$DFOUT"
+        boot_feed_emit "$MKELF" "$HDF" "$DFOUT" "" $DFQ         # genuine must emit P_T (flake-robust)
+        DF_EMIT="$(python3 "$LB" emitbody "$DFOUT" 2>/dev/null)"
+        if hdf_accept "$DFOUT" "$DFTP"; then
+            dnote=""
+            [[ "$att" -eq 2 ]] && dnote=" [FLAKE-DISCRIMINATED: attempt-1 completed RED ($df_a1) did NOT recur under one same-seed replay -- classed a one-shot transport/capture miss; NOT proof against an intermittent same-data race]"
+            ok "(C-HOSTILE-DF) a SYS_FS_GET preceded by a hostile std (DF=1) of a VALID name STILL resolves correctly -- the genuine kernel cld's before EVERY FS rep (the dir/data reads, the 16-byte name-compare cmpsb, the dst-copy movsb), so the name-compare + payload-copy run FORWARD regardless of the module's direction flag and the emitted payload == P_T (${#DF_EMIT} hex chars); M-fsnocld would inherit DF=1 -> the FS reps walk BACKWARD off diskbuf/dirbuf into the page tables -> wrong resolution / a kernel-memory leak. WHAT THE PASS RESTS ON, stated exactly: BOOT-1's receipt was byte-exact AND the medium held both records ($DF_B1). It is NOT proof against an intermittent same-data race$dnote"
+            df_done=1; break
+        fi
+        if [[ "$att" -eq 1 ]]; then
+            df_a1="emitted=${DF_EMIT:-EMPTY}"
+            echo "  REPLAY (C-HOSTILE-DF): completed leg graded RED ($df_a1 want=$DFTP) -- $DF_B1, so the records did reach the guest AND the medium held them, and this is not a lost BOOT-1 byte; running ONE same-seed replay (recurrence -> deterministic RED, non-recurrence -> transport-class miss on the BOOT-2 side)" >&2
+            continue
+        fi
+        DF_FW="$(python3 "$LB" faultwitness "$DFOUT" 2>&1)"
+        fail_test "(C-HOSTILE-DF) the genuine kernel mis-resolved under a hostile std=DF=1, REPRODUCED under same-seed replay -> hard RED (attempt-1: $df_a1 ; replay: emitted=${DF_EMIT:-EMPTY}, want=$DFTP ; fault witness: $DF_FW) -- $DF_B1 on BOTH attempts, so this is NOT a lost COM1 byte and NOT an unlanded write: the kernel did NOT cld before its FS reps, so DF=1 made the name-compare/copy walk BACKWARD (this should NEVER happen on the genuine kernel)"
+        df_done=1
+    done
+    if [[ "$df_done" -eq 0 ]]; then
+        echo "HARNESS-ERROR: (C-HOSTILE-DF) the attempt loop ended with NO verdict -- FAILED CLOSED unconditionally."
+        fail=$((fail + 1))
     fi
+
+    # ---- POSITIVE CONTROLS, per hostile leg (the established discipline, applied through the legs' OWN predicates) ----
+    # PACKET-ORACLE-CORPUS item 4, verbatim: "every leg needs a liveness receipt and a positive control that must go
+    # RED when the boot is absent." All three controls call `hlba_accept` / `hcarry_accept` / `hdf_accept` -- the same
+    # functions the legs above call -- so a control cannot go on passing after the leg it defends is edited.
+    # THREE stimuli, all boot-free:
+    #   ABSENT      a debugcon file no boot ever wrote.
+    #   TABLE-ONLY  a REAL boot's debugcon truncated to its table: the kernel booted and dumped, and the module
+    #               emitted NOTHING. This is what a #PF, a lost query byte or a dead getter actually leave behind.
+    #   PUTTER      a REAL BOOT-1 debugcon. This one exists because THIS CHANGE created it: BOOT-1 debugcons used to
+    #               carry no write frames and now carry four, and a bare `-n` accept test would have taken one for a
+    #               getter's envelope. A change that introduces a new artifact owes a control against it.
+    # HONESTY ABOUT WHAT THESE ARE: they prove the legs' PREDICATES cannot be satisfied by a boot that produced no
+    # module output. They do NOT prove a leg's plumbing ran; that claim needs a bite matrix against a perturbed
+    # environment, which is run out-of-tree against a shim copy of this file and recorded in the packet's REPORT.md.
+    PC_PUTTER=""
+    [[ -s "$work/df.b1.a1" ]] && PC_PUTTER="$work/df.b1.a1"
+    for pcname in ABSENT TABLE-ONLY PUTTER; do
+        pcf=""
+        [[ "$pcname" == "ABSENT" ]] && pcf="$PC_ABSENT"
+        [[ "$pcname" == "TABLE-ONLY" ]] && pcf="$PC_TABLEONLY"
+        [[ "$pcname" == "PUTTER" ]] && pcf="$PC_PUTTER"
+        if [[ -z "$pcf" || ! -f "$pcf" ]]; then
+            echo "HARNESS-ERROR: (positive control) the $pcname stimulus could not be built -- the hostile legs' positive controls did NOT run; FAILED CLOSED (an unrun positive control may never be silently skipped)."
+            fail=$((fail + 1)); continue
+        fi
+        if hlba_accept "$pcf"; then
+            fail_test "(C-HOSTILE-LBA positive control / $pcname) the leg's OWN accept test ACCEPTED a debugcon the getter never wrote to ($HLBA_WHY) -- the leg can be certified without a boot"
+        else
+            ok "(C-HOSTILE-LBA positive control / $pcname) the leg's OWN accept test REFUSES a debugcon the getter never wrote to ($HLBA_WHY)"
+        fi
+        if hcarry_accept "$pcf"; then
+            fail_test "(C-HOSTILE-CARRY positive control / $pcname) the leg's OWN accept test ACCEPTED a debugcon the getter never wrote to ($HCARRY_WHY)"
+        else
+            ok "(C-HOSTILE-CARRY positive control / $pcname) the leg's OWN accept test REFUSES a debugcon the getter never wrote to ($HCARRY_WHY)"
+        fi
+        if hdf_accept "$pcf" "$DFTP"; then
+            fail_test "(C-HOSTILE-DF positive control / $pcname) the leg's OWN grader graded GREEN on a debugcon the getter never wrote to"
+        else
+            ok "(C-HOSTILE-DF positive control / $pcname) the leg's OWN grader is RED on a debugcon the getter never wrote to"
+        fi
+        # AND a control on the BOOT-1 receipt itself -- the check the whole discriminator rests on, which would
+        # otherwise be the one check with no control of its own. It is posed against the CARRY leg's record set,
+        # which is drawn from a different seed, so the PUTTER stimulus (the DF leg's own BOOT-1 debugcon) is a
+        # REAL, WELL-FORMED four-frame receipt that simply belongs to another run -- the sharpest available "not
+        # this BOOT-1" case, and the one that proves the check binds the CONTENT and not merely the shape.
+        # (The first cut of this control posed the DF b1 against the DF records, i.e. asked b1receipt to refuse
+        # the exact stream it exists to accept. It duly failed, and it is recorded rather than quietly re-cut.)
+        pcb1="$(python3 "$LB" b1receipt "$pcf" "$HCTN" "$HCTP" "$HCDN" "$HCDP" 2>&1 | head -1)"
+        if python3 "$LB" b1receipt "$pcf" "$HCTN" "$HCTP" "$HCDN" "$HCDP" >/dev/null 2>&1; then
+            fail_test "(BOOT-1 receipt positive control / $pcname) b1receipt ACCEPTED a stream that is not this BOOT-1's four frames ($pcb1)"
+        else
+            ok "(BOOT-1 receipt positive control / $pcname) b1receipt REFUSES a stream that is not this BOOT-1's four frames ($pcb1)"
+        fi
+    done
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "QEMU required but not found"; else echo "  SKIP: qemu-system-x86_64 not found"; fi
 fi
@@ -495,6 +810,7 @@ if have_bochs; then
         BOCHS_HARNESS_ERR=""
         if [[ "$completed_red" -eq 0 ]]; then
             BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+            echo "  SEED BSEED=$BSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
             read -r BTN BTP BDN BDP < <(python3 "$LB" records "$BSEED")
             BPUT="$(python3 "$LB" putstream "$BTN" "$BTP" "$BDN" "$BDP")"
             BQD="$(python3 "$LB" querystream "$BDN")"     # query the DECOY on Bochs (the harder, returnfirst-killing query)

@@ -132,6 +132,7 @@ else fail_test "master byte-pin: a mutant kernel was byte-identical to genuine (
 
 # ---- SINGLE SHARED SEED: control + every forge mutant run on the EXACT SAME late-bound cross-page witness ----
 SEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+echo "  SEED SEED=$SEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
 
 # ---- CONTROL: genuine kernel -- GREEN on the cross-page witness AND assert_growheap TRUE ----
 CK="$work/ctrl.elf"; build_kernel "$CK" none

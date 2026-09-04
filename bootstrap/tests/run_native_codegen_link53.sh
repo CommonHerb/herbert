@@ -88,7 +88,12 @@ import sys, os, random
 img, lo, w, hint = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 start_idx, khops, mask = int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[3]) - 1
 # author-unknown: seed from os.urandom XOR the per-call hint so two calls in one run differ (the MAPDIFF leg).
-rng = random.Random(int.from_bytes(os.urandom(8), 'little') ^ (hash(hint) & 0xFFFFFFFF))
+# SEED RIDER 2026-09-04: the effective seed is PRINTED (to stderr, so the block's stdout contract is
+# untouched) -- a RED on a chasemap leg is retro-checkable only if the map can be regenerated, and
+# `hash(hint)` is per-process randomised, so the XORed RESULT is the only reproducible value.
+_seed = int.from_bytes(os.urandom(8), 'little') ^ (hash(hint) & 0xFFFFFFFF)
+print('  SEED chasemap[%s]=%016x' % (hint, _seed), file=sys.stderr)   # HEX, to match every other rider
+rng = random.Random(_seed)
 # Reject-and-regenerate DEGENERATE maps (still author-unknown -- only the disk BYTES are conditioned; the
 # frozen kernel/prober are unchanged). The M-fixedlba mutation pins EVERY hop to the start sector, so its
 # output is [cm[start]]*khops. If the honest chase (idx=start; idx=cm[idx]&mask each hop -- mirrors
@@ -166,7 +171,8 @@ qemu_run() { # kernel-elf diskimg out timeout [kvm]
 }
 
 QIMG="$work/disk.img"; build_raw_disk "$QIMG"
-CHASEMAP="$(make_chasemap "$QIMG" map-a 2>/dev/null)" || { echo "FAIL: stack/native_compile_fragment.herb (chasemap generation FATAL -- the degenerate-map guard could not converge; refusing to continue with a degenerate/empty chasemap)"; exit 1; }
+CHASEMAP="$(make_chasemap "$QIMG" map-a 2>$work/chasemap.cmerr)" || { echo "FAIL: stack/native_compile_fragment.herb (chasemap generation FATAL -- the degenerate-map guard could not converge; refusing to continue with a degenerate/empty chasemap)"; exit 1; }
+grep -E '^  SEED ' $work/chasemap.cmerr >&2 || true   # seed rider 2026-09-04: the caller used to 2>/dev/null this away
 EXPECT="$(python3 "$REF" diskexpect "$CHASEMAP")"
 
 if have_qemu; then
@@ -177,7 +183,8 @@ if have_qemu; then
 
     # (C-MAPDIFF) THE CHASEMAP DIFFERENTIAL: re-dd a DIFFERENT author-unknown chasemap into the SAME disk, re-run, and
     # check (a) grading the NEW run with the OLD map is RED, (b) grading the new run with the NEW map is GREEN.
-    CHASEMAP2="$(make_chasemap "$QIMG" map-b 2>/dev/null)" || { echo "FAIL: stack/native_compile_fragment.herb (MAPDIFF chasemap generation FATAL -- the degenerate-map guard could not converge)"; exit 1; }
+    CHASEMAP2="$(make_chasemap "$QIMG" map-b 2>$work/chasemap2.cmerr)" || { echo "FAIL: stack/native_compile_fragment.herb (MAPDIFF chasemap generation FATAL -- the degenerate-map guard could not converge)"; exit 1; }
+    grep -E '^  SEED ' $work/chasemap2.cmerr >&2 || true   # seed rider 2026-09-04: the caller used to 2>/dev/null this away
     EXPECT2="$(python3 "$REF" diskexpect "$CHASEMAP2")"
     qemu_run "$MKELF" "$QIMG" "$work/q2" 40
     if python3 "$REF" gradedisk "$work/q2" "$KEND" "$CHASEMAP2" >/dev/null 2>&1; then ok "(C-MAPDIFF) QEMU new-map run grades GREEN against the NEW chasemap [$EXPECT2] (the chase follows the late-bound disk bytes)"

@@ -113,6 +113,8 @@ four_phase() { # kernel-elf label
     local kel="$1" lbl="$2"
     DISK="$work/disk_${lbl}.img"; build_raw_disk "$DISK"
     FSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"; NSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED NSEED=$NSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
+    echo "  SEED FSEED=$FSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     local fillstream delstream newstream
     fillstream="$(python3 "$LB" fillstream "$FSEED")"; delstream="$(python3 "$LB" delstream "$FSEED")"; newstream="$(python3 "$LB" newstream "$NSEED")"
     boot_feed "$kel" "$FILLER"   "$work/${lbl}.b1" "$DISK" $fillstream

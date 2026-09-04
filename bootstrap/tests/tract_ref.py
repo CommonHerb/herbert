@@ -3522,8 +3522,10 @@ def grade_fs_found(stream, kend_elf, want_found):
     return errs
 
 def grade_fs_deleted(stream, kend_elf):
-    """DELETE grade -- a BOOT-3 reader that GET'd the DELETED name must emit NOTHING (found=0 -> a 0-byte payload). GREEN
-       iff the reader emitted NO non-empty UCODE3 write-frame for the query. RED if the deleted record still resolved
+    """DELETE grade -- a BOOT-3 reader that GET'd the DELETED name must emit a ZERO-LENGTH payload (found=0).
+       GREEN iff the reader emitted EXACTLY ONE closed UCODE3 write-frame and that frame's body is EMPTY.
+       (Corrected 2026-09-04: this used to read "GREEN iff no non-empty frame", which made an ABSENT frame --
+       a dead reader, a lost query byte, an unreadable trace -- grade GREEN.) RED if the deleted record still resolved
        (M-noop / M-positional / M-noflush -> BRAVO survives -> a non-empty payload is emitted). (The companion
        grade_fs(want=ALPHA payload) on the SURVIVOR query catches M-wipeall -> ALPHA also gone -> empty -> RED there.)"""
     errs=[]
@@ -3532,6 +3534,30 @@ def grade_fs_deleted(stream, kend_elf):
         return ['no OWN table parsed (the kernel faulted before the reader prober dumped) -> RED']
     tail=r['_tail']
     wfs=[w for w in _wframes(tail) if w['closed'] and w['cs']==UCODE3 and (w['cs']&3)==3]
+    # ---- LIVENESS RECEIPT (2026-09-04): an EMPTY frame list is a RED, not a pass ----
+    # The BOOT-3 reader SYS_WRITEs UNCONDITIONALLY -- `mov edx,ecx` takes len straight from SYS_FS_GET's
+    # return and len is 0 when found=0 -- so a GENUINE delete leaves EXACTLY ONE closed UCODE3 frame with an
+    # EMPTY body. ZERO frames is NOT evidence of deletion: it is a reader that never reached its SYS_WRITE
+    # (a dead or faulted boot, a lost query byte) or a trace the frame parser could not read.
+    # Before this, `[]` fell straight through to `return errs` == [] == GREEN, so ANYTHING that silenced the
+    # frame parser certified the delete -- the project's documented failure mode, a leg that graded nothing
+    # and printed PASS. It is the false-GREEN direction of the debugcon-parser debt (FLAKE-LOG F11;
+    # MEWTWO/audits/debugcon-parser-2026-09-04/), where a reverted rewrite made exactly that reachable.
+    # The error is RETURNED in `errs` -- the value every caller already turns into RED + exit 1 -- and
+    # deliberately not a module global, because a global nothing reads is not a diagnostic.
+    # EXACTLY ONE, not "at least one". `grade_fs` in this same file uses `len(wfs)!=1`, and "one or more"
+    # would accept a stream carrying an extra frame -- which is precisely the FALSE-GREEN shape of F11, where
+    # a spurious frame appears while the real one is stepped over. `>=1` would close only the zero-frame
+    # subset of the defect this guard exists for. Every real BOOT-3 capture carries exactly one frame
+    # (16 of 16 in the link58 capture), so the stricter form costs nothing.
+    if len(wfs) != 1:
+        errs.append('NO GRADE: this grader SAW %d closed UCODE3 write-frames, want exactly 1 -- "deleted" is NOT '
+                    'established and this leg FAILS CLOSED. A genuine delete emits ONE CLOSED ZERO-LENGTH '
+                    'frame (the reader writes len=0 when found=0). NOTE THE CAREFUL WORDING: what is known '
+                    'is what the FRAME PARSER REPORTED, not what the guest did -- under FLAKE-LOG F11 a '
+                    'physical closed frame can exist while the parser returns none, so this is NOT a claim '
+                    'that the reader never reached its SYS_WRITE. Candidates: a dead/faulted boot, a lost '
+                    'query byte, an F11 mis-parse, or a stream this grader cannot attribute.' % len(wfs))
     nonempty=[w for w in wfs if len(w['body'])>0]
     if nonempty:
         errs.append(f'NOT DELETED: BOOT-3 GET of the deleted name emitted {nonempty[0]["body"]!r} (len '

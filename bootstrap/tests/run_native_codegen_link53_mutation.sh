@@ -103,7 +103,12 @@ import sys, os, random
 img, lo, w, hint = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 start_idx, khops, mask = int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[3]) - 1
 # author-unknown: seed from os.urandom XOR the per-call hint so two calls in one run differ.
-rng = random.Random(int.from_bytes(os.urandom(8), 'little') ^ (hash(hint) & 0xFFFFFFFF))
+# SEED RIDER 2026-09-04: the effective seed is PRINTED (to stderr, so the block's stdout contract is
+# untouched) -- a RED on a chasemap leg is retro-checkable only if the map can be regenerated, and
+# `hash(hint)` is per-process randomised, so the XORed RESULT is the only reproducible value.
+_seed = int.from_bytes(os.urandom(8), 'little') ^ (hash(hint) & 0xFFFFFFFF)
+print('  SEED chasemap[%s]=%016x' % (hint, _seed), file=sys.stderr)   # HEX, to match every other rider
+rng = random.Random(_seed)
 # Reject-and-regenerate DEGENERATE maps (still author-unknown): M-fixedlba pins every hop to the start
 # sector -> output [cm[start]]*khops. If the honest chase (idx=start; idx=cm[idx]&mask each hop -- mirrors
 # platter_ref.disk_chase_expect) self-loops within the hop count (< khops distinct sectors) or collapses to
@@ -134,7 +139,8 @@ PY
 }
 
 QIMG="$work/disk.img"
-CHASEMAP="$(make_disk "$QIMG" map-a 2>/dev/null)" || { echo "FAIL: stack/native_compile_fragment.herb (chasemap generation FATAL -- the degenerate-map guard could not converge; refusing to continue with a degenerate/empty chasemap)"; exit 1; }
+CHASEMAP="$(make_disk "$QIMG" map-a 2>$work/chasemap.cmerr)" || { echo "FAIL: stack/native_compile_fragment.herb (chasemap generation FATAL -- the degenerate-map guard could not converge; refusing to continue with a degenerate/empty chasemap)"; exit 1; }
+grep -E '^  SEED ' $work/chasemap.cmerr >&2 || true   # seed rider 2026-09-04: the caller used to 2>/dev/null this away
 # seed the hostile-DF sentinel at (start sector, DF_PROBE_OFF) so the genuine FORWARD read is well-defined and the M-nocld
 # BACKWARD read (which leaves diskbuf[offset>=2] zero) is observably wrong. offset 0 stays the chase byte (untouched).
 read -r DF_LBA DF_OFF DF_BYTE < <(python3 "$REF" hostiledfprobe)

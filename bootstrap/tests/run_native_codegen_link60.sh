@@ -134,6 +134,7 @@ four_boot() { # kernel-elf seed kvmflag label   (leaves the final disk at $DISK 
 run_force_gate() { # kvmflag label substlabel
     local kvm="$1" lbl="$2" subst="$3"
     local seed; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     four_boot "$MKELF" "$seed" "$kvm" "$lbl"
     local g_raw=1; python3 "$LB" reuseok "$DISK" "$seed" >/dev/null 2>&1 && g_raw=0
     # FUNCTIONAL: BOOT-4 GET R0,N0,N1 by name (a SINGLE-query getter booted once per record, retried per the COM1 flake)
@@ -161,6 +162,7 @@ if have_qemu; then
     # survivor R0 and the merged-gap reuse never happens -> reuseok RED. (R4 at 189B would store, but the expected
     # first-fit multi-sector state is absent.)
     DSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED DSEED=$DSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     four_boot "$DELK" "$DSEED" "" ddiff
     if python3 "$LB" reuseok "$work/disk_ddiff.img" "$DSEED" >/dev/null 2>&1; then
         fail_test "(C-DELETE-DIFF) the frozen delete kernel produced the multi-sector first-fit state -- variable-size is NOT genuinely new (the differential does not bite)"
@@ -171,6 +173,8 @@ if have_qemu; then
     # (C-SEEDDIFF) the SEED-DIFFERENTIAL: a fresh run with a DIFFERENT held-back seed -> different records/placements;
     # grading run-2's disk under run-1's seed is RED -> the on-disk state follows the late-bound COM1 input, not a baked answer.
     S1="$(python3 -c 'import os;print(os.urandom(8).hex())')"; S2="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED S2=$S2" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
+    echo "  SEED S1=$S1" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     four_boot "$MKELF" "$S1" "" sd1; cp "$work/disk_sd1.img" "$work/disk_sd1_saved.img"
     four_boot "$MKELF" "$S2" "" sd2
     if python3 "$LB" reuseok "$work/disk_sd2.img" "$S1" >/dev/null 2>&1; then
@@ -324,6 +328,7 @@ if have_bochs; then
     for attempt in 1 2 3; do
         BOCHS_HARNESS_ERR=""
         BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+        echo "  SEED BSEED=$BSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
         if ! bochs_three_boot "$BSEED"; then
             echo "  HARNESS ERROR (Bochs 3-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the 3-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
             continue

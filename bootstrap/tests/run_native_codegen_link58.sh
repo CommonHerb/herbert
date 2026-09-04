@@ -180,6 +180,7 @@ three_boot_delete() { # kernel-elf seedhex kvmflag label
 run_qemu_gate() { # kvmflag label substlabel
     local kvm="$1" lbl="$2" subst="$3"
     local seed; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     three_boot_delete "$MKELF" "$seed" "$kvm" "$lbl"
     local g_del=1 g_sur=1 g_raw=1
     python3 "$LB" gradefound "$work/${lbl}.b3decoy" "$KEND" 0 >/dev/null 2>&1 && g_del=0   # FUNCTIONAL: decoy found==0 (GET-by-name fails)
@@ -210,6 +211,7 @@ if have_qemu; then
     # the main leg (delete the DECOY/slot1) + M-positional (delete the FIRST valid/slot0), this binds the deleted slot to the
     # NAME. (Closes a cross-model/Codex hole: the main leg alone always deletes slot1, so a positional forge passes it.)
     BNSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED BNSEED=$BNSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     DISK="$work/disk_byname.img"; build_raw_disk "$DISK"
     read -r BNTN BNTP BNDN BNDP < <(python3 "$LB" records "$BNSEED")
     BNPUT="$(python3 "$LB" putstream "$BNTN" "$BNTP" "$BNDN" "$BNDP")"
@@ -233,6 +235,7 @@ if have_qemu; then
     # forge would WRONGLY delete the TARGET. (Mirrors cairn's C-PREFIX leg, applied to DELETE; closes the hole that the
     # decoy/target differing only in byte 15 leaves a last-byte-only compare un-forced.)
     F16SEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED F16SEED=$F16SEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     DISK="$work/disk_full16.img"; build_raw_disk "$DISK"
     read -r F16TN F16TP F16DN F16DP < <(python3 "$LB" records "$F16SEED")
     F16PUT="$(python3 "$LB" putstream "$F16TN" "$F16TP" "$F16DN" "$F16DP")"
@@ -256,6 +259,7 @@ if have_qemu; then
     # in growheap -> falls to SYS_EXIT. The deleter EXITs on its SYS_FS_DEL (no delete); BOOT-3 GET(DECOY) still resolves ->
     # NON-empty -> RED. Delete is genuinely new (growheap has cairn's PUT/GET but no tombstone).
     FSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED FSEED=$FSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     three_boot_delete "$FROZK" "$FSEED" "" froz
     # the raw-dir ground truth: the frozen kernel did NOT clear the decoy's valid -> tombstoneok is RED (decoy slot1 valid==1).
     if python3 "$LB" tombstoneok "$DISK" "$FS_DIR" 1 "$TWB_DN" 0 "$TWB_TN" >/dev/null 2>&1; then
@@ -268,9 +272,11 @@ if have_qemu; then
     # (C-SEEDDIFF) the SEED-DIFFERENTIAL: a fresh run with a DIFFERENT held-back seed produces a DIFFERENT survivor payload;
     # grading run-2's survivor emit under run-1's expected payload is RED -> the output follows the late-bound input.
     SD1="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED SD1=$SD1" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     three_boot_delete "$MKELF" "$SD1" "" sd1
     SD1_TP="$TWB_TP"
     SD2="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED SD2=$SD2" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     three_boot_delete "$MKELF" "$SD2" "" sd2
     if python3 "$LB" gradefs "$work/sd2.b3target" "$KEND" "$SD1_TP" >/dev/null 2>&1; then
         fail_test "(C-SEEDDIFF) run-2's survivor emit graded GREEN under run-1's expected payload -- the output is NOT following the late-bound input (a baked answer?), or the two random seeds collided"
@@ -288,6 +294,7 @@ if have_qemu; then
     # record SURVIVES. (Output witness that the DEL cld is load-bearing; paired with assert_delete's cld pin + M-fsnocld.)
     HDFDEL="$work/hostile_df_del.bin"; python3 "$LB" hostiledfdel "$HDFDEL"
     DFSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED DFSEED=$DFSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     DISK="$work/disk_dfdel.img"; build_raw_disk "$DISK"
     read -r DFTN DFTP DFDN DFDP < <(python3 "$LB" records "$DFSEED")
     DFPUT="$(python3 "$LB" putstream "$DFTN" "$DFTP" "$DFDN" "$DFDP")"
@@ -310,6 +317,7 @@ if have_qemu; then
     # deleter FAULTS (emits nothing). DISCRIMINATOR: genuine emits the envelope; M-nocarrycheck emits nothing.
     HCDEL="$work/hostile_carry_del.bin"; python3 "$LB" hostilenamecarrydel "$HCDEL"
     HCSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED HCSEED=$HCSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     DISK="$work/disk_hcdel.img"; build_raw_disk "$DISK"
     read -r HCTN HCTP HCDN HCDP < <(python3 "$LB" records "$HCSEED")
     HCPUT="$(python3 "$LB" putstream "$HCTN" "$HCTP" "$HCDN" "$HCDP")"
@@ -440,6 +448,7 @@ if have_bochs; then
     for attempt in 1 2 3; do
         BOCHS_HARNESS_ERR=""
         BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+        echo "  SEED BSEED=$BSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
         read -r BTN BTP BDN BDP < <(python3 "$LB" records "$BSEED")
         BPUT="$(python3 "$LB" putstream "$BTN" "$BTP" "$BDN" "$BDP")"
         BDEL="$(python3 "$LB" querystream "$BDN")"     # delete the DECOY

@@ -162,6 +162,7 @@ else fail_test "master byte-pin: a mutant kernel was byte-identical to genuine (
 # ---- SINGLE SHARED SEED: the control AND every mutant run on the EXACT SAME late-bound witness + hostile legs, so each
 #      mutant's RED is strictly attributable to the mutation (not to a different rejection-sampled seed). (Codex nit D.) ----
 SEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+echo "  SEED SEED=$SEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
 
 # ---- CONTROL: genuine kernel -- GREEN on the witness AND clean on all four hostile legs AND passes assert_larder ----
 CK="$work/ctrl.elf"; build_kernel "$CK" none

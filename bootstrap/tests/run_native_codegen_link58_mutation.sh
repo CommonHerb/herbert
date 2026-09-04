@@ -120,6 +120,7 @@ three_phase() { # kernel-elf label [survivor_retry]   (sets global DISK = the di
     local kel="$1" lbl="$2" retry="${3:-}"
     DISK="$work/disk_${lbl}.img"; local img="$DISK"; build_raw_disk "$img"
     local seed; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     read -r TWB_TN TWB_TP TWB_DN TWB_DP < <(python3 "$LB" records "$seed")
     local putstream delname qdecoy qtarget getfn
     putstream="$(python3 "$LB" putstream "$TWB_TN" "$TWB_TP" "$TWB_DN" "$TWB_DP")"
@@ -137,6 +138,7 @@ three_phase() { # kernel-elf label [survivor_retry]   (sets global DISK = the di
 hostile_df_del_run() { # kernel-elf [genuine]  -> echoes GREEN | RED <emit>
     local kel="$1"; local img="$work/hdfdel.img"; build_raw_disk "$img"
     local seed; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     local TN TP DN DP put deln q
     read -r TN TP DN DP < <(python3 "$LB" records "$seed")
     put="$(python3 "$LB" putstream "$TN" "$TP" "$DN" "$DP")"; deln="$(python3 "$LB" querystream "$DN")"; q="$(python3 "$LB" querystream "$DN")"
@@ -153,6 +155,7 @@ hostile_df_del_run() { # kernel-elf [genuine]  -> echoes GREEN | RED <emit>
 hostile_carry_del_run() { # kernel-elf [genuine]  -> echoes emitbody hex
     local kel="$1" genuine="${2:-}"; local img="$work/hcdel.img"; build_raw_disk "$img"
     local seed; seed="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED seed=$seed" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     local TN TP DN DP put n getfn
     read -r TN TP DN DP < <(python3 "$LB" records "$seed")
     put="$(python3 "$LB" putstream "$TN" "$TP" "$DN" "$DP")"; n="$(python3 "$LB" querystream "$DN")"

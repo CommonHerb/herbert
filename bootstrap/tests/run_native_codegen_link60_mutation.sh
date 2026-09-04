@@ -95,6 +95,7 @@ four_phase() { # kernel-elf label  (sets DISK + SEED globals)
     local kel="$1" lbl="$2"
     DISK="$work/disk_${lbl}.img"; build_raw_disk "$DISK"
     SEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+    echo "  SEED SEED=$SEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     boot_feed "$kel" "$WRITER"  "$work/${lbl}.b1" "$DISK" $(python3 "$LB" putstream1 "$SEED")
     boot_feed "$kel" "$DELETER" "$work/${lbl}.b2" "$DISK" $(python3 "$LB" delstream  "$SEED")
     boot_feed "$kel" "$WRITER3" "$work/${lbl}.b3" "$DISK" $(python3 "$LB" putstream3 "$SEED")
