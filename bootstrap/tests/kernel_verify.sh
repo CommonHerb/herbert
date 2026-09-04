@@ -81,8 +81,12 @@ have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # mirrors the g
 #   * mutation proof  for every link 18..66  (link17 predates the mutation-proof convention -- the ONE
 #                     documented gate-only exception)
 #   RANGE MOVED 65 -> 66 in link66's landing slice (longbuf, the 50th kernel-arc link). This line is
-#   also the SCORECARD's range authority for its section 4 (tools/scorecard.sh reads GATE_LO=/GATE_HI=
-#   out of this file's git HEAD blob), so until it moves the scorecard cannot see link66 at all and
+#   also the SCORECARD's range authority for its section 4 (tools/scorecard.sh reads the declaration
+#   below out of this file's git HEAD blob), so until it moves the scorecard cannot see link66 and
+#   NOTE TO ANYONE EDITING THIS COMMENT: the scorecard requires EXACTLY ONE occurrence each of the
+#   two assignment strings in this whole file, so do not spell them out in prose -- writing them
+#   here once broke section 4 outright (`declaration not unique: 2 assignment(s)`), which is a
+#   uniqueness invariant doing its job on a comment that meant well.
 #   reports 49 links with link65 as the newest -- which is why a landing that stops at the workflow
 #   leaves the project's own progress authority telling the truth about the wrong tree.
 GATE_LO=17; GATE_HI=66
