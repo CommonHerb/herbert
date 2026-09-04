@@ -168,33 +168,111 @@ fi
 # Each extraction asserts its anchor is UNIQUE. A mutation proof whose subject silently became the
 # wrong text is the failure class this whole file exists to catch, so it fails closed on its own
 # extraction before it grades anything.
-extract_between() { # opener-regex closer-regex outfile why
-    local open_re="$1" close_re="$2" out="$3" why="$4" n
-    n="$(grep -cE "$open_re" "$gate")"
-    [[ "$n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract $why: opener matched $n times, want 1)"; exit 1; }
-    awk -v o="$open_re" -v c="$close_re" '$0 ~ o {f=1; next} f && $0 ~ c {exit} f' "$gate" > "$out"
+#
+# NO AWK, AND NO REGEX AT ALL -- and that is a fix, not a preference. CI run 33856459556 step 104
+# died in 0 s with
+#     awk: warning: escape sequence `\$' treated as plain `$'
+#     FAIL: link66-mutation (extract the forcing source: empty)
+# because the openers were awk REGEXES containing `\$` to mean a literal dollar. mawk (this host's
+# /usr/bin/awk) reads `\$` as a literal `$`; gawk (CI's) reads it as plain `$`, i.e. the END-ANCHOR,
+# so the pattern could never match and the extraction returned nothing. The gate's fail-closed guard
+# caught it -- it did not grade an empty subject -- but the proof could not run at all. This is the
+# THIRD mawk-versus-gawk divergence in this project (see FLAKE-LOG's portability class), so the whole
+# class is removed here rather than the one instance patched: every anchor below is a FIXED STRING
+# tested with equality / startswith / endswith, which no awk dialect, locale or escape rule can
+# reinterpret. `gawk` is NOT installed on this host, so the replacement could not be run against it;
+# what IS proven is that it reproduces the known-good mawk output BYTE-FOR-BYTE on all ten subjects.
+cat > "$tmp/extract.py" <<'EXEOF'
+import sys
+# spec syntax, deliberately regex-free:  eq:TEXT | sw:TEXT | ew:TEXT
+def match(line, spec):
+    kind, text = spec.split(":", 1)
+    line = line.rstrip("\n")
+    if kind == "eq": return line == text
+    if kind == "sw": return line.startswith(text)
+    if kind == "ew": return line.endswith(text)
+    raise SystemExit("extract.py: unknown spec kind %r" % kind)
+mode, src, out, start_spec, end_spec = sys.argv[1:6]
+lines = open(src).read().splitlines(True)
+hits = [i for i, l in enumerate(lines) if match(l, start_spec)]
+if len(hits) != 1:
+    print("opener %r matched %d times, want 1" % (start_spec, len(hits))); raise SystemExit(2)
+i = hits[0]
+if mode == "between":        # exclusive of BOTH bounds
+    body_start = i + 1
+elif mode in ("through", "until"):   # inclusive of the opener
+    body_start = i
+else:
+    raise SystemExit("extract.py: unknown mode %r" % mode)
+body, j = [], body_start
+while j < len(lines):
+    if match(lines[j], end_spec):
+        if mode == "through": body.append(lines[j])
+        break
+    body.append(lines[j]); j += 1
+else:
+    print("closer %r never matched after the opener" % end_spec); raise SystemExit(3)
+if not body:
+    print("extraction is empty"); raise SystemExit(4)
+open(out, "w").writelines(body)
+EXEOF
+count_lines() { # spec -> how many lines of the gate the FIXED-STRING spec matches
+    python3 -I - "$gate" "$1" <<'CEOF'
+import sys
+src, spec = sys.argv[1], sys.argv[2]
+kind, text = spec.split(":", 1)
+n = 0
+for line in open(src).read().splitlines():
+    if (kind == "eq" and line == text) or (kind == "sw" and line.startswith(text)) \
+       or (kind == "ew" and line.endswith(text)) or (kind == "has" and text in line):
+        n += 1
+print(n)
+CEOF
+}
+assert_unique() { # spec why
+    local n; n="$(count_lines "$1")"
+    [[ "$n" -eq 1 ]] || { echo "FAIL: link66-mutation (uniqueness: $2 -- spec '$1' matched $n lines, want 1)"; exit 1; }
+}
+# GLOBAL UNIQUENESS FOR EVERY SEMANTIC MARKER, restored after a review leg found the rewrite had
+# dropped them. `lift` only proves its OWN opener is unique; that is not the same guarantee. A second
+# `boundary_src()` defined AFTER the one lifted would override the gate's function before its calls
+# while the lift, stopping at the first `}`, would source the stale first definition and pass.
+for _spec_why in \
+    "sw:frame_scan() {|the frame rule's opener" \
+    "sw:frame_count()|frame_count" \
+    "sw:frame_last()|frame_last" \
+    "sw:frame_verdict()|frame_verdict" \
+    "sw:grade_bochs_boundary() {|the frame rule's closer" \
+    "sw:golden_leg() {|golden_leg" \
+    "sw:boundary_static() {|boundary_static" \
+    "sw:SENTINEL=|the boundary generator's sentinel" \
+    "sw:boundary_src() {|boundary_src" \
+    "sw:echo \"LINK66_SEED=|the A1 printed line" \
+    "sw:DRIVER_SEED=|the seed concatenation" \
+    ; do
+    assert_unique "${_spec_why%%|*}" "${_spec_why#*|}"
+done
+
+lift() { # mode outfile why start_spec end_spec
+    local mode="$1" out="$2" why="$3" ss="$4" es="$5" msg
+    msg="$(python3 -I "$tmp/extract.py" "$mode" "$gate" "$out" "$ss" "$es" 2>&1)" \
+        || { echo "FAIL: link66-mutation (extract $why: ${msg:-unknown})"; exit 1; }
     [[ -s "$out" ]] || { echo "FAIL: link66-mutation (extract $why: empty)"; exit 1; }
 }
 static_py="$tmp/static_legs.py"
-extract_between "<<'PYEOF'$" '^PYEOF$' "$static_py" "the gate's static-leg block"
-extract_between '^cat > "\$tmp/forcing.herb" <<.EOS.$' '^EOS$' "$tmp/forcing.herb" "the forcing source"
-extract_between '^cat > "\$tmp/nobufop.herb" <<.EOS.$' '^EOS$' "$tmp/nobufop.herb" "the no-buf-op reject probe"
-extract_between '^cat > "\$tmp/oneidx.herb" <<.EOS.$' '^EOS$' "$tmp/oneidx.herb" "the one-indexed-op accept probe"
-extract_between '^cat > "\$tmp/singlefunc.herb" <<.EOS.$' '^EOS$' "$tmp/singlefunc.herb" "the single-function reject probe"
-# The gate's boundary-image decoder and its D26 frame-rule fixtures, lifted whole so the two rows
-# that grade them exercise the production text rather than a restatement of it.
-for _fn in frame_scan frame_count frame_last frame_verdict grade_bochs_boundary; do
-    _n="$(grep -cE "^$_fn\\(\\) " "$gate")"
-    [[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract the Bochs frame rule: $_fn defined $_n times in the gate, want 1)"; exit 1; }
-done
-awk '/^frame_scan\(\) \{/{f=1} /^grade_bochs_boundary\(\) \{/{exit} f' "$gate" > "$tmp/frames.sh"
+lift between "$static_py"            "the gate's static-leg block"        "ew:<<'PYEOF'"                        "eq:PYEOF"
+lift between "$tmp/forcing.herb"     "the forcing source"                 "eq:cat > \"\$tmp/forcing.herb\" <<'EOS'"     "eq:EOS"
+lift between "$tmp/nobufop.herb"     "the no-buf-op reject probe"         "eq:cat > \"\$tmp/nobufop.herb\" <<'EOS'"     "eq:EOS"
+lift between "$tmp/oneidx.herb"      "the one-indexed-op accept probe"    "eq:cat > \"\$tmp/oneidx.herb\" <<'EOS'"      "eq:EOS"
+lift between "$tmp/singlefunc.herb"  "the single-function reject probe"   "eq:cat > \"\$tmp/singlefunc.herb\" <<'EOS'"  "eq:EOS"
+# The gate's frame rule, golden leg, boundary decoder and boundary generator, lifted whole so the
+# rows that grade them exercise the production text rather than a restatement of it.
+lift until   "$tmp/frames.sh"        "the Bochs frame rule"               "sw:frame_scan() {"        "sw:grade_bochs_boundary() {"
 for fn in frame_scan frame_count frame_last frame_verdict; do
-    _n="$(grep -cE "^$fn\\(\\) " "$tmp/frames.sh")"
+    _n="$(grep -cF "$fn() " "$tmp/frames.sh")"
     [[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (the extracted Bochs frame rule defines $fn $_n times, want 1)"; exit 1; }
 done
-_n="$(grep -cE "^golden_leg\\(\\) \\{" "$gate")"
-[[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract golden_leg: matched $_n times, want 1)"; exit 1; }
-awk '/^golden_leg\(\) \{/{f=1} f{print} f && /^}$/{exit}' "$gate" > "$tmp/golden_leg.sh"
+lift through "$tmp/golden_leg.sh"    "golden_leg"                         "sw:golden_leg() {"        "eq:}"
 grep -q 'is not exactly 65 bytes' "$tmp/golden_leg.sh" || { echo "FAIL: link66-mutation (extract golden_leg: the 65-byte representation check is missing)"; exit 1; }
 # golden_leg reports through the GATE's ok()/bad(). This file grades it on its RETURN VALUE and keeps
 # its own ledger, so those two are quiet shims here -- not wired to okleg()/fail_test(), which would
@@ -203,35 +281,19 @@ ok()  { :; }
 bad() { :; }
 # shellcheck source=/dev/null
 source "$tmp/golden_leg.sh" || { echo "FAIL: link66-mutation (cannot source the extracted golden_leg)"; exit 1; }
-_n="$(grep -cE "^boundary_static\\(\\) \\{" "$gate")"
-[[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract boundary_static: matched $_n times, want 1)"; exit 1; }
-awk '/^boundary_static\(\) \{/{f=1} f{print} f && /^}$/{exit}' "$gate" > "$tmp/boundary_static.sh"
+lift through "$tmp/boundary_static.sh" "boundary_static"                  "sw:boundary_static() {"    "eq:}"
 grep -q 'BOUNDARY-STATIC' "$tmp/boundary_static.sh" || { echo "FAIL: link66-mutation (extract boundary_static: body missing)"; exit 1; }
 # The gate's D26 FIXTURES are deliberately NOT extracted: three of them begin with the same `printf
 # 'boot noise` line, so no single opener is unique and a uniqueness guard that passed would be lying.
 # Row 28 builds the two fixtures that matter itself -- fixtures are data. What IS extracted, and what
 # the row actually grades, is the production RULE (frame_verdict, above).
-# the boundary generator (SENTINEL + boundary_src) and the A1 seed channel, sourced/run as-is
-# Uniqueness FIRST, then extract. A review leg was right that greping the extracted text for what it
-# ought to contain is not a uniqueness check: two definitions both extract, and the later shell
-# definition silently wins.
-for _pair in "^SENTINEL=:the boundary generator's sentinel" "^boundary_src\\(\\) \\{:boundary_src"; do
-    _re="${_pair%%:*}"; _why="${_pair#*:}"
-    _n="$(grep -cE "$_re" "$gate")"
-    [[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract $_why: matched $_n times, want 1)"; exit 1; }
-done
-awk '/^SENTINEL=/{f=1} f{print} f && /^}$/{exit}' "$gate" > "$tmp/boundary_src.sh"
-grep -q '^boundary_src() {' "$tmp/boundary_src.sh" || { echo "FAIL: link66-mutation (extract boundary_src: not found)"; exit 1; }
+lift through "$tmp/boundary_src.sh"  "the boundary generator"             "sw:SENTINEL="             "eq:}"
+grep -q 'boundary_src() {' "$tmp/boundary_src.sh" || { echo "FAIL: link66-mutation (extract boundary_src: not found)"; exit 1; }
 # shellcheck source=/dev/null
 source "$tmp/boundary_src.sh" || { echo "FAIL: link66-mutation (cannot source the extracted boundary generator)"; exit 1; }
-for _pair in "^# -+ A1: the seed channel\$:the A1 seed-channel opener" "^echo \"LINK66_SEED=:the A1 printed line" "^DRIVER_SEED=:the seed concatenation"; do
-    _re="${_pair%%:*}"; _why="${_pair#*:}"
-    _n="$(grep -cE "$_re" "$gate")"
-    [[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract $_why: matched $_n times, want 1)"; exit 1; }
-done
-awk '/^# -+ A1: the seed channel$/{f=1} f{print} f && /^echo "LINK66_SEED=/{exit}' "$gate" > "$tmp/seedchan.sh"
+lift through "$tmp/seedchan.sh"      "the A1 seed channel"                "eq:# ---------------------------------------------------------------- A1: the seed channel"  "sw:echo \"LINK66_SEED="
 grep -q 'LINK66_SEED is set' "$tmp/seedchan.sh" || { echo "FAIL: link66-mutation (extract the A1 seed channel: refusal not found)"; exit 1; }
-grep -q '^echo "LINK66_SEED=' "$tmp/seedchan.sh" || { echo "FAIL: link66-mutation (extract the A1 seed channel: no printed line)"; exit 1; }
+grep -q 'echo "LINK66_SEED=' "$tmp/seedchan.sh" || { echo "FAIL: link66-mutation (extract the A1 seed channel: no printed line)"; exit 1; }
 
 # ---------------------------------------------------------------- compilers, probes, derivation
 native_codegen_ensure_compiler "$tmp/gen1" || { echo "FAIL: link66-mutation (cannot acquire the C-free gen-1 compiler)"; exit 1; }
@@ -368,12 +430,24 @@ static_legs() { # label elf src driverseed harnessecho [specpath] -> sets STATIC
         STATIC_FAILS="__CRASH__"
         return 1
     fi
-    total=$(( $(awk '{print $2}' <<<"$summary") + $(awk '{print $4}' <<<"$summary") ))
+    # Bash field-splitting, not awk. These two were dialect-SAFE (field access, no regex, no
+    # escapes, no intervals) and were audited as such -- they are replaced anyway so this file can
+    # state a simple thing: it uses no awk at all, and cannot acquire an awk portability bug later.
+    local _sl_tag _sl_ok _sl_w1 _sl_bad _sl_w2
+    read -r _sl_tag _sl_ok _sl_w1 _sl_bad _sl_w2 <<<"$summary"
+    total=$(( _sl_ok + _sl_bad ))
     if [[ "$total" -ne 16 ]]; then
         STATIC_FAILS="__SHORT__($total)"
         return 1
     fi
-    STATIC_FAILS="$(awk '/^FAIL /{printf "%s ", $2}' "$tmp/st.$label.out")"
+    # WHITESPACE-SPLIT like awk's default, not `cut -d' '`. A review leg was right that they differ:
+    # awk collapses runs of spaces/tabs, `cut` does not, so a `FAIL  geometry` line (two spaces, or a
+    # tab) would have yielded an EMPTY field and silently dropped a leg name from the FAIL set.
+    STATIC_FAILS=""
+    while read -r _sf_tag _sf_name _sf_rest; do
+        [[ "$_sf_tag" == "FAIL" ]] || continue
+        STATIC_FAILS="$STATIC_FAILS$_sf_name "
+    done < "$tmp/st.$label.out"
     return 0
 }
 has_leg() { grep -qE "^FAIL $2( |\$)" "$tmp/st.$1.out"; }
