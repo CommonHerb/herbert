@@ -1201,6 +1201,10 @@ fi
 # shellcheck source=/dev/null
 source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: link66 (cannot source bochs_f2_harness.sh)"; exit 1; }
 F2_GATE="link66"; F2_HARNESS_FAIL=0
+# OPT IN to the shared harness's positive termination (default OFF for every other gate). Without
+# it a triple-faulting Bochs boot is bounded only by the 240 s attempt window -- measured 28.2 s on
+# local 2.7 and the FULL 241 s on CI 2.8, which is what killed link66's first CI run.
+export F2_FEED_END_BOOT=1
 
 # --- the Bochs completion-frame rule, extracted so `reject-twoframe` can exercise THE
 #     PRODUCTION function rather than a copy of it. QEMU's debugcon is a raw device file and is
@@ -1309,7 +1313,7 @@ if [[ "$boot_legs" -eq 1 ]]; then
     fi
     if have_bochs && declare -F f2_bochs_feed_leg >/dev/null; then
         bochs_ran=1
-        echo "  -- boot legs (Bochs 2.7 -- A2: the second draw and every runtime-fault leg run here too) --"
+        echo "  -- boot legs (Bochs $(bochs_version) -- A2: the second draw and every runtime-fault leg run here too) --"
         # The GRUB config the disk build writes. An earlier smoke passed "" here, which wrote an
         # EMPTY grub.cfg -- GRUB then had nothing to boot and every Bochs leg classified
         # NO-SHUTDOWN. The dest path is RELATIVE (boot/kernel.elf), matching the landed callers.
