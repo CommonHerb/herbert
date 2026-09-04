@@ -145,6 +145,10 @@ SENTHEX="5a"
 
 QEMU_BIN="${QEMU_PREFIX:+$QEMU_PREFIX/bin/}qemu-system-x86_64"
 have_qemu()  { command -v "$QEMU_BIN" >/dev/null 2>&1 || [[ -x "$QEMU_BIN" ]]; }
+# THE BOCHS VERSION IS DETECTED, NEVER WRITTEN DOWN. A review leg caught both banners hardcoding
+# "Bochs 2.7" while CI pins bochs 2.8 -- so in CI the banner would have named a version that did
+# not run, in a suite whose whole doctrine is that a banner states only what executed.
+bochs_version() { bochs --help 2>&1 | grep -oE 'Bochs x86 Emulator [0-9][0-9.]*' | head -1 | grep -oE '[0-9][0-9.]*$' || true; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 free_port() { python3 -I -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
@@ -175,6 +179,38 @@ static_py="$tmp/static_legs.py"
 extract_between "<<'PYEOF'$" '^PYEOF$' "$static_py" "the gate's static-leg block"
 extract_between '^cat > "\$tmp/forcing.herb" <<.EOS.$' '^EOS$' "$tmp/forcing.herb" "the forcing source"
 extract_between '^cat > "\$tmp/nobufop.herb" <<.EOS.$' '^EOS$' "$tmp/nobufop.herb" "the no-buf-op reject probe"
+extract_between '^cat > "\$tmp/oneidx.herb" <<.EOS.$' '^EOS$' "$tmp/oneidx.herb" "the one-indexed-op accept probe"
+extract_between '^cat > "\$tmp/singlefunc.herb" <<.EOS.$' '^EOS$' "$tmp/singlefunc.herb" "the single-function reject probe"
+# The gate's boundary-image decoder and its D26 frame-rule fixtures, lifted whole so the two rows
+# that grade them exercise the production text rather than a restatement of it.
+for _fn in frame_scan frame_count frame_last frame_verdict grade_bochs_boundary; do
+    _n="$(grep -cE "^$_fn\\(\\) " "$gate")"
+    [[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract the Bochs frame rule: $_fn defined $_n times in the gate, want 1)"; exit 1; }
+done
+awk '/^frame_scan\(\) \{/{f=1} /^grade_bochs_boundary\(\) \{/{exit} f' "$gate" > "$tmp/frames.sh"
+for fn in frame_scan frame_count frame_last frame_verdict; do
+    _n="$(grep -cE "^$fn\\(\\) " "$tmp/frames.sh")"
+    [[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (the extracted Bochs frame rule defines $fn $_n times, want 1)"; exit 1; }
+done
+_n="$(grep -cE "^golden_leg\\(\\) \\{" "$gate")"
+[[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract golden_leg: matched $_n times, want 1)"; exit 1; }
+awk '/^golden_leg\(\) \{/{f=1} f{print} f && /^}$/{exit}' "$gate" > "$tmp/golden_leg.sh"
+grep -q 'is not exactly 65 bytes' "$tmp/golden_leg.sh" || { echo "FAIL: link66-mutation (extract golden_leg: the 65-byte representation check is missing)"; exit 1; }
+# golden_leg reports through the GATE's ok()/bad(). This file grades it on its RETURN VALUE and keeps
+# its own ledger, so those two are quiet shims here -- not wired to okleg()/fail_test(), which would
+# let an extracted function move this file's counters behind its back.
+ok()  { :; }
+bad() { :; }
+# shellcheck source=/dev/null
+source "$tmp/golden_leg.sh" || { echo "FAIL: link66-mutation (cannot source the extracted golden_leg)"; exit 1; }
+_n="$(grep -cE "^boundary_static\\(\\) \\{" "$gate")"
+[[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract boundary_static: matched $_n times, want 1)"; exit 1; }
+awk '/^boundary_static\(\) \{/{f=1} f{print} f && /^}$/{exit}' "$gate" > "$tmp/boundary_static.sh"
+grep -q 'BOUNDARY-STATIC' "$tmp/boundary_static.sh" || { echo "FAIL: link66-mutation (extract boundary_static: body missing)"; exit 1; }
+# The gate's D26 FIXTURES are deliberately NOT extracted: three of them begin with the same `printf
+# 'boot noise` line, so no single opener is unique and a uniqueness guard that passed would be lying.
+# Row 28 builds the two fixtures that matter itself -- fixtures are data. What IS extracted, and what
+# the row actually grades, is the production RULE (frame_verdict, above).
 # the boundary generator (SENTINEL + boundary_src) and the A1 seed channel, sourced/run as-is
 # Uniqueness FIRST, then extract. A review leg was right that greping the extracted text for what it
 # ought to contain is not a uniqueness check: two definitions both extract, and the later shell
@@ -250,6 +286,17 @@ elif mode == "nopredicate":
                "the two-guard LAYOUT arm")
 elif mode == "noirgate":
     src = once(src, "        if nc_tap_idx_ops(funcs, 0, nf, 0) < 1:\n", "        if false:\n", "the IR >= 1 gate")
+elif mode == "irgate2":
+    # The SAME gate, moved the other way: >= 2 indexed ops. This is the POSITIVE side of the
+    # boundary -- a buffer-mode program with EXACTLY ONE indexed op must still compile, and
+    # `accept-oneidx` is the only leg that says so.
+    src = once(src, "        if nc_tap_idx_ops(funcs, 0, nf, 0) < 1:\n", "        if nc_tap_idx_ops(funcs, 0, nf, 0) < 2:\n", "the IR >= 1 gate (raised to 2)")
+elif mode == "singlefunc":
+    # Route SINGLE-function programs down the multi-function tap path too, so the device-op
+    # multi-function rule stops rejecting them. `reject-singlefunc` is the only leg that sees it.
+    src = infunc(src, "nc_emit_multiboot32_long64_program",
+                 "    if count(funcs) != 1:\n        return nc_tap_emit_program(funcs, prog.2)\n",
+                 "    if true:\n        return nc_tap_emit_program(funcs, prog.2)\n")
 elif mode == "pops":
     src = infunc(src, "nc_tap_pops", "    if op == 49:\n        return 0\n    end\n    if op == 50:\n        return 2\n    end\n    if op == 51:\n        return 3\n    end\n", "")
     src = infunc(src, "nc_tap_pushes", "    if op == 49:\n        return 1\n    end\n    if op == 50:\n        return 1\n    end\n    if op == 51:\n        return 1\n    end\n", "")
@@ -308,11 +355,11 @@ done
 
 # ---------------------------------------------------------------- the gate's static legs, per image
 STATIC_FAILS=""
-static_legs() { # label elf src driverseed harnessecho -> sets STATIC_FAILS, leaves $tmp/st.<label>.out
-    local label="$1" elf="$2" src="$3" drv="$4" ech="$5" rc summary total
+static_legs() { # label elf src driverseed harnessecho [specpath] -> sets STATIC_FAILS
+    local label="$1" elf="$2" src="$3" drv="$4" ech="$5" sp="${6:-$spec}" rc summary total
     STATIC_FAILS=""
     LINK66_DRIVER_SEED="$drv" LINK66_HARNESS_ECHO="$ech" \
-        python3 -I "$static_py" "$spec" "$elf" "$src" > "$tmp/st.$label.out" 2>&1
+        python3 -I "$static_py" "$sp" "$elf" "$src" > "$tmp/st.$label.out" 2>&1
     rc=$?
     summary="$(grep -E '^STATIC-LEGS ' "$tmp/st.$label.out" | tail -1)"
     if [[ "$rc" -ne 0 || -z "$summary" ]]; then
@@ -535,6 +582,11 @@ elif mode == "constidx":
     hits = [h for h in occ(bytes.fromhex("488b04ca")) if h != guard_op50]
     assert len(hits) == 1, "serve's gather is not unique: %s (guard at %d)" % (hits, guard_op50)
     raw[CO + hits[0] + 3] = 0xE2
+elif mode == "elfheader":
+    # The phdr's p_type, which longbuf_spec.Image.header_ok() asserts is PT_LOAD == 1. Nothing else
+    # reads it, so the ONLY leg that can see this is `elf-header` -- which is the point: the leg
+    # exists because the location fields the whole analysis rests on were parsed and then ignored.
+    struct.pack_into("<I", raw, 52, 2)
 elif mode == "underindex":
     # the EDGE probe's baked index 262143 -> 2^64-1, so the SAME image now reaches guard_lo.
     hits = occ(movabs(262143))
@@ -587,8 +639,21 @@ echo "  -- rows graded on the IMAGE or on the emitter's refusal to produce one (
 if mint_mutant decorative; then
     compile_with "$MUTC" "$tmp/forcing.herb" "$tmp/m.decorative"
     if compiled_ok "$tmp/m.decorative"; then
-        leg_red M-decorative "$tmp/m.decorative/a.out" "$tmp/forcing.herb" sites \
-            "the dead 48 8B 04 CA is a raw window at no predicted op-50 offset, and \`counts\` sees n_get+1"
+        if leg_red M-decorative "$tmp/m.decorative/a.out" "$tmp/forcing.herb" sites \
+            "the dead 48 8B 04 CA is a raw window at no predicted op-50 offset"; then
+            # ASSERTED, not narrated. A review lens was right that `counts`, `sib-exclusivity`,
+            # `pushints`, `displacements` and `windows` were firing here as FAIL-set spill while being
+            # counted as "covered" -- coverage that nothing checks is not coverage.
+            _dec_missing=""
+            for _l in counts windows sib-exclusivity pushints displacements; do
+                has_leg M-decorative "$_l" || _dec_missing="$_dec_missing $_l"
+            done
+            if [[ -n "$_dec_missing" ]]; then
+                fail_test "M-decorative: these legs did NOT fire and were being counted as covered:$_dec_missing"
+            else
+                echo "    M-decorative ALSO bit RED on counts, windows, sib-exclusivity, pushints and displacements -- each REQUIRED here, so those five legs are covered by assertion rather than by spill"
+            fi
+        fi
     else
         fail_test "M-decorative: the probe did not compile under the decorative mutant ($COMPILE_MSG) -- a length invariant pre-empted the site legs, which is what declaring the size exists to prevent"
     fi
@@ -626,8 +691,14 @@ fi
 if mint_mutant noguardlo; then
     compile_with "$MUTC" "$tmp/forcing.herb" "$tmp/m.noguardlo"
     if compiled_ok "$tmp/m.noguardlo"; then
-        leg_red M-noguardlo-static "$tmp/m.noguardlo/a.out" "$tmp/forcing.herb" pd-guards \
-            "the page directory now carries ONE non-present entry where the layout requires two"
+        if leg_red M-noguardlo-static "$tmp/m.noguardlo/a.out" "$tmp/forcing.herb" pd-guards \
+            "the page directory now carries ONE non-present entry where the layout requires two"; then
+            if has_leg M-noguardlo-static geometry; then
+                echo "    M-noguardlo ALSO bit RED on \`geometry\` -- REQUIRED here, so that leg is covered by assertion rather than by spill"
+            else
+                fail_test "M-noguardlo-static: \`geometry\` did NOT fire and was being counted as covered"
+            fi
+        fi
     else
         fail_test "M-noguardlo: the forcing program did not compile under the mutant ($COMPILE_MSG)"
     fi
@@ -939,6 +1010,281 @@ else
     else
         fail_test "M-seedpin-internal: the pinned harness printed '${ECHO_MUT:-<none>}', not its pinned constant -- the mutation did not take, so nothing below it is attributable"
     fi
+fi
+
+echo "  -- SLICE 6: the residual legs, closed by ADDING a mutant where one is cheap and discriminating --"
+# The parent's rule (2026-09-03): for each gate leg with no mutant, ADD one where it is cheap and
+# discriminating, or JUSTIFY in the design's table by NAMING the leg's discriminator and saying why a
+# mutant would be redundant. Eight are added here; the justified ones are named in SCOPE-BUILD.md.
+
+# --- ROW 24: M-golden-boundary -- the THREE boundary goldens, which M-golden never touched (it
+#     perturbs the forcing image only, so `golden-forcing` was covered and the other three were not).
+# Graded through the GATE'S OWN `golden_leg`, extracted above -- a review leg was right that comparing
+# digests here is WEAKER than the production leg, which also pins the committed file's EXACT
+# REPRESENTATION at 65 bytes (bash command substitution strips trailing newlines, so a malformed
+# 66-byte pin would satisfy a digest comparison and be refused by the real leg).
+gb_bad=0
+for _lbl in edge over under; do
+    forge golden "$tmp/base.b_$_lbl/a.out" "$tmp/mgb_$_lbl.elf" || { gb_bad=1; continue; }
+    if ! golden_leg "boundary_$_lbl" "$tmp/base.b_$_lbl/a.out" >/dev/null 2>&1; then
+        fail_test "M-golden-boundary/$_lbl: the UNMUTATED image fails the gate's own golden_leg -- no RED below it is attributable"; gb_bad=1; continue
+    fi
+    if golden_leg "boundary_$_lbl" "$tmp/mgb_$_lbl.elf" >/dev/null 2>&1; then
+        fail_test "M-golden-boundary/$_lbl: the gate's own golden_leg ACCEPTED a one-byte forge"; gb_bad=1; continue
+    fi
+    echo "    golden-boundary_$_lbl: the gate's own golden_leg accepts the base image and REFUSES the one-byte forge"
+done
+
+if [[ "$gb_bad" -eq 0 ]]; then
+    echo "M-golden-boundary bit RED on all three committed boundary hashes, each with its base-matches control"
+    scored M-golden-boundary
+fi
+
+# --- ROW 25: M-elfheader -- the phdr's p_type, which the whole positional analysis rests on and
+#     which `elf-header` exists to assert rather than assume.
+if forge elfheader "$tmp/base.forcing/a.out" "$tmp/m_elfheader.elf"; then
+    leg_red M-elfheader "$tmp/m_elfheader.elf" "$tmp/forcing.herb" elf-header \
+        "p_type is no longer PT_LOAD, so the location fields the analysis rests on are wrong -- and NOTHING else reads p_type, which is why this leg is the only one that can see it"
+fi
+
+# --- ROW 26: M-sourceshape -- a bufget whose base is NOT the identifier bound to bufbase(). Graded
+#     by calling longbuf_spec's OWN production predicate, because that predicate IS the leg: the
+#     subject is the SOURCE, and running the image battery on a re-shaped source would fail other
+#     legs for reasons that have nothing to do with A3.3.
+python3 -I - "$tmp/forcing.herb" "$tmp/shape.herb" <<'SHEOF'
+import sys
+src = open(sys.argv[1]).read()
+old = "    let g = bufget(b, 262144)\n"
+assert src.count(old) == 1, "the guard access is not unique (%d hits)" % src.count(old)
+# A DERIVED base: `c` is bufbase()-rooted only through arithmetic, which is exactly the shape A3.3
+# forbids -- a booted measurement showed ops 50/51 take their base as a RUNTIME value, so a computed
+# base runs real indexed accesses entirely outside the guarded buffer.
+open(sys.argv[2], "w").write(src.replace(old, "    let c = b + 0\n    let g = bufget(c, 262144)\n", 1))
+print("SOURCE-MUTATED M-sourceshape")
+SHEOF
+shape_out="$(python3 -I - "$spec" "$tmp/forcing.herb" "$tmp/shape.herb" <<'SPEOF'
+import importlib.util, sys
+_s = importlib.util.spec_from_file_location("longbuf_spec", sys.argv[1])
+L = importlib.util.module_from_spec(_s); _s.loader.exec_module(L)
+base_ok, base_detail = L.source_base_shape(open(sys.argv[2]).read())
+mut_ok, mut_detail = L.source_base_shape(open(sys.argv[3]).read())
+print("BASE %s :: %s" % ("ok" if base_ok else "FAIL", base_detail))
+print("MUT %s :: %s" % ("ok" if mut_ok else "FAIL", mut_detail))
+sys.exit(0 if (base_ok and not mut_ok) else 1)
+SPEOF
+)"; shape_rc=$?
+if [[ "$shape_rc" -eq 0 ]]; then
+    echo "M-sourceshape bit RED on \`source-shape\`: $(grep '^MUT' <<<"$shape_out")"
+    echo "    (control, same predicate, unmutated source: $(grep '^BASE' <<<"$shape_out"))"
+    scored M-sourceshape
+else
+    fail_test "M-sourceshape: \`source-shape\` did not discriminate a computed base ($shape_out)"
+fi
+
+# --- ROW 27: M-parser -- longbuf_spec's parse_positional made to accept ANY length, which is the
+#     scan-shaped behaviour LEDGER D26 records the cost of. Graded through the gate's own static
+#     battery with the mutated spec, so the legs that fire are the gate's, named.
+python3 -I - "$spec" "$tmp/spec_scan.py" <<'PSEOF'
+import sys
+src = open(sys.argv[1]).read()
+old = "    if not isinstance(stream, (bytes, bytearray)) or len(stream) != need:\n"
+assert src.count(old) == 1, "the positional length check is not unique (%d hits)" % src.count(old)
+# Drop the COUNT rejection: a stream one byte short or one byte long is now "well formed", which is
+# precisely what `frame-cardinality` exists to refuse.
+# `!=` -> `<`: a stream one byte LONG is now "well formed", which is what `frame-cardinality`
+# exists to refuse. Deliberately NOT dropping the check outright -- that made the SHORT fixture raise
+# IndexError and killed the whole battery, and a CRASH is not a RED (this file's own rule, and why
+# `static_legs` reports __CRASH__ separately from a leg FAIL).
+open(sys.argv[2], "w").write(src.replace(old, "    if not isinstance(stream, (bytes, bytearray)) or len(stream) < need:\n", 1))
+print("SPEC-MUTATED M-parser")
+PSEOF
+if [[ -s "$tmp/spec_scan.py" ]]; then
+    if static_legs M-parser "$tmp/base.forcing/a.out" "$tmp/forcing.herb" "$CTRL_SEED" "$CTRL_SEED" "$tmp/spec_scan.py" \
+       && has_leg M-parser frame-cardinality; then
+        echo "M-parser bit RED on \`frame-cardinality\`: $(grep -E '^FAIL frame-cardinality ' "$tmp/st.M-parser.out" | head -1)"
+        if has_leg M-parser frame-terminal; then
+            fail_test "M-parser: \`frame-terminal\` ALSO fired, so the two parser legs are not discriminated by this mutation"
+        else
+            echo "    (the parser stopped rejecting by COUNT, which is the D26 scan-shape; \`frame-terminal\` is PROVEN silent here, not merely said to be; full FAIL set: ${STATIC_FAILS:-<none>} -- the IMAGE is untouched)"
+            scored M-parser
+        fi
+    else
+        fail_test "M-parser: \`frame-cardinality\` did not fire against a parser that accepts any length (FAIL set: ${STATIC_FAILS:-<none>})"
+    fi
+else
+    fail_test "M-parser: the spec mutation did not apply"
+fi
+
+# --- ROW 33: M-parserpos -- the answers read at the WRONG positions. `frame-cardinality` cannot see
+#     this (the length is still right); `frame-terminal` is the leg that pins WHERE each answer sits
+#     and that the last one is terminal by construction, and it is the only leg that can.
+python3 -I - "$spec" "$tmp/spec_pos.py" <<'PPEOF'
+import sys
+src = open(sys.argv[1]).read()
+old = "    answers = [stream[n_echo + 3 * j + 2] for j in range(n_query)]\n"
+assert src.count(old) == 1, "the positional answer read is not unique (%d hits)" % src.count(old)
+# Off by one WITHIN the triple: the stream length is unchanged, so the cardinality leg stays green
+# and only the position pin can fire.
+open(sys.argv[2], "w").write(src.replace(old, "    answers = [stream[n_echo + 3 * j + 1] for j in range(n_query)]\n", 1))
+print("SPEC-MUTATED M-parserpos")
+PPEOF
+if [[ -s "$tmp/spec_pos.py" ]]; then
+    if static_legs M-parserpos "$tmp/base.forcing/a.out" "$tmp/forcing.herb" "$CTRL_SEED" "$CTRL_SEED" "$tmp/spec_pos.py" \
+       && has_leg M-parserpos frame-terminal; then
+        echo "M-parserpos bit RED on \`frame-terminal\`: $(grep -E '^FAIL frame-terminal ' "$tmp/st.M-parserpos.out" | head -1)"
+        if has_leg M-parserpos frame-cardinality; then
+            fail_test "M-parserpos: \`frame-cardinality\` ALSO fired, so the two parser legs are not discriminated by this mutation"
+        else
+            echo "    (the answers moved one byte inside each triple, so the LENGTH is still right and \`frame-cardinality\` is PROVEN silent -- full FAIL set: ${STATIC_FAILS:-<none>})"
+            scored M-parserpos
+        fi
+    else
+        fail_test "M-parserpos: \`frame-terminal\` did not fire against answers read at the wrong offset (FAIL set: ${STATIC_FAILS:-<none>})"
+    fi
+else
+    fail_test "M-parserpos: the spec mutation did not apply"
+fi
+
+# --- ROW 34: M-harnesssummary -- the `bochs-harness` leg, which slice 6 first JUSTIFIED as needing no
+#     mutant on the grounds that forcing three genuine harness failures would cost three 240 s Bochs
+#     timeouts. A cross-family review leg REFUTED that: the leg's discriminator is
+#     `f2_harness_summary`'s RETURN VALUE, and the counter it reads can simply be set. No boot at all.
+#     The justification is withdrawn and this row replaces it.
+python3 -I - "$script_dir/bochs_f2_harness.sh" "$tmp/f2_blind.sh" <<'HSEOF'
+import sys
+src = open(sys.argv[1]).read()
+old = ('f2_harness_summary() {\n'
+       '    if [[ "$F2_HARNESS_FAIL" -ne 0 ]]; then\n')
+assert src.count(old) == 1, "f2_harness_summary's fail branch is not unique (%d hits)" % src.count(old)
+# Exhaustion stops being reported: the summary returns 0 no matter how many legs were unadjudicated,
+# which is the fail-OPEN shape the F2 contract exists to forbid.
+open(sys.argv[2], "w").write(src.replace(old, 'f2_harness_summary() {\n    if false; then\n', 1))
+print("SHARED-HARNESS MUTATED M-harnesssummary")
+HSEOF
+if [[ -s "$tmp/f2_blind.sh" ]]; then
+    hs_base="$( set +u; fail_test() { :; }; source "$script_dir/bochs_f2_harness.sh" >/dev/null 2>&1; F2_HARNESS_FAIL=1; if f2_harness_summary >/dev/null 2>&1; then echo GREEN; else echo RED; fi )"
+    hs_mut="$( set +u;  fail_test() { :; }; source "$tmp/f2_blind.sh" >/dev/null 2>&1;                 F2_HARNESS_FAIL=1; if f2_harness_summary >/dev/null 2>&1; then echo GREEN; else echo RED; fi )"
+    if [[ "$hs_base" == "RED" && "$hs_mut" == "GREEN" ]]; then
+        echo "M-harnesssummary bit RED on \`bochs-harness\`: with one leg recorded as exhausted (F2_HARNESS_FAIL=1) the PRODUCTION summary returns failure, and the mutated one returns SUCCESS -- so the gate would print \`ok bochs-harness\` over an attempted-but-unadjudicated Bochs leg, which is exactly the fail-OPEN shape the F2 contract forbids"
+        scored M-harnesssummary
+    else
+        fail_test "M-harnesssummary: the summary did not discriminate (production=$hs_base mutant=$hs_mut; want RED then GREEN)"
+    fi
+else
+    fail_test "M-harnesssummary: the shared-harness mutation did not apply"
+fi
+
+# --- ROW 28: M-frameverdict -- D26 ITSELF, on the Bochs frame rule: bind the FIRST de..ad frame by
+#     bare search, which is the landed defect `reject-twoframe` exists to refuse. The gate's OWN
+#     fixtures are re-run against the mutated rule.
+python3 -I - "$tmp/frames.sh" "$tmp/frames_d26.sh" <<'FVEOF'
+import sys
+src = open(sys.argv[1]).read()
+old = '    [[ "$(frame_last "$1")" == "de${2}ad" ]] || return 1\n'
+assert src.count(old) == 1, "frame_verdict's terminal-frame comparison is not unique (%d hits)" % src.count(old)
+# THE D26 DEFECT, restored deliberately: grade the FIRST frame instead of the terminal one, and stop
+# requiring exactly one. A two-frame stream whose first frame is correct now passes.
+new = '    [[ "$(frame_scan "$1" | head -1)" == "de${2}ad" ]] || return 1\n'
+src = src.replace(old, new, 1)
+old_n = '    local n; n="$(frame_count "$1")"\n    [[ "$n" -eq 1 ]] || return 1\n'
+assert src.count(old_n) == 1, "frame_verdict's cardinality check is not unique"
+open(sys.argv[2], "w").write(src.replace(old_n, '    local n; n="$(frame_count "$1")"\n', 1))
+print("FRAME-RULE MUTATED M-frameverdict")
+FVEOF
+if [[ -s "$tmp/frames_d26.sh" ]]; then
+    tf_out="$(
+        set +u
+        source "$tmp/frames_d26.sh"
+        tmp="$tmp"
+        printf 'boot noise\n\xde\x10\xad\ntail\n'                > "$tmp/d26_one.log"
+        printf 'boot noise\n\xde\x10\xad\nmore\n\xde\x20\xad\n' > "$tmp/d26_two.log"
+        if frame_verdict "$tmp/d26_one.log" 10 && frame_verdict "$tmp/d26_two.log" 10; then
+            echo "D26-ACCEPTED-TWOFRAME"
+        else
+            echo "D26-STILL-REJECTED"
+        fi
+    )"
+    if [[ "$tf_out" == "D26-ACCEPTED-TWOFRAME" ]]; then
+        echo "M-frameverdict bit RED on \`reject-twoframe\`: with the rule binding the FIRST frame and dropping the cardinality check, a TWO-frame stream whose first frame is the expected one is ACCEPTED -- which is LEDGER D26's defect exactly, and the leg exists to refuse it"
+        scored M-frameverdict
+    else
+        fail_test "M-frameverdict: the mutated rule still rejected the two-frame stream ($tf_out) -- the mutation did not reach the rule it names"
+    fi
+else
+    fail_test "M-frameverdict: the frame-rule mutation did not apply"
+fi
+
+# --- ROW 29: M-irgate2 -- the IR gate raised to >= 2, so a buffer-mode program with EXACTLY ONE
+#     indexed op is refused. `accept-oneidx` is the POSITIVE side of that boundary and the only leg
+#     that says a one-op program must still compile.
+compile_with "$NATIVE_CODEGEN_COMPILER" "$tmp/oneidx.herb" "$tmp/base.oneidx"
+if compiled_ok "$tmp/base.oneidx"; then
+    okleg "control-oneidx (the UNMUTATED compiler ACCEPTS a buffer-mode program with exactly one indexed op -- without this, \"the mutant refused it\" would prove nothing)"
+else
+    fail_test "control-oneidx (the unmutated compiler did not accept the one-indexed-op probe: $COMPILE_MSG) -- row 29's RED would not be attributable"
+fi
+if mint_mutant irgate2; then
+    compile_with "$MUTC" "$tmp/oneidx.herb" "$tmp/m.irgate2"
+    if compiled_ok "$tmp/m.irgate2"; then
+        fail_test "M-irgate2: the one-indexed-op probe still COMPILED with the gate raised to >= 2 -- the mutation did not reach the gate it names"
+    elif grep -q 'ERR 655' <<<"$COMPILE_MSG"; then
+        echo "M-irgate2 bit RED on \`accept-oneidx\`: a buffer-mode program with EXACTLY ONE indexed op was REFUSED ($COMPILE_MSG) where the gate requires it to compile"
+        scored M-irgate2
+    else
+        fail_test "M-irgate2: no a.out, but the failure was not ERR 655 ($COMPILE_MSG)"
+    fi
+fi
+
+# --- ROW 30: M-singlefunc -- single-function programs routed down the multi-function tap path, so
+#     the device-op multi-function rule stops refusing them.
+compile_with "$NATIVE_CODEGEN_COMPILER" "$tmp/singlefunc.herb" "$tmp/base.singlefunc"
+if refused_ok "$tmp/base.singlefunc" && grep -qE 'ERR (50[0-9]|6[0-9][0-9])' <<<"$COMPILE_MSG"; then
+    okleg "control-singlefunc (the UNMUTATED compiler REFUSES a single-function device-op program with a named diagnostic: $COMPILE_MSG)"
+else
+    fail_test "control-singlefunc (the unmutated compiler did not refuse the single-function probe with a named diagnostic: rc=$COMPILE_RC $COMPILE_MSG) -- row 30's RED would not be attributable"
+fi
+if mint_mutant singlefunc; then
+    compile_with "$MUTC" "$tmp/singlefunc.herb" "$tmp/m.singlefunc"
+    if compiled_ok "$tmp/m.singlefunc"; then
+        echo "M-singlefunc bit RED on \`reject-singlefunc\`: a SINGLE-function device-op program COMPILED (a.out present, rc=$COMPILE_RC) where the gate requires a named refusal"
+        scored M-singlefunc
+    else
+        fail_test "M-singlefunc: the single-function probe was still refused ($COMPILE_MSG) -- the mutation did not reach the rule it names"
+    fi
+fi
+
+# --- ROW 31: M-boundaryimages -- the decode-based boundary leg, graded on the trio with the EDGE
+#     slot replaced by the under-index forge. That image carries the WRONG own-immediate and a
+#     FOREIGN one, which is exactly the "the compiler lowered both constants the same" collapse the
+#     leg was written for. The gate's own decoder runs, extracted, not restated.
+# shellcheck source=/dev/null
+if source "$tmp/boundary_static.sh" 2>/dev/null && declare -F boundary_static >/dev/null; then
+    # The extracted function reads the GATE's own paths ($tmp/b_<lbl>.d/a.out), so those are staged
+    # here rather than the function being edited -- editing it would make this a restatement.
+    for _lbl in edge over under; do
+        mkdir -p "$tmp/b_$_lbl.d"; cp "$tmp/base.b_$_lbl/a.out" "$tmp/b_$_lbl.d/a.out"
+    done
+    bi_base="$(boundary_static 2>&1)"; bi_base_rc=$?
+    # This row runs BEFORE the booting section, so it forges its own copy rather than depending on a
+    # file a later block happens to leave behind -- an ordering dependency is how a leg silently
+    # stops grading.
+    [[ -f "$tmp/m_underindex.elf" ]] || forge underindex "$tmp/base.b_edge/a.out" "$tmp/m_underindex.elf"
+    if [[ -f "$tmp/m_underindex.elf" ]]; then
+        cp "$tmp/m_underindex.elf" "$tmp/b_edge.d/a.out"
+        bi_mut="$(boundary_static 2>&1)"; bi_mut_rc=$?
+        cp "$tmp/base.b_edge/a.out" "$tmp/b_edge.d/a.out"
+        if [[ "$bi_base_rc" -eq 0 && "$bi_mut_rc" -ne 0 ]]; then
+            echo "M-boundaryimages bit RED on \`boundary-images\`: $(sed 's/^BOUNDARY-STATIC //' <<<"$bi_mut" | cut -c1-150)"
+            echo "    (control, same decoder, the honest trio: $(sed 's/^BOUNDARY-STATIC //' <<<"$bi_base" | cut -c1-90))"
+            scored M-boundaryimages
+        else
+            fail_test "M-boundaryimages: the decoder did not discriminate (base rc=$bi_base_rc mutant rc=$bi_mut_rc; $bi_mut)"
+        fi
+    else
+        fail_test "M-boundaryimages: the under-index forge is missing, so the trio could not be re-graded"
+    fi
+else
+    fail_test "M-boundaryimages: the gate's boundary decoder could not be sourced"
 fi
 
 # ---------------------------------------------------------------- the booting rows
@@ -1390,15 +1736,8 @@ fi
 # re-roll x3 and exhaustion FAILING CLOSED. The frame rule below is the GATE'S OWN, extracted rather
 # than copied -- the gate learned the hard way that Bochs's port_e9_hack log is BINARY and that a
 # non-byte-aligned matcher invents frames that do not exist.
-for _fn in frame_scan frame_count frame_last frame_verdict grade_bochs_boundary; do
-    _n="$(grep -cE "^$_fn\\(\\) " "$gate")"
-    [[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (extract the Bochs frame rule: $_fn defined $_n times in the gate, want 1)"; exit 1; }
-done
-awk '/^frame_scan\(\) \{/{f=1} /^grade_bochs_boundary\(\) \{/{exit} f' "$gate" > "$tmp/frames.sh"
-for fn in frame_scan frame_count frame_last frame_verdict; do
-    _n="$(grep -cE "^$fn\\(\\) " "$tmp/frames.sh")"
-    [[ "$_n" -eq 1 ]] || { echo "FAIL: link66-mutation (the extracted Bochs frame rule defines $fn $_n times, want 1)"; exit 1; }
-done
+# The rule itself is extracted in the plumbing near the top, because row 28 grades it long
+# before any Bochs leg runs; here it is only sourced.
 # shellcheck source=/dev/null
 source "$tmp/frames.sh" || { echo "FAIL: link66-mutation (cannot source the extracted frame rule)"; exit 1; }
 if [[ ! -f "$script_dir/bochs_f2_harness.sh" ]]; then
@@ -1463,6 +1802,67 @@ if have_bochs && declare -F f2_bochs_feed_attempt >/dev/null; then
         echo "M-scale4 bit RED on Bochs too (A2): at scale 4 the 262144 probe ANSWERS on a second engine"
         scored M-scale4-bochs
     fi
+    # --- ROW 32: M-seedpin-internal-bochs -- A2's own GRADED-SESSION legs, `draw1-bochs` and
+    #     `draw2-bochs`, which no chartered row reached. They are NOT the QEMU draw legs on a second
+    #     engine sharing one code path: the gate implements `bochs_draw` separately from `qemu_draw`,
+    #     with its own class handling, its own seed check, its own capture check and its own witness
+    #     check, so a QEMU-side mutant proves nothing about them.
+    #
+    #     WHAT THIS ROW PROVES, NARROWED after two review lenses landed the same objection: it runs a
+    #     REAL Bochs graded session against the pinned harness and shows the seed the harness prints
+    #     there is NOT the one the driver drew -- the comparison `bochs_draw` makes at its own seed
+    #     check. It does NOT execute `bochs_draw` itself: that function is defined inside the gate's
+    #     `have_bochs` block over a closure of the gate's own locals, so it is not extractable the way
+    #     `golden_leg`, `frame_verdict`, `boundary_static` and the static battery are, and this row
+    #     therefore grades the SAME FACT through its own comparison. Said plainly rather than claimed
+    #     away: for the static legs this file grades the gate's OWN code; for the Bochs draw leg it
+    #     grades the same discrimination in a restatement.
+    #
+    #     A wrong-ANSWER mutant was rejected for this leg deliberately, and the reason is Bochs-specific
+    #     rather than general: on QEMU this file KILLS the guest once the verdict is recorded, which is
+    #     why rows 9 and 10 are cheap. Bochs has no such kill here -- a guest whose answer was rejected
+    #     is left blocked on input_byte and the leg runs to its 240 s timeout, three attempts over. A
+    #     pinned SEED lets the session complete normally and still go RED.
+    if [[ -s "$tmp/feed_pinned.py" ]]; then
+        _bs="$(draw_seed "$tmp/seedchan.sh")"
+        if [[ "${#_bs}" -ne 32 ]]; then
+            fail_test "M-seedpin-internal-bochs: the driver did not draw"
+        else
+            _W="$tmp/M-seedpin-internal-bochs.b"; rm -rf "$_W"; mkdir -p "$_W"
+            _feeder_save="$feeder"; feeder="$tmp/feed_pinned.py"
+            _cls=""
+            for _attempt in 1 2 3; do
+                _cls="$(f2_bochs_feed_attempt "--grade $N:$Q --draw 0 --master-seed ${_bs:0:16} --query-seed ${_bs:16:16} --witness --drain-mode quiet --cap $_W/cap.bin" "$_W/feed.log" "$L66_GRUBCFG" 240 64 "$_W/out.log" "$tmp/base.forcing/a.out:boot/kernel.elf")"
+                case "$_cls" in NO-SHUTDOWN|COMPLETED) break ;; esac
+                echo "HARNESS re-roll: link66-mutation M-seedpin-internal-bochs attempt $_attempt = $_cls (fresh disk + fresh feeder retry)" >&2
+                [[ "$_attempt" -eq 3 ]] && f2_harness_error M-seedpin-internal-bochs "$_cls"
+            done
+            feeder="$_feeder_save"
+            _gl="$(grep -E '^GRADE ' "$_W/feed.log" | tail -1)"
+            _sl="$(sed -n 's/^LINK66_SEED=\([0-9a-f]*\).*/\1/p' "$_W/feed.log" | tail -1)"
+            echo "    M-seedpin-internal-bochs :: class=$_cls $_gl"
+            echo "    M-seedpin-internal-bochs LINK66_SEED=$_sl (harness) driver drew $_bs"
+            # NO-SHUTDOWN specifically, and a COMPLETE grade -- a review leg was right that accepting
+            # COMPLETED, or scoring without reading the GRADE line at all, lets a feeder that printed
+            # its constant and then DIED after LISTENING count as a bite.
+            if [[ "$_cls" != "NO-SHUTDOWN" ]]; then
+                fail_test "M-seedpin-internal-bochs (class=$_cls, want NO-SHUTDOWN -- the guest must reach the guard access and fault; COMPLETED means it did not, and any other class is a HARNESS failure, not a kernel verdict)"
+            elif ! grep -qE 'ok=1' <<<"$_gl" || ! grep -qE "rx=$WANT_RX expected_rx=$WANT_RX extra=0" <<<"$_gl" || ! grep -qE "answers=$Q" <<<"$_gl"; then
+                fail_test "M-seedpin-internal-bochs (the Bochs session did not GRADE cleanly, so its seed line is not evidence: ${_gl:-<no GRADE line>})"
+            elif ! grep -q "^LISTENING" "$_W/feed.log" 2>/dev/null; then
+                fail_test "M-seedpin-internal-bochs (the feeder never LISTENED -- HARNESS, not a kernel verdict)"
+            elif [[ "${#_sl}" -ne 32 ]]; then
+                fail_test "M-seedpin-internal-bochs (the harness printed no seed line on Bochs: '${_sl:-<none>}') -- an empty read would make this bite vacuously"
+            elif [[ "$_sl" == "$_bs" ]]; then
+                fail_test "M-seedpin-internal-bochs (the harness echoed the DRAWN seed on Bochs, so the pin did not take)"
+            else
+                echo "M-seedpin-internal-bochs bit RED on \`draw1-bochs\`'s discrimination: a REAL Bochs graded session (class=NO-SHUTDOWN, ok=1, rx=$WANT_RX, extra=0) printed the harness's internal constant $_sl where the driver drew $_bs -- the comparison bochs_draw makes. STATED EXACTLY: this grades the same FACT through this file's own comparison, because bochs_draw is a closure over the gate's locals and is not extractable; it is NOT the gate's leg body executing"
+                scored M-seedpin-internal-bochs
+            fi
+        fi
+    else
+        fail_test "M-seedpin-internal-bochs: the pinned harness is missing"
+    fi
     if ! declare -F f2_harness_summary >/dev/null; then
         fail_test "bochs-harness (f2_harness_summary is not defined after sourcing -- the shared harness did not load)"
     elif ! f2_harness_summary; then
@@ -1492,17 +1892,22 @@ fi
 REQUIRED_ROWS="M-decorative M-literal M-recursionstore M-deadsib M-underindex M-noguardlo M-scale4 \
 M-basebias M-wrongidx M-constidx M-memsz M-opsize-49 M-opsize-50 M-opsize-51 M-golden M-nopredicate \
 M-noirgate M-pops M-op51noret M-seedpin-env M-seedpin-internal M-driverpin"
+# Rows 24-31, added in slice 6 to close the per-leg residual the parent ruled on: each covers a
+# gate leg that no chartered row reached. Listed separately so the ORIGINAL twenty-two, and then
+# row 23, stay auditable as sets.
+REQUIRED_RESIDUAL="M-golden-boundary M-elfheader M-sourceshape M-parser M-frameverdict M-irgate2 \
+M-singlefunc M-boundaryimages M-parserpos M-harnesssummary M-seedpin-internal-bochs"
 REQUIRED_CONTROLS="control-static control-seed-refusal control-seed-echo control-noirgate control-qemu \
 control-bochs seed-freshness bochs-harness M-driverpin-seedecho-green M-op51noret-static"
 # Row 23, ACCEPTED by parent ruling 2026-09-03 after a blind refutation lens showed no chartered row
 # covers its shape. Kept in its own list so the ORIGINAL twenty-two stay auditable as a set.
 REQUIRED_ADDED="M-seedpin-late"
 MISSING=""
-for _r in $REQUIRED_ROWS $REQUIRED_CONTROLS $REQUIRED_ADDED; do row_ran "$_r" || MISSING="$MISSING $_r"; done
+for _r in $REQUIRED_ROWS $REQUIRED_CONTROLS $REQUIRED_ADDED $REQUIRED_RESIDUAL; do row_ran "$_r" || MISSING="$MISSING $_r"; done
 SUBSTRATES="static/compile-time only"
 if [[ "$boot_legs" -eq 1 ]]; then
     SUBSTRATES="QEMU-TCG"
-    if [[ "$bochs_ran" -eq 1 ]]; then SUBSTRATES="$SUBSTRATES + Bochs 2.7 (A2, dual-substrate on every runtime-fault row)"
+    if [[ "$bochs_ran" -eq 1 ]]; then SUBSTRATES="$SUBSTRATES + Bochs $(bochs_version) (A2, dual-substrate on every runtime-fault row; version DETECTED -- CI pins 2.8, every local figure is 2.7)"
     else SUBSTRATES="$SUBSTRATES ONLY -- Bochs did NOT run, so A2's second engine is UNOBSERVED on this host"; fi
 fi
 echo "LEGS THAT RAN AND SCORED ($pass):$RAN"
@@ -1517,5 +1922,5 @@ if [[ -n "$MISSING" ]]; then
     fi
     exit 0
 fi
-echo "PASS: link66-mutation ($pass legs on $SUBSTRATES: controls GREEN -- control-static (the base image passes all 16 gate static legs), control-seed-refusal, control-seed-echo, control-qemu (base image graded GREEN on QEMU-TCG, answer stream == host table), control-bochs (base boundary probe graded GREEN on Bochs, marker seen, no completion frame), seed-freshness (two consecutive graded runs printed different seeds), M-noirgate's base-refuses control and M-golden's base-matches -- and each of the twenty-three chartered mutants bit RED on its OWN targeted leg with the committed hash out of circuit for all but M-golden: M-decorative (sites) + M-literal (rawdecode) + M-recursionstore/M-deadsib (the black-box floor alone; they answer a constant, so they are P_forge~0 forgers and NOT the design's priced chain forgery) + M-underindex (the EDGE leg's marker-then-SENTINEL round-trip is violated by a fault at the derived guard_lo address, QEMU and Bochs) + M-noguardlo (pd-guards; the -1 probe completes, QEMU and Bochs) + M-scale4 (rawdecode; the 262144 probe answers, QEMU and Bochs) + M-basebias (bufbase-eq; its runtime leg ON THE GRADED DRAW is GREEN by design and is not booted) + M-wrongidx/M-constidx (the answer stream) + M-memsz (pmemsz) + M-opsize-49/50/51 (ERR 610/611/611 at compile time) + M-golden (the committed hash with its base-matches control) + M-nopredicate (pd-guards AND bufbase-eq, static only by parent ruling) + M-noirgate (reject-nobufop: the no-buf-op probe compiles where the base compiler refuses it) + M-pops (ERR 605) + M-op51noret (the fill echo, and the byte-window pin too) + M-seedpin-env (seed-refusal, and a program storing no payload then grades GREEN on an attacker-chosen seed) + M-seedpin-internal (seed-echo AND seed-freshness) + M-driverpin (seed-freshness ONLY, with seed-echo PROVEN absent from its FAIL set rather than asserted) + M-seedpin-late (row 23: the harness echoes the DRAWN seed verbatim and generates from a constant, so BOTH A1 legs are green against it and only the driver's own independent derivation of the whole receive transcript catches it))"
+echo "PASS: link66-mutation ($pass legs on $SUBSTRATES: controls GREEN -- control-static (the base image passes all 16 gate static legs), control-seed-refusal, control-seed-echo, control-qemu (base image graded GREEN on QEMU-TCG, answer stream == host table), control-bochs (base boundary probe graded GREEN on Bochs, marker seen, no completion frame), seed-freshness (two consecutive graded runs printed different seeds), M-noirgate's base-refuses control and M-golden's base-matches -- and each of the twenty-three chartered mutants bit RED on its OWN targeted leg with the committed hash out of circuit for all but M-golden: M-decorative (sites) + M-literal (rawdecode) + M-recursionstore/M-deadsib (the black-box floor alone; they answer a constant, so they are P_forge~0 forgers and NOT the design's priced chain forgery) + M-underindex (the EDGE leg's marker-then-SENTINEL round-trip is violated by a fault at the derived guard_lo address, QEMU and Bochs) + M-noguardlo (pd-guards; the -1 probe completes, QEMU and Bochs) + M-scale4 (rawdecode; the 262144 probe answers, QEMU and Bochs) + M-basebias (bufbase-eq; its runtime leg ON THE GRADED DRAW is GREEN by design and is not booted) + M-wrongidx/M-constidx (the answer stream) + M-memsz (pmemsz) + M-opsize-49/50/51 (ERR 610/611/611 at compile time) + M-golden (the committed hash with its base-matches control) + M-nopredicate (pd-guards AND bufbase-eq, static only by parent ruling) + M-noirgate (reject-nobufop: the no-buf-op probe compiles where the base compiler refuses it) + M-pops (ERR 605) + M-op51noret (the fill echo, and the byte-window pin too) + M-seedpin-env (seed-refusal, and a program storing no payload then grades GREEN on an attacker-chosen seed) + M-seedpin-internal (seed-echo AND seed-freshness) + M-driverpin (seed-freshness ONLY, with seed-echo PROVEN absent from its FAIL set rather than asserted) + M-seedpin-late (row 23: the harness echoes the DRAWN seed verbatim and generates from a constant, so BOTH A1 legs are green against it and only the driver's own independent derivation of the whole receive transcript catches it); and TEN MORE rows added in slice 6 to close the per-leg residual, each covering a gate leg no chartered row reached: M-golden-boundary (the three boundary hashes M-golden never touched) + M-elfheader (elf-header, the only leg that reads p_type) + M-sourceshape (source-shape, graded by longbuf_spec's own predicate) + M-parser (frame-cardinality) + M-parserpos (frame-terminal) + M-frameverdict (reject-twoframe -- LEDGER D26's own defect, restored deliberately, and the rule ACCEPTS a two-frame stream again) + M-irgate2 (accept-oneidx, the POSITIVE side of the IR boundary) + M-singlefunc (reject-singlefunc) + M-boundaryimages (boundary-images, the constant-collapse the decoder was written for) + M-seedpin-internal-bochs (draw1-bochs -- A2's GRADED-SESSION leg, which bochs_draw implements separately from qemu_draw, so no QEMU-side row covers it). COVERAGE, STATED EXACTLY RATHER THAN ROUNDED: the STATIC legs are graded through the gate's OWN extracted code (its 16-leg battery, golden_leg, boundary_static, frame_verdict), and after rows 24-34 every static leg has a row that REQUIRES it -- counts, windows, sib-exclusivity, pushints and displacements are required inside M-decorative and geometry inside M-noguardlo, rather than being counted from FAIL-set spill. The RUNTIME legs (draw1-qemu, draw2-qemu, draw1-bochs, draw2-bochs, draw1-kvm) are graded by THIS FILE'S session driver, which models the gate's rather than executing it: the booting rows prove the discriminations exist, not that the gate's own leg bodies run them. draw2-qemu, draw2-bochs and draw1-kvm additionally have no row of their own and are JUSTIFIED in SCOPE-BUILD.md as the same functions their draw-1 siblings exercise)"
 exit 0

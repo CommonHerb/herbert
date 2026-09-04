@@ -669,6 +669,10 @@ fi
 QEMU_BIN="${QEMU_PREFIX:+$QEMU_PREFIX/bin/}qemu-system-x86_64"
 have_qemu()  { command -v "$QEMU_BIN" >/dev/null 2>&1 || [[ -x "$QEMU_BIN" ]]; }
 have_kvm()   { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
+# THE BOCHS VERSION IS DETECTED, NEVER WRITTEN DOWN. A review leg caught both banners hardcoding
+# "Bochs 2.7" while CI pins bochs 2.8 -- so in CI the banner would have named a version that did
+# not run, in a suite whose whole doctrine is that a banner states only what executed.
+bochs_version() { bochs --help 2>&1 | grep -oE 'Bochs x86 Emulator [0-9][0-9.]*' | head -1 | grep -oE '[0-9][0-9.]*$' || true; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 free_port() { python3 -I -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
@@ -1486,7 +1490,7 @@ BOOT_LEGS="draw1-qemu, draw2-qemu (both GUARD-WITNESS: emulator-authored wire re
 SUBSTRATES="QEMU-TCG"
 if [[ "$bochs_ran" -eq 1 ]]; then
     BOOT_LEGS="$BOOT_LEGS, draw1-bochs, draw2-bochs, boundary-edge-bochs, boundary-over-bochs, boundary-under-bochs, bochs-harness"
-    SUBSTRATES="$SUBSTRATES + Bochs 2.7 (A2, dual-substrate)"
+    SUBSTRATES="$SUBSTRATES + Bochs $(bochs_version) (A2, dual-substrate; version DETECTED, not written down -- CI pins 2.8 and every local figure in this design is 2.7)"
 else
     SUBSTRATES="$SUBSTRATES ONLY -- Bochs did NOT run, so A2's second engine is UNOBSERVED on this host"
 fi

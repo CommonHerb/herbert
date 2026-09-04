@@ -29,7 +29,11 @@ unset CDPATH
 cd -- "$(dirname "$0")/../.." || exit 1   # herbert repo root
 
 LO="${KERNEL_VERIFY_LO:-17}"
-HI="${KERNEL_VERIFY_HI:-65}"
+# The DEFAULT sweep must track the canonical set below (GATE_LO/GATE_HI), or `make kernel-verify`
+# silently stops short of the newest link while that link is still REQUIRED to exist -- which is
+# exactly what happened when the canonical range moved to 66 and this default was left at 65:
+# link66 would have been canonical, mandatory, and never run by the local sweep.
+HI="${KERNEL_VERIFY_HI:-66}"
 
 # Validate the range up front: a non-integer or inverted range must FAIL, never fall
 # through to a vacuous "GREEN" with zero gates run (a false-green is the one outcome this
@@ -73,10 +77,15 @@ have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # mirrors the g
 
 # --- the canonical kernel-arc gate set (what MUST exist -- a missing member inside the requested range is a
 #     HARD failure, never the silent skip that yields a vacuous GREEN) --------------------------------------
-#   * gate script     for every link 17..65
-#   * mutation proof  for every link 18..65  (link17 predates the mutation-proof convention -- the ONE
+#   * gate script     for every link 17..66
+#   * mutation proof  for every link 18..66  (link17 predates the mutation-proof convention -- the ONE
 #                     documented gate-only exception)
-GATE_LO=17; GATE_HI=65
+#   RANGE MOVED 65 -> 66 in link66's landing slice (longbuf, the 50th kernel-arc link). This line is
+#   also the SCORECARD's range authority for its section 4 (tools/scorecard.sh reads GATE_LO=/GATE_HI=
+#   out of this file's git HEAD blob), so until it moves the scorecard cannot see link66 at all and
+#   reports 49 links with link65 as the newest -- which is why a landing that stops at the workflow
+#   leaves the project's own progress authority telling the truth about the wrong tree.
+GATE_LO=17; GATE_HI=66
 mutation_expected() { local n="$1"; (( n >= 18 && n <= GATE_HI )); }
 
 # --- which requested links carry a KVM real-silicon leg. An explicit MEMBER SET, NOT a contiguous range
@@ -98,7 +107,7 @@ mutation_expected() { local n="$1"; (( n >= 18 && n <= GATE_HI )); }
 #     is unchanged in substance (blind Opus 5 finding 3, 2026-09-01). A stronger closure
 #     (a machine-readable KVM-ran sentinel per gate, or a KERNEL_CODEGEN_REQUIRE_KVM=1 the member gates
 #     honor) remains a future hardening, out of scope here. ---
-KVM_LINKS="39 $(seq -s' ' 44 65)"
+KVM_LINKS="39 $(seq -s' ' 44 66)"
 kvm_links_desc() {   # compact the member set for the banner -- DERIVED from KVM_LINKS, so the text a
                      # reader sees can never drift from the set the requirement is computed on.
     local n out="" s="" p=""
