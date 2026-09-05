@@ -114,6 +114,7 @@ BX
 port_e9_hack: enabled=1
 display_library: x
 panic: action=report
+log: bochs_log.txt
 BX
       } > bochsrc.txt
       xvfb-run -a bash -c "yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )

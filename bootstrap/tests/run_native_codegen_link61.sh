@@ -283,6 +283,7 @@ com1: enabled=1, mode=socket-client, dev=127.0.0.1:__PORT__
 port_e9_hack: enabled=1
 display_library: x
 panic: action=report
+log: bochs_log.txt
 BX
     # F2 sweep (2026-07-04): the existing retry re-rolls on a missing/truncated trace (is_struct_flake). Add the EXPLICIT
     # harness detectors from the link60 reference so a harness failure re-rolls instead of grading a confounded trace:

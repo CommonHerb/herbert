@@ -294,3 +294,62 @@ jobs:
         if: always()
         timeout-minutes: 25
         run: KERNEL_CODEGEN_REQUIRE_EMU=1 KERNEL_CODEGEN_MUTATION=1 bash bootstrap/tests/run_native_codegen_link66_mutation.sh
+
+      # ---------------------------------------------------------------------------------------
+      # Bochs 2.8 RAW STREAMS -- a design INPUT for the debugcon-parser packet (parent ruling,
+      # 2026-09-05). Every local measurement in that packet is Bochs 2.7; VERIFYING.md makes the
+      # CI run the authoritative Bochs substrate, so round 4 needs 2.8's own stdout and log
+      # beside the 2.7 captures. The gates DELETE their work dirs on exit, so a plain upload of
+      # what they write finds nothing -- this step runs a CAPTURE COPY of one gate (identical
+      # bytes except that the work dirs are KEPT) and enumerates the paths the gate really wrote.
+      # It is best-effort by construction: `continue-on-error` + `if-no-files-found: ignore`, so
+      # it can NEVER fail the run or change a verdict.
+      - name: capture Bochs raw stdout + bochs_log.txt (design INPUT; never fails the run)
+        if: always()
+        continue-on-error: true
+        run: |
+          set -u
+          out="$GITHUB_WORKSPACE/_bochs_streams"; mkdir -p "$out"
+          bochs --help 2>&1 | grep -oE 'Bochs x86 Emulator [0-9.]+' | head -1 > "$out/BOCHS-VERSION.txt" || true
+          cat "$out/BOCHS-VERSION.txt" || true
+          python3 - "$PWD" "$out" <<'PY'
+          import re, sys, os
+          repo, out = sys.argv[1], sys.argv[2]
+          src = os.path.join(repo, 'bootstrap/tests/run_native_codegen_link33.sh')
+          s = open(src).read()
+          # the same two-line capture-copy technique the packet uses locally: keep the work dirs.
+          s = s.replace('script_dir="$(cd "$(dirname "$0")" && pwd)"',
+                        'script_dir="%s/bootstrap/tests"' % repo)
+          s = s.replace('work="$(mktemp -d)"', 'work="%s/work"; mkdir -p "$work"' % out)
+          s = re.sub(r"trap 'rm -rf \"\$work\"' EXIT", "trap '' EXIT", s)
+          s = s.replace('W="$(mktemp -d)"', 'W="$(mktemp -d -p "$work")"')
+          s = re.sub(r'rm -rf "\$W";', ': ;', s)
+          open(os.path.join(out, 'capture-copy.sh'), 'w').write(s)
+          print('capture copy written')
+          PY
+          bash -n "$out/capture-copy.sh" || { echo "capture copy is not valid bash -- skipping"; exit 0; }
+          rc=0
+          KERNEL_CODEGEN_REQUIRE_EMU=1 timeout 900 bash "$out/capture-copy.sh" > "$out/capture.log" 2>&1 || rc=$?
+          # Record the capture's exit status as a MACHINE-READABLE file. Without it a timeout or a
+          # partial capture uploads partial streams with no completion record, and incomplete design
+          # evidence can be mistaken for complete -- which is the exact defect class this packet
+          # exists to remove. (Cross-model review leg, Codex gpt-5.6-sol, 2026-09-05.)
+          echo "$rc" > "$out/CAPTURE-STATUS.txt"
+          echo "capture exit status: $rc"
+          echo "--- paths the gate actually wrote ---"
+          find "$out" \( -name 'bochs_out.txt' -o -name 'bochs_log.txt' \) -printf '%s\t%p\n' | head -50
+          du -sh "$out" || true
+      - name: upload Bochs raw streams (design INPUT; never fails the run)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: bochs-raw-streams-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 30
+          path: |
+            _bochs_streams/BOCHS-VERSION.txt
+            _bochs_streams/CAPTURE-STATUS.txt
+            _bochs_streams/capture.log
+            _bochs_streams/**/bochs_out.txt
+            _bochs_streams/**/bochs_log.txt

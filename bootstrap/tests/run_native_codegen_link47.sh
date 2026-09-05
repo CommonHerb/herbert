@@ -156,6 +156,7 @@ boot: disk
 port_e9_hack: enabled=1
 display_library: x
 panic: action=report
+log: bochs_log.txt
 BX
       xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
     python3 - "$d/bochs_out.txt" "$e9" <<'PY'

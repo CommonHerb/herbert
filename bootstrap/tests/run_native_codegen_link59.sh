@@ -273,6 +273,7 @@ com1: enabled=1, mode=socket-client, dev=127.0.0.1:__PORT__
 port_e9_hack: enabled=1
 display_library: x
 panic: action=report
+log: bochs_log.txt
 BX
     # Harness-failure detectors (F2 sweep, mirror of the link60 reference). Each sets the GLOBAL BOCHS_HARNESS_ERR
     # (naming the offending file) and returns nonzero so the caller re-rolls, never false-REDding the kernel.

@@ -333,6 +333,7 @@ boot: disk
 port_e9_hack: enabled=1
 display_library: x
 panic: action=report
+log: bochs_log.txt
 BX
       xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" > bochs_out.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "$work"`
     python3 - "$d/bochs_out.txt" "$out" <<'PY'

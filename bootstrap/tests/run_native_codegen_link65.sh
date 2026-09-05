@@ -505,6 +505,7 @@ boot: disk
 port_e9_hack: enabled=1
 display_library: x
 panic: action=report
+log: bochs_log.txt
 BX
       xvfb-run -a bash -c "yes c | timeout -s KILL 120 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
     hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null

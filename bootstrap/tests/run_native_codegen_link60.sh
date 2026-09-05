@@ -243,6 +243,7 @@ com1: enabled=1, mode=socket-client, dev=127.0.0.1:__PORT__
 port_e9_hack: enabled=1
 display_library: x
 panic: action=report
+log: bochs_log.txt
 BX
     # HARNESS-vs-KERNEL distinction (parent 2026-07-04): a Bochs boot whose COM1 feeder never bound its
     # socket (feed*.log never reaches LISTENING) or whose Bochs run produced no output at all is an

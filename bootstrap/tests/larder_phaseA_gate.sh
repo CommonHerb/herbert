@@ -187,6 +187,7 @@ com1: enabled=1, mode=socket-client, dev=127.0.0.1:__PORT__
 port_e9_hack: enabled=1
 display_library: x
 panic: action=report
+log: bochs_log.txt
 BX
   port=$(free_port)
   python3 "$feeder" "$port" $STREAM --hold 150 > "$d/feed.log" 2>&1 & fp=$!
