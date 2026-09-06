@@ -2837,121 +2837,32 @@ func err_parse_type_tuple_tail(tokens, pos, eof_line, n_items, tuple_line):
     return err_parse_ok(pos + 1)
 end
 
+-- This checked pass recognizes structure, not expression meaning. Share the
+-- AST parser's operator vocabulary; leave precedence and class-mixing ERR 442
+-- to that parser. A flat operand/operator chain avoids a second precedence
+-- ladder drifting behind the language. Groups/calls still recurse structurally.
+-- The root kind records only whether the complete expression is a call, for do.
 func err_parse_expr(tokens, pos, eof_line):
-    return err_parse_or(tokens, pos, eof_line)
-end
-
-func err_parse_or(tokens, pos, eof_line):
-    let r = err_parse_and(tokens, pos, eof_line)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_or_loop(tokens, r.2, eof_line, r.3)
-end
-
-func err_parse_or_loop(tokens, pos, eof_line, root_kind):
-    if tok_is_ident_text(tokens, pos, "or"):
-        let r = err_parse_and(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return err_parse_or_loop(tokens, r.2, eof_line, err_expr_other())
-    end
-    return err_parse_ok_extra(pos, root_kind)
-end
-
-func err_parse_and(tokens, pos, eof_line):
-    let r = err_parse_cmp(tokens, pos, eof_line)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_and_loop(tokens, r.2, eof_line, r.3)
-end
-
-func err_parse_and_loop(tokens, pos, eof_line, root_kind):
-    if tok_is_ident_text(tokens, pos, "and"):
-        let r = err_parse_cmp(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return err_parse_and_loop(tokens, r.2, eof_line, err_expr_other())
-    end
-    return err_parse_ok_extra(pos, root_kind)
-end
-
-func err_parse_cmp(tokens, pos, eof_line):
-    let r = err_parse_add(tokens, pos, eof_line)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_cmp_loop(tokens, r.2, eof_line, r.3)
-end
-
-func err_parse_cmp_loop(tokens, pos, eof_line, root_kind):
-    if pos >= count(tokens):
-        return err_parse_ok_extra(pos, root_kind)
-    end
-    let t = get(tokens, pos)
-    if t.0 == 5 and not equal(cmp_tag(t.1), ""):
-        let r = err_parse_add(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return err_parse_cmp_loop(tokens, r.2, eof_line, err_expr_other())
-    end
-    return err_parse_ok_extra(pos, root_kind)
-end
-
-func err_parse_add(tokens, pos, eof_line):
-    let r = err_parse_mul(tokens, pos, eof_line)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_add_loop(tokens, r.2, eof_line, r.3)
-end
-
-func err_parse_add_loop(tokens, pos, eof_line, root_kind):
-    if pos >= count(tokens):
-        return err_parse_ok_extra(pos, root_kind)
-    end
-    let t = get(tokens, pos)
-    if t.0 == 5 and not equal(add_tag(t.1), ""):
-        let r = err_parse_mul(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return err_parse_add_loop(tokens, r.2, eof_line, err_expr_other())
-    end
-    return err_parse_ok_extra(pos, root_kind)
-end
-
--- Multiplicative tier in the structural err-parse mirror (`*` `/` `%`), one
--- level tighter than additive. Mirrors err_parse_add, calling err_parse_not.
-func err_parse_mul(tokens, pos, eof_line):
     let r = err_parse_not(tokens, pos, eof_line)
     if r.0 == err_err_tag():
         return r
     end
-    return err_parse_mul_loop(tokens, r.2, eof_line, r.3)
+    return err_parse_expr_tail(tokens, r.2, eof_line, r.3)
 end
 
-func err_parse_mul_loop(tokens, pos, eof_line, root_kind):
-    if pos >= count(tokens):
+func err_parse_expr_tail(tokens, pos, eof_line, root_kind):
+    if bin_op_class(tokens, pos) == 0:
         return err_parse_ok_extra(pos, root_kind)
     end
-    let t = get(tokens, pos)
-    if t.0 == 5 and not equal(mul_tag(t.1), ""):
-        let r = err_parse_not(tokens, pos + 1, eof_line)
-        if r.0 == err_err_tag():
-            return r
-        end
-        return err_parse_mul_loop(tokens, r.2, eof_line, err_expr_other())
+    let r = err_parse_not(tokens, pos + 1, eof_line)
+    if r.0 == err_err_tag():
+        return r
     end
-    return err_parse_ok_extra(pos, root_kind)
+    return err_parse_expr_tail(tokens, r.2, eof_line, err_expr_other())
 end
 
 func err_parse_not(tokens, pos, eof_line):
-    if tok_is_ident_text(tokens, pos, "not"):
+    if tok_is_ident_text(tokens, pos, "not") or tok_is_op_text(tokens, pos, "~"):
         let r = err_parse_not(tokens, pos + 1, eof_line)
         if r.0 == err_err_tag():
             return r
@@ -3162,7 +3073,9 @@ func err_parse_do(tokens, pos, eof_line, do_line):
     if r.0 == err_err_tag():
         return r
     end
-    if r.3 != err_expr_call():
+    -- new_array is call-shaped too. Whether a callee is permitted in a do
+    -- statement belongs to native semantic checking, not this structural pass.
+    if r.3 != err_expr_call() and r.3 != err_expr_new_array():
         return err_parse_fail_at(205, do_line)
     end
     return err_parse_ok(r.2)
@@ -21446,6 +21359,16 @@ func main():
         return 0
     end
     let tokens = lexed.2
+    -- Validate the whole source before the unchecked AST builder consumes it.
+    -- Diagnostic priority is lexical, then structural, then native AST/type
+    -- checks; this does not promise the globally earliest source-position error.
+    -- This is an interim two-pass front end, not checked AST construction.
+    let structure = err_parse_program(tokens, lexed.3)
+    if structure.0 == err_err_tag():
+        do flogger(serialize_diagnostic(structure.1))
+        do flogger("\n")
+        return 0
+    end
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
     let type_pool = nc_type_pool_new()

@@ -384,7 +384,10 @@ check_reject_code append_non_buffer_renamed 437 "$tmp/r_append_non_buffer_rename
 check_reject_code freeze_non_buffer 437 "$tmp/r_freeze_non_buffer.herb"
 check_reject_code append_non_int 430 "$tmp/r_append_non_int.herb"
 check_reject_code monomorph 436 "$tmp/r_monomorph.herb"
-check_reject_code bad_type 434 "$tmp/r_bad_type.herb"
+# Type-expression grammar is now rejected by the hosted structural preflight,
+# before native type inference. Preserve this source and require its specific
+# located syntax diagnostic in the production conformance corpus as well.
+check_reject_code bad_type 211 "$tmp/r_bad_type.herb"
 check_reject_code len_buffer 438 "$tmp/r_len_buffer.herb"
 check_reject_code index_buffer 438 "$tmp/r_index_buffer.herb"
 check_reject_code equal_buffer 438 "$tmp/r_equal_buffer.herb"
