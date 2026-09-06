@@ -97,7 +97,10 @@ tests, goldens, runners, and workflow logs.
 
 ## Next Small Real Step
 
-Continue expanding lexer equivalence with focused fixtures for real parser,
-compiler, and native-codegen source shapes, then start the parser replacement
-proof with a C-AST-to-Herbert-AST comparison. Keep this as proof-building only;
-no C lexer deletion is justified yet.
+The native compiler now exposes explicit process exit and checked stderr output
+to ordinary hosted programs. Next, repair its own invocation contract in
+separately verified stages: driver-owned diagnostics and nonzero failure status,
+checked input rather than treating read errors as EOF, and replacement of output
+only after complete successful publication. Preserve normal program rendering
+and the last good output on compilation failure. The retired C interpreter is
+not a live oracle; the earlier C-parser-comparison recommendation was stale.

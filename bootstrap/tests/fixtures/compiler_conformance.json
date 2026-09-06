@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "scope": "Ordinary non-directive hosted input through the production workspace seed only; leading -- emit: routes are excluded. Retains prior lexical/direct-return and structural grammar cases, adding ordinary hosted builtin arity controls. Expectations are independently declared, not regenerated from compiler output; the 21 grammar-parse cases preserve the existing structural probe source and reviewed diagnostic contract. Priority is whole-source lexing, then whole-source structure, then AST/operator-class checks, then native semantics: not globally earliest source error. Supported-call arity precedes argument inference; context-invalid calls and unsupported operations keep their own diagnostics. Arity coverage is not whole-source validation or low-level target-intrinsic coverage. The recognizer and AST builder remain separate passes. Rejects intentionally retain the legacy status-zero/stdout envelope. Does not certify complete grammar/type checking, general TCO, allocation lifetime, or stale-output/CLI repairs. Inline JSON source strings preserve exact EOF and newline bytes.",
+  "version": 2,
+  "scope": "Ordinary non-directive hosted input through the production workspace seed only; leading -- emit: routes are excluded. Retains prior lexical/direct-return and structural grammar cases, adding ordinary hosted builtin arity controls. Expectations are independently declared, not regenerated from compiler output; the 21 grammar-parse cases preserve the existing structural probe source and reviewed diagnostic contract. Priority is whole-source lexing, then whole-source structure, then AST/operator-class checks, then native semantics: not globally earliest source error. Supported-call arity precedes argument inference; context-invalid calls and unsupported operations keep their own diagnostics. Arity coverage is not whole-source validation or low-level target-intrinsic coverage. The recognizer and AST builder remain separate passes. Rejects intentionally retain the legacy status-zero/stdout envelope. Version 2 adds explicit run-stdio checks for generated programs using process_exit and stderr_write, plus their arity/type/context/name-reservation and ordinary-rendering controls. It does not change the compiler invocation envelope or continuously test injected syscall faults. Does not certify complete grammar/type checking, general TCO, allocation lifetime, or stale-output/CLI repairs. Inline JSON source strings preserve exact EOF and newline bytes.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -986,6 +986,281 @@
       "profile": "reject-legacy",
       "source": "func main():\n    return missing()\nend\n",
       "diagnostic": "line 2: native-subset: unknown callee 'missing' (ERR 419)"
+    },
+    {
+      "id": "process-exit-zero", "profile": "run-stdio",
+      "source": "func main():\n    do process_exit(0)\n    do flogger(\"unreachable\")\n    return 99\nend\n",
+      "stdin": "", "stdout": "", "stderr": "", "status": 0
+    },
+    {
+      "id": "process-exit-one", "profile": "run-stdio",
+      "source": "func main():\n    do process_exit(1)\n    return 99\nend\n",
+      "stdin": "", "stdout": "", "stderr": "", "status": 1
+    },
+    {
+      "id": "process-exit-255", "profile": "run-stdio",
+      "source": "func main():\n    do process_exit(255)\n    return 99\nend\n",
+      "stdin": "", "stdout": "", "stderr": "", "status": 255
+    },
+    {
+      "id": "process-exit-256", "profile": "run-stdio",
+      "source": "func main():\n    do process_exit(256)\n    return 99\nend\n",
+      "stdin": "", "stdout": "", "stderr": "", "status": 0
+    },
+    {
+      "id": "process-exit-257", "profile": "run-stdio",
+      "source": "func main():\n    do process_exit(257)\n    return 99\nend\n",
+      "stdin": "", "stdout": "", "stderr": "", "status": 1
+    },
+    {
+      "id": "process-exit-maxuint", "profile": "run-stdio",
+      "source": "func main():\n    do process_exit(18446744073709551615)\n    return 99\nend\n",
+      "stdin": "", "stdout": "", "stderr": "", "status": 255
+    },
+    {
+      "id": "process-exit-string-renderer", "profile": "run-stdio",
+      "source": "func main():\n    do process_exit(7)\n    return \"unreachable\"\nend\n",
+      "stdin": "", "stdout": "", "stderr": "", "status": 7
+    },
+    {
+      "id": "process-exit-tuple-renderer", "profile": "run-stdio",
+      "source": "func main():\n    do process_exit(23)\n    return (42, \"unreachable\", true)\nend\n",
+      "stdin": "", "stdout": "", "stderr": "", "status": 23
+    },
+    {
+      "id": "process-exit-helper-dynamic", "profile": "run-stdio",
+      "source": "func halt(code):\n    do process_exit(code + 256)\n    return 9\nend\nfunc main():\n    let source = clogger()\n    return halt(index(source, 0))\nend\n",
+      "stdin": "Q", "stdout": "", "stderr": "", "status": 81
+    },
+    {
+      "id": "process-exit-branch-taken", "profile": "run-stdio",
+      "source": "func main():\n    let source = clogger()\n    if length(source) == 1:\n        do process_exit(31)\n    end\n    return (42, \"alive\", true)\nend\n",
+      "stdin": "x", "stdout": "", "stderr": "", "status": 31
+    },
+    {
+      "id": "process-exit-branch-not-taken", "profile": "run-stdio",
+      "source": "func main():\n    let source = clogger()\n    if length(source) == 1:\n        do process_exit(31)\n    end\n    return (42, \"alive\", true)\nend\n",
+      "stdin": "xy", "stdout": "(42, \"alive\", true)\n", "stderr": "", "status": 0
+    },
+    {
+      "id": "process-exit-after-output", "profile": "run-stdio",
+      "source": "func main():\n    do flogger(\"before\")\n    let sent = stderr_write(\"diagnostic\\n\")\n    do process_exit(17 + sent)\n    return 99\nend\n",
+      "stdin": "", "stdout": "before", "stderr": "diagnostic\n", "status": 17
+    },
+    {
+      "id": "stderr-write-direct-return", "profile": "run-stdio",
+      "source": "func main():\n    return stderr_write(\"X\")\nend\n",
+      "stdin": "", "stdout": "0\n", "stderr": "X", "status": 0
+    },
+    {
+      "id": "stderr-write-empty", "profile": "run-stdio",
+      "source": "func main():\n    let sent = stderr_write(\"\")\n    return sent + 42\nend\n",
+      "stdin": "", "stdout": "42\n", "stderr": "", "status": 0
+    },
+    {
+      "id": "stderr-write-stream-order", "profile": "run-stdio",
+      "source": "func main():\n    do flogger(\"left\")\n    let a = stderr_write(\"first\")\n    do flogger(\"right\")\n    let b = stderr_write(\"second\\n\")\n    return (a, b)\nend\n",
+      "stdin": "", "stdout": "leftright(0, 0)\n", "stderr": "firstsecond\n", "status": 0
+    },
+    {
+      "id": "stderr-write-helper-dynamic", "profile": "run-stdio",
+      "source": "func send(message):\n    let sent = stderr_write(message)\n    return (sent, length(message))\nend\nfunc main():\n    let source = clogger()\n    return send(source)\nend\n",
+      "stdin": "variable\nbytes", "stdout": "(0, 14)\n", "stderr": "variable\nbytes", "status": 0
+    },
+    {
+      "id": "stderr-write-branch-left", "profile": "run-stdio",
+      "source": "func choose(source):\n    if length(source) == 1:\n        return stderr_write(\"short\")\n    else:\n        return stderr_write(source)\n    end\nend\nfunc main():\n    return choose(clogger()) + 42\nend\n",
+      "stdin": "x", "stdout": "42\n", "stderr": "short", "status": 0
+    },
+    {
+      "id": "stderr-write-branch-right", "profile": "run-stdio",
+      "source": "func choose(source):\n    if length(source) == 1:\n        return stderr_write(\"short\")\n    else:\n        return stderr_write(source)\n    end\nend\nfunc main():\n    return choose(clogger()) + 42\nend\n",
+      "stdin": "longer", "stdout": "42\n", "stderr": "longer", "status": 0
+    },
+    {
+      "id": "stderr-write-heap-alias", "profile": "run-stdio",
+      "source": "func send(snapshot, alias):\n    let sent = stderr_write(snapshot)\n    do append(alias, 67)\n    return sent\nend\nfunc main():\n    let bytes = new_buffer()\n    do append(bytes, 65)\n    let snapshot = freeze(bytes)\n    let alias = bytes\n    do append(alias, 66)\n    let sent = send(snapshot, alias)\n    return (sent, snapshot, freeze(bytes))\nend\n",
+      "stdin": "", "stdout": "(0, \"A\", \"ABC\")\n", "stderr": "A", "status": 0
+    },
+    {
+      "id": "stderr-write-array-string", "profile": "run-stdio",
+      "source": "func main():\n    let messages = new_array(string)\n    do add(messages, \"alpha\")\n    do add(messages, \"beta\")\n    let sent = stderr_write(get(messages, 1))\n    return (sent, count(messages), get(messages, 0))\nend\n",
+      "stdin": "", "stdout": "(0, 2, \"alpha\")\n", "stderr": "beta", "status": 0
+    },
+    {
+      "id": "stderr-write-nul-and-utf8", "profile": "run-stdio",
+      "source": "func main():\n    let bytes = new_buffer()\n    do append(bytes, 65)\n    do append(bytes, 0)\n    do append(bytes, 195)\n    do append(bytes, 169)\n    do append(bytes, 10)\n    return stderr_write(freeze(bytes))\nend\n",
+      "stdin": "", "stdout": "0\n", "stderr": "A\u0000é\n", "status": 0
+    },
+    {
+      "id": "stderr-write-expression-stack", "profile": "run-stdio",
+      "source": "func pair(left, right):\n    return (left, right)\nend\nfunc main():\n    let result = pair(11 + stderr_write(\"L\"), stderr_write(\"R\") + 22)\n    return (result, 33)\nend\n",
+      "stdin": "", "stdout": "((11, 22), 33)\n", "stderr": "LR", "status": 0
+    },
+    {
+      "id": "capability-control-int", "profile": "run-stdio",
+      "source": "func main():\n    return 7\nend\n",
+      "stdin": "", "stdout": "7\n", "stderr": "", "status": 0
+    },
+    {
+      "id": "capability-control-bool", "profile": "run-stdio",
+      "source": "func main():\n    return true\nend\n",
+      "stdin": "", "stdout": "true\n", "stderr": "", "status": 0
+    },
+    {
+      "id": "capability-control-string", "profile": "run-stdio",
+      "source": "func main():\n    return \"still rendered\"\nend\n",
+      "stdin": "", "stdout": "\"still rendered\"\n", "stderr": "", "status": 0
+    },
+    {
+      "id": "capability-control-tuple", "profile": "run-stdio",
+      "source": "func main():\n    return (7, false, \"ok\")\nend\n",
+      "stdin": "", "stdout": "(7, false, \"ok\")\n", "stderr": "", "status": 0
+    },
+    {
+      "id": "process-exit-arity-zero", "profile": "reject-legacy",
+      "source": "func main():\n    do process_exit()\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'process_exit' (ERR 420)"
+    },
+    {
+      "id": "process-exit-arity-two", "profile": "reject-legacy",
+      "source": "func main():\n    do process_exit(1, missing())\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'process_exit' (ERR 420)"
+    },
+    {
+      "id": "process-exit-type-bool", "profile": "reject-legacy",
+      "source": "func main():\n    do process_exit(true)\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "process-exit-type-string", "profile": "reject-legacy",
+      "source": "func main():\n    do process_exit(\"1\")\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "process-exit-type-tuple", "profile": "reject-legacy",
+      "source": "func main():\n    do process_exit((1, 2))\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "process-exit-type-buffer", "profile": "reject-legacy",
+      "source": "func main():\n    do process_exit(new_buffer())\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "process-exit-value-return", "profile": "reject-legacy",
+      "source": "func main():\n    return process_exit(7)\nend\n",
+      "diagnostic": "line 2: native-subset: value-less builtin used as a value (ERR 440)"
+    },
+    {
+      "id": "process-exit-value-binding", "profile": "reject-legacy",
+      "source": "func main():\n    let result = process_exit(7)\n    return result\nend\n",
+      "diagnostic": "line 2: native-subset: value-less builtin used as a value (ERR 440)"
+    },
+    {
+      "id": "process-exit-context-before-arity", "profile": "reject-legacy",
+      "source": "func main():\n    return process_exit()\nend\n",
+      "diagnostic": "line 2: native-subset: value-less builtin used as a value (ERR 440)"
+    },
+    {
+      "id": "process-exit-still-needs-return", "profile": "reject-legacy",
+      "source": "func main():\n    do process_exit(0)\nend\n",
+      "diagnostic": "line 1: native-subset: ambiguous or unconstrained function signature (ERR 424)"
+    },
+    {
+      "id": "stderr-write-arity-zero", "profile": "reject-legacy",
+      "source": "func main():\n    return stderr_write()\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'stderr_write' (ERR 420)"
+    },
+    {
+      "id": "stderr-write-arity-two", "profile": "reject-legacy",
+      "source": "func main():\n    return stderr_write(\"x\", missing())\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'stderr_write' (ERR 420)"
+    },
+    {
+      "id": "stderr-write-type-int", "profile": "reject-legacy",
+      "source": "func main():\n    return stderr_write(1)\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "stderr-write-type-bool", "profile": "reject-legacy",
+      "source": "func main():\n    return stderr_write(true)\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "stderr-write-type-tuple", "profile": "reject-legacy",
+      "source": "func main():\n    return stderr_write((\"x\", 1))\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "stderr-write-type-buffer", "profile": "reject-legacy",
+      "source": "func main():\n    return stderr_write(new_buffer())\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "stderr-write-type-array", "profile": "reject-legacy",
+      "source": "func main():\n    return stderr_write(new_array(string))\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "stderr-write-context-do", "profile": "reject-legacy",
+      "source": "func main():\n    do stderr_write(\"x\")\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: forbidden construct 'stderr_write' (ERR 404)"
+    },
+    {
+      "id": "stderr-write-context-before-arity", "profile": "reject-legacy",
+      "source": "func main():\n    do stderr_write()\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: forbidden construct 'stderr_write' (ERR 404)"
+    },
+    {
+      "id": "process-exit-renamed-unknown", "profile": "reject-legacy",
+      "source": "func main():\n    do process_exit_twin(7)\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: forbidden construct 'process_exit_twin' (ERR 404)"
+    },
+    {
+      "id": "stderr-write-renamed-unknown", "profile": "reject-legacy",
+      "source": "func main():\n    return stderr_write_twin(\"x\")\nend\n",
+      "diagnostic": "line 2: native-subset: unknown callee 'stderr_write_twin' (ERR 419)"
+    },
+    {
+      "id": "process-exit-definition-before-main", "profile": "reject-legacy",
+      "source": "func process_exit(x):\n return x\nend\nfunc main():\n return 42\nend\n",
+      "diagnostic": "line 1: native-subset: invalid function table (ERR 429)"
+    },
+    {
+      "id": "process-exit-definition-after-main", "profile": "reject-legacy",
+      "source": "func main():\n return 42\nend\nfunc process_exit(x):\n return x\nend\n",
+      "diagnostic": "line 4: native-subset: invalid function table (ERR 429)"
+    },
+    {
+      "id": "stderr-write-definition-before-main", "profile": "reject-legacy",
+      "source": "func stderr_write(x):\n return x\nend\nfunc main():\n return 42\nend\n",
+      "diagnostic": "line 1: native-subset: invalid function table (ERR 429)"
+    },
+    {
+      "id": "stderr-write-definition-after-main", "profile": "reject-legacy",
+      "source": "func main():\n return 42\nend\nfunc stderr_write(x):\n return x\nend\n",
+      "diagnostic": "line 4: native-subset: invalid function table (ERR 429)"
+    },
+    {
+      "id": "builtin-spellings-as-locals", "profile": "run",
+      "source": "func main():\n let process_exit = 20\n let stderr_write = 22\n return process_exit + stderr_write\nend\n",
+      "stdin": "", "stdout": "42\n", "status": 0
+    },
+    {
+      "id": "builtin-spellings-as-parameters", "profile": "run",
+      "source": "func total(process_exit, stderr_write):\n return process_exit + stderr_write\nend\nfunc main():\n return total(20, 22)\nend\n",
+      "stdin": "", "stdout": "42\n", "status": 0
+    },
+    {
+      "id": "semantic-check-after-process-exit", "profile": "reject-legacy",
+      "source": "func main():\n do process_exit(7)\n let bad = stderr_write(42)\n return 0\nend\n",
+      "diagnostic": "line 3: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "main-render-type-check-after-process-exit", "profile": "reject-legacy",
+      "source": "func main():\n do process_exit(7)\n return new_buffer()\nend\n",
+      "diagnostic": "line 1: native-subset: main must return int or bool (ERR 432)"
     }
   ]
 }

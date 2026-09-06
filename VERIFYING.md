@@ -29,6 +29,13 @@ make test
 
 Runs the main shell harness in `bootstrap/tests/run_tests.sh`.
 
+It also runs `bootstrap/tests/compiler_conformance.py`: independently declared
+ordinary hosted inputs with exact compiler status/streams/artifact checks, then
+exact generated-program output/status checks for accepted cases. The explicit
+`run-stdio` profile additionally checks runtime stderr; the legacy `run` profile
+still requires it empty. Source rejection retains the old compiler envelope.
+These cases do not replace syscall fault-injection or full target verification.
+
 This target requires a Linux/x86_64 host because the native-codegen links mint and execute Linux ELF artifacts. The Makefile prepends `tools/` to `PATH`, so Linux hosts without GNU `timeout` can still run bounded test legs.
 
 On macOS or non-x86_64 hosts the aggregate `make verify-local` is NOT runnable: it depends on `make test` (which refuses such hosts) and on the native rungs, which mint and execute Linux/x86_64 ELF artifacts. The individually portable checks are `make check`, `make test-timeout`, and `make lexer-copy-sync`; run everything else in Linux CI or an equivalent Linux/x86_64 environment (a VM is fine).

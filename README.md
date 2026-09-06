@@ -34,3 +34,29 @@ Use `ROADMAP.md` as the living map for what is proven, aspirational, unknown,
 and next.
 Use `BOOTSTRAP-RESPONSIBILITIES.md` to choose the next host-bootstrap
 replacement proof.
+
+## Hosted process output
+
+Ordinary Linux/x86_64 programs can use `stderr_write(bytes)` with one string
+argument. It writes raw bytes to standard error and returns an integer: zero
+after complete transfer, otherwise a positive Linux errno. It retries EINTR and
+continues after partial writes; a nonempty write making zero progress returns
+EIO (5). Empty input succeeds without a syscall. Failure may follow a partial
+transfer: the result is not a byte count or an all-or-nothing guarantee. The
+inherited SIGPIPE disposition is unchanged, so a broken pipe may terminate the
+process rather than return an error.
+
+Use `stderr_write` in an expression (for example, bind its result with `let`);
+`do stderr_write(...)` is rejected because it produces a value.
+
+`do process_exit(status)` accepts one integer and terminates the process with
+its low eight bits as the exit status, without rendering `main`'s return value.
+It is not a value expression. The compiler still requires the existing return
+structure and checks statements following this call; it does not infer a
+never-returning type. Both names are reserved builtin function names. These
+operations are not additions to the VM or kernel target interfaces.
+
+This is a capability-only addition. Normal `main` return rendering and the old
+`clogger`, `flogger`, and `fwriter` behavior are unchanged. The compiler itself
+does not yet use the new operations: its legacy status-zero/stdout diagnostics
+and unsafe fixed-name output publication still need separate repairs.

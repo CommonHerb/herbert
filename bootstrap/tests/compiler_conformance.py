@@ -11,6 +11,9 @@ routes are excluded.
 
 The corpus covers checked lexical/structural rejection, accepted boundaries,
 operator-class restrictions, hosted builtin arity, and direct-return lowering.
+Version 2 adds explicit run-stdio cases for hosted process/I/O capabilities:
+their generated programs have independent exact stderr and status expectations.
+This does not change the legacy compiler invocation envelope below.
 Arity is checked before a supported call's arguments in native inference; this
 is not a whole-source arity pass and does not cover low-level target intrinsics.
 Context-invalid/unsupported calls keep their own diagnostics. Diagnostic
@@ -69,7 +72,7 @@ def read_corpus() -> list[dict]:
     data = json.loads(CORPUS.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
     require(isinstance(data, dict), "corpus must be an object")
     require(set(data) == {"version", "scope", "cases"}, "unknown/missing corpus keys")
-    require(type(data["version"]) is int and data["version"] == 1, "unsupported corpus version")
+    require(type(data["version"]) is int and data["version"] == 2, "unsupported corpus version")
     require(isinstance(data["scope"], str) and bool(data["scope"]), "missing corpus scope")
     cases = data["cases"]
     require(isinstance(cases, list) and bool(cases), "corpus must contain cases")
@@ -82,20 +85,27 @@ def read_corpus() -> list[dict]:
         require(ident not in seen, f"duplicate case id {ident}")
         seen.add(ident)
         profile = case.get("profile")
-        require(profile in ("run", "reject-legacy"), f"{ident}: unknown profile {profile!r}")
+        require(profile in ("run", "run-stdio", "reject-legacy"), f"{ident}: unknown profile {profile!r}")
         profiles.add(profile)
-        specific = {"stdin", "stdout", "status"} if profile == "run" else {"diagnostic"}
+        running = profile in ("run", "run-stdio")
+        specific = {"stdin", "stdout", "status"} if running else {"diagnostic"}
+        if profile == "run-stdio":
+            specific.add("stderr")
         require(set(case) == {"id", "profile", "source"} | specific, f"{ident}: unknown/missing case keys")
-        for field in ({"source", "stdin", "stdout"} if profile == "run" else {"source", "diagnostic"}):
+        text_fields = {"source", "stdin", "stdout"} if running else {"source", "diagnostic"}
+        if profile == "run-stdio":
+            text_fields.add("stderr")
+        for field in text_fields:
             require(isinstance(case[field], str), f"{ident}: {field} must be text")
             case[field].encode("utf-8")  # Reject unencodable surrogate data before running anything.
         require(bool(case["source"]), f"{ident}: empty source fixture")
-        if profile == "run":
+        if running:
             require(type(case["status"]) is int and 0 <= case["status"] <= 255, f"{ident}: invalid exit status")
         else:
             require(re.fullmatch(r"line [1-9][0-9]*: [^\r\n]+ \(ERR [0-9]{3}\)", case["diagnostic"]),
                     f"{ident}: expected one located diagnostic")
-    require(profiles == {"run", "reject-legacy"}, "corpus must retain both accept and reject controls")
+    require(profiles == {"run", "run-stdio", "reject-legacy"},
+            "corpus must retain legacy accept/reject and explicit stdio controls")
     return cases
 
 
@@ -162,7 +172,8 @@ def check_case(case: dict, compiler: Path, work: Path, timeout: float) -> None:
     result = invoke(artifact, case["stdin"].encode("utf-8"), directory, "run", timeout)
     exact(result.returncode, case["status"], "program status")
     exact(result.stdout, case["stdout"].encode("utf-8"), "program stdout")
-    exact(result.stderr, b"", "program stderr")
+    expected_stderr = case["stderr"].encode("utf-8") if case["profile"] == "run-stdio" else b""
+    exact(result.stderr, expected_stderr, "program stderr")
 
 
 def positive_timeout(value: str) -> float:
@@ -183,7 +194,8 @@ def main() -> int:
     try:
         cases = read_corpus()
         accepted = sum(case["profile"] == "run" for case in cases)
-        print(f"compiler-conformance corpus: {len(cases)} cases ({accepted} run, {len(cases) - accepted} reject-legacy)", flush=True)
+        stdio = sum(case["profile"] == "run-stdio" for case in cases)
+        print(f"compiler-conformance corpus: {len(cases)} cases ({accepted} run, {stdio} run-stdio, {len(cases) - accepted - stdio} reject-legacy)", flush=True)
         if args.check_corpus:
             return 0
         work = Path(tempfile.mkdtemp(prefix="herbert-conformance."))

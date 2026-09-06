@@ -1505,6 +1505,17 @@ func op_output_byte():
     return 53
 end
 
+-- Linux-hosted process I/O only. Existing opcode numbers and target allowlists
+-- stay unchanged. process_exit is void; stderr_write consumes a string and
+-- returns zero on complete transfer or a positive Linux errno on failure.
+func op_process_exit():
+    return 54
+end
+
+func op_stderr_write():
+    return 55
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1785,6 +1796,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     if equal(name, "clogger"):
         return emit_instr(ir, op_clogger(), 0, 0)
     end
+    if equal(name, "stderr_write"):
+        return emit_instr(ir, op_stderr_write(), 0, 0)
+    end
     if equal(name, "length"):
         return emit_instr(ir, op_length(), 0, 0)
     end
@@ -1836,7 +1850,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     if equal(name, "bufset"):
         return emit_instr(ir, op_bufset(), 0, 0)
     end
-    if equal(name, "append") or equal(name, "add") or equal(name, "flogger"):
+    if equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "process_exit"):
         return fault("void builtin in expression")
     end
     return emit_instr(ir, op_call(), nc_poly_lowered_call_target(poly, caller_inst_idx, call_node_idx), count(kids))
@@ -1962,6 +1976,10 @@ func emit_do_call(call_idx, stmt_line, env, ir, strings, nodes, prog_idx, type_p
     if equal(name, "fwriter"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, op_fwriter(), 0, 0)
+    end
+    if equal(name, "process_exit"):
+        ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_process_exit(), 0, 0)
     end
     return fault("bad do call")
 end
@@ -2191,6 +2209,12 @@ func opcode_name(op):
     if op == op_flogger():
         return "FLOGGER"
     end
+    if op == op_process_exit():
+        return "PROCESS_EXIT"
+    end
+    if op == op_stderr_write():
+        return "STDERR_WRITE"
+    end
     if op == op_band():
         return "BAND"
     end
@@ -2228,7 +2252,7 @@ func opcode_operands(op):
     if op == op_push_int() or op == op_push_bool() or op == op_push_str() or op == op_load_local() or op == op_store_local() or op == op_make_tuple() or op == op_tuple_get() or op == op_br() or op == op_br_if_false() or op == op_br_and() or op == op_br_or():
         return 1
     end
-    if op == op_clogger() or op == op_flogger():
+    if op == op_clogger() or op == op_flogger() or op == op_process_exit() or op == op_stderr_write():
         return 0
     end
     return 0
@@ -3235,11 +3259,14 @@ func err_is_builtin_name(name):
     if equal(name, "bufbase") or equal(name, "bufget") or equal(name, "bufset"):
         return true
     end
+    if equal(name, "process_exit") or equal(name, "stderr_write"):
+        return true
+    end
     return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
 end
 
 func err_is_void_builtin(name):
-    return equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "fwriter")
+    return equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "process_exit")
 end
 
 func err_is_value_builtin(name):
@@ -3252,10 +3279,13 @@ func err_is_value_builtin(name):
     if equal(name, "bufbase") or equal(name, "bufget") or equal(name, "bufset"):
         return true
     end
-    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
+    return equal(name, "get") or equal(name, "count") or equal(name, "clogger") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte") or equal(name, "stderr_write")
 end
 
 func err_value_builtin_arity(name):
+    if equal(name, "stderr_write"):
+        return 1
+    end
     if equal(name, "length"):
         return 1
     end
@@ -3296,6 +3326,9 @@ func err_value_builtin_arity(name):
 end
 
 func err_void_builtin_arity(name):
+    if equal(name, "process_exit"):
+        return 1
+    end
     if equal(name, "fwriter"):
         return 1
     end
@@ -6102,6 +6135,9 @@ end
 -- calls here. Type constructors, void-as-value, unsupported calls and low-level
 -- target intrinsics have separate contracts; a default arity is not a whitelist.
 func nc_has_value_arity_guard(name):
+    if equal(name, "stderr_write"):
+        return true
+    end
     if equal(name, "clogger") or equal(name, "new_buffer"):
         return true
     end
@@ -6222,6 +6258,13 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         end
         if equal(name, "clogger"):
             return (0, nc_type_string(), env, sig, 0)
+        end
+        if equal(name, "stderr_write"):
+            let sw = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
+            if sw.0 != 0:
+                return (sw.0, 0, sw.1, sw.2, sw.3)
+            end
+            return (0, nc_type_int(), sw.1, sw.2, sw.3)
         end
         if equal(name, "input_byte"):
             return (0, nc_type_int(), env, sig, 0)
@@ -6483,10 +6526,16 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         if equal(call_node.0, "call"):
             let name = get(call_node.1, 0)
             let ckids = call_node.2
-            -- The four supported void builtins share the same arity-first rule.
+            -- Supported void builtins share the same arity-first rule.
             -- In particular, append/add must not silently discard extra args.
             if err_is_void_builtin(name) and count(ckids) != err_void_builtin_arity(name):
                 return (nc_fail(420, call_node.3, name), env, sig, 0, 0)
+            end
+            if equal(name, "process_exit"):
+                let pe = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+                -- No new noreturn inference: retain the existing syntactic
+                -- return requirement, including checking following statements.
+                return (pe.0, pe.1, pe.2, pe.3, 0)
             end
             if equal(name, "append"):
                 let b = nc_constrain_buffer_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
@@ -7037,6 +7086,12 @@ func nc_opcode_name_for_diag(op):
     if op == 44:
         return "MOD"
     end
+    if op == 54:
+        return "PROCESS_EXIT"
+    end
+    if op == 55:
+        return "STDERR_WRITE"
+    end
     return int_to_str(op)
 end
 
@@ -7558,6 +7613,18 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             return (pf.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         stack = pf.1
+    elif op == 54:
+        let pe = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
+        if pe.0 != 0:
+            return (pe.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        stack = pe.1
+    elif op == 55:
+        let sw = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
+        if sw.0 != 0:
+            return (sw.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        stack = nc_stack_push(sw.1, nc_type_int())
     else:
         return (nc_fail(408, 0, nc_opcode_name_for_diag(op)), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
     end
@@ -8185,6 +8252,12 @@ func nc_group_single_len(op):
     end
     if op == 35:
         return 120
+    end
+    if op == 54:
+        return 10
+    end
+    if op == 55:
+        return 55
     end
     -- Bitwise / shift (36-41). LOAD-BEARING for branch-displacement layout:
     -- pass 1 sizes every instruction here; a missing arm would give the new
@@ -10461,6 +10534,95 @@ func nc_emit_flogger(buf):
     return buf
 end
 
+func nc_emit_process_exit(buf):
+    -- 10 bytes: pop rdi; mov eax,231; syscall; ud2. Linux exit_group
+    -- supplies the low eight status bits to the parent. Never fall through
+    -- to main's renderer, even if the syscall unexpectedly returns.
+    do append(buf, 95)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 15)
+    do append(buf, 11)
+    return buf
+end
+
+func nc_emit_stderr_write(buf):
+    -- 55 bytes. Pop len/ptr into rdx/rsi; push one int result. No heap,
+    -- frame, or callee-saved register changes. Empty input succeeds without
+    -- a syscall. Retry EINTR; advance after real partial writes. Other raw
+    -- negative syscall results become positive errno; zero progress is EIO.
+    -- SIGPIPE remains inherited: a broken pipe may terminate the process.
+    do append(buf, 90)
+    do append(buf, 94)
+    -- loop (2): test rdx,rdx; jz success (52)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 116)
+    do append(buf, 45)
+    -- mov eax,1; mov edi,2; syscall
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    -- cmp rax,-4; je loop (2)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 233)
+    -- test rax,rax; js errno (40); jz zero (45)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 120)
+    do append(buf, 10)
+    do append(buf, 116)
+    do append(buf, 13)
+    -- add rsi,rax; sub rdx,rax; jmp loop (2)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 235)
+    do append(buf, 218)
+    -- errno (40): neg rax; jmp done (54)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 216)
+    do append(buf, 235)
+    do append(buf, 9)
+    -- zero (45): mov eax,5; jmp done (54)
+    do append(buf, 184)
+    do append(buf, 5)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 235)
+    do append(buf, 2)
+    -- success (52): xor eax,eax; done (54): push rax
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 80)
+    return buf
+end
+
 func nc_emit_fwriter(buf):
     -- fwriter(bytes): pop the bytes string (len in r8, ptr in r9), build a
     -- NUL-terminated "a.out" in an 8-byte stack slot, openat it, write-loop the
@@ -11221,6 +11383,10 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         buf = nc_emit_flogger(buf)
     elif op == 35:
         buf = nc_emit_fwriter(buf)
+    elif op == 54:
+        buf = nc_emit_process_exit(buf)
+    elif op == 55:
+        buf = nc_emit_stderr_write(buf)
     end
     return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, g.1, n, buf)
 end
