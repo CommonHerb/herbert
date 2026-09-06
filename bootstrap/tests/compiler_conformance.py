@@ -10,7 +10,10 @@ The corpus covers ordinary non-directive hosted input only; leading `-- emit:`
 routes are excluded.
 
 The corpus covers checked lexical/structural rejection, accepted boundaries,
-operator-class restrictions, and lowering after a direct return. Diagnostic
+operator-class restrictions, hosted builtin arity, and direct-return lowering.
+Arity is checked before a supported call's arguments in native inference; this
+is not a whole-source arity pass and does not cover low-level target intrinsics.
+Context-invalid/unsupported calls keep their own diagnostics. Diagnostic
 priority is whole-source lexing, then whole-source structural recognition,
 then AST/operator-class checks, then native semantics. It does not promise the
 globally earliest source error. The structural recognizer and AST builder are

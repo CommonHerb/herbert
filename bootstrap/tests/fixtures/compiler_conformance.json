@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "scope": "Ordinary non-directive hosted input through the production workspace seed only; leading -- emit: routes are excluded. Retains first-wave lexical/direct-return cases and adds structural grammar, call-shape, operator-class and diagnostic-priority controls. Expectations are independently declared, not regenerated from compiler output; the 21 grammar-parse cases preserve the existing structural probe source and reviewed diagnostic contract. Priority is whole-source lexing, then whole-source structure, then AST/operator-class checks, then native semantics: not globally earliest source error. The recognizer and AST builder remain separate passes. Rejects intentionally retain the legacy status-zero/stdout envelope. Does not certify complete grammar/type checking, general TCO, allocation lifetime, or stale-output/CLI repairs. Inline JSON source strings preserve exact EOF and newline bytes.",
+  "scope": "Ordinary non-directive hosted input through the production workspace seed only; leading -- emit: routes are excluded. Retains prior lexical/direct-return and structural grammar cases, adding ordinary hosted builtin arity controls. Expectations are independently declared, not regenerated from compiler output; the 21 grammar-parse cases preserve the existing structural probe source and reviewed diagnostic contract. Priority is whole-source lexing, then whole-source structure, then AST/operator-class checks, then native semantics: not globally earliest source error. Supported-call arity precedes argument inference; context-invalid calls and unsupported operations keep their own diagnostics. Arity coverage is not whole-source validation or low-level target-intrinsic coverage. The recognizer and AST builder remain separate passes. Rejects intentionally retain the legacy status-zero/stdout envelope. Does not certify complete grammar/type checking, general TCO, allocation lifetime, or stale-output/CLI repairs. Inline JSON source strings preserve exact EOF and newline bytes.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -588,6 +588,404 @@
       "profile": "reject-legacy",
       "source": "func main():\n    return missing() & 2 | 3\nend\n",
       "diagnostic": "line 2: native-subset: bitwise/shift operator mixed with another operator class without parentheses (ERR 442)"
+    },
+    {
+      "id": "arity-length-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return length()\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'length' (ERR 420)"
+    },
+    {
+      "id": "arity-length-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return length(\"ab\", 99)\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'length' (ERR 420)"
+    },
+    {
+      "id": "arity-length-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return length(\"ab\", missing())\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'length' (ERR 420)"
+    },
+    {
+      "id": "arity-index-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return index()\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'index' (ERR 420)"
+    },
+    {
+      "id": "arity-index-under-1",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return index(\"ab\")\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'index' (ERR 420)"
+    },
+    {
+      "id": "arity-index-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return index(\"ab\", 0, 99)\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'index' (ERR 420)"
+    },
+    {
+      "id": "arity-index-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return index(\"ab\", 0, missing())\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'index' (ERR 420)"
+    },
+    {
+      "id": "arity-equal-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return equal()\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'equal' (ERR 420)"
+    },
+    {
+      "id": "arity-equal-under-1",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return equal(\"ab\")\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'equal' (ERR 420)"
+    },
+    {
+      "id": "arity-equal-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return equal(\"ab\", \"ab\", 99)\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'equal' (ERR 420)"
+    },
+    {
+      "id": "arity-equal-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return equal(\"ab\", \"ab\", missing())\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'equal' (ERR 420)"
+    },
+    {
+      "id": "arity-freeze-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    return length(freeze())\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'freeze' (ERR 420)"
+    },
+    {
+      "id": "arity-freeze-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    return length(freeze(bytes, 99))\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'freeze' (ERR 420)"
+    },
+    {
+      "id": "arity-freeze-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    return length(freeze(bytes, missing()))\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'freeze' (ERR 420)"
+    },
+    {
+      "id": "arity-get-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items, 42)\n    return get()\nend\n",
+      "diagnostic": "line 4: native-subset: arity mismatch at call to 'get' (ERR 420)"
+    },
+    {
+      "id": "arity-get-under-1",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items, 42)\n    return get(items)\nend\n",
+      "diagnostic": "line 4: native-subset: arity mismatch at call to 'get' (ERR 420)"
+    },
+    {
+      "id": "arity-get-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items, 42)\n    return get(items, 0, 99)\nend\n",
+      "diagnostic": "line 4: native-subset: arity mismatch at call to 'get' (ERR 420)"
+    },
+    {
+      "id": "arity-get-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items, 42)\n    return get(items, 0, missing())\nend\n",
+      "diagnostic": "line 4: native-subset: arity mismatch at call to 'get' (ERR 420)"
+    },
+    {
+      "id": "arity-count-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    return count()\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'count' (ERR 420)"
+    },
+    {
+      "id": "arity-count-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    return count(items, 99)\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'count' (ERR 420)"
+    },
+    {
+      "id": "arity-count-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    return count(items, missing())\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'count' (ERR 420)"
+    },
+    {
+      "id": "arity-new_buffer-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return length(freeze(new_buffer(99)))\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'new_buffer' (ERR 420)"
+    },
+    {
+      "id": "arity-new_buffer-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return length(freeze(new_buffer(missing())))\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'new_buffer' (ERR 420)"
+    },
+    {
+      "id": "arity-clogger-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return length(clogger(99))\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'clogger' (ERR 420)"
+    },
+    {
+      "id": "arity-clogger-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return length(clogger(missing()))\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'clogger' (ERR 420)"
+    },
+    {
+      "id": "arity-append-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    do append()\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-append-under-1",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    do append(bytes)\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-append-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    do append(bytes, 65, 99)\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-append-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    do append(bytes, 65, missing())\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-append-extra-void-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    do append(bytes, 65, flogger(\"unexpected\"))\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-add-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add()\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'add' (ERR 420)"
+    },
+    {
+      "id": "arity-add-under-1",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items)\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'add' (ERR 420)"
+    },
+    {
+      "id": "arity-add-extra-literal",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items, 42, 99)\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'add' (ERR 420)"
+    },
+    {
+      "id": "arity-add-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items, 42, missing())\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'add' (ERR 420)"
+    },
+    {
+      "id": "arity-add-extra-void-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items, 42, flogger(\"unexpected\"))\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'add' (ERR 420)"
+    },
+    {
+      "id": "arity-flogger-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do flogger()\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'flogger' (ERR 420)"
+    },
+    {
+      "id": "arity-flogger-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do flogger(\"\", missing())\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'flogger' (ERR 420)"
+    },
+    {
+      "id": "arity-fwriter-under-0",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do fwriter()\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'fwriter' (ERR 420)"
+    },
+    {
+      "id": "arity-fwriter-extra-unknown-call",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do fwriter(\"\", missing())\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'fwriter' (ERR 420)"
+    },
+    {
+      "id": "arity-get-constrained-under",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    return 1 + get(items)\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'get' (ERR 420)"
+    },
+    {
+      "id": "arity-get-constrained-over",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let items = new_array(int)\n    do add(items, 42)\n    return 1 + get(items, 0, missing())\nend\n",
+      "diagnostic": "line 4: native-subset: arity mismatch at call to 'get' (ERR 420)"
+    },
+    {
+      "id": "arity-append-before-wrong-first-type",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do append(1)\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-add-before-unknown-first-argument",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do add(missing(), 1, 2)\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'add' (ERR 420)"
+    },
+    {
+      "id": "arity-length-before-wrong-argument-type",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return length(1, missing())\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'length' (ERR 420)"
+    },
+    {
+      "id": "arity-valid-append-keeps-type-error",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do append(1, 2)\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: buffer operation on non-buffer (ERR 437)"
+    },
+    {
+      "id": "arity-valid-add-keeps-type-error",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do add(1, 2)\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: array operation on non-array (ERR 435)"
+    },
+    {
+      "id": "arity-split-do-call-location",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let bytes = new_buffer()\n    do\n        append(bytes)\n    return 42\nend\n",
+      "diagnostic": "line 4: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-split-value-call-location",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return\n        length()\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'length' (ERR 420)"
+    },
+    {
+      "id": "arity-called-helper-append",
+      "profile": "reject-legacy",
+      "source": "func mutate(bytes):\n    do append(bytes)\n    return 42\nend\nfunc main():\n    return mutate(new_buffer())\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-called-helper-length",
+      "profile": "reject-legacy",
+      "source": "func measure(text):\n    return length(text, missing())\nend\nfunc main():\n    return measure(\"abc\")\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'length' (ERR 420)"
+    },
+    {
+      "id": "arity-renamed-buffer-over",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let satchel = new_buffer()\n    do append(satchel, 65, 99)\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-renamed-array-under",
+      "profile": "reject-legacy",
+      "source": "func main():\n    let satchel = new_array(int)\n    do add(satchel)\n    return 42\nend\n",
+      "diagnostic": "line 3: native-subset: arity mismatch at call to 'add' (ERR 420)"
+    },
+    {
+      "id": "arity-extra-side-effecting-user-call",
+      "profile": "reject-legacy",
+      "source": "func noisy():\n    do flogger(\"unexpected\")\n    return 1\nend\nfunc main():\n    let bytes = new_buffer()\n    do append(bytes, 65, noisy())\n    return 42\nend\n",
+      "diagnostic": "line 7: native-subset: arity mismatch at call to 'append' (ERR 420)"
+    },
+    {
+      "id": "arity-value-extra-side-effecting-user-call",
+      "profile": "reject-legacy",
+      "source": "func noisy():\n    do flogger(\"unexpected\")\n    return 1\nend\nfunc main():\n    return length(\"abc\", noisy())\nend\n",
+      "diagnostic": "line 6: native-subset: arity mismatch at call to 'length' (ERR 420)"
+    },
+    {
+      "id": "arity-valid-hosted-value-family",
+      "profile": "run",
+      "source": "func main():\n    let bytes = new_buffer()\n    do append(bytes, 65)\n    let items = new_array(int)\n    do add(items, 42)\n    return (length(freeze(bytes)), index(freeze(bytes), 0), equal(freeze(bytes), \"A\"), get(items, 0), count(items), length(freeze(new_buffer())))\nend\n",
+      "stdin": "",
+      "stdout": "(1, 65, true, 42, 1, 0)\n",
+      "status": 0
+    },
+    {
+      "id": "arity-valid-clogger",
+      "profile": "run",
+      "source": "func main():\n    return length(clogger())\nend\n",
+      "stdin": "xyz",
+      "stdout": "3\n",
+      "status": 0
+    },
+    {
+      "id": "arity-valid-called-buffer-helper",
+      "profile": "run",
+      "source": "func fill(satchel):\n    do append(satchel, 42)\n    return index(freeze(satchel), 0)\nend\nfunc main():\n    return fill(new_buffer())\nend\n",
+      "stdin": "",
+      "stdout": "42\n",
+      "status": 0
+    },
+    {
+      "id": "arity-valid-called-array-helper",
+      "profile": "run",
+      "source": "func fill(satchel):\n    do add(satchel, 42)\n    return get(satchel, 0)\nend\nfunc main():\n    return fill(new_array(int))\nend\n",
+      "stdin": "",
+      "stdout": "42\n",
+      "status": 0
+    },
+    {
+      "id": "arity-priority-later-lexical",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do append()\n    return $\nend\n",
+      "diagnostic": "line 3: unexpected character (ERR 101)"
+    },
+    {
+      "id": "arity-priority-missing-end",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do append()\n    return 42\n",
+      "diagnostic": "line 4: expected end (ERR 203)"
+    },
+    {
+      "id": "arity-priority-later-class-mix",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do append()\n    return 1 & 2 | 3\nend\n",
+      "diagnostic": "line 3: native-subset: bitwise/shift operator mixed with another operator class without parentheses (ERR 442)"
+    },
+    {
+      "id": "arity-context-void-as-value",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return append()\nend\n",
+      "diagnostic": "line 2: native-subset: value-less builtin used as a value (ERR 440)"
+    },
+    {
+      "id": "arity-context-value-under-do",
+      "profile": "reject-legacy",
+      "source": "func main():\n    do length()\n    return 42\nend\n",
+      "diagnostic": "line 2: native-subset: forbidden construct 'length' (ERR 404)"
+    },
+    {
+      "id": "arity-context-unsupported-slice",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return slice()\nend\n",
+      "diagnostic": "line 2: native-subset: deferred native operation (ERR 438)"
+    },
+    {
+      "id": "arity-context-unknown-callee",
+      "profile": "reject-legacy",
+      "source": "func main():\n    return missing()\nend\n",
+      "diagnostic": "line 2: native-subset: unknown callee 'missing' (ERR 419)"
     }
   ]
 }

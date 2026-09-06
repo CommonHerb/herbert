@@ -6025,7 +6025,7 @@ func nc_constrain_expr(pool, nodes, prog_idx, idx, env, want, sig, fn_idx, funcs
             return nc_poly_constrain_user_call(pool, nodes, prog_idx, idx, env, want, sig, fn_idx, funcs, n_params)
         end
         if equal(name, "get"):
-            if count(node.2) != 2:
+            if count(node.2) != err_value_builtin_arity(name):
                 return (nc_fail(420, node.3, name), env, sig, 0)
             end
             let ar = nc_constrain_array_value(pool, nodes, prog_idx, get(node.2, 0), env, sig, fn_idx, funcs, n_params, want, node.3)
@@ -6096,6 +6096,19 @@ func nc_tuple_child_start_loop(pool, kids, i, target, acc):
         return acc
     end
     return nc_tuple_child_start_loop(pool, kids, i + 1, target, acc + nc_type_width(pool, get(kids, i)))
+end
+
+-- Keep the arity metadata shared, but guard only the supported ordinary value
+-- calls here. Type constructors, void-as-value, unsupported calls and low-level
+-- target intrinsics have separate contracts; a default arity is not a whitelist.
+func nc_has_value_arity_guard(name):
+    if equal(name, "clogger") or equal(name, "new_buffer"):
+        return true
+    end
+    if equal(name, "length") or equal(name, "freeze") or equal(name, "count"):
+        return true
+    end
+    return equal(name, "index") or equal(name, "equal") or equal(name, "get")
 end
 
 func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params):
@@ -6202,6 +6215,11 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
     end
     if equal(tag, "call"):
         let name = get(node.1, 0)
+        -- Check count before indexing or inferring arguments. Extra arguments
+        -- must not escape inference and reach lowering without call metadata.
+        if nc_has_value_arity_guard(name) and count(kids) != err_value_builtin_arity(name):
+            return (nc_fail(420, node.3, name), 0, env, sig, 0)
+        end
         if equal(name, "clogger"):
             return (0, nc_type_string(), env, sig, 0)
         end
@@ -6465,6 +6483,11 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         if equal(call_node.0, "call"):
             let name = get(call_node.1, 0)
             let ckids = call_node.2
+            -- The four supported void builtins share the same arity-first rule.
+            -- In particular, append/add must not silently discard extra args.
+            if err_is_void_builtin(name) and count(ckids) != err_void_builtin_arity(name):
+                return (nc_fail(420, call_node.3, name), env, sig, 0, 0)
+            end
             if equal(name, "append"):
                 let b = nc_constrain_buffer_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
                 if b.0 != 0:
@@ -6512,16 +6535,10 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
                 return (0, env, sig, changed, 0)
             end
             if equal(name, "flogger"):
-                if count(ckids) != 1:
-                    return (nc_fail(420, call_node.3, "flogger"), env, sig, 0, 0)
-                end
                 let s = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
                 return (s.0, s.1, s.2, s.3, 0)
             end
             if equal(name, "fwriter"):
-                if count(ckids) != 1:
-                    return (nc_fail(420, call_node.3, "fwriter"), env, sig, 0, 0)
-                end
                 let sf = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
                 return (sf.0, sf.1, sf.2, sf.3, 0)
             end
