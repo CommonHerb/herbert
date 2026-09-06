@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check test test-timeout evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run closed-loop-memory-diet reseed verify-local clean
+.PHONY: all check test test-timeout compiler-conformance evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run closed-loop-memory-diet reseed verify-local clean
 
 all: $(SCANNER)
 
@@ -21,10 +21,17 @@ check: $(SCANNER)
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
 	@bash bootstrap/tests/run_tests.sh --check-pinned
+	@python3 bootstrap/tests/compiler_conformance.py --check-corpus
 
 test:
 	@bash tools/check_full_test_host.sh
 	@PATH=$(abspath tools):$$PATH bash bootstrap/tests/run_tests.sh
+	@python3 bootstrap/tests/compiler_conformance.py
+
+# Hosted language behavior through the ordinary seed, independently counted from
+# the historical 43-test bootstrap/switchover suite. CI reaches it via make test.
+compiler-conformance:
+	@python3 bootstrap/tests/compiler_conformance.py
 
 test-timeout:
 	@python3 tools/check_timeout.py

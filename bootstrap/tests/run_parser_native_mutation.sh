@@ -20,6 +20,7 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 fragment="$repo_root/stack/parser_fragment.herb"
 oracle="$repo_root/stack/parser_probe.expected"
+gate="$script_dir/run_parser_native.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -29,6 +30,7 @@ fail_test() { echo "FAIL: parser native mutation ($1)"; FAILED=1; }
 FAILED=0
 
 [[ -f "$fragment" ]] || { echo "FAIL: missing fragment"; exit 1; }
+[[ -f "$gate" && -r "$gate" ]] || { echo "FAIL: missing parser native gate"; exit 1; }
 
 source "$script_dir/native_codegen_oracle.sh"
 native_codegen_ensure_compiler "$tmp/native-compiler" || { echo "FAIL: could not acquire gen-1 compiler"; exit 1; }
@@ -40,28 +42,43 @@ GEN1="$NATIVE_CODEGEN_COMPILER"
 native_line1() {
     local src="$1" out="$2" wd; wd="$(mktemp -d "$tmp/run.XXXX")"
     : >"$out"                                 # always exists, so a fault -> clean empty diff
-    ( cd "$wd" && "$GEN1" <"$src" >compile.log 2>compile.err )
-    [[ -f "$wd/a.out" ]] || return 2          # rc 2 = did not compile
-    [[ "$(head -c4 "$wd/a.out" | xxd -p)" == "7f454c46" ]] || return 2   # not a real ELF
+    ( cd "$wd" && "$GEN1" <"$src" >compile.log 2>compile.err ); local compile_rc=$?
+    [[ "$compile_rc" -eq 0 ]] || { echo "    (gen-1 compiler exited nonzero: rc=$compile_rc)"; return 2; }
+    [[ -f "$wd/a.out" ]] || { echo "    (gen-1 compile produced no ELF: $(head -1 "$wd/compile.log" 2>/dev/null))"; return 2; }
+    [[ "$(head -c4 "$wd/a.out" | xxd -p)" == "7f454c46" ]] || { echo "    (a.out is not an ELF)"; return 2; }
     chmod +x "$wd/a.out" || return 1
-    ( "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" ); local r=$?
-    head -1 "$wd/run.out" >"$out" 2>/dev/null
-    return $r
+    ( "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" ); local run_rc=$?
+    [[ "$run_rc" -eq 0 ]] || { echo "    (native ELF exited nonzero: rc=$run_rc)"; return 1; }
+    # Match the real gate's transcript qualification before judging a wrong value.
+    [[ "$(wc -l <"$wd/run.out")" -eq 2 ]] || { echo "    (native output is not exactly 2 lines: $(wc -l <"$wd/run.out"))"; return 1; }
+    tail -n +2 "$wd/run.out" | cmp -s - <(printf '0\n') || { echo "    (native output after line 1 is not exactly the return-0 marker)"; return 1; }
+    head -1 "$wd/run.out" >"$out"
+    [[ -s "$out" ]] || { echo "    (native ELF produced empty line 1)"; return 1; }
+    return 0
+}
+
+# Exercise the production gate, including its own oracle comparison. The separate
+# native run above qualifies the mutation; it must not stand in for this check.
+actual_gate() {
+    PARSER_NATIVE_NO_C=1 NATIVE_CODEGEN_COMPILER="$GEN1" \
+        bash "$gate" --fragment "$1" >"$2" 2>&1
 }
 
 # ===== CONTROL: the unmutated fragment must grade GREEN (else the grader is vacuous) =====
 ctl="$tmp/ctl.line1"
-if native_line1 "$fragment" "$ctl" && cmp -s "$ctl" "$oracle"; then
+if native_line1 "$fragment" "$ctl" && cmp -s "$ctl" "$oracle" && \
+        actual_gate "$fragment" "$tmp/control.gate.log"; then
     pass=$((pass + 1))
 else
-    fail_test "CONTROL: unmutated parser did not grade GREEN (native line1 != oracle) -- grader vacuous"
+    fail_test "CONTROL: unmutated parser did not match the oracle and pass the actual gate"
 fi
 
 # ===== mutation helper: replace a UNIQUE anchor, require the STRONG bite =====
 # Strong bite = the mutated fragment (a) has the anchor exactly once (an unscoped
 # multi-hit substitution is rejected), (b) compiles to a real native ELF, (c) the
-# ELF runs cleanly (rc 0) and emits a non-empty line 1, and (d) that line 1
-# DIFFERS from the oracle. A compile failure or a crash is NOT accepted for these
+# ELF runs cleanly (rc 0) and emits a non-empty line 1 plus exactly "0\n", (d) line 1
+# DIFFERS from the oracle, and (e) the ACTUAL gate rejects it at its enduring
+# oracle comparison. A compile failure or a crash is NOT accepted for these
 # shipped mutations -- we are proving the C-free path grades a WRONG RUNTIME VALUE
 # (a wrong AST tag in the emitted tree), not merely that broken input fails to build.
 mutate_expect_red() {
@@ -82,11 +99,11 @@ PY
     fi
     native_line1 "$m" "$ln"; local rc=$?
     if [[ $rc -eq 2 ]]; then
-        fail_test "$label: mutated fragment did NOT compile to a native ELF (want compiles-runs-wrong-value, not a build failure)"
+        fail_test "$label: mutated fragment did NOT compile cleanly to a native ELF (want compiles-runs-wrong-value, not a build failure)"
         return
     fi
     if [[ $rc -ne 0 ]]; then
-        fail_test "$label: mutated native ELF did not run cleanly (rc=$rc; want a clean wrong-value bite)"
+        fail_test "$label: mutated native ELF failed run/output qualification (want a clean wrong-value bite)"
         return
     fi
     if [[ ! -s "$ln" ]]; then
@@ -95,6 +112,11 @@ PY
     fi
     if cmp -s "$ln" "$oracle"; then
         fail_test "$label: mutated parser STILL matched the oracle -- the gate is blind to this rule"
+    elif actual_gate "$m" "$tmp/$label.gate.log"; then
+        fail_test "$label: actual parser gate accepted a qualified wrong-value mutation"
+    # Keep this prefix in sync with the enduring-leg failure in run_parser_native.sh.
+    elif ! grep -Fq 'FAIL: parser native execution (native gen-1 parser line 1 differs from independent oracle' "$tmp/$label.gate.log"; then
+        fail_test "$label: actual parser gate failed outside its enduring oracle comparison"
     else
         pass=$((pass + 1))
     fi
@@ -121,7 +143,7 @@ mutate_expect_red "M-lt" 'return "lt"' 'return "gt"'
 
 echo "parser native mutation proof: pass=$pass fail=$([[ $FAILED -eq 1 ]] && echo "$((4 - pass))" || echo 0)"
 if [[ $FAILED -eq 0 && $pass -eq 4 ]]; then
-    echo "PASS: parser native mutation (CONTROL green; M-add/M-eq/M-lt each compile natively then DIVERGE from the oracle -- the C-free gate bites)"
+    echo "PASS: parser native mutation (CONTROL green; M-add/M-eq/M-lt each compile natively then DIVERGE from the oracle and are rejected by the actual C-free gate)"
 else
     exit 1
 fi

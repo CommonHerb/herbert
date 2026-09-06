@@ -1907,15 +1907,22 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     return fault("bad expression")
 end
 
-func body_ends_return(body_idx, nodes):
-    let body = get(nodes, body_idx)
-    let kids = body.2
-    let n = count(kids)
-    if n == 0:
+func body_has_direct_return(stmts, i, n, nodes):
+    if i >= n:
         return false
     end
-    let stmt = get(nodes, get(kids, n - 1))
-    return equal(stmt.0, "return")
+    if equal(get(nodes, get(stmts, i)).0, "return"):
+        return true
+    end
+    return body_has_direct_return(stmts, i + 1, n, nodes)
+end
+
+func body_ends_return(body_idx, nodes):
+    -- A direct return terminates the body even if unreachable statements follow.
+    -- Use the same boundary for branch emission and inference's join inputs.
+    -- This does not infer termination from nested ifs whose arms all return.
+    let body = get(nodes, body_idx)
+    return body_has_direct_return(body.2, 0, count(body.2), nodes)
 end
 
 func emit_body(stmts, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -1923,6 +1930,11 @@ func emit_body(stmts, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller
         return env
     end
     env = emit_stmt(get(stmts, i), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    -- Inference ends this body at a direct return. Lowering must not request
+    -- specializations or local metadata for statements inference never visited.
+    if equal(get(nodes, get(stmts, i)).0, "return"):
+        return env
+    end
     return emit_body(stmts, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
 end
 
@@ -2713,6 +2725,9 @@ func err_scan(src, i, n, line, out):
         do add(out, (3, slice_text(src, i, r.2), line))
         return err_scan(src, r.2, n, line, out)
     elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
+        do add(out, (5, slice_text(src, i, i + 2), line))
+        return err_scan(src, i + 2, n, line, out)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
         do add(out, (5, slice_text(src, i, i + 2), line))
         return err_scan(src, i + 2, n, line, out)
     elif is_one_byte_op(c):
@@ -21422,7 +21437,15 @@ func main():
         let mb_done = nc_emit_multiboot32_program(source)
         return 0
     end
-    let tokens = lex_source(source)
+    -- Use the existing checked lexer on the hosted production path. The
+    -- historical emit-directive routes above retain their own contracts.
+    let lexed = err_lex_source(source)
+    if lexed.0 == err_err_tag():
+        do flogger(serialize_diagnostic(lexed.1))
+        do flogger("\n")
+        return 0
+    end
+    let tokens = lexed.2
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
     let type_pool = nc_type_pool_new()

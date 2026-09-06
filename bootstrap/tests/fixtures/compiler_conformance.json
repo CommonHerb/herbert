@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "scope": "Hosted production workspace seed only. First wave: lexical acceptance/rejection and direct-return lowering. Hand-authored expectations; no regeneration from compiler output. Rejects intentionally retain the legacy status-zero/stdout envelope. Does not certify complete grammar checking, general TCO, allocation lifetime, or stale-output/CLI repairs. Inline JSON source strings preserve exact EOF and newline bytes.",
+  "cases": [
+    {
+      "id": "uint64-zero", "profile": "run",
+      "source": "func main():\n    return 0\nend\n",
+      "stdin": "", "stdout": "0\n", "status": 0
+    },
+    {
+      "id": "uint64-max", "profile": "run",
+      "source": "func main():\n    return 18446744073709551615\nend\n",
+      "stdin": "", "stdout": "18446744073709551615\n", "status": 0
+    },
+    {
+      "id": "leading-zeroes", "profile": "run",
+      "source": "func main():\n    return (0000000000000000000000000000000000000000000000000042, 0000000000000000000018446744073709551615)\nend\n",
+      "stdin": "", "stdout": "(42, 18446744073709551615)\n", "status": 0
+    },
+    {
+      "id": "arithmetic-wrap", "profile": "run",
+      "source": "func main():\n    return (18446744073709551615 + 1, 0 - 1, 9223372036854775808 * 2)\nend\n",
+      "stdin": "", "stdout": "(0, 18446744073709551615, 0)\n", "status": 0
+    },
+    {
+      "id": "char-escapes", "profile": "run",
+      "source": "func main():\n    return ('K', '\\n', '\\\\', '\\'')\nend\n",
+      "stdin": "", "stdout": "(75, 10, 92, 39)\n", "status": 0
+    },
+    {
+      "id": "string-escapes", "profile": "run",
+      "source": "func main():\n    do flogger(\"a\\n\\\"\\\\z\")\n    return 0\nend\n",
+      "stdin": "", "stdout": "a\n\"\\z0\n", "status": 0
+    },
+    {
+      "id": "empty-string", "profile": "run",
+      "source": "func main():\n    return length(\"\")\nend\n",
+      "stdin": "", "stdout": "0\n", "status": 0
+    },
+    {
+      "id": "parenthesized-bitwise-shifts", "profile": "run",
+      "source": "func main():\n    return ((6 & 3), (4 | 1), (7 ^ 3), (1 << 63), (9223372036854775808 >> 63), (1 << 64), (8 >> 65), ~0)\nend\n",
+      "stdin": "", "stdout": "(2, 5, 4, 9223372036854775808, 1, 1, 4, 18446744073709551615)\n", "status": 0
+    },
+    {
+      "id": "parenthesized-mixed-classes", "profile": "run",
+      "source": "func main():\n    return (((3 & 1) | (4 ^ 1)) << (1 + 1))\nend\n",
+      "stdin": "", "stdout": "20\n", "status": 0
+    },
+    {
+      "id": "comment-and-crlf", "profile": "run",
+      "source": "-- comment may contain $ @ ! \\\r\nfunc main():\r\n    return 42\r\nend -- final comment without newline",
+      "stdin": "", "stdout": "42\n", "status": 0
+    },
+    {
+      "id": "unreachable-defined-call", "profile": "run",
+      "source": "func helper():\n    return 9\nend\nfunc main():\n    return 42\n    let unused = helper()\nend\n",
+      "stdin": "", "stdout": "42\n", "status": 0
+    },
+    {
+      "id": "unreachable-call-in-branch", "profile": "run",
+      "source": "func helper():\n    return 9\nend\nfunc main():\n    if true:\n        return 42\n        let unused = helper()\n    else:\n        return 0\n    end\nend\n",
+      "stdin": "", "stdout": "42\n", "status": 0
+    },
+    {
+      "id": "unreachable-width-changing-assignment", "profile": "run",
+      "source": "func main():\n    let x = 1\n    return 42\n    x = (1, 2)\nend\n",
+      "stdin": "", "stdout": "42\n", "status": 0
+    },
+    {
+      "id": "unreachable-call-after-string-return", "profile": "run",
+      "source": "func helper():\n    return 9\nend\nfunc main():\n    return \"answer\"\n    let unused = helper()\nend\n",
+      "stdin": "", "stdout": "\"answer\"\n", "status": 0
+    },
+    {
+      "id": "unreachable-call-after-tuple-return", "profile": "run",
+      "source": "func helper():\n    return 9\nend\nfunc main():\n    return (42, \"ok\")\n    let unused = helper()\nend\n",
+      "stdin": "", "stdout": "(42, \"ok\")\n", "status": 0
+    },
+    {
+      "id": "overflow-one", "profile": "reject-legacy",
+      "source": "func main():\n    return 18446744073709551616\nend\n",
+      "diagnostic": "line 2: integer literal does not fit in 64 bits (ERR 103)"
+    },
+    {
+      "id": "overflow-many", "profile": "reject-legacy",
+      "source": "func main():\n    return 99999999999999999999999999999999999999999999999999999999\nend\n",
+      "diagnostic": "line 2: integer literal does not fit in 64 bits (ERR 103)"
+    },
+    {
+      "id": "overflow-leading-zeroes", "profile": "reject-legacy",
+      "source": "func main():\n    return 0000000000000018446744073709551616\nend\n",
+      "diagnostic": "line 2: integer literal does not fit in 64 bits (ERR 103)"
+    },
+    {
+      "id": "unknown-dollar", "profile": "reject-legacy",
+      "source": "func main():\n    return 42 $\nend\n",
+      "diagnostic": "line 2: unexpected character (ERR 101)"
+    },
+    {
+      "id": "unknown-at", "profile": "reject-legacy",
+      "source": "func main():\n    return 42 @\nend\n",
+      "diagnostic": "line 2: unexpected character (ERR 101)"
+    },
+    {
+      "id": "unknown-semicolon", "profile": "reject-legacy",
+      "source": "func main():\n    return 42;\nend\n",
+      "diagnostic": "line 2: unexpected character (ERR 101)"
+    },
+    {
+      "id": "unknown-lone-bang", "profile": "reject-legacy",
+      "source": "func main():\n    return 42 !\nend\n",
+      "diagnostic": "line 2: unexpected character (ERR 101)"
+    },
+    {
+      "id": "unknown-shifted-line", "profile": "reject-legacy",
+      "source": "\n-- comment $ ignored\r\nfunc main():\r\n    return 42 @\r\nend\r\n",
+      "diagnostic": "line 4: unexpected character (ERR 101)"
+    },
+    {
+      "id": "string-unknown-escape", "profile": "reject-legacy",
+      "source": "func main():\n    return \"\\q\"\nend\n",
+      "diagnostic": "line 2: unknown escape sequence (ERR 104)"
+    },
+    {
+      "id": "string-escape-eof", "profile": "reject-legacy",
+      "source": "func main():\n    return \"abc\\",
+      "diagnostic": "line 2: unterminated escape (ERR 105)"
+    },
+    {
+      "id": "string-newline", "profile": "reject-legacy",
+      "source": "func main():\n    return \"abc\ndef\"\nend\n",
+      "diagnostic": "line 2: newline in string literal (ERR 106)"
+    },
+    {
+      "id": "string-eof", "profile": "reject-legacy",
+      "source": "func main():\n    return \"abc",
+      "diagnostic": "line 2: unterminated string literal (ERR 107)"
+    },
+    {
+      "id": "char-unknown-escape", "profile": "reject-legacy",
+      "source": "func main():\n    return '\\q'\nend\n",
+      "diagnostic": "line 2: unknown escape sequence (ERR 104)"
+    },
+    {
+      "id": "char-escape-eof", "profile": "reject-legacy",
+      "source": "func main():\n    return '\\",
+      "diagnostic": "line 2: unterminated escape (ERR 105)"
+    },
+    {
+      "id": "char-empty", "profile": "reject-legacy",
+      "source": "func main():\n    return ''\nend\n",
+      "diagnostic": "line 2: empty character literal (ERR 108)"
+    },
+    {
+      "id": "char-two-bytes", "profile": "reject-legacy",
+      "source": "func main():\n    return 'ab'\nend\n",
+      "diagnostic": "line 2: character literal not closed (ERR 109)"
+    },
+    {
+      "id": "char-eof", "profile": "reject-legacy",
+      "source": "func main():\n    return '",
+      "diagnostic": "line 2: character literal not closed (ERR 109)"
+    },
+    {
+      "id": "char-newline", "profile": "reject-legacy",
+      "source": "func main():\n    return '\n'\nend\n",
+      "diagnostic": "line 2: newline in character literal (ERR 110)"
+    }
+  ]
+}

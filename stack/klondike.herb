@@ -2176,6 +2176,9 @@ func err_scan(src, i, n, line, out):
     elif is_two_byte_op_start(c) and i + 1 < n and index(src, i + 1) == '=':
         do add(out, (5, slice_text(src, i, i + 2), line))
         return err_scan(src, i + 2, n, line, out)
+    elif is_shift_op_start(c) and i + 1 < n and index(src, i + 1) == c:
+        do add(out, (5, slice_text(src, i, i + 2), line))
+        return err_scan(src, i + 2, n, line, out)
     elif is_one_byte_op(c):
         do add(out, (5, slice_text(src, i, i + 1), line))
         return err_scan(src, i + 1, n, line, out)

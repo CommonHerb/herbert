@@ -41,6 +41,11 @@
 # before this link; mutating a reachable parse rule makes the native output
 # diverge from the oracle (proven by run_parser_native_mutation.sh).
 #
+# --fragment ABS_PATH explicitly overrides the source for the mutation proof,
+# which exercises THIS gate's enduring comparison against the fixed oracle.
+# With no arguments the committed fragment is always used; ambient environment
+# variables cannot redirect this input. Every explicit override is logged.
+#
 # SCOPE (honest): the native parser is exercised over ONE fixed forcing probe
 # (parser_probe, hand-authored to exercise every grammar production -- if/elif/
 # else, recursion, let/rebind, all six comparisons, and/or/not, booleans,
@@ -65,7 +70,14 @@ trap 'rm -rf "$tmp"' EXIT
 
 fail() { echo "FAIL: parser native execution ($1)"; exit 1; }
 
-[[ -f "$fragment" ]] || fail "missing fragment $fragment"
+case "$#" in
+    0) ;;
+    2) [[ "$1" == "--fragment" ]] || fail "usage: $0 [--fragment ABS_PATH]"
+       fragment="$2" ;;
+    *) fail "usage: $0 [--fragment ABS_PATH]" ;;
+esac
+[[ "$fragment" == /* && -f "$fragment" && -r "$fragment" ]] || fail "fragment must be an absolute readable file: $fragment"
+[[ "$#" -eq 0 ]] || echo "NOTE: parser native execution explicit fragment override: $fragment"
 [[ -f "$oracle" ]] || fail "missing oracle $oracle"
 
 # --- 1. Acquire the C-free gen-1 production compiler (the committed seed) -------
@@ -79,7 +91,8 @@ GEN1="$NATIVE_CODEGEN_COMPILER"
 # running (a missing chmod looks exactly like a C-vs-native divergence -- it is not).
 native_line1() {
     local src="$1" out="$2" wd; wd="$(mktemp -d "$tmp/run.XXXX")"
-    ( cd "$wd" && "$GEN1" <"$src" >compile.log 2>compile.err )
+    ( cd "$wd" && "$GEN1" <"$src" >compile.log 2>compile.err ); local compile_rc=$?
+    [[ "$compile_rc" -eq 0 ]] || { echo "    (gen-1 compiler exited nonzero: rc=$compile_rc)"; return 1; }
     [[ -f "$wd/a.out" ]] || { echo "    (gen-1 compile produced no ELF: $(head -1 "$wd/compile.log" 2>/dev/null))"; return 1; }
     # Require a genuine ELF, not just any executable named a.out: the native path
     # must really be a gen-1-emitted ELF, not a wrapper/shim that echoes the oracle.
@@ -91,7 +104,7 @@ native_line1() {
     # nothing else -- so trailing garbage or a corrupted return marker cannot hide
     # behind a correct line 1.
     [[ "$(wc -l <"$wd/run.out")" -eq 2 ]] || { echo "    (native output is not exactly 2 lines: $(wc -l <"$wd/run.out"))"; return 1; }
-    [[ "$(sed -n 2p "$wd/run.out")" == "0" ]] || { echo "    (native line 2 is not the expected return-0 marker)"; return 1; }
+    tail -n +2 "$wd/run.out" | cmp -s - <(printf '0\n') || { echo "    (native output after line 1 is not exactly the return-0 marker)"; return 1; }
     head -1 "$wd/run.out" >"$out"
     [[ -s "$out" ]] || { echo "    (native ELF produced empty line 1)"; return 1; }
     return 0
@@ -100,6 +113,8 @@ native_line1() {
 # --- 2. ENDURING leg: native gen-1 parser output == independent oracle ---------
 nat="$tmp/native.line1"
 native_line1 "$fragment" "$nat" || fail "native gen-1 parser did not run cleanly"
+# This failure prefix is asserted by run_parser_native_mutation.sh so setup or
+# transcript failures cannot masquerade as an enduring-oracle rejection.
 cmp -s "$nat" "$oracle" || fail "native gen-1 parser line 1 differs from independent oracle (native=$(head -c80 "$nat") oracle=$(head -c80 "$oracle"))"
 
 # --- 3. RETIREABLE leg: faithfulness vs the C interpreter (migration guard) ------

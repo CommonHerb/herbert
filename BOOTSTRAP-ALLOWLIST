@@ -31,6 +31,9 @@ examples/native_today_collections.expected
 examples/native_today_io.expected
 stack/native_surface_ledger.expected
 bootstrap/tests/check_lexer_copy_sync.py
+# Hosted conformance harness + hand-authored data: deliberate test-tool boundary.
+bootstrap/tests/compiler_conformance.py
+bootstrap/tests/fixtures/compiler_conformance.json
 bootstrap/tests/run_evaluator_native.sh
 bootstrap/tests/run_evaluator_native_mutation.sh
 bootstrap/tests/run_vm_native.sh
