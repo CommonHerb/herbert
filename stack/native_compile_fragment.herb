@@ -348,6 +348,24 @@ func collect_str_atoms(atoms, bytes, i, n):
     return collect_str_atoms(atoms, bytes, i + 1, n)
 end
 
+-- Large literals reuse the immutable decimal strings for all 256 byte values.
+-- Keep the same AST atoms while avoiding one new decimal buffer per byte.
+func byte_decimal_strings_loop(out, i):
+    if i >= 256:
+        return out
+    end
+    do add(out, int_to_str(i))
+    return byte_decimal_strings_loop(out, i + 1)
+end
+
+func collect_str_atoms_cached(atoms, bytes, i, n, cache):
+    if i >= n:
+        return atoms
+    end
+    do add(atoms, get(cache, index(bytes, i)))
+    return collect_str_atoms_cached(atoms, bytes, i + 1, n, cache)
+end
+
 -- ====================================================================
 -- TOKEN INSPECTION
 -- ====================================================================
@@ -746,7 +764,12 @@ func parse_atom(tokens, pos, pool):
         let frozen = decode_string(s)
         let n = length(frozen)
         let atoms = atoms1(int_to_str(n))
-        atoms = collect_str_atoms(atoms, frozen, 0, n)
+        if n >= 1024:
+            let cache = byte_decimal_strings_loop(new_array(string), 0)
+            atoms = collect_str_atoms_cached(atoms, frozen, 0, n, cache)
+        else:
+            atoms = collect_str_atoms(atoms, frozen, 0, n)
+        end
         return (add_node(pool, "str", atoms, kids0(), ln), pos + 1)
     end
     if k == 0:
