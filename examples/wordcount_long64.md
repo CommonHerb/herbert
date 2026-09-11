@@ -30,6 +30,9 @@ the guest. It does not calculate counts. It prints the guest's answer only
 after the complete result, closed serial connection, success frame and QEMU
 success exit have all arrived. Input read failures, lost transport, invalid
 records and failed guest completion produce a nonzero exit and no count result.
+Temporarily unavailable nonblocking input is an error, even after a valid prefix;
+it is never treated as EOF. The command reads unbuffered stdin so available pipe
+fragments can be forwarded without waiting to fill a chunk.
 `--timeout SECONDS` bounds each guest response and emulator completion, not
 the whole input stream or a blocking host stdin read.
 
@@ -66,8 +69,10 @@ separate work.
 
 `make check-long64-wordcount` exercises the actual compiled image under QEMU,
 using literal expected counts, sustained input, two faulty source variants and
-a near-capacity counter variant. A small transport fixture checks truncated
-results. For the additional local KVM case and retained evidence:
+a near-capacity counter variant. An actual nonblocking pipe checks that a valid
+prefix followed by unavailable input produces no successful result. A small
+transport fixture checks truncated results. For the additional local KVM case
+and retained evidence:
 
 ```sh
 python3 bootstrap/tests/check_wordcount_long64.py \

@@ -91,9 +91,11 @@ def exchange(peer, source, *, timeout=30.0, sent_log, received_log):
             raise ProtocolError("guest did not acknowledge the input byte")
 
     while True:
-        # read1 forwards an available pipe fragment without waiting to fill 255 bytes.
-        read = getattr(source, "read1", source.read)
-        block = read(255)
+        # BufferedReader.read1 can return b"" on EAGAIN, even with a live writer.
+        # read preserves None as unavailable input instead of mistaking it for EOF.
+        block = source.read(255)
+        if block is None:
+            raise ProtocolError("input is temporarily unavailable; stream is incomplete")
         if not isinstance(block, bytes) or len(block) > 255:
             raise ProtocolError("input did not provide a bounded binary read")
         send_byte(len(block))
@@ -226,8 +228,12 @@ def main():
     parser.add_argument("--evidence", type=Path, help="new directory retaining image, wire bytes and emulator logs")
     args = parser.parse_args()
     try:
+        if sys.stdin is None:
+            raise ProtocolError("standard input is closed")
         result = run_qemu(
-            args.image, sys.stdin.buffer, qemu=args.qemu, accel=args.accel,
+            # No buffered stdin reads precede this call. FileIO preserves short
+            # pipe reads without read1's ambiguous empty result on EAGAIN.
+            args.image, sys.stdin.buffer.raw, qemu=args.qemu, accel=args.accel,
             timeout=args.timeout, evidence=args.evidence,
         )
         sys.stdout.buffer.write(result)

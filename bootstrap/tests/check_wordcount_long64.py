@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -153,6 +154,41 @@ def check_capacity(image, evidence, qemu, timeout):
     print("PASS wordcount-long64 overflow: explicit capacity rejection, no result", flush=True)
 
 
+def check_nonblocking_prefix(image, evidence, qemu, timeout):
+    """EAGAIN after real input progress must not become an explicit guest EOF."""
+    read_fd, write_fd = os.pipe()
+    directory = evidence / "nonblocking-prefix"
+    try:
+        os.set_blocking(read_fd, False)
+        if os.write(write_fd, b"one two\n") != 8:
+            raise AssertionError("nonblocking-prefix fixture did not write its prefix")
+        # Keep BufferedReader: read1 returns b"" on EAGAIN, unlike read's None.
+        # The writer stays open throughout the guest run, so no real EOF exists.
+        with os.fdopen(read_fd, "rb") as source:
+            read_fd = None
+            try:
+                driver.run_qemu(image, source, qemu=qemu, accel="tcg",
+                                timeout=timeout, evidence=directory)
+            except driver.ProtocolError as error:
+                sent = (directory / "sent.bin").read_bytes()
+                received = (directory / "received.bin").read_bytes()
+                if ("input is temporarily unavailable; stream is incomplete" not in str(error)
+                        or sent != b"\x08one two\n"
+                        or received != b"HWC1\n" + b"\x06" * 9):
+                    raise AssertionError(
+                        f"nonblocking prefix lacked exact progress/refusal: {error}; "
+                        f"sent={sent!r}, received={received!r}")
+            else:
+                raise AssertionError("nonblocking EAGAIN was accepted as source EOF")
+    finally:
+        try:
+            if read_fd is not None:
+                os.close(read_fd)
+        finally:
+            os.close(write_fd)
+    print("PASS wordcount-long64 nonblocking prefix: progress, no EOF or result", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, type=Path)
@@ -194,6 +230,7 @@ def main():
     if args.kvm:
         run("KVM-combined", COMBINED, COMBINED_EXPECTED, accel="kvm")
 
+    check_nonblocking_prefix(image, evidence, qemu, args.timeout)
     mutants = compile_mutants(evidence, args.compiler.resolve())
     probe = b"one two\n"
     expected = b"(1, 2, 8)\n"
@@ -216,7 +253,7 @@ def main():
         raise AssertionError("complete-looking result with failed guest completion was accepted")
     print("PASS wordcount-long64 bad completion: valid counts refused", flush=True)
     check_capacity(mutants["near-capacity"], evidence, qemu, args.timeout)
-    print(f"wordcount-long64: {len(CASES) + int(args.kvm) + 5} checks passed", flush=True)
+    print(f"wordcount-long64: {len(CASES) + int(args.kvm) + 6} checks passed", flush=True)
 
 
 if __name__ == "__main__":
