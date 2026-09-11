@@ -160,7 +160,7 @@ run_surface() {
         if env HERBERT="$herbert" $env_kv bash "$script_dir/$s" >"$scrub_dir/out" 2>&1; then
             p=$((p+1))
         else
-            f=$((f+1)); note "  [$label] FAIL  $s"; sed 's/^/        | /' "$scrub_dir/out" | tail -5
+            f=$((f+1)); note "  [$label] FAIL  $s"; sed 's/^/        | /' "$scrub_dir/out"
         fi
     done
     note "  [$label] $p/${#SURFACE_SCRIPTS[@]} gates green"

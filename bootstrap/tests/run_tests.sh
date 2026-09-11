@@ -1119,7 +1119,7 @@ if pinned_proof run_switchover_cfree.sh; then
         pass=$((pass + 1))
     else
         echo "FAIL: switchover-cfree (the C-free production surface did NOT stand with C physically absent)"
-        sed 's/^/    | /' /tmp/herbert_switchover.$$ | tail -20
+        sed 's/^/    | /' /tmp/herbert_switchover.$$
         fail=$((fail + 1))
     fi
     rm -f /tmp/herbert_switchover.$$
