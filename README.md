@@ -4,6 +4,10 @@ Herbert is a self-hosting language and native compiler, with a developing bare-m
 
 Start with [the word counter](examples/wordcount.md) to compile a useful program and process real input. Current capabilities and limitations are established by the source and executable checks.
 
+The [streaming long64 counter](examples/wordcount_long64.md) performs the same
+calculation on Herbert's own runtime, with a host adapter carrying input bytes
+over its serial port.
+
 ## Layout
 
 - `bootstrap/` contains the committed native gen-1 seed, verification harnesses,
@@ -15,8 +19,8 @@ Start with [the word counter](examples/wordcount.md) to compile a useful program
   path is separate. The parent workspace's `../../tools/scorecard.sh` computes
   the current provenance breakdown; link counts alone are not a progress measure.
 - `bootstrap/tests/` contains sample interpreter tests, stack probes, native-codegen links, Python reference builders, golden artifacts, and kernel runners.
-- `tools/` contains guard and verification helpers, including the remaining C
-  governance scanner.
+- `tools/` contains host adapters, guard and verification helpers, including the
+  remaining C governance scanner.
 - `.github/workflows/` contains CI verification surfaces.
 
 ## Development Rule

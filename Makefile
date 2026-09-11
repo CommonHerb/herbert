@@ -54,6 +54,26 @@ compiler-cli-contract:
 wordcount:
 	@python3 bootstrap/tests/check_wordcount.py
 
+# The same useful calculation on the sovereign long64 runtime. The host tool
+# transports stdin and prints the guest's result; it does not calculate counts.
+.PHONY: long64-wordcount check-long64-wordcount
+long64-wordcount: $(BUILD)/wordcount-long64.elf
+
+$(BUILD)/wordcount-long64.elf: examples/wordcount_long64.herb bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
+	@set -eu; \
+	  mkdir -p $(BUILD)/wordcount-long64; \
+	  cp bootstrap/seed/gen1.seed $(BUILD)/wordcount-long64/compiler; \
+	  chmod u+x $(BUILD)/wordcount-long64/compiler; \
+	  (cd $(BUILD)/wordcount-long64 && ./compiler < ../../examples/wordcount_long64.herb > compiler.stdout 2> compiler.stderr) || { cat $(BUILD)/wordcount-long64/compiler.stderr >&2; exit 1; }; \
+	  printf '0\n' > $(BUILD)/wordcount-long64/expected.stdout; \
+	  cmp $(BUILD)/wordcount-long64/expected.stdout $(BUILD)/wordcount-long64/compiler.stdout; \
+	  test ! -s $(BUILD)/wordcount-long64/compiler.stderr; \
+	  mv $(BUILD)/wordcount-long64/a.out $@
+
+check-long64-wordcount: $(BUILD)/wordcount-long64.elf
+	@python3 bootstrap/tests/check_wordcount_long64.py --image $(BUILD)/wordcount-long64.elf
+
 test-timeout:
 	@python3 tools/check_timeout.py
 

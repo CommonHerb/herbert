@@ -127,6 +127,13 @@ The local Bochs is 2.7 while CI pins 2.8. Local emulator results remain distinct
 from the CI substrate. F2-hardened gates classify harness failures (such as disk
 setup or feeder failures) separately from completed kernel results.
 
+`make check-long64-wordcount` separately builds and checks the maintained
+[streaming application](examples/wordcount_long64.md) under QEMU. It runs once
+in the 60..61 CI job, retaining application evidence alongside the kernel gate
+directories. The 99 kernel gates and their STATUS files keep their existing
+scope. The application checker has an optional `--kvm` case for local hardware;
+its normal CI checks use QEMU TCG and do not claim a Bochs application run.
+
 ## What These Commands Do Not Prove
 
 - They do not prove arbitrary-program compiler correctness.

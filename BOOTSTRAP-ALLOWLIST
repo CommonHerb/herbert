@@ -30,8 +30,12 @@ examples/native_today_arithmetic.expected
 examples/native_today_collections.expected
 examples/native_today_io.expected
 examples/wordcount.md
+examples/wordcount_long64.md
 # Test tooling for the Herbert-authored sustained input utility.
 bootstrap/tests/check_wordcount.py
+# Serial host adapter and focused checks; counting runs in the Herbert guest.
+tools/wordcount_long64.py
+bootstrap/tests/check_wordcount_long64.py
 stack/native_surface_ledger.expected
 bootstrap/tests/check_lexer_copy_sync.py
 # Hosted conformance harness + hand-authored data: deliberate test-tool boundary.

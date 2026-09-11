@@ -128,6 +128,13 @@ jobs:
           L16_BOCHS_PROBES: cg_lit cg_then
           L23_BOCHS_PROBES: tri fact
         run: bash bootstrap/tests/kernel_ci_group.sh ${{ matrix.lo }} ${{ matrix.hi }}
+      - name: source-authored streaming word counter
+        if: ${{ always() && steps.pinned.outcome == 'success' && matrix.lo == 60 }}
+        run: |
+          make long64-wordcount
+          python3 bootstrap/tests/check_wordcount_long64.py \
+            --image build/wordcount-long64.elf \
+            --evidence "$GITHUB_WORKSPACE/_kernel_evidence/wordcount-long64"
       - name: retain actual gate results and raw emulator streams
         if: always()
         uses: actions/upload-artifact@v4

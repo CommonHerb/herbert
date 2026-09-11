@@ -1,0 +1,147 @@
+-- emit: multiboot32-long64
+-- Finite COM1 word counter. Startup is HWC1 followed by LF. Input is a
+-- length byte (1..255), that many arbitrary bytes, then another length.
+-- Length zero ends the stream. ACK 6 follows every consumed header and
+-- every payload byte whose counters have been updated. Host sends each
+-- wire byte only after the preceding ACK; UART silence is never EOF.
+-- Success emits R(lines, words, bytes) and LF after the final header ACK.
+-- Capacity failure emits NAK 21, ASCII 1 and LF instead of a payload ACK.
+-- Counts use LF lines and ASCII whitespace 9..13/32, including binary input.
+--
+-- One guarded buffer holds three 20-digit decimal counters, least-significant
+-- digit first: lines at 0, words at 20, bytes at 40. Carry is bounded by 20;
+-- initialization/display stay inside slots 0..59. Capacity is 10^20-1 each.
+-- Input length does not grow memory or the call stack: scan/carry/init/display
+-- recurse only in equal-arity tail position. Each function stays below the
+-- long64 limit of 15 frame slots. Flags are integers; no heap or hosted I/O.
+
+func initialize(base, i):
+    if i == 60:
+        return 0
+    end
+    let stored = bufset(base, i, 0)
+    return initialize(base, i + 1)
+end
+
+func increment(base, offset, i):
+    if i == 20:
+        return 1
+    end
+    let digit = bufget(base, offset + i)
+    if digit == 9:
+        let cleared = bufset(base, offset + i, 0)
+        return increment(base, offset, i + 1)
+    end
+    let stored = bufset(base, offset + i, digit + 1)
+    return 0
+end
+
+func whitespace(c):
+    if c == 9:
+        return 1
+    elif c == 10:
+        return 1
+    elif c == 11:
+        return 1
+    elif c == 12:
+        return 1
+    elif c == 13:
+        return 1
+    elif c == 32:
+        return 1
+    end
+    return 0
+end
+
+func display(base, offset, i, started):
+    let digit = bufget(base, offset + i)
+    if started == 0:
+        if digit == 0:
+            if i != 0:
+                return display(base, offset, i - 1, 0)
+            end
+        end
+    end
+    let emitted = output_byte(digit + 48)
+    if i == 0:
+        return 0
+    end
+    return display(base, offset, i - 1, 1)
+end
+
+func result(base):
+    let r = output_byte(82)
+    let open = output_byte(40)
+    let lines = display(base, 0, 19, 0)
+    let comma1 = output_byte(44)
+    let space1 = output_byte(32)
+    let words = display(base, 20, 19, 0)
+    let comma2 = output_byte(44)
+    let space2 = output_byte(32)
+    let bytes = display(base, 40, 19, 0)
+    let close = output_byte(41)
+    let newline = output_byte(10)
+    return 0
+end
+
+func capacity_error():
+    let nak = output_byte(21)
+    let code = output_byte(49)
+    let newline = output_byte(10)
+    return 1
+end
+
+func scan(base, remaining, in_word):
+    if remaining == 0:
+        let header = input_byte()
+        if header == 0:
+            let final_ack = output_byte(6)
+            let shown = result(base)
+            return 0
+        end
+        let header_ack = output_byte(6)
+        return scan(base, header, in_word)
+    end
+    let c = input_byte()
+    let byte_status = increment(base, 40, 0)
+    if byte_status != 0:
+        return capacity_error()
+    end
+    if c == 10:
+        let line_status = increment(base, 0, 0)
+        if line_status != 0:
+            return capacity_error()
+        end
+    end
+    let is_space = whitespace(c)
+    if is_space == 1:
+        let space_ack = output_byte(6)
+        return scan(base, remaining - 1, 0)
+    end
+    if in_word == 0:
+        let word_status = increment(base, 20, 0)
+        if word_status != 0:
+            return capacity_error()
+        end
+    end
+    let payload_ack = output_byte(6)
+    return scan(base, remaining - 1, 1)
+end
+
+func startup():
+    let h = output_byte(72)
+    let w = output_byte(87)
+    let c = output_byte(67)
+    let version = output_byte(49)
+    let newline = output_byte(10)
+    return 0
+end
+
+func main():
+    let base = bufbase()
+    let initialized = initialize(base, 0)
+    let ready = startup()
+    let status = scan(base, 0, 0)
+    -- The existing long64 grading epilogue extracts bits 32..39 of main.
+    return status * 4294967296
+end
