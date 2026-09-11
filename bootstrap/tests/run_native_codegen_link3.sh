@@ -154,11 +154,10 @@ check_reject() {
     total=$((total + 1))
     local out="$tmp/reject_${label}.out"
     local err="$tmp/reject_${label}.err"
-    "$NATIVE_CODEGEN_COMPILER" <"$probe_file" >"$out" 2>"$err"
-    if grep -qE 'ERR 4[0-9][0-9]' "$out"; then
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe_file" "$out" "$err" "ERR 4[0-9][0-9]"; then
         pass=$((pass + 1))
     else
-        fail_test "reject $label: expected 4xx diagnostic, stdout: $(head -1 "$out"), stderr: $(head -1 "$err")"
+        fail_test "reject $label: expected clean ERR 4[0-9][0-9], stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
     fi
 }
 

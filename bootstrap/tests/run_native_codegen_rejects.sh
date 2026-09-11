@@ -41,17 +41,10 @@ check_source_reject_code() {
     total=$((total + 1))
     local out="$tmp/reject_${label}.out"
     local err="$tmp/reject_${label}.err"
-    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"
-    local magic
-    magic=$(head -c4 "$out" | xxd -p | tr -d '\n')
-    if [[ "$magic" == "7f454c46" ]]; then
-        fail_test "reject $label: unexpectedly emitted ELF"
-        return
-    fi
-    if grep -q "ERR $code" "$out"; then
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$out" "$err" "ERR $code"; then
         pass=$((pass + 1))
     else
-        fail_test "reject $label: expected ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+        fail_test "reject $label: expected clean ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
     fi
 }
 
@@ -62,20 +55,10 @@ check_source_reject_code_once() {
     total=$((total + 1))
     local out="$tmp/reject_${label}.out"
     local err="$tmp/reject_${label}.err"
-    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"
-    local magic
-    magic=$(head -c4 "$out" | xxd -p | tr -d '\n')
-    if [[ "$magic" == "7f454c46" ]]; then
-        fail_test "reject $label: unexpectedly emitted ELF"
-        return
-    fi
-    local err_count diag_count
-    err_count=$(grep -c "ERR " "$out" || true)
-    diag_count=$(grep -c "native-subset:" "$out" || true)
-    if grep -q "ERR $code" "$out" && [[ "$err_count" -eq 1 && "$diag_count" -eq 1 ]]; then
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$out" "$err" "ERR $code" && grep -q "native-subset:" "$err"; then
         pass=$((pass + 1))
     else
-        fail_test "reject $label: expected exactly one ERR $code diagnostic, err_count=$err_count diag_count=$diag_count stdout=$(head -2 "$out" | tr '\n' '|'), stderr=$(head -1 "$err")"
+        fail_test "reject $label: expected clean ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
     fi
 }
 
@@ -97,7 +80,7 @@ check_driver_reject_code() {
     [[ -f "$cdir/a.out" ]] && chmod +x "$cdir/a.out"
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "driver reject $label: seed did not compile driver: $(head -1 "$tmp/driver_${label}.cc.out") $(head -1 "$tmp/driver_${label}.cc.err")"
-    elif ! { "$cdir/a.out" >"$out" 2>"$err"; grep -q "ERR $code" "$out"; }; then
+    elif ! { native_codegen_expect_rejection "$cdir/a.out" /dev/null "$out" "$err" "ERR $code"; }; then
         fail_test "driver reject $label: expected ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
     elif [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]] && ! { "$HERBERT" "$driver" >"$tmp/driver_${label}.cref" 2>/dev/null; cmp -s "$out" "$tmp/driver_${label}.cref"; }; then
         fail_test "driver reject $label: C cross-check diverged from native (C=$(head -1 "$tmp/driver_${label}.cref"))"
@@ -115,7 +98,7 @@ compile_probe() {
     # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
     # stdout. Run it in a per-label scratch dir and harvest that dir's a.out. (Only
     # the frontier-cap ACCEPT probe uses this; every reject check below reads the
-    # diagnostic from stdout, unchanged -- a rejected program writes no a.out.)
+    # diagnostic from stderr, with status 1 -- a rejected program writes no a.out.)
     local cdir="$tmp/${label}.compile.d"
     rm -rf "$cdir"; mkdir -p "$cdir"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )

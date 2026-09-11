@@ -345,8 +345,7 @@ run_branch_target_ret_probe() {
         fail_test "branch-target RET: seed did not compile old-recognizer backend"
         return
     fi
-    "$old_elf" <"$tmp/branch_target_ret_tail.herb" >"$out" 2>"$err"
-    if ! grep -q "ERR 415" "$out"; then
+    if ! native_codegen_expect_rejection "$old_elf" "$tmp/branch_target_ret_tail.herb" "$out" "$err" "ERR 415"; then
         fail_test "branch-target RET old recognizer should reject ERR 415, stdout=$(head -1 "$out") stderr=$(head -1 "$err")"
     elif [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]] && ! { "$HERBERT" "$old_be" <"$tmp/branch_target_ret_tail.herb" >"$tmp/btr.cref" 2>/dev/null; cmp -s "$out" "$tmp/btr.cref"; }; then
         fail_test "branch-target RET old recognizer: C cross-check diverged from native (C=$(head -1 "$tmp/btr.cref"))"
@@ -369,11 +368,10 @@ check_reject() {
     local label="$1" probe="$2"
     total=$((total + 1))
     local out="$tmp/reject_${label}.out" err="$tmp/reject_${label}.err"
-    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"
-    if grep -qE 'ERR 4[0-9][0-9]' "$out"; then
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$out" "$err" "ERR 4[0-9][0-9]"; then
         pass=$((pass + 1))
     else
-        fail_test "reject $label: expected ERR 4xx, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+        fail_test "reject $label: expected clean ERR 4[0-9][0-9], stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
     fi
 }
 

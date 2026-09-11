@@ -34,8 +34,39 @@ It also runs `bootstrap/tests/compiler_conformance.py`: independently declared
 ordinary hosted inputs with exact compiler status/streams/artifact checks, then
 exact generated-program output/status checks for accepted cases. The explicit
 `run-stdio` profile additionally checks runtime stderr; the legacy `run` profile
-still requires it empty. Source rejection retains the old compiler envelope.
+still requires it empty. Version 3 source rejection requires status 1, empty
+stdout and the unchanged exact diagnostic on stderr.
 These cases do not replace syscall fault-injection or full target verification.
+
+`bootstrap/tests/stdin_contract.py` also runs under `make test`, or separately
+with `make stdin-contract`. It checks generated `stdin_read` programs and the
+compiler itself using real closed/directory/nonblocking-pipe descriptors. Empty
+EOF differs from an empty pipe with a held-open writer. Compiler read errors
+must produce the exact failure status/streams and preserve absent, regular,
+symlink and hardlink artifact state. A closed-writer pipe carrying valid source
+is the successful compiler control. This needs only Python's standard library
+and Linux/x86_64, not ptrace, GDB, strace or an emulator. Failed runs retain
+their scratch evidence automatically; `--keep-work` also retains successful
+runs. `make check` runs only its portable declaration/oracle self-tests.
+
+This regular gate checks final artifact state, not transient file operations.
+Injected errors after a valid prefix, interrupted/short transfers, arena-capacity
+probes and broken-stderr cases have separate manual fault evidence; they are
+not continuously exercised by this descriptor gate. No output-publication or kernel verification claim follows from that
+descriptor gate alone.
+
+`compiler_cli_contract.py` runs filesystem and concurrent-publication checks in
+`make test`. `make compiler-cli-contract` additionally uses strace to inject
+open/random/write/fsync/close/rename failures and EINTR, GDB to force real short
+writes, and GNU binutils to compare the emitted writer against its readable
+assembly specification. Missing tools/tracing fail this target. The fault target
+runs in `verify-local` and the check workflow; no assembler is involved in the
+production compiler or normal seed mint. `--compiler PATH` can qualify an old
+seed or mutant; `--keep-work` retains successful evidence, and failures retain
+it automatically. This includes regular-file, symlink, hardlink, umask, directory
+rejection, empty-file and concurrent whole-image publication checks. Abrupt
+termination, hostile containing-directory mutations and post-rename power loss
+are outside this contract.
 
 This target requires a Linux/x86_64 host because the native-codegen links mint and execute Linux ELF artifacts. The Makefile prepends `tools/` to `PATH`, so Linux hosts without GNU `timeout` can still run bounded test legs.
 

@@ -217,22 +217,10 @@ compile_probe() {  # src outdir -> sets COMPILE_RC, leaves stdout.txt/err.txt fo
     ( cd -- "$d" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >stdout.txt 2>err.txt )
     COMPILE_RC=$?
 }
-# ACCEPTANCE AND REJECTION BOTH INCLUDE THE EXIT STATUS. A review leg found COMPILE_RC recorded
-# and then never read by any leg: "a compiler can emit a valid image and exit 1; every accepting
-# leg treats it as compiled. Conversely, it can print the named error, emit no image, and exit 0;
-# both rejection legs pass."
-#
-# THE FIRST HALF IS ADOPTED AS WRITTEN. THE SECOND IS NOT, AND THE REASON IS MEASURED RATHER THAN
-# ARGUED: this toolchain's refusal convention IS exit 0. Run against the gen-1 seed compiler,
-# the no-indexed-op probe gives
-#     REFUSAL rc=0 ; a.out: no ; stdout: program: native-subset: unknown error (ERR 655)
-# so requiring a NONZERO status on the reject path would demand behaviour the compiler does not
-# have, and the two reject legs went RED against a correctly-refusing compiler when this file
-# first tried it. Pinning rc == 0 on the reject path is still strictly stronger than the old
-# `! -f a.out` alone, and it buys the half that matters: a CRASH (nonzero, no image) can no
-# longer be read as a principled refusal.
+# Accepted compilation requires status 0 and an artifact. Rejection uses the
+# current compiler contract: status 1, exact stderr diagnostic, no output.
 compiled_ok()  { [[ "$COMPILE_RC" -eq 0 && -f "$1/a.out" ]]; }
-refused_ok()   { [[ "$COMPILE_RC" -eq 0 && ! -f "$1/a.out" ]]; }
+refused_ok()   { native_codegen_rejection_result "$COMPILE_RC" "$1" "$1/stdout.txt" "$1/err.txt" "$2"; }
 
 compile_probe "$tmp/forcing.herb" "$tmp/forcing.d"
 compiled_ok "$tmp/forcing.d" || { echo "FAIL: link66 (the forcing program did not compile cleanly: rc=$COMPILE_RC a.out=$([[ -f "$tmp/forcing.d/a.out" ]] && echo yes || echo no); $(head -1 "$tmp/forcing.d/err.txt" 2>/dev/null))"; exit 1; }
@@ -629,14 +617,14 @@ else
 fi
 
 compile_probe "$tmp/nobufop.herb" "$tmp/nobufop.d"
-if refused_ok "$tmp/nobufop.d" && grep -qs 'ERR 655' "$tmp/nobufop.d/stdout.txt" "$tmp/nobufop.d/err.txt"; then
+if refused_ok "$tmp/nobufop.d" 'ERR 655'; then
     ok "reject-nobufop"
 else
     bad "reject-nobufop (buffer mode with no indexed op must be refused with ERR 655, not merely fail)"
 fi
 
 compile_probe "$tmp/singlefunc.herb" "$tmp/singlefunc.d"
-if refused_ok "$tmp/singlefunc.d" && grep -qsE 'ERR (50[0-9]|6[0-9][0-9])' "$tmp/singlefunc.d/stdout.txt" "$tmp/singlefunc.d/err.txt"; then
+if refused_ok "$tmp/singlefunc.d" 'ERR (50[0-9]|6[0-9][0-9])'; then
     ok "reject-singlefunc"
 else
     bad "reject-singlefunc (a single-function device-op program must be refused with a NAMED diagnostic, not merely produce no a.out)"

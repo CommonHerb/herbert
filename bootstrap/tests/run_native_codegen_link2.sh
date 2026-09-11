@@ -270,12 +270,10 @@ check_reject() {
     total=$((total + 1))
     local out_file="$tmp/reject_${label}.elf"
     local err_file="$tmp/reject_${label}.err"
-    "$NATIVE_CODEGEN_COMPILER" < "$probe_file" > "$out_file" 2>"$err_file"
-    # Diagnostic goes to stdout (via flogger); check there
-    if grep -qE 'ERR 4[0-9][0-9]' "$out_file"; then
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe_file" "$out_file" "$err_file" "ERR 4[0-9][0-9]"; then
         pass=$((pass + 1))
     else
-        fail_test "reject $label: expected 4xx diagnostic, stdout: $(head -1 "$out_file"), stderr: $(head -1 "$err_file")"
+        fail_test "reject $label: expected clean ERR 4[0-9][0-9], stdout=$(head -1 "$out_file"), stderr=$(head -1 "$err_file")"
     fi
 }
 
@@ -286,11 +284,10 @@ check_reject_code() {
     total=$((total + 1))
     local out_file="$tmp/reject_${label}.elf"
     local err_file="$tmp/reject_${label}.err"
-    "$NATIVE_CODEGEN_COMPILER" < "$probe_file" > "$out_file" 2>"$err_file"
-    if grep -q "ERR $code" "$out_file"; then
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe_file" "$out_file" "$err_file" "ERR $code"; then
         pass=$((pass + 1))
     else
-        fail_test "reject $label: expected ERR $code, stdout: $(head -1 "$out_file"), stderr: $(head -1 "$err_file")"
+        fail_test "reject $label: expected clean ERR $code, stdout=$(head -1 "$out_file"), stderr=$(head -1 "$err_file")"
     fi
 }
 

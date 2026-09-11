@@ -17,6 +17,10 @@ jobs:
         run: make test-timeout
       - name: make test
         run: make test
+      - name: install compiler fault-test tools
+        run: sudo apt-get update && sudo apt-get install -y gdb strace binutils
+      - name: compiler invocation fault contract
+        run: make compiler-cli-contract
       # verify-local suites CI historically skipped (2026-07-03 canon-cleanup, §4). The
       # emulator-free ones run here; native-codegen-diagnostics needs QEMU so it runs in
       # kernel-codegen-l1.yml.

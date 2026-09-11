@@ -35,7 +35,29 @@ and next.
 Use `BOOTSTRAP-RESPONSIBILITIES.md` to choose the next host-bootstrap
 replacement proof.
 
-## Hosted process output
+## Hosted process I/O
+
+`stdin_read()` reads standard input to EOF and returns `(status, bytes)`, an
+`(int, string)` tuple. Zero status means complete input, including empty or
+binary input. Positive short reads accumulate and interrupted reads retry.
+Other failures return a positive Linux errno and an empty string, never a
+successful partial prefix. EAGAIN is an error, not a wait/retry request.
+
+The reader uses the existing arena. At its limit, a one-byte probe distinguishes
+exact-fit EOF from excess input; excess input returns synthetic ENOMEM (12).
+This probe consumes the excess byte. Failure does not roll back the stream or
+erase consumed bytes, but leaves the allocation bump unchanged. Success commits
+the complete input; earlier allocations remain valid. This adds no reclamation
+or promise that further allocations succeed after an exact-fit read. Initial
+arena mapping failure still occurs before main and is not returned by this API.
+
+Use the value builtin in `main`, with at most one syntactic input operation
+across `stdin_read` and legacy `clogger`. Mutually exclusive branches still
+count separately. Existing reachable-function checking is unchanged; this is
+not a new validation pass over unused helper bodies. The builtin takes no
+arguments; `do stdin_read()` is rejected. Its function name is reserved, while
+local and parameter names may use that spelling. It is native hosted-only,
+not an addition to VM or kernel target interfaces.
 
 Ordinary Linux/x86_64 programs can use `stderr_write(bytes)` with one string
 argument. It writes raw bytes to standard error and returns an integer: zero
@@ -56,7 +78,38 @@ structure and checks statements following this call; it does not infer a
 never-returning type. Both names are reserved builtin function names. These
 operations are not additions to the VM or kernel target interfaces.
 
-This is a capability-only addition. Normal `main` return rendering and the old
-`clogger`, `flogger`, and `fwriter` behavior are unchanged. The compiler itself
-does not yet use the new operations: its legacy status-zero/stdout diagnostics
-and unsafe fixed-name output publication still need separate repairs.
+Normal program `main` return rendering, `clogger` and `flogger` are unchanged.
+
+## Compiler invocation
+
+The compiler reads source from stdin before parsing or dispatching an emit mode.
+Success publishes `a.out`, prints `0` plus newline to stdout and exits 0. A
+checked input error writes `compiler: stdin read failed (errno N)` plus newline
+to stderr and exits 1. Lexical, structural and native diagnostics retain their
+text but now go to stderr with status 1 and empty stdout. This deliberately
+changes the old status-zero/stdout rejection convention, including shared native
+diagnostics in historical emit modes. Callers must check the compiler status
+before using `a.out`; a failed invocation preserves the previous artifact.
+The internal `-- emit: ast-dump` inspection route still uses the unchecked
+lexer/parser and is outside the supported malformed-source diagnostic contract.
+
+`fwriter(bytes)` now publishes through an exclusive `.herbert*.tmp` file in
+an opened current-directory descriptor. It obtains the unpredictable name from
+Linux `getrandom` (failure has no weak fallback), handles partial writes and
+EINTR, checks `fsync` and `close`, and renames the finished file to `a.out`.
+Linux close is never retried, including after EINTR. Creation uses mode 0644
+subject to the process umask; replacement also resets a prior output's mode,
+including any executable bits. Every failure before rename leaves the previous
+`a.out` intact and attempts to remove its own temporary file, reports
+`compiler: output publication failed` on stderr and exits 1. This behavior also
+applies to generated hosted programs using `fwriter`.
+
+Rename replaces an existing symlink itself; its target and other hardlinks to
+an old output remain untouched. Concurrent writers publish complete artifacts;
+the last successful rename wins. This assumes a directory whose other writers
+do not maliciously replace a compiler's private temporary entry. It guarantees
+atomic visibility, not crash durability of directory metadata. A killed process
+or failed cleanup can leave a `.herbert*.tmp` file. Directory-descriptor close
+after successful rename is cleanup only and cannot undo the committed output.
+Failure to write an error diagnostic still terminates; inherited SIGPIPE may
+terminate with a signal instead of status 1.

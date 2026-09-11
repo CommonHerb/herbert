@@ -64,12 +64,15 @@ emit() { # marker prog outfile label -> writes outfile on accept; fail on reject
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(grep -o 'ERR [0-9]*' "$cdir/err" 2>/dev/null | head -1))"; return 1; fi
     cp "$cdir/a.out" "$out"; return 0
 }
-reject_probe() { # label marker prog
+reject_probe() { # label marker prog -> exact nonzero diagnostic, no artifact
     local label="$1" marker="$2" prog="$3"
     local cdir="$work/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '%s\n%b\n' "$marker" "$prog" > "$cdir/probe.herb"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
-    if [[ -f "$cdir/a.out" ]]; then fail_test "reject $label: compiler ACCEPTED an out-of-subset program"; else ok "reject $label (refused: $(grep -o 'ERR [0-9]*' "$cdir/err" 2>/dev/null | head -1))"; fi
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$cdir/probe.herb" "$cdir/out" "$cdir/err" 'ERR [456][0-9][0-9]'; then
+        ok "reject $label (refused: $(grep -o 'ERR [0-9]*' "$cdir/err" | head -1))"
+    else
+        fail_test "reject $label: expected a clean compiler diagnostic"
+    fi
 }
 accept_probe() { # label marker prog
     local label="$1" marker="$2" prog="$3"

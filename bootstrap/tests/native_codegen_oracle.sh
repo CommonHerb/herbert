@@ -485,4 +485,30 @@ native_codegen_transcript_line1() {
     local result=$?
     rm -f "$expected"
     return "$result"
+# Compiler CLI contract (2026-09): clean native rejection is status 1,
+# exactly one diagnostic on stderr, empty stdout and no published a.out.
+# Fresh directories make unexpected acceptance observable without writing into
+# the checkout. Success/program goldens remain unchanged.
+native_codegen_expect_rejection() {
+    local compiler="$1" probe="$2" out="$3" err="$4" pattern="$5"
+    local directory rc
+    directory="$(mktemp -d "$(dirname "$out")/reject.XXXXXXXX")" || return 1
+    if ( cd "$directory" && "$compiler" <"$probe" >"$out" 2>"$err" ); then rc=0; else rc=$?; fi
+    native_codegen_rejection_result "$rc" "$directory" "$out" "$err" "$pattern"
+}
+
+# Validate an already captured invocation (kernel gates retain its observations).
+native_codegen_rejection_result() {
+    local rc="$1" directory="$2" out="$3" err="$4" pattern="$5"
+    if [[ "$rc" -ne 1 || -s "$out" || -e "$directory/a.out" || -L "$directory/a.out" ]]; then
+        echo "rejection contract failed: rc=$rc, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")" >&2
+        return 1
+    fi
+    # Full-byte validation rejects duplicate diagnostics and trailing fragments.
+    python3 - "$err" "$pattern" <<'PYDIAG'
+from pathlib import Path
+import re, sys
+pattern = rb"(?:line [1-9][0-9]*|program): [^\r\n]+ \(" + sys.argv[2].encode() + rb"\)\n"
+raise SystemExit(0 if re.fullmatch(pattern, Path(sys.argv[1]).read_bytes()) else 1)
+PYDIAG
 }

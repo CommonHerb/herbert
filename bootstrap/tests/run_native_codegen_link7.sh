@@ -151,21 +151,10 @@ check_reject_code() {
     total=$((total + 1))
     local out="$tmp/reject_${label}.out"
     local err="$tmp/reject_${label}.err"
-    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"
-    local magic
-    magic=$(head -c4 "$out" | xxd -p | tr -d '\n')
-    if [[ "$magic" == "7f454c46" ]]; then
-        fail_test "reject $label: unexpectedly emitted ELF"
-        return
-    fi
-    if grep -q "ERR 438" "$out"; then
-        fail_test "reject $label: obsolete ERR 438 surfaced"
-        return
-    fi
-    if grep -q "ERR $code" "$out"; then
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$out" "$err" "ERR $code"; then
         pass=$((pass + 1))
     else
-        fail_test "reject $label: expected ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+        fail_test "reject $label: expected clean ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
     fi
 }
 

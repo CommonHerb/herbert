@@ -186,8 +186,7 @@ if [[ -n "$mutc" && -x "$mutc" || -n "$mutc" && -f "$mutc" ]]; then
     chmod +x "$mutc"
     pdir="$tmp/mut.p"; mkdir -p "$pdir"
     printf -- '-- emit: multiboot32-long64\n%b' "$RO_SRC" > "$pdir/p.herb"
-    ( cd "$pdir" && "$mutc" < p.herb > out.txt 2>&1 )
-    if [[ ! -f "$pdir/a.out" ]] && grep -qE 'ERR 61[01]' "$pdir/out.txt"; then pass=$((pass + 1));
+    if native_codegen_expect_rejection "$mutc" "$pdir/p.herb" "$pdir/out.txt" "$pdir/err.txt" 'ERR 61[01]'; then pass=$((pass + 1));
     else fail_test "M-op53size: expected ERR 610/611 + no a.out, got a.out=$([[ -f "$pdir/a.out" ]] && echo yes || echo no) msg=$(head -1 "$pdir/out.txt")"; fi
 fi
 

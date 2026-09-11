@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check test test-timeout compiler-conformance evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run closed-loop-memory-diet reseed verify-local clean
+.PHONY: all check test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run closed-loop-memory-diet reseed verify-local clean
 
 all: $(SCANNER)
 
@@ -22,11 +22,14 @@ check: $(SCANNER)
 	@./$(SCANNER) $(TRACKED)
 	@bash bootstrap/tests/run_tests.sh --check-pinned
 	@python3 bootstrap/tests/compiler_conformance.py --check-corpus
+	@python3 bootstrap/tests/stdin_contract.py --check-spec
 
 test:
 	@bash tools/check_full_test_host.sh
 	@PATH=$(abspath tools):$$PATH bash bootstrap/tests/run_tests.sh
 	@python3 bootstrap/tests/compiler_conformance.py
+	@python3 bootstrap/tests/stdin_contract.py
+	@python3 bootstrap/tests/compiler_cli_contract.py
 
 # Hosted language behavior through the ordinary seed, independently counted from
 # the historical 43-test bootstrap/switchover suite. CI reaches it via make test.
@@ -35,6 +38,14 @@ compiler-conformance:
 
 verification-helpers:
 	@python3 bootstrap/tests/check_verification_helpers.py
+# Real descriptor error/EOF checks; no ptrace, emulator, or partition change.
+stdin-contract:
+	@python3 bootstrap/tests/stdin_contract.py
+
+# Atomic-publication syscall fault injection + instruction-layout reference.
+# Requires Linux owned-process tracing, strace, GDB and binutils.
+compiler-cli-contract:
+	@python3 bootstrap/tests/compiler_cli_contract.py --faults
 
 test-timeout:
 	@python3 tools/check_timeout.py
@@ -166,7 +177,7 @@ closed-loop-memory-diet:
 reseed:
 	@bash bootstrap/tests/reseed_gen1.sh
 
-verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
+verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

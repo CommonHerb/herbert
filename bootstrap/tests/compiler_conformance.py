@@ -11,21 +11,12 @@ routes are excluded.
 
 The corpus covers checked lexical/structural rejection, accepted boundaries,
 operator-class restrictions, hosted builtin arity, and direct-return lowering.
-Version 2 adds explicit run-stdio cases for hosted process/I/O capabilities:
-their generated programs have independent exact stderr and status expectations.
-This does not change the legacy compiler invocation envelope below.
-Arity is checked before a supported call's arguments in native inference; this
-is not a whole-source arity pass and does not cover low-level target intrinsics.
-Context-invalid/unsupported calls keep their own diagnostics. Diagnostic
-priority is whole-source lexing, then whole-source structural recognition,
-then AST/operator-class checks, then native semantics. It does not promise the
-globally earliest source error. The structural recognizer and AST builder are
-still separate passes; these examples do NOT certify complete grammar/type
-checking, general tail calls, allocation lifetime, or a repaired CLI.
-The explicit `reject-legacy` profile pins the CURRENT rejection envelope
-(status 0, stdout diagnostic and return marker), not a desirable final CLI.
-Fresh directories exclude stale artifacts; the stale-output defect is not
-claimed fixed by these tests. Add new profiles/tests with their actual repairs.
+Version 3 migrates rejection to status 1, exact stderr diagnostics and empty
+stdout. Every existing source/diagnostic and successful program expectation is
+preserved. Source rejection does not publish an artifact. The separate CLI
+contract exercises prior-artifact preservation and injected syscall failures.
+The recognizer and AST builder remain separate passes; these cases do not
+certify complete grammar/type checking, general tail calls or allocation lifetime.
 
 Usage: make compiler-conformance
        python3 bootstrap/tests/compiler_conformance.py --compiler /path/to/seed
@@ -72,7 +63,7 @@ def read_corpus() -> list[dict]:
     data = json.loads(CORPUS.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
     require(isinstance(data, dict), "corpus must be an object")
     require(set(data) == {"version", "scope", "cases"}, "unknown/missing corpus keys")
-    require(type(data["version"]) is int and data["version"] == 2, "unsupported corpus version")
+    require(type(data["version"]) is int and data["version"] == 3, "unsupported corpus version")
     require(isinstance(data["scope"], str) and bool(data["scope"]), "missing corpus scope")
     cases = data["cases"]
     require(isinstance(cases, list) and bool(cases), "corpus must contain cases")
@@ -85,7 +76,7 @@ def read_corpus() -> list[dict]:
         require(ident not in seen, f"duplicate case id {ident}")
         seen.add(ident)
         profile = case.get("profile")
-        require(profile in ("run", "run-stdio", "reject-legacy"), f"{ident}: unknown profile {profile!r}")
+        require(profile in ("run", "run-stdio", "reject"), f"{ident}: unknown profile {profile!r}")
         profiles.add(profile)
         running = profile in ("run", "run-stdio")
         specific = {"stdin", "stdout", "status"} if running else {"diagnostic"}
@@ -104,8 +95,8 @@ def read_corpus() -> list[dict]:
         else:
             require(re.fullmatch(r"line [1-9][0-9]*: [^\r\n]+ \(ERR [0-9]{3}\)", case["diagnostic"]),
                     f"{ident}: expected one located diagnostic")
-    require(profiles == {"run", "run-stdio", "reject-legacy"},
-            "corpus must retain legacy accept/reject and explicit stdio controls")
+    require(profiles == {"run", "run-stdio", "reject"},
+            "corpus must retain accept/reject and explicit stdio controls")
     return cases
 
 
@@ -157,15 +148,15 @@ def check_case(case: dict, compiler: Path, work: Path, timeout: float) -> None:
     (directory / "source.herb").write_bytes(source)
     result = invoke(compiler, source, directory, "compile", timeout)
     artifact = directory / "a.out"
-    exact(result.returncode, 0, "compiler status")
-    exact(result.stderr, b"", "compiler stderr")
-    if case["profile"] == "reject-legacy":
-        # A crash, a different diagnostic, duplicate messages, or an output
-        # artifact is not a successful rejection. Preserve the legacy envelope
-        # explicitly until a separate change establishes a new CLI contract.
-        exact(result.stdout, (case["diagnostic"] + "\n0\n").encode("utf-8"), "compiler diagnostic")
+    if case["profile"] == "reject":
+        # Pin channel, status and exact diagnostic independently of artifact.
+        exact(result.returncode, 1, "compiler status")
+        exact(result.stdout, b"", "compiler stdout")
+        exact(result.stderr, (case["diagnostic"] + "\n").encode("utf-8"), "compiler diagnostic")
         require(not artifact.exists() and not artifact.is_symlink(), "rejected source produced a.out")
         return
+    exact(result.returncode, 0, "compiler status")
+    exact(result.stderr, b"", "compiler stderr")
     exact(result.stdout, b"0\n", "compiler stdout")
     require_elf(artifact)
     artifact.chmod(0o700)
@@ -195,7 +186,7 @@ def main() -> int:
         cases = read_corpus()
         accepted = sum(case["profile"] == "run" for case in cases)
         stdio = sum(case["profile"] == "run-stdio" for case in cases)
-        print(f"compiler-conformance corpus: {len(cases)} cases ({accepted} run, {stdio} run-stdio, {len(cases) - accepted - stdio} reject-legacy)", flush=True)
+        print(f"compiler-conformance corpus: {len(cases)} cases ({accepted} run, {stdio} run-stdio, {len(cases) - accepted - stdio} reject)", flush=True)
         if args.check_corpus:
             return 0
         work = Path(tempfile.mkdtemp(prefix="herbert-conformance."))

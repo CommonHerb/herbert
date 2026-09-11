@@ -1516,6 +1516,11 @@ func op_stderr_write():
     return 55
 end
 
+-- Checked hosted input: one abstract (int, string), three machine words.
+func op_stdin_read():
+    return 56
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1795,6 +1800,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     if equal(name, "clogger"):
         return emit_instr(ir, op_clogger(), 0, 0)
+    end
+    if equal(name, "stdin_read"):
+        return emit_instr(ir, op_stdin_read(), 0, 0)
     end
     if equal(name, "stderr_write"):
         return emit_instr(ir, op_stderr_write(), 0, 0)
@@ -2215,6 +2223,9 @@ func opcode_name(op):
     if op == op_stderr_write():
         return "STDERR_WRITE"
     end
+    if op == op_stdin_read():
+        return "STDIN_READ"
+    end
     if op == op_band():
         return "BAND"
     end
@@ -2252,7 +2263,7 @@ func opcode_operands(op):
     if op == op_push_int() or op == op_push_bool() or op == op_push_str() or op == op_load_local() or op == op_store_local() or op == op_make_tuple() or op == op_tuple_get() or op == op_br() or op == op_br_if_false() or op == op_br_and() or op == op_br_or():
         return 1
     end
-    if op == op_clogger() or op == op_flogger() or op == op_process_exit() or op == op_stderr_write():
+    if op == op_clogger() or op == op_flogger() or op == op_process_exit() or op == op_stderr_write() or op == op_stdin_read():
         return 0
     end
     return 0
@@ -3259,7 +3270,7 @@ func err_is_builtin_name(name):
     if equal(name, "bufbase") or equal(name, "bufget") or equal(name, "bufset"):
         return true
     end
-    if equal(name, "process_exit") or equal(name, "stderr_write"):
+    if equal(name, "process_exit") or equal(name, "stderr_write") or equal(name, "stdin_read"):
         return true
     end
     return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
@@ -3270,6 +3281,9 @@ func err_is_void_builtin(name):
 end
 
 func err_is_value_builtin(name):
+    if equal(name, "stdin_read"):
+        return true
+    end
     if equal(name, "length") or equal(name, "index") or equal(name, "slice"):
         return true
     end
@@ -3283,6 +3297,9 @@ func err_is_value_builtin(name):
 end
 
 func err_value_builtin_arity(name):
+    if equal(name, "stdin_read"):
+        return 0
+    end
     if equal(name, "stderr_write"):
         return 1
     end
@@ -4391,6 +4408,9 @@ func nc_diag_msg(code, payload):
         return diagnostic_with_payload("native-subset: user-defined function calls are forbidden '", payload, "'")
     end
     if code == 411:
+        if equal(payload, "stdin_read"):
+            return "native-subset: more than one input operation (clogger()/stdin_read()) is not allowed"
+        end
         return "native-subset: more than one clogger() call is not allowed"
     end
     if code == 412:
@@ -4507,8 +4527,9 @@ func nc_serialize_diag(code, line, payload):
 end
 
 func nc_fail(code, line, payload):
-    do flogger(nc_serialize_diag(code, line, payload))
-    do flogger("\n")
+    let reported = stderr_write(nc_serialize_diag(code, line, payload))
+    let newline = stderr_write("\n")
+    do process_exit(1)
     return 1
 end
 
@@ -4733,6 +4754,14 @@ end
 
 func nc_type_intern_tuple(pool, children):
     return nc_type_intern_struct_loop(pool, 1, children, 0, count(pool))
+end
+
+func nc_type_stdin_result(pool):
+    -- Intern lazily so programs without checked input retain their type IDs.
+    let kids = new_array(int)
+    do add(kids, nc_type_int())
+    do add(kids, nc_type_string())
+    return nc_type_intern_tuple(pool, kids)
 end
 
 func nc_type_intern_array(pool, elem):
@@ -5062,27 +5091,27 @@ func nc_is_clogger_call(node):
     return count(node.2) == 0
 end
 
-func nc_count_clogger_expr(nodes, idx):
+func nc_count_input_expr(nodes, idx, input_name):
     let node = get(nodes, idx)
     let tag = node.0
     let kids = node.2
     if equal(tag, "call"):
         let name = get(node.1, 0)
-        if equal(name, "clogger"):
+        if equal(name, input_name):
             return 1
         end
     end
-    return nc_count_clogger_kids(nodes, kids, 0, count(kids))
+    return nc_count_input_kids(nodes, kids, 0, count(kids), input_name)
 end
 
-func nc_count_clogger_kids(nodes, kids, i, n):
+func nc_count_input_kids(nodes, kids, i, n, input_name):
     if i >= n:
         return 0
     end
-    return nc_count_clogger_expr(nodes, get(kids, i)) + nc_count_clogger_kids(nodes, kids, i + 1, n)
+    return nc_count_input_expr(nodes, get(kids, i), input_name) + nc_count_input_kids(nodes, kids, i + 1, n, input_name)
 end
 
-func nc_count_clogger_body(nodes, stmts, i, n):
+func nc_count_input_body(nodes, stmts, i, n, input_name):
     if i >= n:
         return 0
     end
@@ -5091,16 +5120,16 @@ func nc_count_clogger_body(nodes, stmts, i, n):
     let kids = stmt.2
     let here = 0
     if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return"):
-        here = nc_count_clogger_expr(nodes, get(kids, 0))
+        here = nc_count_input_expr(nodes, get(kids, 0), input_name)
     elif equal(tag, "if"):
-        here = nc_count_clogger_if_arms(nodes, kids, 0, count(kids))
+        here = nc_count_input_if_arms(nodes, kids, 0, count(kids), input_name)
     elif equal(tag, "do"):
-        here = nc_count_clogger_expr(nodes, get(kids, 0))
+        here = nc_count_input_expr(nodes, get(kids, 0), input_name)
     end
-    return here + nc_count_clogger_body(nodes, stmts, i + 1, n)
+    return here + nc_count_input_body(nodes, stmts, i + 1, n, input_name)
 end
 
-func nc_count_clogger_if_arms(nodes, kids, i, n):
+func nc_count_input_if_arms(nodes, kids, i, n, input_name):
     if i >= n:
         return 0
     end
@@ -5110,11 +5139,31 @@ func nc_count_clogger_if_arms(nodes, kids, i, n):
     if equal(arm.0, "else"):
         body_idx = get(arm.2, 0)
     else:
-        here = nc_count_clogger_expr(nodes, get(arm.2, 0))
+        here = nc_count_input_expr(nodes, get(arm.2, 0), input_name)
         body_idx = get(arm.2, 1)
     end
     let body = get(nodes, body_idx)
-    return here + nc_count_clogger_body(nodes, body.2, 0, count(body.2)) + nc_count_clogger_if_arms(nodes, kids, i + 1, n)
+    return here + nc_count_input_body(nodes, body.2, 0, count(body.2), input_name) + nc_count_input_if_arms(nodes, kids, i + 1, n, input_name)
+end
+
+func nc_check_input_scope(nodes, fn_node):
+    let body = get(nodes, get(fn_node.2, 1))
+    let legacy = nc_count_input_body(nodes, body.2, 0, count(body.2), "clogger")
+    let checked = nc_count_input_body(nodes, body.2, 0, count(body.2), "stdin_read")
+    let payload = ""
+    if checked > 0:
+        payload = "stdin_read"
+    end
+    if equal(get(fn_node.1, 0), "main"):
+        if legacy + checked > 1:
+            return nc_fail(411, fn_node.3, payload)
+        end
+    elif checked > 0:
+        return nc_fail(404, fn_node.3, "stdin_read")
+    elif legacy > 0:
+        return nc_fail(404, fn_node.3, "clogger")
+    end
+    return 0
 end
 
 func nc_find_handle_loop(nodes, stmts, i, n, found_name, found_count):
@@ -6135,7 +6184,7 @@ end
 -- calls here. Type constructors, void-as-value, unsupported calls and low-level
 -- target intrinsics have separate contracts; a default arity is not a whitelist.
 func nc_has_value_arity_guard(name):
-    if equal(name, "stderr_write"):
+    if equal(name, "stderr_write") or equal(name, "stdin_read"):
         return true
     end
     if equal(name, "clogger") or equal(name, "new_buffer"):
@@ -6258,6 +6307,9 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         end
         if equal(name, "clogger"):
             return (0, nc_type_string(), env, sig, 0)
+        end
+        if equal(name, "stdin_read"):
+            return (0, nc_type_stdin_result(pool), env, sig, 0)
         end
         if equal(name, "stderr_write"):
             let sw = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
@@ -6728,13 +6780,9 @@ func nc_infer_func(pool, nodes, prog_idx, func_kids, fn_idx, sig):
     let name = get(fn_node.1, 0)
     let params_node = get(nodes, get(fn_node.2, 0))
     let body_node = get(nodes, get(fn_node.2, 1))
-    let total_clogger = nc_count_clogger_body(nodes, body_node.2, 0, count(body_node.2))
-    if equal(name, "main"):
-        if total_clogger > 1:
-            return (nc_fail(411, fn_node.3, ""), sig, 0)
-        end
-    elif total_clogger > 0:
-        return (nc_fail(404, fn_node.3, "clogger"), sig, 0)
+    let input_scope = nc_check_input_scope(nodes, fn_node)
+    if input_scope != 0:
+        return (input_scope, sig, 0)
     end
     let env = nc_func_env_from_params(nodes, fn_node, sig, fn_idx)
     let br = nc_infer_body(pool, nodes, prog_idx, body_node.2, 0, count(body_node.2), env, sig, fn_idx, func_kids, count(params_node.1), 0)
@@ -6759,13 +6807,9 @@ func nc_poly_infer_instance(pool, nodes, prog_idx, funcs, inst_idx, sig):
     let name = get(fn_node.1, 0)
     let params_node = get(nodes, get(fn_node.2, 0))
     let body_node = get(nodes, get(fn_node.2, 1))
-    let total_clogger = nc_count_clogger_body(nodes, body_node.2, 0, count(body_node.2))
-    if equal(name, "main"):
-        if total_clogger > 1:
-            return (nc_fail(411, fn_node.3, ""), sig, 0)
-        end
-    elif total_clogger > 0:
-        return (nc_fail(404, fn_node.3, "clogger"), sig, 0)
+    let input_scope = nc_check_input_scope(nodes, fn_node)
+    if input_scope != 0:
+        return (input_scope, sig, 0)
     end
     let env = nc_func_env_from_params(nodes, fn_node, sig, inst_idx)
     let br = nc_infer_body(pool, nodes, prog_idx, body_node.2, 0, count(body_node.2), env, sig, inst_idx, funcs, count(params_node.1), 0)
@@ -7091,6 +7135,9 @@ func nc_opcode_name_for_diag(op):
     end
     if op == 55:
         return "STDERR_WRITE"
+    end
+    if op == 56:
+        return "STDIN_READ"
     end
     return int_to_str(op)
 end
@@ -7596,7 +7643,11 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             return (nc_fail(408, 0, "CLOGGER"), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         if has_clogger != 0:
-            return (nc_fail(411, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            let payload = ""
+            if has_clogger == 2:
+                payload = "stdin_read"
+            end
+            return (nc_fail(411, 0, payload), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         has_clogger = 1
         has_heap = 1
@@ -7625,6 +7676,18 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             return (sw.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         stack = nc_stack_push(sw.1, nc_type_int())
+    elif op == 56:
+        if fn_idx != main_idx:
+            return (nc_fail(408, 0, "STDIN_READ"), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        if has_clogger != 0:
+            return (nc_fail(411, 0, "stdin_read"), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        -- Historical flag name; 1=legacy input, 2=checked input. Consumers
+        -- outside this function only test nonzero, not the input's type.
+        has_clogger = 2
+        has_heap = 1
+        stack = nc_stack_push(stack, nc_type_stdin_result(pool))
     else:
         return (nc_fail(408, 0, nc_opcode_name_for_diag(op)), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
     end
@@ -8251,13 +8314,16 @@ func nc_group_single_len(op):
         return 44
     end
     if op == 35:
-        return 120
+        return 593
     end
     if op == 54:
         return 10
     end
     if op == 55:
         return 55
+    end
+    if op == 56:
+        return 106
     end
     -- Bitwise / shift (36-41). LOAD-BEARING for branch-displacement layout:
     -- pass 1 sizes every instruction here; a missing arm would give the new
@@ -10534,6 +10600,130 @@ func nc_emit_flogger(buf):
     return buf
 end
 
+func nc_emit_stdin_read(buf):
+    -- Checked hosted input. Preserve r12/r13/r15/rbp and all prior heap data.
+    -- Return one (int, string); a failed read never exposes a partial prefix.
+    -- 0: mov r8,r14; xor r9d,r9d. Original bump and uncommitted length.
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 240)
+    do append(buf, 69)
+    do append(buf, 49)
+    do append(buf, 201)
+    -- loop (6): remaining = r15-r8-r9; jz probe (45). Never read count zero.
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 250)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 202)
+    do append(buf, 116)
+    do append(buf, 28)
+    -- read(0, r8+r9, remaining). r8/r9 survive the syscall.
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 49)
+    do append(buf, 255)
+    do append(buf, 75)
+    do append(buf, 141)
+    do append(buf, 52)
+    do append(buf, 8)
+    do append(buf, 15)
+    do append(buf, 5)
+    -- Retry EINTR at loop (6); other errors -> errno (87); EOF -> success (95).
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 229)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 120)
+    do append(buf, 49)
+    do append(buf, 116)
+    do append(buf, 55)
+    -- Accumulate positive short transfer; loop (6).
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 193)
+    do append(buf, 235)
+    do append(buf, 217)
+    -- probe (45): reserve ONE scratch word; retry (49) does not reserve again.
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    -- read(0, rsp, 1); retry EINTR at (49).
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 49)
+    do append(buf, 255)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 236)
+    -- Restore probe scratch before every terminal path; errno (87), EOF (95).
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 120)
+    do append(buf, 9)
+    do append(buf, 116)
+    do append(buf, 15)
+    -- Extra byte means overflow: positive synthetic ENOMEM; failure (90).
+    do append(buf, 184)
+    do append(buf, 12)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 235)
+    do append(buf, 3)
+    -- errno (87): positive errno; failure (90): discard prefix, preserve r14.
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 216)
+    do append(buf, 69)
+    do append(buf, 49)
+    do append(buf, 201)
+    do append(buf, 235)
+    do append(buf, 6)
+    -- success (95): commit complete input and status zero.
+    do append(buf, 79)
+    do append(buf, 141)
+    do append(buf, 52)
+    do append(buf, 8)
+    do append(buf, 49)
+    do append(buf, 192)
+    -- result (101): status / original pointer / length. Total 106 bytes.
+    do append(buf, 80)
+    do append(buf, 65)
+    do append(buf, 80)
+    do append(buf, 65)
+    do append(buf, 81)
+    return buf
+end
+
 func nc_emit_process_exit(buf):
     -- 10 bytes: pop rdi; mov eax,231; syscall; ud2. Linux exit_group
     -- supplies the low eight status bits to the parent. Never fall through
@@ -10624,18 +10814,80 @@ func nc_emit_stderr_write(buf):
 end
 
 func nc_emit_fwriter(buf):
-    -- fwriter(bytes): pop the bytes string (len in r8, ptr in r9), build a
-    -- NUL-terminated "a.out" in an 8-byte stack slot, openat it, write-loop the
-    -- bytes, close, restore rsp; on SUCCESS jmp over the error-exit and return to
-    -- the caller (error paths exit_group(1)). 120 bytes; conductor-silicon-validated.
+    -- Atomic Linux publication of a.out. The instruction-level reference is
+    -- bootstrap/tests/fixtures/fwriter_linux_x86_64.s (test-only assembly).
+    -- Open the directory, create an unpredictable exclusive temporary, write
+    -- all bytes, fsync, check close without retry, then renameat. Errors before
+    -- rename preserve a.out and clean our temporary; successful concurrent
+    -- writers publish complete last-writer-wins images. Replaces symlinks,
+    -- never follows their targets. No directory crash-durability guarantee.
+    -- Preserve rbx/r12..r15 and the caller stack. getrandom fails closed.
     do append(buf, 65)
     do append(buf, 88)
     do append(buf, 65)
     do append(buf, 89)
+    do append(buf, 83)
+    do append(buf, 65)
+    do append(buf, 84)
+    do append(buf, 65)
+    do append(buf, 85)
+    do append(buf, 65)
+    do append(buf, 86)
+    do append(buf, 65)
+    do append(buf, 87)
     do append(buf, 72)
     do append(buf, 131)
     do append(buf, 236)
-    do append(buf, 8)
+    do append(buf, 96)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 206)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 199)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 196)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 197)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 49)
+    do append(buf, 219)
+    do append(buf, 72)
+    do append(buf, 184)
+    do append(buf, 46)
+    do append(buf, 104)
+    do append(buf, 101)
+    do append(buf, 114)
+    do append(buf, 98)
+    do append(buf, 101)
+    do append(buf, 114)
+    do append(buf, 116)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 24)
+    do append(buf, 46)
+    do append(buf, 116)
+    do append(buf, 109)
+    do append(buf, 112)
+    do append(buf, 198)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 28)
+    do append(buf, 0)
     do append(buf, 72)
     do append(buf, 184)
     do append(buf, 97)
@@ -10648,27 +10900,183 @@ func nc_emit_fwriter(buf):
     do append(buf, 0)
     do append(buf, 72)
     do append(buf, 137)
-    do append(buf, 4)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 40)
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 48)
+    do append(buf, 46)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 68)
     do append(buf, 36)
     do append(buf, 72)
-    do append(buf, 137)
-    do append(buf, 230)
+    do append(buf, 128)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
     do append(buf, 184)
     do append(buf, 1)
     do append(buf, 1)
     do append(buf, 0)
     do append(buf, 0)
-    do append(buf, 72)
-    do append(buf, 199)
-    do append(buf, 199)
+    do append(buf, 191)
     do append(buf, 156)
     do append(buf, 255)
     do append(buf, 255)
     do append(buf, 255)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 116)
+    do append(buf, 36)
+    do append(buf, 48)
     do append(buf, 186)
-    do append(buf, 65)
-    do append(buf, 2)
     do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 9)
+    do append(buf, 0)
+    do append(buf, 69)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 225)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 136)
+    do append(buf, 52)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 196)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 76)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 15)
+    do append(buf, 136)
+    do append(buf, 38)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 124)
+    do append(buf, 36)
+    do append(buf, 80)
+    do append(buf, 190)
+    do append(buf, 8)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 184)
+    do append(buf, 62)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 241)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 142)
+    do append(buf, 4)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 240)
+    do append(buf, 15)
+    do append(buf, 135)
+    do append(buf, 251)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 199)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 198)
+    do append(buf, 117)
+    do append(buf, 215)
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 80)
+    do append(buf, 185)
+    do append(buf, 16)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 137)
+    do append(buf, 194)
+    do append(buf, 131)
+    do append(buf, 226)
+    do append(buf, 15)
+    do append(buf, 131)
+    do append(buf, 194)
+    do append(buf, 48)
+    do append(buf, 131)
+    do append(buf, 250)
+    do append(buf, 57)
+    do append(buf, 118)
+    do append(buf, 3)
+    do append(buf, 131)
+    do append(buf, 194)
+    do append(buf, 39)
+    do append(buf, 136)
+    do append(buf, 84)
+    do append(buf, 12)
+    do append(buf, 7)
+    do append(buf, 72)
+    do append(buf, 193)
+    do append(buf, 232)
+    do append(buf, 4)
+    do append(buf, 255)
+    do append(buf, 201)
+    do append(buf, 117)
+    do append(buf, 228)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 193)
+    do append(buf, 0)
+    do append(buf, 10)
     do append(buf, 0)
     do append(buf, 65)
     do append(buf, 186)
@@ -10679,18 +11087,43 @@ func nc_emit_fwriter(buf):
     do append(buf, 15)
     do append(buf, 5)
     do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 226)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 239)
+    do append(buf, 15)
+    do append(buf, 132)
+    do append(buf, 116)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 72)
     do append(buf, 133)
     do append(buf, 192)
-    do append(buf, 120)
-    do append(buf, 53)
+    do append(buf, 15)
+    do append(buf, 136)
+    do append(buf, 156)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
     do append(buf, 73)
     do append(buf, 137)
-    do append(buf, 196)
+    do append(buf, 197)
+    do append(buf, 187)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
     do append(buf, 77)
     do append(buf, 133)
-    do append(buf, 192)
+    do append(buf, 255)
     do append(buf, 116)
-    do append(buf, 29)
+    do append(buf, 40)
     do append(buf, 184)
     do append(buf, 1)
     do append(buf, 0)
@@ -10698,28 +11131,114 @@ func nc_emit_fwriter(buf):
     do append(buf, 0)
     do append(buf, 76)
     do append(buf, 137)
-    do append(buf, 231)
+    do append(buf, 239)
     do append(buf, 76)
     do append(buf, 137)
-    do append(buf, 206)
+    do append(buf, 246)
     do append(buf, 76)
     do append(buf, 137)
-    do append(buf, 194)
+    do append(buf, 250)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 229)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 116)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 248)
+    do append(buf, 119)
+    do append(buf, 111)
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 73)
+    do append(buf, 41)
+    do append(buf, 199)
+    do append(buf, 235)
+    do append(buf, 211)
+    do append(buf, 184)
+    do append(buf, 74)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 239)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 240)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 82)
+    do append(buf, 184)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 239)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 197)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
     do append(buf, 15)
     do append(buf, 5)
     do append(buf, 72)
     do append(buf, 133)
     do append(buf, 192)
-    do append(buf, 126)
-    do append(buf, 24)
-    do append(buf, 73)
+    do append(buf, 117)
+    do append(buf, 60)
+    do append(buf, 184)
+    do append(buf, 8)
     do append(buf, 1)
-    do append(buf, 193)
-    do append(buf, 73)
-    do append(buf, 41)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 226)
+    do append(buf, 76)
+    do append(buf, 141)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, 40)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 229)
+    do append(buf, 72)
+    do append(buf, 133)
     do append(buf, 192)
-    do append(buf, 235)
-    do append(buf, 222)
+    do append(buf, 117)
+    do append(buf, 28)
     do append(buf, 184)
     do append(buf, 3)
     do append(buf, 0)
@@ -10733,9 +11252,119 @@ func nc_emit_fwriter(buf):
     do append(buf, 72)
     do append(buf, 131)
     do append(buf, 196)
-    do append(buf, 8)
+    do append(buf, 96)
+    do append(buf, 65)
+    do append(buf, 95)
+    do append(buf, 65)
+    do append(buf, 94)
+    do append(buf, 65)
+    do append(buf, 93)
+    do append(buf, 65)
+    do append(buf, 92)
+    do append(buf, 91)
+    do append(buf, 233)
+    do append(buf, 148)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 77)
+    do append(buf, 133)
+    do append(buf, 237)
+    do append(buf, 120)
+    do append(buf, 10)
+    do append(buf, 184)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 239)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 133)
+    do append(buf, 219)
+    do append(buf, 116)
+    do append(buf, 21)
+    do append(buf, 184)
+    do append(buf, 7)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
     do append(buf, 235)
-    do append(buf, 12)
+    do append(buf, 77)
+    do append(buf, 133)
+    do append(buf, 228)
+    do append(buf, 120)
+    do append(buf, 10)
+    do append(buf, 184)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 53)
+    do append(buf, 50)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 186)
+    do append(buf, 36)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 238)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 117)
+    do append(buf, 225)
     do append(buf, 184)
     do append(buf, 231)
     do append(buf, 0)
@@ -10748,6 +11377,44 @@ func nc_emit_fwriter(buf):
     do append(buf, 0)
     do append(buf, 15)
     do append(buf, 5)
+    do append(buf, 15)
+    do append(buf, 11)
+    do append(buf, 99)
+    do append(buf, 111)
+    do append(buf, 109)
+    do append(buf, 112)
+    do append(buf, 105)
+    do append(buf, 108)
+    do append(buf, 101)
+    do append(buf, 114)
+    do append(buf, 58)
+    do append(buf, 32)
+    do append(buf, 111)
+    do append(buf, 117)
+    do append(buf, 116)
+    do append(buf, 112)
+    do append(buf, 117)
+    do append(buf, 116)
+    do append(buf, 32)
+    do append(buf, 112)
+    do append(buf, 117)
+    do append(buf, 98)
+    do append(buf, 108)
+    do append(buf, 105)
+    do append(buf, 99)
+    do append(buf, 97)
+    do append(buf, 116)
+    do append(buf, 105)
+    do append(buf, 111)
+    do append(buf, 110)
+    do append(buf, 32)
+    do append(buf, 102)
+    do append(buf, 97)
+    do append(buf, 105)
+    do append(buf, 108)
+    do append(buf, 101)
+    do append(buf, 100)
+    do append(buf, 10)
     return buf
 end
 
@@ -11387,6 +12054,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         buf = nc_emit_process_exit(buf)
     elif op == 55:
         buf = nc_emit_stderr_write(buf)
+    elif op == 56:
+        buf = nc_emit_stdin_read(buf)
     end
     return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, g.1, n, buf)
 end
@@ -21344,7 +22013,13 @@ func nc_emit_multiboot32_long64_program(source):
 end
 
 func main():
-    let source = clogger()
+    let incoming = stdin_read()
+    if incoming.0 != 0:
+        let message = diagnostic_with_payload("compiler: stdin read failed (errno ", int_to_str(incoming.0), ")\n")
+        let reported = stderr_write(message)
+        do process_exit(1)
+    end
+    let source = incoming.1
     if nc_is_ast_dump(source):
         let ad = nc_emit_ast_dump_program(source)
         return 0
@@ -21537,8 +22212,9 @@ func main():
     -- historical emit-directive routes above retain their own contracts.
     let lexed = err_lex_source(source)
     if lexed.0 == err_err_tag():
-        do flogger(serialize_diagnostic(lexed.1))
-        do flogger("\n")
+        let reported = stderr_write(serialize_diagnostic(lexed.1))
+        let newline = stderr_write("\n")
+        do process_exit(1)
         return 0
     end
     let tokens = lexed.2
@@ -21548,8 +22224,9 @@ func main():
     -- This is an interim two-pass front end, not checked AST construction.
     let structure = err_parse_program(tokens, lexed.3)
     if structure.0 == err_err_tag():
-        do flogger(serialize_diagnostic(structure.1))
-        do flogger("\n")
+        let reported = stderr_write(serialize_diagnostic(structure.1))
+        let newline = stderr_write("\n")
+        do process_exit(1)
         return 0
     end
     let nodes = pool_new()

@@ -93,36 +93,12 @@ check_diff() {
 # class-mix used to "reject" via a `get: ... out of range` parser crash that also
 # wrote no a.out). $3 is an ERE the diagnostic MUST match (e.g. "ERR 442").
 #
-# Stream contract (verified on silicon): the compiler reports rejections through
-# its own `flogger` to STDOUT (fd 1, both in the golden's captured C run and the emitted ELF) and
-# returns 0 from main -- so a clean reject is exit 0 + diagnostic-on-stdout + no
-# a.out. A crash is the opposite: a nonzero exit from the C runtime with the
-# `get:`/`out of range` abort text on STDERR and no diagnostic on stdout. We assert
-# the diagnostic IS on stdout and a crash signature is on NEITHER stream.
+# Stream contract: status 1, exactly one diagnostic on stderr, empty stdout,
+# no artifact. Shared helper rejects signals and malformed diagnostic streams.
 check_reject() {
     local label="$1" probe="$2" expect_diag="$3"
-    local rdir="$tmp/$label.reject.d"
-    rm -rf "$rdir"; mkdir -p "$rdir"
-    ( cd "$rdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.out" 2>"$tmp/$label.err" )
-    local rc=$?
-    if [[ -f "$rdir/a.out" ]]; then
-        fail_test "$label: expected rejection but compiler emitted a.out (stdout=$(head -1 "$tmp/$label.out"))"
-        return
-    fi
-    # A clean reject is exit 0 + diagnostic-on-stdout + no a.out. ANY nonzero exit is
-    # a crash (segfault, abort, runtime fault) regardless of what is on stderr --
-    # the airtight form of the crash check below, which stays for a clearer message
-    # on the known get:/out-of-range parser-crash path.
-    if [[ $rc -ne 0 ]]; then
-        fail_test "$label: rejection exited nonzero ($rc) -- a crash, not a clean diagnostic-on-stdout reject (stderr=$(head -1 "$tmp/$label.err"))"
-        return
-    fi
-    if grep -Eq 'out of range|get:' "$tmp/$label.out" "$tmp/$label.err"; then
-        fail_test "$label: rejection is a CRASH, not a clean diagnostic (stdout=$(head -1 "$tmp/$label.out") stderr=$(head -1 "$tmp/$label.err"))"
-        return
-    fi
-    if ! grep -Eq "$expect_diag" "$tmp/$label.out"; then
-        fail_test "$label: rejection diagnostic missing /$expect_diag/ (stdout=$(head -1 "$tmp/$label.out") stderr=$(head -1 "$tmp/$label.err"))"
+    if ! native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$tmp/$label.out" "$tmp/$label.err" "$expect_diag"; then
+        fail_test "$label: expected clean rejection /$expect_diag/"
         return
     fi
     pass=$((pass + 1))

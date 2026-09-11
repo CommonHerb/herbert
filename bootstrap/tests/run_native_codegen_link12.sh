@@ -92,38 +92,38 @@ check_bytepure() {
     fi
 }
 
-# White-box disasm gate: the emitted ELF must contain the exact fwriter syscall
-# sequence (openat with AT_FDCWD/flags=0x241/mode=0644, then close), and the
-# success path must jmp over the error-exit block (add rsp,8; jmp +12).
+# White-box pin of the complete atomic writer, assembled from
+# fixtures/fwriter_linux_x86_64.s. The fault target verifies that reference with
+# GNU as; this C-free gate deliberately needs no assembler at runtime.
 check_disasm_gate() {
     local label="$1" probe="$2"
     local elf="$tmp/$label.elf"
     compile_probe "$label" "$probe" "$elf" || return
-    local hex
-    hex=$(xxd -p "$elf" | tr -d '\n')
-    local openat="b80101000048c7c79cffffffba4102000041baa40100000f05"
-    local close="b8030000004c89e70f05"
-    local jmpover="4883c408eb0c"
-    if [[ "$hex" == *"$openat"* && "$hex" == *"$close"* && "$hex" == *"$jmpover"* ]]; then
+    if python3 - "$elf" <<'PYWRITER'
+from pathlib import Path
+import hashlib, sys
+image = Path(sys.argv[1]).read_bytes()
+prefix = bytes.fromhex("415841595341544155415641574883ec60")
+start = image.find(prefix)
+expected = "63981c56c5677d52567015e724a39d3bb760be697c4abb9b0d03ebf7082e4c22"
+ok = (start >= 0 and image.count(prefix) == 1 and
+      hashlib.sha256(image[start:start + 593]).hexdigest() == expected)
+raise SystemExit(0 if ok else 1)
+PYWRITER
+    then
         pass=$((pass + 1))
     else
-        fail_test "$label disasm gate: fwriter openat/close/jmp-over-error byte signature missing"
+        fail_test "$label disasm gate: atomic fwriter instruction image differs"
     fi
 }
 
 # Rejection: a probe that should NOT compile to an ELF (renamed twin / type error).
 check_reject() {
     local label="$1" probe="$2"
-    # A rejected program returns before the fwriter emit, so it must write NO
-    # a.out (and print its diagnostic to stdout). Run in a dir and assert no a.out
-    # -- the post-D12 form of "expected rejection, not an ELF".
-    local rdir="$tmp/$label.reject.d"
-    rm -rf "$rdir"; mkdir -p "$rdir"
-    ( cd "$rdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.out" 2>"$tmp/$label.err" )
-    if [[ -f "$rdir/a.out" ]]; then
-        fail_test "$label: expected rejection but compiler emitted a.out (stdout=$(head -1 "$tmp/$label.out"))"
-    else
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$tmp/$label.out" "$tmp/$label.err" 'ERR 4[0-9][0-9]'; then
         pass=$((pass + 1))
+    else
+        fail_test "$label: expected clean rejection"
     fi
 }
 
@@ -178,5 +178,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link12: $pass sub-tests: fwriter byte-pure file differential vs the committed C-derived goldens (golden mode, C not run) (hi/empty), openat/close/jmp-over-error disasm gate, renamed-twin + non-string rejects)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link12: $pass sub-tests: fwriter byte-pure file differential vs the committed C-derived goldens (golden mode, C not run) (hi/empty), complete atomic-writer instruction pin, renamed-twin + non-string rejects)"
 exit 0

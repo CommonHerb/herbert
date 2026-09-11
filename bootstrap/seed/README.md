@@ -51,3 +51,12 @@ make check && make test
 (Post-switchover — sovereignty link `castoff` — the C bootstrap is gone, so the
 seed re-mints **itself**: the old seed compiles the new backend to the new gen-1,
 proven legitimate by the self-hosting fixpoint, not by a C diff.)
+
+A builtin-emitter change can require a staged bootstrap: the old compiler may
+embed its old implementation into the first new compiler, which then emits a
+different second generation. `make reseed` intentionally refuses that mismatch
+and leaves the seed unchanged. Retain an explicit generation chain, establish
+byte-identical consecutive generations, then run the ordinary strict reseed
+and behavioral gates. Never remove the fixpoint check to advance a bootstrap.
+A newly introduced builtin also needs a capability stage before the compiler
+source can adopt it; the checked-stdin landing followed that order.

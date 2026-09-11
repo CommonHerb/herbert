@@ -86,11 +86,10 @@ check_reject_code() {
     local label="$1" code="$2" probe="$3"
     total=$((total + 1))
     local out="$tmp/reject_${label}.out" err="$tmp/reject_${label}.err"
-    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"
-    if grep -q "ERR $code" "$out"; then
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$out" "$err" "ERR $code"; then
         pass=$((pass + 1))
     else
-        fail_test "reject $label: expected ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+        fail_test "reject $label: expected clean ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
     fi
 }
 
@@ -432,7 +431,7 @@ mmd="$tmp/missing_meta_driver.cdir"; rm -rf "$mmd"; mkdir -p "$mmd"
 [[ -f "$mmd/a.out" ]] && chmod +x "$mmd/a.out"
 if [[ ! -f "$mmd/a.out" ]]; then
     fail_test "reject missing_new_array_metadata: seed did not compile driver: $(head -1 "$tmp/missing_meta.cc.out") $(head -1 "$tmp/missing_meta.cc.err")"
-elif ! { "$mmd/a.out" >"$tmp/missing_meta.out" 2>"$tmp/missing_meta.err"; grep -q "ERR 439" "$tmp/missing_meta.out"; }; then
+elif ! { native_codegen_expect_rejection "$mmd/a.out" /dev/null "$tmp/missing_meta.out" "$tmp/missing_meta.err" "ERR 439"; }; then
     fail_test "reject missing_new_array_metadata: expected ERR 439, stdout=$(head -1 "$tmp/missing_meta.out"), stderr=$(head -1 "$tmp/missing_meta.err")"
 elif [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]] && ! { "$HERBERT" "$tmp/missing_meta_driver.herb" >"$tmp/missing_meta.cref.out" 2>/dev/null; cmp -s "$tmp/missing_meta.out" "$tmp/missing_meta.cref.out"; }; then
     fail_test "reject missing_new_array_metadata: C cross-check diverged from native (C=$(head -1 "$tmp/missing_meta.cref.out"))"

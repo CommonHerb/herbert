@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "scope": "Linux hosted checked-stdin capability and compiler-main adoption real-descriptor contract only. No injected after-prefix/probe faults, generic publication, or kernel claim.",
+  "provenance": "Derived without candidate output from private frozen faults/fixtures.json SHA256 fe662e43aba773118206936e595b4a11df5b4f856698f1e3abad81b2f90fb6e4; compiler EOF transport choice explicitly approved by root.",
+  "reader_source": "func main():\n    let r = stdin_read()\n    do flogger(r.1)\n    return r.0\nend\n",
+  "valid_source": "func main():\n    return 42\nend\n",
+  "compile_status": 0,
+  "compile_stdout": "0\n",
+  "compile_stderr": "",
+  "valid_program_status": 0,
+  "valid_program_stdout": "42\n",
+  "valid_program_stderr": "",
+  "reader_status": 0,
+  "reader_stderr": "",
+  "compiler_error_status": 1,
+  "compiler_error_stdout": "",
+  "compiler_error_stderr_template": "compiler: stdin read failed (errno {errno})\n",
+  "reader_cases": [
+    {"id": "closed-fd0", "method": "closed", "errno": 9, "stdout": "9\n"},
+    {"id": "directory-fd0", "method": "directory", "errno": 21, "stdout": "21\n"},
+    {"id": "held-open-empty-pipe", "method": "pipe-open", "errno": 11, "stdout": "11\n"},
+    {"id": "closed-writer-empty-pipe-eof", "method": "pipe-eof", "errno": 0, "stdout": "0\n"}
+  ],
+  "compiler_error_cases": [
+    {"id": "closed-fd0", "method": "closed", "errno": 9},
+    {"id": "directory-fd0", "method": "directory", "errno": 21},
+    {"id": "held-open-empty-pipe", "method": "pipe-open", "errno": 11}
+  ],
+  "artifact_states": ["absent", "regular", "symlink"],
+  "compiler_eof_control": "valid_source bytes supplied through a nonblocking pipe; writer closed before launch; emitted program must run and render 42",
+  "artifact_contract": "On input failure preserve absence or exact regular/symlink/hardlink bytes and lstat(dev,ino,mode,size,mtime_ns,ctime_ns,nlink). This observes final state, not a syscall trace proving no transient output opens."
+}

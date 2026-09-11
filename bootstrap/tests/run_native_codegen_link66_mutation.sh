@@ -398,9 +398,7 @@ compile_with() { # compiler src outdir -> sets COMPILE_RC/COMPILE_MSG, leaves $o
     COMPILE_MSG="$(head -1 "$d/stdout.txt" "$d/err.txt" 2>/dev/null | grep -v '^==>' | tr -d '\n')"
 }
 compiled_ok() { [[ "$COMPILE_RC" -eq 0 && -f "$1/a.out" ]]; }
-# This toolchain's refusal convention is exit 0 with no image (the gate measured it and says so), so
-# a refusal is rc==0 AND no a.out -- which still separates a principled refusal from a CRASH.
-refused_ok()   { [[ "$COMPILE_RC" -eq 0 && ! -f "$1/a.out" ]]; }
+refused_ok()   { native_codegen_rejection_result "$COMPILE_RC" "$1" "$1/stdout.txt" "$1/err.txt" "$2"; }
 
 # the probe sources: the forcing program and the reject probe are the GATE'S OWN (extracted above);
 # the three boundary images come from the gate's own generator, sourced above.
@@ -840,7 +838,7 @@ fi
 #     static battery at all: it is the gate's `reject-nobufop` leg, which requires the compiler to
 #     REFUSE a buffer-mode program that never indexes the page.
 compile_with "$NATIVE_CODEGEN_COMPILER" "$tmp/nobufop.herb" "$tmp/base.noirgate"
-if refused_ok "$tmp/base.noirgate" && grep -q 'ERR 655' <<<"$COMPILE_MSG"; then
+if refused_ok "$tmp/base.noirgate" 'ERR 655'; then
     okleg "control-noirgate (the UNMUTATED compiler refuses the no-buf-op probe: rc=$COMPILE_RC, no a.out, $COMPILE_MSG -- without this, \"the mutant compiled\" would prove nothing about the gate)"
 else
     fail_test "control-noirgate (the unmutated compiler did not refuse the no-buf-op probe with ERR 655: rc=$COMPILE_RC a.out=$([[ -f "$tmp/base.noirgate/a.out" ]] && echo yes || echo no) $COMPILE_MSG) -- row 17's RED would not be attributable"
@@ -1312,7 +1310,7 @@ fi
 # --- ROW 30: M-singlefunc -- single-function programs routed down the multi-function tap path, so
 #     the device-op multi-function rule stops refusing them.
 compile_with "$NATIVE_CODEGEN_COMPILER" "$tmp/singlefunc.herb" "$tmp/base.singlefunc"
-if refused_ok "$tmp/base.singlefunc" && grep -qE 'ERR (50[0-9]|6[0-9][0-9])' <<<"$COMPILE_MSG"; then
+if refused_ok "$tmp/base.singlefunc" 'ERR (50[0-9]|6[0-9][0-9])'; then
     okleg "control-singlefunc (the UNMUTATED compiler REFUSES a single-function device-op program with a named diagnostic: $COMPILE_MSG)"
 else
     fail_test "control-singlefunc (the unmutated compiler did not refuse the single-function probe with a named diagnostic: rc=$COMPILE_RC $COMPILE_MSG) -- row 30's RED would not be attributable"

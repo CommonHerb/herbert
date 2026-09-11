@@ -34,6 +34,12 @@ bootstrap/tests/check_lexer_copy_sync.py
 # Hosted conformance harness + hand-authored data: deliberate test-tool boundary.
 bootstrap/tests/compiler_conformance.py
 bootstrap/tests/fixtures/compiler_conformance.json
+# Checked stdin real-descriptor gate + frozen data: deliberate test-tool boundary.
+bootstrap/tests/stdin_contract.py
+bootstrap/tests/fixtures/stdin_contract.json
+# Invocation/atomic-publication tests and assembly specification: test tooling only.
+bootstrap/tests/compiler_cli_contract.py
+bootstrap/tests/fixtures/fwriter_linux_x86_64.s
 bootstrap/tests/run_evaluator_native.sh
 bootstrap/tests/run_evaluator_native_mutation.sh
 bootstrap/tests/run_vm_native.sh
