@@ -1,0 +1,29 @@
+-- Byte-oriented word counter for ordinary Linux/x86_64 Herbert.
+-- Result: (LF line endings, ASCII-whitespace-delimited words, bytes).
+-- One input allocation; the scan makes no per-byte heap allocations.
+
+func scan(s, i, lines, words, in_word):
+    if i == length(s):
+        return (lines, words, i)
+    end
+    let c = index(s, i)
+    if c == 10:
+        return scan(s, i + 1, lines + 1, words, false)
+    elif c == 32 or (c >= 9 and c <= 13):
+        return scan(s, i + 1, lines, words, false)
+    elif in_word:
+        return scan(s, i + 1, lines, words, true)
+    else:
+        return scan(s, i + 1, lines, words + 1, true)
+    end
+end
+
+func main():
+    let incoming = stdin_read()
+    if incoming.0 != 0:
+        let ignored = stderr_write("wordcount: cannot read standard input\n")
+        do process_exit(1)
+        return (0, 0, 0)
+    end
+    return scan(incoming.1, 0, 0, 0, false)
+end

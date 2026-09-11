@@ -29,6 +29,9 @@ docs/superpowers/plans/2026-06-25-native-ecosystem-covenant.md
 examples/native_today_arithmetic.expected
 examples/native_today_collections.expected
 examples/native_today_io.expected
+examples/wordcount.md
+# Test tooling for the Herbert-authored sustained input utility.
+bootstrap/tests/check_wordcount.py
 stack/native_surface_ledger.expected
 bootstrap/tests/check_lexer_copy_sync.py
 # Hosted conformance harness + hand-authored data: deliberate test-tool boundary.

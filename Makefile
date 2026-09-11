@@ -38,6 +38,7 @@ compiler-conformance:
 
 verification-helpers:
 	@python3 bootstrap/tests/check_verification_helpers.py
+
 # Real descriptor error/EOF checks; no ptrace, emulator, or partition change.
 stdin-contract:
 	@python3 bootstrap/tests/stdin_contract.py
@@ -46,6 +47,11 @@ stdin-contract:
 # Requires Linux owned-process tracing, strace, GDB and binutils.
 compiler-cli-contract:
 	@python3 bootstrap/tests/compiler_cli_contract.py --faults
+
+# A maintained useful program: sustained input processing on the hosted runtime.
+.PHONY: wordcount
+wordcount:
+	@python3 bootstrap/tests/check_wordcount.py
 
 test-timeout:
 	@python3 tools/check_timeout.py
@@ -90,14 +96,14 @@ lexer-copy-sync:
 
 # native-codegen-diagnostics: a small QEMU DIAGNOSTICS suite for the native-codegen
 # emitter -- NOT the kernel-arc boot gate. The boot gate is `make kernel-verify` (the
-# link17..65 dual/tri-substrate gates + mutation proofs under KERNEL_CODEGEN_REQUIRE_EMU=1)
+# link17..66 dual/tri-substrate gates + mutation proofs under KERNEL_CODEGEN_REQUIRE_EMU=1)
 # and its CI mirror `.github/workflows/kernel-codegen-l1.yml`. Do not read this target's
 # green as "the kernels boot" -- it is diagnostics, not the tri-substrate boot proof.
 native-codegen-diagnostics:
 	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
 
 # kernel-verify: the LOCAL kernel-arc boot gate. Runs every kernel-codegen link gate
-# (link17..65 = kernel-arc L1..L49) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
+# (link17..66 = kernel-arc L1..L50) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
 # (a missing QEMU/Bochs is a HARD failure, never a silent skip), and REQUIRES the KVM
 # real-silicon leg when /dev/kvm is present -- the A11 tier-1 anchor CI cannot cover
 # (GitHub runners have no /dev/kvm). Run this before any kernel-arc push. See the driver
@@ -121,52 +127,11 @@ switchover-dry-run:
 	@bash bootstrap/tests/run_switchover_dryrun.sh
 	@bash bootstrap/tests/run_switchover_dryrun_mutation.sh
 
-# closed-loop-memory-diet: core-owned RSS gate for the Linux production compiler
-# appliance. It proves gen-1 emits a byte-identical gen-2 while staying under the
-# current bounded RSS ceiling, and prints an attribution cone for the front end vs
-# the rest of the self-compile.
-#
-# WHERE IT IS ENFORCED -- recorded 2026-09-02 because four independent review legs
-# read this wrong and concluded the ceiling was unenforced on every push path.
-# The TARGET below is genuinely not a verify-local prerequisite and is named in no
-# workflow. The SCRIPT is one of the 26 gates of the frozen C-free surface
-# (FROZEN_SURFACE in run_switchover_cfree.sh; its CFREE_SWITCHOVER row in
-# switchover_manifest.tsv), and run_switchover_cfree.sh runs that surface TWICE --
-# phase A/absent and phase B/tombstone. Two FULL-SURFACE paths inside verify-local
-# reach that driver: `make test` (via run_tests.sh) and the `switchover-cfree`
-# target above. (Other callers exist -- run_switchover_cfree_mutation.sh and
-# apply_switchover.sh -- but those do not add full-surface runs here.) verify-local
-# depends on BOTH, so it already runs this gate FOUR times (two driver invocations,
-# two phases each); adding the target to it would make five, not close a gap.
-# CI reaches it because the `check` job runs `make test`
-# (.github/workflows/check.yml) on push and pull_request, with no branch or path
-# filters. Two things still skip it, neither silent: an earlier step in the same job
-# failing (the job is RED regardless), and a `[skip ci]` commit message, which skips
-# the whole run (this repo has used one -- 2d8d369).
-#
-# PROVEN, not assumed, at 202c678 with CLOSED_LOOP_MAX_RSS_KB=1000. Two separate
-# runs, quoted with the provenance each line actually came from:
-#   `CLOSED_LOOP_MAX_RSS_KB=1000 make test` -> exit 2, and prints
-#       FAIL: switchover-cfree (the C-free production surface did NOT stand with C physically absent)
-#       1 of 43 test(s) failed.
-#     -- and NOTHING more specific: run_tests.sh captures the driver's output and
-#     echoes only `tail -20` of it, which the surface ledger fills, so the per-gate
-#     attribution below never reaches a `make test` transcript.
-#   `CLOSED_LOOP_MAX_RSS_KB=1000 bash bootstrap/tests/run_switchover_cfree.sh` -> exit 1:
-#       [A/absent] FAIL  run_closed_loop_memory_diet.sh
-#               | FAIL: closed-loop-memory-diet (rss 351920 kB > ceiling 1000 kB)
-#       [A/absent] 25/26 gates green
-#       [B/tombstone] FAIL  run_closed_loop_memory_diet.sh
-#               | FAIL: closed-loop-memory-diet (rss 351920 kB > ceiling 1000 kB)
-#       [B/tombstone] 25/26 gates green
-#
-# So: do NOT "wire it in" again -- grep the SCRIPT name, not the target name.
-# TWO RESIDUALS, surfaced not fixed: (1) an RSS-ceiling breach is REPORTED as the
-# C-free surface failing "with C physically absent" -- the gate bites but names the
-# wrong reason; (2) `make test` cannot say WHICH of the 26 gates broke. Both are
-# scoped changes to the reporting path, not wiring changes.
-# Full record incl. the two cross-model refutation legs that produced this comment:
-# MEWTWO/audits/step0-diet-gate-2026-09-02/REPORT.md.
+# Self-compile must reproduce the seed within the pinned RSS ceiling.
+# make test already reaches this through the frozen C-free surface in both its
+# absent and tombstone phases. This standalone target diagnoses that same gate;
+# adding it again to verify-local would duplicate enforcement. Prior enforcement
+# evidence: MEWTWO/audits/step0-diet-gate-2026-09-02/REPORT.md.
 closed-loop-memory-diet:
 	@bash bootstrap/tests/run_closed_loop_memory_diet.sh
 
@@ -177,7 +142,7 @@ closed-loop-memory-diet:
 reseed:
 	@bash bootstrap/tests/reseed_gen1.sh
 
-verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract
+verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract wordcount
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<
