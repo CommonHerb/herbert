@@ -12,34 +12,13 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || tr
 pass=0; fail=0
 ok(){ echo "  PASS: $1"; pass=$((pass+1)); }
 bad(){ echo "  FAIL: $1"; fail=$((fail+1)); }
-# QEMU_PREFIX knob (2026-08-31): fail LOUD, never fall silently back to a system qemu.
-# Inline (not a `source`) because this file defines no script_dir -- and because there is no shared
-# helper to source: the 29 files that invoke qemu without sourcing an oracle each carry this same
-# block inline, by decision (2026-09-01), so the bootstrap allowlist does not grow. (Gates that DO
-# source native_codegen_oracle.sh inherit it from there.) Same contract as the oracle's copy.
-if [[ -n "${QEMU_PREFIX:-}" ]]; then
-    qp_bin="$QEMU_PREFIX/bin/qemu-system-x86_64"
-    # -x alone is TRUE for a DIRECTORY and says nothing about the prefix being absolute, so a
-    # prefix that passed it could still leave PATH lookup resolving to the system qemu 8.2.2 --
-    # the exact silent downgrade this knob exists to retire (parent delta refutation panel,
-    # 2026-09-02). Require a REGULAR executable file at an ABSOLUTE path: a relative prefix
-    # installs a relative PATH entry that silently stops resolving after any `cd`.
-    if [[ "$QEMU_PREFIX" != /* || ! -f "$qp_bin" || ! -x "$qp_bin" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $qp_bin is not an executable REGULAR FILE at an ABSOLUTE path -- refusing to fall back to a system qemu" >&2
-        exit 1
-    fi
-    # A shell FUNCTION shadows PATH lookup entirely, so an inherited `export -f qemu-system-x86_64`
-    # silently restored the system 8.2.2 while this guard reported success (Codex refutation leg,
-    # 2026-09-02). Drop any such shadow, then PROVE the resolution instead of assuming it: the knob's
-    # promise is that the PINNED binary runs, and only `command -v` after the prepend establishes it.
-    unset -f qemu-system-x86_64 2>/dev/null || true
-    export PATH="$QEMU_PREFIX/bin:$PATH"
-    qp_res="$(command -v qemu-system-x86_64 || true)"
-    if [[ "$qp_res" != "$qp_bin" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but qemu-system-x86_64 resolves to '${qp_res:-<nothing>}', not '$qp_bin' -- refusing to fall back to a system qemu" >&2
-        exit 1
-    fi
-fi
+
+
+# Fail closed before any emulator availability probe, including standalone runs.
+unset CDPATH
+qemu_helper_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+source "$qemu_helper_dir/qemu_prefix.sh" || { echo "FAIL: cannot establish QEMU prefix" >&2; exit 1; }
+
 have_qemu(){ command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm(){ [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs(){ command -v bochs >/dev/null && command -v parted >/dev/null && command -v grub-install >/dev/null && command -v xvfb-run >/dev/null && sudo -n true 2>/dev/null; }

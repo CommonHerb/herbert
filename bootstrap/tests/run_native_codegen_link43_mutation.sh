@@ -13,42 +13,18 @@
 #                real 4-page kernel (it too needs multi-page recursion) but the CONTENT/reversal pin catches the
 #                wrong order -> RED; AND it is byte-DIFFERENT from target_module() (the emitter byte-pin catches it).
 set -u
+unset CDPATH
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-# QEMU_PREFIX knob (2026-08-31): when set, $QEMU_PREFIX/bin MUST hold an executable qemu-system-x86_64
-# and is prepended to PATH -- fail LOUD, never fall silently back to a system qemu (kingdom's system qemu
-# is 8.2.2, the F8-aborting major). Unset => byte-identical historical behavior; CI sets nothing.
-# Inlined per gate (not a shared sourced helper) so each gate is self-protecting when run STANDALONE --
-# the exact scenario the knob exists for -- and so the bootstrap allowlist does not grow. This block was
-# added because the knob originally lived ONLY in native_codegen_oracle.sh, justified by the comment
-# "the one file every gate sources", which was FALSE: this gate sources no oracle and silently ignored
-# the knob. Found by the tranche-1b blind diff audit, 2026-08-31.
-if [[ -n "${QEMU_PREFIX:-}" ]]; then
-    qp_bin="$QEMU_PREFIX/bin/qemu-system-x86_64"
-    # -x alone is TRUE for a DIRECTORY and says nothing about the prefix being absolute, so a
-    # prefix that passed it could still leave PATH lookup resolving to the system qemu 8.2.2 --
-    # the exact silent downgrade this knob exists to retire (parent delta refutation panel,
-    # 2026-09-02). Require a REGULAR executable file at an ABSOLUTE path: a relative prefix
-    # installs a relative PATH entry that silently stops resolving after any `cd`.
-    if [[ "$QEMU_PREFIX" != /* || ! -f "$qp_bin" || ! -x "$qp_bin" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $qp_bin is not an executable REGULAR FILE at an ABSOLUTE path -- refusing to fall back to a system qemu" >&2
-        exit 1
-    fi
-    # A shell FUNCTION shadows PATH lookup entirely, so an inherited `export -f qemu-system-x86_64`
-    # silently restored the system 8.2.2 while this guard reported success (Codex refutation leg,
-    # 2026-09-02). Drop any such shadow, then PROVE the resolution instead of assuming it: the knob's
-    # promise is that the PINNED binary runs, and only `command -v` after the prepend establishes it.
-    unset -f qemu-system-x86_64 2>/dev/null || true
-    export PATH="$QEMU_PREFIX/bin:$PATH"
-    qp_res="$(command -v qemu-system-x86_64 || true)"
-    if [[ "$qp_res" != "$qp_bin" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but qemu-system-x86_64 resolves to '${qp_res:-<nothing>}', not '$qp_bin' -- refusing to fall back to a system qemu" >&2
-        exit 1
-    fi
-fi
+
+
+# Fail closed before any emulator availability probe, including standalone runs.
+qemu_helper_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+source "$qemu_helper_dir/qemu_prefix.sh" || { echo "FAIL: cannot establish QEMU prefix" >&2; exit 1; }
+
 repo_root="$(cd "$script_dir/../.." && pwd)"
 REF="$script_dir/mumbani_ref.py"; feeder="$script_dir/kernel_input_feed.py"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok(){ echo "  PASS: $1"; pass=$((pass+1)); }

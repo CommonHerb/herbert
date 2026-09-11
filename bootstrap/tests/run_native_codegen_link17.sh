@@ -44,7 +44,8 @@
 # permanent audited-assertion residue recorded in the ledger.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -64,11 +65,11 @@ if [[ ! -f "$backend" ]]; then
     exit 1
 fi
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 source "$script_dir/bochs_f2_harness.sh"
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'kernel_test_cleanup "$tmp"' EXIT
 # Reuse only the gen-1 mint (C out of the run path; the native compiler emits
 # the image). The C-golden manifest machinery does not apply -- L1 is graded on
 # the dual-substrate oracle, not against C. Mint into the per-run tmp.
@@ -89,7 +90,7 @@ host_qemu_exit() { local p; p=$(host_payload "$1" "$2"); echo $(( ((( p ^ 0x31) 
 # ---- compile a freestanding A*B probe with the NATIVE gen-1 compiler --------
 compile_mb() { # label A B outfile  -> 0 on a valid multiboot ELF
     local label="$1" a="$2" b="$3" out="$4"
-    local cdir="$tmp/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$tmp/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32\nfunc main(): return %d*%d end\n' "$a" "$b" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then
@@ -183,7 +184,7 @@ bochs_run() { # label A B elf  (same call sites; F2-hardened via bochs_f2_harnes
 # ---- reject probe: an out-of-subset program must NOT emit a valid image -----
 reject_probe() { # label "<herbert body lines>"
     local label="$1" prog="$2"
-    local cdir="$tmp/rej.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$tmp/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- "-- emit: multiboot32\n%b\n" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>/dev/null )
     if [[ -f "$cdir/a.out" ]] && grub-file --is-x86-multiboot "$cdir/a.out" >/dev/null 2>&1; then

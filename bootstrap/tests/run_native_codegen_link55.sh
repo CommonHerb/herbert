@@ -60,7 +60,8 @@
 #       drops it -> the reps walk BACKWARD off diskbuf/dirbuf into the page tables -> wrong resolution / leak).
 # REQUIRE_EMU fail-closed (the durable pattern): if KERNEL_CODEGEN_REQUIRE_EMU=1 and an emulator is missing, FAIL.
 set -u
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 REF="$script_dir/cairn_ref.py"
 LB="$script_dir/cairn_latebound.py"
 DUR_REF="$script_dir/durable_ref.py"
@@ -69,8 +70,8 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $REF)"; exit 1; fi
 if [[ ! -f "$LB" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $LB)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing feeder $feeder)"; exit 1; fi
-source "$script_dir/native_codegen_oracle.sh"
-work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || true' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
+work="$(mktemp -d)"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -83,7 +84,7 @@ free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0)
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
-    local cdir="$work/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '%s\n%s\n' "$marker" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(grep -o 'ERR [0-9]*' "$cdir/err" 2>/dev/null | head -1))"; return 1; fi
@@ -705,7 +706,7 @@ bochs_two_boot_query() { # putstream(space-bytes) querystream(space-bytes) b2out
     local putstream="$1" qstream="$2" b2out="$3"
     local kelf; kelf="$(readlink -f "$MKELF")"
     local pu; pu="$(readlink -f "$PUTTER")"; local ge; ge="$(readlink -f "$GETTER")"
-    local d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"
+    local d="$work/b.d"; kernel_test_cleanup "$d"; mkdir -p "$d"
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
     pkill -9 -f "$work" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)

@@ -463,3 +463,10 @@ bootstrap/tests/link66_goldens/boundary_edge.sha256
 bootstrap/tests/link66_goldens/boundary_over.sha256
 bootstrap/tests/link66_goldens/boundary_under.sha256
 bootstrap/tests/longbuf_spec.py
+
+# Shared verification machinery (test-only; no compiler/runtime dependency).
+bootstrap/tests/qemu_prefix.sh
+bootstrap/tests/check_verification_helpers.py
+bootstrap/tests/kernel_evidence.py
+bootstrap/tests/kernel_evidence.sh
+bootstrap/tests/kernel_ci_group.sh

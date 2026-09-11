@@ -21,12 +21,13 @@
 #               but the P-seeds "8 zero GP" provenance pin is RED (a forge seeding a nonzero accumulator
 #               to fake warmth is caught white-box, NOT by the trace -- the talcott/toggler meta-class)
 set -u
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
 feeder="$script_dir/kernel_input_feed.py"
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
@@ -35,7 +36,7 @@ if ! have_qemu; then
     echo "SKIP: native-codegen link32 mutation (no qemu)"; exit 0
 fi
 
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 fail=0; fail_test() { echo "FAIL: link32 mutation ($1)"; fail=$((fail + 1)); }
@@ -78,7 +79,7 @@ trace_for() { # elf byte -> captured e9 trace hex (e.g. de59ad...) or "none"
     wait "$fp" 2>/dev/null
     # cap the capture: a stuck-schedule mutation (M-nohlt) emits unboundedly until the timeout; we only
     # need enough to distinguish from the K-frame golden, and a multi-MB hex string chokes bash.
-    local got; got=$(dd if="$W/e9.bin" bs=1 count=256 status=none 2>/dev/null | xxd -p | tr -d '\n'); rm -rf "$W"
+    local got; got=$(dd if="$W/e9.bin" bs=1 count=256 status=none 2>/dev/null | xxd -p | tr -d '\n'); kernel_test_cleanup "$W"
     [[ -n "$got" ]] && echo "$got" || echo "none"
 }
 patch_hex() { python3 - "$1" "$2" "$3" "$4" <<'PY'

@@ -61,7 +61,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "${KERNEL_CODEGEN_REQUIRE_EMU:-0}" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: native-codegen link18 mutation proof (no qemu)"; exit 0
 fi
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+tmp="$(mktemp -d)"; trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 SEED="$NATIVE_CODEGEN_COMPILER"
 # retireable C cross-check: ON only when C is present and not opted out.
@@ -109,7 +109,7 @@ whitebox_ok() { # elf
 # $EMIT_IMG to the emitted image path, or "" if the compiler refused to emit.
 EMIT_IMG=""
 emit_via() {
-    local compiler="$1" d="$2"; rm -rf "$d"; mkdir -p "$d"
+    local compiler="$1" d="$2"; kernel_test_cleanup "$d"; mkdir -p "$d"
     printf -- '-- emit: multiboot32\n%s\n' "$PROBE" > "$d/p.herb"
     ( cd "$d" && "$compiler" < p.herb >/dev/null 2>/dev/null )
     if [[ -f "$d/a.out" ]]; then EMIT_IMG="$d/a.out"; else EMIT_IMG=""; fi
@@ -161,7 +161,7 @@ else echo "FAIL control: unmutated seed compiler did not pass cleanly: $ctrl"; f
 # (mutated) backend to emit the probe. Sets $C_IMG (or "" if no image).
 C_IMG=""
 c_emit() {
-    local src="$1" d="$2"; rm -rf "$d"; mkdir -p "$d"
+    local src="$1" d="$2"; kernel_test_cleanup "$d"; mkdir -p "$d"
     printf -- '-- emit: multiboot32\n%s\n' "$PROBE" > "$d/p.herb"
     ( cd "$d" && "$HERBERT" "$src" < p.herb >/dev/null 2>/dev/null )
     if [[ -f "$d/a.out" ]]; then C_IMG="$d/a.out"; else C_IMG=""; fi

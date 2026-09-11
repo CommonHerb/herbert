@@ -61,7 +61,7 @@ spec="$script_dir/longbuf_spec.py"
 [[ -f "$backend" ]] || { echo "FAIL: link66 (missing backend)"; exit 1; }
 [[ -f "$spec" ]] || { echo "FAIL: link66 (missing longbuf_spec.py)"; exit 1; }
 
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+tmp="$(mktemp -d)"; trap 'kernel_test_cleanup "$tmp"' EXIT
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); echo "  ok   $1"; }
 bad() { fail=$((fail + 1)); echo "  FAIL $1"; }
@@ -213,7 +213,7 @@ EOS
 
 compile_probe() {  # src outdir -> sets COMPILE_RC, leaves stdout.txt/err.txt for provenance
     local src="$1" d="$2"
-    rm -rf "$d"; mkdir -p "$d"; cp "$src" "$d/probe.herb"
+    kernel_test_cleanup "$d"; mkdir -p "$d"; cp "$src" "$d/probe.herb"
     ( cd -- "$d" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >stdout.txt 2>err.txt )
     COMPILE_RC=$?
 }
@@ -831,7 +831,7 @@ if [[ "${LINK66_CAPTURE_GOLDENS:-0}" == "1" ]]; then
     # review leg's blocker: capture would print CAPTURE-COMPLETE and exit 0 over empty, stale or
     # partial digest files. Each digest is computed, validated as 64 lowercase hex, and staged;
     # nothing is published until all four have succeeded.
-    _stage="$tmp/goldens.stage"; rm -rf "$_stage"; mkdir -p "$_stage" || { echo "FAIL: link66 capture (cannot stage)"; exit 1; }
+    _stage="$tmp/goldens.stage"; kernel_test_cleanup "$_stage"; mkdir -p "$_stage" || { echo "FAIL: link66 capture (cannot stage)"; exit 1; }
     for _g in "forcing:$tmp/forcing.d/a.out" "boundary_edge:$tmp/b_edge.d/a.out" \
               "boundary_over:$tmp/b_over.d/a.out" "boundary_under:$tmp/b_under.d/a.out"; do
         _lbl="${_g%%:*}"; _img="${_g#*:}"

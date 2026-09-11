@@ -34,7 +34,8 @@
 # each and asserts each grades RED, control GREEN.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -46,11 +47,11 @@ if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" == "c" && ! -x "$HERBERT" ]]; then echo
 if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing backend)"; exit 1; fi
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing nokta_ref.py $REF)"; exit 1; fi
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 source "$script_dir/bochs_f2_harness.sh"
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -84,7 +85,7 @@ ALL_PROBES="nk_echo nk_xform nk_local"
 
 compile_probe() { # label outfile
     local label="$1" out="$2"
-    local cdir="$work/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32-nokta\n%s\n' "$(prog_src "$label")" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(head -1 "$cdir/err" 2>/dev/null))"; return 1; fi
@@ -188,7 +189,7 @@ bochs_run() { # elf mod outfile  (F2-hardened via bochs_f2_harness.sh)
 
 reject_probe() { # label directive "<body>"
     local label="$1" directive="$2" prog="$3"
-    local cdir="$work/rej.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- "%s\n%b\n" "$directive" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>/dev/null )
     if [[ -f "$cdir/a.out" ]] && grub-file --is-x86-multiboot "$cdir/a.out" >/dev/null 2>&1; then

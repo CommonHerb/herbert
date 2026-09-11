@@ -31,15 +31,16 @@
 # gate. M-eager is the KEY mutation: it distinguishes demand-commit from a fixed-large/eager reserve -- same output,
 # missing the not-present commit witness).
 set -u
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 REF="$script_dir/homestead_ref.py"
 TEN="$script_dir/tenement_ref.py"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 N="${HOMESTEAD_N:-400}"          # recursion depth of the grower (~3-4 pages of frames; GROWMAX=8)
 SEED="${HOMESTEAD_SEED:-90}"     # held-back seed byte (0x5A); fed late-bound over COM1
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $REF)"; exit 1; fi
-source "$script_dir/native_codegen_oracle.sh"
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
+work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -52,7 +53,7 @@ free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0)
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
-    local cdir="$work/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '%s\n%s\n' "$marker" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(grep -o 'ERR [0-9]*' "$cdir/err" 2>/dev/null | head -1))"; return 1; fi

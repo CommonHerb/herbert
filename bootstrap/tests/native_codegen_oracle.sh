@@ -12,47 +12,13 @@
 # reseed` re-mints the seed C-FREE (the seed recompiles the backend to its fixpoint),
 # no longer via a C mint. The default golden path is unchanged.
 
-native_codegen_oracle__script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+unset CDPATH
+native_codegen_oracle__script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || return 1
 
-# QEMU_PREFIX knob (2026-08-31, Ben-greenlit): the durable alternative to the per-shell
-# PATH=/opt/qemu-X.Y.Z/bin convention for hosts whose system qemu is not the pinned emulator
-# (kingdom's system qemu is 8.2.2 -- the F8-aborting major). When set, $QEMU_PREFIX/bin is
-# prepended to PATH here and MUST contain qemu-system-x86_64:
-# fail LOUD, never fall silently back to a system qemu -- the silent-downgrade footgun this knob
-# retires. Unset => exactly the historical behavior (CI sets nothing and is untouched).
-# NOTE (2026-08-31): an earlier version of this comment claimed this was "the one file every gate
-# sources" and used that to justify putting the knob ONLY here. That was FALSE -- 25 *_mutation.sh
-# gates plus larder_phaseA_gate.sh and replay_discriminator.sh invoke qemu by bare name and source
-# no oracle, so they silently ignored the knob. Those 27 now each carry this block INLINE (29 files
-# in all, counting this one and kernel_verify.sh); every OTHER qemu-invoking gate still inherits it
-# by SOURCING this file. There is no shared qemu_prefix.sh helper: a DRY one was written and
-# deliberately dropped -- it would be a new git-tracked non-.herb file, and BOOTSTRAP-ALLOWLIST says
-# the list "shrinks toward empty" and that "adding a line here is a deliberate, reviewable act,
-# never incidental", so growing it is a deliberate call, not a bug-fix side effect. Inline also
-# keeps those 29 self-protecting when run standalone. Settled 2026-09-01: keep inline.
-if [[ -n "${QEMU_PREFIX:-}" ]]; then
-    qp_bin="$QEMU_PREFIX/bin/qemu-system-x86_64"
-    # -x alone is TRUE for a DIRECTORY and says nothing about the prefix being absolute, so a
-    # prefix that passed it could still leave PATH lookup resolving to the system qemu 8.2.2 --
-    # the exact silent downgrade this knob exists to retire (parent delta refutation panel,
-    # 2026-09-02). Require a REGULAR executable file at an ABSOLUTE path: a relative prefix
-    # installs a relative PATH entry that silently stops resolving after any `cd`.
-    if [[ "$QEMU_PREFIX" != /* || ! -f "$qp_bin" || ! -x "$qp_bin" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $qp_bin is not an executable REGULAR FILE at an ABSOLUTE path -- refusing to fall back to a system qemu" >&2
-        exit 1
-    fi
-    # A shell FUNCTION shadows PATH lookup entirely, so an inherited `export -f qemu-system-x86_64`
-    # silently restored the system 8.2.2 while this guard reported success (Codex refutation leg,
-    # 2026-09-02). Drop any such shadow, then PROVE the resolution instead of assuming it: the knob's
-    # promise is that the PINNED binary runs, and only `command -v` after the prepend establishes it.
-    unset -f qemu-system-x86_64 2>/dev/null || true
-    export PATH="$QEMU_PREFIX/bin:$PATH"
-    qp_res="$(command -v qemu-system-x86_64 || true)"
-    if [[ "$qp_res" != "$qp_bin" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but qemu-system-x86_64 resolves to '${qp_res:-<nothing>}', not '$qp_bin' -- refusing to fall back to a system qemu" >&2
-        exit 1
-    fi
-fi
+
+# Fail closed before any emulator availability probe, including standalone runs.
+source "$native_codegen_oracle__script_dir/qemu_prefix.sh" || { echo "FAIL: cannot establish QEMU prefix" >&2; exit 1; }
+
 NATIVE_CODEGEN_GOLDENS_DIR="${NATIVE_CODEGEN_GOLDENS_DIR:-$native_codegen_oracle__script_dir/native_codegen_goldens}"
 NATIVE_CODEGEN_ORACLE="${NATIVE_CODEGEN_ORACLE:-golden}"
 NATIVE_CODEGEN_CAPTURE="${NATIVE_CODEGEN_ORACLE_CAPTURE:-0}"
@@ -502,4 +468,21 @@ oracle_expect_file() {
     local rc=$?
     rm -f "$derived"
     return $rc
+}
+
+# The metacircular adapters print one result line, then exactly "0\n".
+# Keep bytes in files: command substitution strips final newlines and ignores NUL.
+native_codegen_transcript_line1() {
+    local stdout="$1" stderr="$2" line1="$3" expected
+    [[ -f "$stdout" && -f "$stderr" && ! -s "$stderr" ]] || return 1
+    head -n 1 "$stdout" > "$line1" || return 1
+    [[ -s "$line1" ]] || return 1
+    expected="$(mktemp)" || return 1
+    if ! { cat "$line1" && printf '0\n'; } > "$expected"; then
+        rm -f "$expected"; return 1
+    fi
+    cmp -s "$stdout" "$expected"
+    local result=$?
+    rm -f "$expected"
+    return "$result"
 }

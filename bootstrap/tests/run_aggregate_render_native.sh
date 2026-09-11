@@ -45,7 +45,8 @@
 # codify; this completes its aggregate rendering (scalar -> flat -> string/nested).
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
@@ -57,7 +58,7 @@ trap 'rm -rf "$tmp"' EXIT
 fail() { echo "FAIL: aggregate-render native execution ($1)"; exit 1; }
 
 # --- 1. Acquire the C-free gen-1 production compiler (the committed seed) -------
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || fail "could not acquire gen-1 compiler"
 GEN1="$NATIVE_CODEGEN_COMPILER"
 [[ -x "$GEN1" ]] || fail "gen-1 compiler not executable: $GEN1"

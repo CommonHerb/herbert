@@ -10,7 +10,8 @@
 # them and the coalgate grader must reject. Run under KERNEL_CODEGEN_MUTATION=1 (CI) like every prior link.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -27,8 +28,8 @@ if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missi
 if [[ ! -f "$GREF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing geeking_ref.py $GREF)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
-source "$script_dir/native_codegen_oracle.sh"
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
+work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0

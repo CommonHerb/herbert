@@ -133,28 +133,28 @@ f2_bochs_attempt() { # grubcfg timeout_s megs outlog src:dest...
     local grubcfg="$1" tmo="$2" megs="$3" outlog="$4"; shift 4
     : > "$outlog" 2>/dev/null || { echo "DISK-BUILD(log-init)"; return; }   # checked truncate: no stale output can ever be graded
     local W; W="$(mktemp -d)"
-    f2__bios_find || { rm -rf "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
+    f2__bios_find || { kernel_test_cleanup "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
     local bcls
-    bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || rm -rf "$W"; echo "$bcls"; return; }
+    bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || kernel_test_cleanup "$W"; echo "$bcls"; return; }
     f2__boot "$W" "$tmo" "$megs" ""
     local cls; cls="$(f2__classify_boot "$W" "$outlog")"
-    rm -rf "$W"; echo "$cls"
+    kernel_test_cleanup "$W"; echo "$cls"
 }
 
 f2_bochs_feed_attempt() { # feed_args feedlog grubcfg timeout_s megs outlog src:dest...
     local feed_args="$1" feedlog="$2" grubcfg="$3" tmo="$4" megs="$5" outlog="$6"; shift 6
     { : > "$outlog" && : > "$feedlog"; } 2>/dev/null || { echo "DISK-BUILD(log-init)"; return; }   # checked: a stale feed log must never authenticate a dead feeder
     local W; W="$(mktemp -d)"
-    f2__bios_find || { rm -rf "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
+    f2__bios_find || { kernel_test_cleanup "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
     local bcls
-    bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || rm -rf "$W"; echo "$bcls"; return; }
+    bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || kernel_test_cleanup "$W"; echo "$bcls"; return; }
     # feeder AFTER the build, just before the boot (link31's accept-hold lesson)
     local port; port=$(free_port)
     # shellcheck disable=SC2086
     python3 "$feeder" "$port" $feed_args > "$feedlog" 2>&1 &
     local fp=$!
     local i ok=0; for i in $(seq 1 50); do grep -q LISTENING "$feedlog" 2>/dev/null && { ok=1; break; }; sleep 0.1; done
-    if [[ "$ok" -ne 1 ]]; then kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; rm -rf "$W"; echo "FEED-NO-LISTEN"; return; fi
+    if [[ "$ok" -ne 1 ]]; then kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; kernel_test_cleanup "$W"; echo "FEED-NO-LISTEN"; return; fi
     f2__boot "$W" "$tmo" "$megs" "com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port"
     # bounded post-boot grace for the feeder-side SENT (a non-reading guest lets Bochs run the moment the TCP
     # connect completes, possibly before a starved feeder returns from accept()+sendall(); cross-model Codex,
@@ -162,7 +162,7 @@ f2_bochs_feed_attempt() { # feed_args feedlog grubcfg timeout_s megs outlog src:
     for i in $(seq 1 20); do grep -q '^SENT' "$feedlog" 2>/dev/null && break; sleep 0.1; done
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     local cls; cls="$(f2__classify_boot "$W" "$outlog")"
-    rm -rf "$W"
+    kernel_test_cleanup "$W"
     if [[ "$cls" == "COMPLETED" ]] && ! grep -q '^SENT' "$feedlog" 2>/dev/null; then echo "FEED-NO-SENT"; return; fi
     echo "$cls"
 }

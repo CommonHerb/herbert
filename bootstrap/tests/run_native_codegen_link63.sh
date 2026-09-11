@@ -33,7 +33,8 @@
 # stays taproot's constant-deep 1,000,000 test (link62); this link does NOT claim input-controlled overflow.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -45,10 +46,9 @@ BOCHS_PROBES="${L63_BOCHS_PROBES:-hi hc}"
 DIFF_BYTES="${L63_DIFF_BYTES:-4 8 12 255}"
 
 if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing backend)"; exit 1; fi
-source "$script_dir/native_codegen_oracle.sh"
-
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -75,7 +75,7 @@ PROBES="hi hc"
 
 compile_probe() { # label outfile
     local label="$1" out="$2"
-    local cdir="$tmp/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$tmp/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     { printf -- '-- emit: multiboot32-long64\n'; prog_src "$label"; } > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(head -1 "$cdir/err" 2>/dev/null))"; return 1; fi
@@ -226,7 +226,7 @@ BX
 
 reject_probe() { # label "<full source incl funcs>"
     local label="$1" src="$2"
-    local cdir="$tmp/rej.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$tmp/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     { printf -- '-- emit: multiboot32-long64\n'; printf '%b\n' "$src"; } > "$cdir/r.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < r.herb >/dev/null 2>/dev/null )
     if [[ -f "$cdir/a.out" ]]; then fail_test "$label reject: compiled but should be out-of-subset"; return 1; fi

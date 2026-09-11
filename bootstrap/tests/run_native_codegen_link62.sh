@@ -48,7 +48,8 @@
 # compile-time-determined (no late-bound input this link, by design).
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -58,10 +59,9 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 BOCHS_PROBES="${L62_BOCHS_PROBES:-p1 p2}"
 
 if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing backend)"; exit 1; fi
-source "$script_dir/native_codegen_oracle.sh"
-
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -121,7 +121,7 @@ NONTAILREC="p2"
 
 compile_probe() { # label outfile   (multi-function)
     local label="$1" out="$2"
-    local cdir="$tmp/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$tmp/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     { printf -- '-- emit: multiboot32-long64\n'; prog_src "$label"; } > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(head -1 "$cdir/err" 2>/dev/null))"; return 1; fi
@@ -350,7 +350,7 @@ BX
 
 # ---- reject probes (+ twins): still-out-of-subset multi-function sources must NOT emit an image ----
 reject_probe() { # label src
-    local label="$1" src="$2"; local cdir="$tmp/rej.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local label="$1" src="$2"; local cdir="$tmp/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     { printf -- '-- emit: multiboot32-long64\n'; printf '%b\n' "$src"; } > "$cdir/r.herb"
     ( cd "$cdir" && rm -f a.out; "$NATIVE_CODEGEN_COMPILER" < r.herb >/dev/null 2>"$cdir/err" )
     if [[ -s "$cdir/a.out" ]]; then fail_test "reject $label: out-of-subset source emitted an image"; else pass=$((pass + 1)); fi
@@ -370,7 +370,7 @@ reject_probe() { # label src
 guard_faults() {
     local nt_src='func nt(n):\n    if n == 0: return 4294967296 end\n    return nt(n - 1) + 4294967296\nend\n'
     # shallow completing twin: nt(4) = 5*2^32 -> proof byte 5 -> frame de05ad, exit 105
-    local cdir="$tmp/deep.twin.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$tmp/deep.twin.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     { printf -- '-- emit: multiboot32-long64\n'; printf "$nt_src"; printf 'func main(): return nt(4) end\n'; } > "$cdir/twin.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < twin.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "guard: shallow non-tail twin did not compile"; return 1; fi
@@ -386,7 +386,7 @@ guard_faults() {
         return 1
     fi
     # deep leg: same shape at depth 1,000,000 -> overflows the 2-MiB stack into the guard page
-    cdir="$tmp/deep.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    cdir="$tmp/deep.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     { printf -- '-- emit: multiboot32-long64\n'; printf "$nt_src"; printf 'func main(): return nt(1000000) end\n'; } > "$cdir/deep.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < deep.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "guard: deep non-tail probe did not compile"; return 1; fi

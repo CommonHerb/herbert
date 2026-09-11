@@ -56,7 +56,8 @@
 # byte-identical to the interpreted fragment.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
@@ -68,11 +69,16 @@ trap 'rm -rf "$tmp"' EXIT
 
 fail() { echo "FAIL: lexer native execution ($1)"; exit 1; }
 
-[[ -f "$fragment" ]] || fail "missing fragment $fragment"
+case "$#" in
+    0) ;;
+    2) [[ "$1" == "--fragment" ]] || fail "usage: $0 [--fragment ABS_PATH]"; fragment="$2" ;;
+    *) fail "usage: $0 [--fragment ABS_PATH]" ;;
+esac
+[[ "$fragment" == /* && -f "$fragment" && -r "$fragment" ]] || fail "fragment must be an absolute readable file: $fragment"
 [[ -f "$oracle" ]] || fail "missing oracle $oracle"
 
 # --- 1. Acquire the C-free gen-1 production compiler (the committed seed) -------
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || fail "could not acquire gen-1 compiler"
 GEN1="$NATIVE_CODEGEN_COMPILER"
 [[ -x "$GEN1" ]] || fail "gen-1 compiler not executable: $GEN1"
@@ -89,14 +95,9 @@ native_line1() {
     [[ "$(head -c4 "$wd/a.out" | xxd -p)" == "7f454c46" ]] || { echo "    (a.out is not an ELF)"; return 1; }
     chmod +x "$wd/a.out" || return 1
     "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" || { echo "    (native ELF exited nonzero)"; return 1; }
-    # Bind the FULL native transcript, not just line 1: the fragment emits the
-    # serialized token stream (line 1) then "0" from `return 0` (line 2), and
-    # nothing else -- so trailing garbage or a corrupted return marker cannot hide
-    # behind a correct line 1.
-    [[ "$(wc -l <"$wd/run.out")" -eq 2 ]] || { echo "    (native output is not exactly 2 lines: $(wc -l <"$wd/run.out"))"; return 1; }
-    [[ "$(sed -n 2p "$wd/run.out")" == "0" ]] || { echo "    (native line 2 is not the expected return-0 marker)"; return 1; }
-    head -1 "$wd/run.out" >"$out"
-    [[ -s "$out" ]] || { echo "    (native ELF produced empty line 1)"; return 1; }
+    native_codegen_transcript_line1 "$wd/run.out" "$wd/run.err" "$out" || {
+        echo "    (native stdout is not exactly result + return marker, or stderr is nonempty)"; return 1;
+    }
     return 0
 }
 

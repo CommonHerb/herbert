@@ -33,6 +33,9 @@ test:
 compiler-conformance:
 	@python3 bootstrap/tests/compiler_conformance.py
 
+verification-helpers:
+	@python3 bootstrap/tests/check_verification_helpers.py
+
 test-timeout:
 	@python3 tools/check_timeout.py
 
@@ -163,7 +166,7 @@ closed-loop-memory-diet:
 reseed:
 	@bash bootstrap/tests/reseed_gen1.sh
 
-verify-local: check test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
+verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

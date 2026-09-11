@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 fragment="$repo_root/stack/native_elf_fragment.herb"
@@ -28,7 +29,7 @@ fail() {
 # test. It is now COMPILED by the C-free gen-1 seed to a native ELF, and that ELF
 # is RUN with the same 1-byte stdin -- the fragment runs natively, no C. C is
 # preserved as an OPT-IN byte-faithfulness cross-check under NATIVE_CODEGEN_ORACLE=c.
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 frag_native="$tmp/native_elf_fragment.elf"
 frag_cdir="$tmp/frag.cdir"; rm -rf "$frag_cdir"; mkdir -p "$frag_cdir"

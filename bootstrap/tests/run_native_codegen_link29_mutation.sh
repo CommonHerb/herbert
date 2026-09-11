@@ -63,7 +63,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "${KERNEL_CODEGEN_REQUIRE_EMU:-0}" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: native-codegen link29 mutation proof (no qemu)"; exit 0
 fi
-mtmp="$(mktemp -d)"; trap 'rm -rf "$mtmp"' EXIT
+mtmp="$(mktemp -d)"; trap 'kernel_test_cleanup "$mtmp"' EXIT
 native_codegen_ensure_compiler "$mtmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: link29-mutation ($1)"; fail=$((fail + 1)); }
@@ -78,7 +78,7 @@ le32_val() { local h="$1" o="$2"; echo $(( 16#${h:o+6:2}${h:o+4:2}${h:o+2:2}${h:
 occ() { echo "$1" | grep -oE "$2" | wc -l | tr -d ' '; }
 
 # build the genuine control image
-ctrl_d="$mtmp/ctrl.d"; rm -rf "$ctrl_d"; mkdir -p "$ctrl_d"
+ctrl_d="$mtmp/ctrl.d"; kernel_test_cleanup "$ctrl_d"; mkdir -p "$ctrl_d"
 printf -- '-- emit: multiboot32-long64\n%s\n' "$PROBE" > "$ctrl_d/p.herb"
 ( cd "$ctrl_d" && "$NATIVE_CODEGEN_COMPILER" < p.herb >/dev/null 2>/dev/null )
 CTRL_IMG="$ctrl_d/a.out"

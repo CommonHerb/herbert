@@ -16,38 +16,14 @@
 #   M-hwbakedaddr   emit a FIXED baked address (0x12340000) instead of the runtime top-down frame -> fails the per-run-random
 #                   -m expectation -> RED (the kernel-emit must read the genuine top-down frame).
 set -u
+unset CDPATH
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-# QEMU_PREFIX knob (2026-08-31): when set, $QEMU_PREFIX/bin MUST hold an executable qemu-system-x86_64
-# and is prepended to PATH -- fail LOUD, never fall silently back to a system qemu (kingdom's system qemu
-# is 8.2.2, the F8-aborting major). Unset => byte-identical historical behavior; CI sets nothing.
-# Inlined per gate (not a shared sourced helper) so each gate is self-protecting when run STANDALONE --
-# the exact scenario the knob exists for -- and so the bootstrap allowlist does not grow. This block was
-# added because the knob originally lived ONLY in native_codegen_oracle.sh, justified by the comment
-# "the one file every gate sources", which was FALSE: this gate sources no oracle and silently ignored
-# the knob. Found by the tranche-1b blind diff audit, 2026-08-31.
-if [[ -n "${QEMU_PREFIX:-}" ]]; then
-    qp_bin="$QEMU_PREFIX/bin/qemu-system-x86_64"
-    # -x alone is TRUE for a DIRECTORY and says nothing about the prefix being absolute, so a
-    # prefix that passed it could still leave PATH lookup resolving to the system qemu 8.2.2 --
-    # the exact silent downgrade this knob exists to retire (parent delta refutation panel,
-    # 2026-09-02). Require a REGULAR executable file at an ABSOLUTE path: a relative prefix
-    # installs a relative PATH entry that silently stops resolving after any `cd`.
-    if [[ "$QEMU_PREFIX" != /* || ! -f "$qp_bin" || ! -x "$qp_bin" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but $qp_bin is not an executable REGULAR FILE at an ABSOLUTE path -- refusing to fall back to a system qemu" >&2
-        exit 1
-    fi
-    # A shell FUNCTION shadows PATH lookup entirely, so an inherited `export -f qemu-system-x86_64`
-    # silently restored the system 8.2.2 while this guard reported success (Codex refutation leg,
-    # 2026-09-02). Drop any such shadow, then PROVE the resolution instead of assuming it: the knob's
-    # promise is that the PINNED binary runs, and only `command -v` after the prepend establishes it.
-    unset -f qemu-system-x86_64 2>/dev/null || true
-    export PATH="$QEMU_PREFIX/bin:$PATH"
-    qp_res="$(command -v qemu-system-x86_64 || true)"
-    if [[ "$qp_res" != "$qp_bin" ]]; then
-        echo "FAIL: QEMU_PREFIX='$QEMU_PREFIX' is set but qemu-system-x86_64 resolves to '${qp_res:-<nothing>}', not '$qp_bin' -- refusing to fall back to a system qemu" >&2
-        exit 1
-    fi
-fi
+
+
+# Fail closed before any emulator availability probe, including standalone runs.
+qemu_helper_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+source "$qemu_helper_dir/qemu_prefix.sh" || { echo "FAIL: cannot establish QEMU prefix" >&2; exit 1; }
+
 REF="$script_dir/highwater_ref.py"
 LB="$script_dir/highwater_latebound.py"
 feeder="$script_dir/kernel_input_feed.py"
@@ -57,7 +33,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "$REQUIRE_EMU" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -71,7 +47,7 @@ DISK="$work/disk.img"; dd if=/dev/zero of="$DISK" bs=1M count=64 status=none
 
 boot_feed() { # kernel out ram seed [prober]
     local kel="$1" out="$2" ram="$3" seed="$4" prb="${5:-$PROBER}"
-    local port; port="$(free_port)"; local d="$out.d"; rm -rf "$d"; mkdir -p "$d"
+    local port; port="$(free_port)"; local d="$out.d"; kernel_test_cleanup "$d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$seed" --hold 16 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
     grep -q LISTENING "$d/feed.log" 2>/dev/null || { echo "FAIL: link61 harness failure -- feeder never reached LISTENING (socket/QEMU launch dead; NOT a mutation bite)" >&2; : > "$HVMARK"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return; }

@@ -34,15 +34,16 @@
 # REJECT; M-noremap: drop the PTE[V]<-F' write -> A==y, B==OLD_FP; M-sameframe: remap V to F (F'==F) -> A==y; M-noinstall:
 # no aliases -> the CPL3 store #PFs terminally).
 set -u
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 REF="$script_dir/lethe_ref.py"
 PRIOR_REF="$script_dir/tessera_ref.py"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 SEED="${LETHE_SEED:-90}"         # the held-back seed byte fed late-bound over COM1 (decimal 90 = 0x5A)
 SEEDB="${LETHE_SEEDB:-77}"       # the seed-differential byte (decimal 77 = 0x4D)
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $REF)"; exit 1; fi
-source "$script_dir/native_codegen_oracle.sh"
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
+work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -55,7 +56,7 @@ free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0)
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
-    local cdir="$work/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '%s\n%s\n' "$marker" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(grep -o 'ERR [0-9]*' "$cdir/err" 2>/dev/null | head -1))"; return 1; fi
@@ -153,7 +154,7 @@ bochs_run() { # out seed timeout  -> nonzero (sets BOCHS_HARNESS_ERR) on a harne
     _feed_delivered() { local fl="$1" lbl="$2"; grep -q '^SENT' "$fl" 2>/dev/null && return 0
         BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload for $lbl (log: $fl has LISTENING but no SENT / shows NOCONN -- Bochs did not connect COM1, the kernel received no input, not a kernel miscompile)"; return 1; }
     local kelf; kelf="$(readlink -f "$MKELF")"
-    local d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"; local port; port="$(free_port)"
+    local d="$work/b.d"; kernel_test_cleanup "$d"; mkdir -p "$d"; local port; port="$(free_port)"
     python3 "$script_dir/kernel_input_feed.py" "$port" "$sd" --delay 2 --hold 40 > "$d/feed.log" 2>&1 &
     local bfp=$!
     _feed_ok "$d/feed.log" "prober(BOOT)" || { kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null; return 1; }

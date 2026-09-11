@@ -62,7 +62,8 @@
 # dual-substrate + host golden is the far-axis replacement for the absent C differential.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -77,11 +78,11 @@ if [[ ! -f "$backend" ]]; then
     echo "FAIL: stack/native_compile_fragment.herb (missing backend)"; exit 1
 fi
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 source "$script_dir/bochs_f2_harness.sh"
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'kernel_test_cleanup "$tmp"' EXIT
 # Reuse only the gen-1 mint (C out of the run path; the native compiler emits the
 # image). L3 is graded on the dual-substrate oracle, not against C.
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
@@ -117,7 +118,7 @@ ALL_PROBES="idt_then idt_else idt_lit"
 # ---- compile a freestanding -idt probe with the NATIVE gen-1 compiler --------
 compile_probe() { # label outfile -> 0 on a valid multiboot ELF
     local label="$1" out="$2"
-    local cdir="$tmp/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$tmp/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32-idt\n%s\n' "$(prog_src "$label")" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then
@@ -246,7 +247,7 @@ bochs_run() { # label byte elf  (F2-hardened via bochs_f2_harness.sh)
 # ---- reject probe: an out-of-subset handler must NOT emit a valid image ------
 reject_probe() { # label "<herbert program>"
     local label="$1" prog="$2"
-    local cdir="$tmp/rej.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$tmp/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- "-- emit: multiboot32-idt\n%b\n" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>/dev/null )
     if [[ -f "$cdir/a.out" ]] && grub-file --is-x86-multiboot "$cdir/a.out" >/dev/null 2>&1; then

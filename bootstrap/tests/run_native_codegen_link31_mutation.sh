@@ -17,12 +17,13 @@
 #   M-eflags  seed eflags 0x002 -> 0x202 (IF=1): silicon still single-shot (slow PIT) -> P-seeds pin RED
 #   M-thresh  cmp 128 -> cmp 100: still splits 65|200 -> P-sched THRESH==128 value-bind RED
 set -u
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
 feeder="$script_dir/kernel_input_feed.py"
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
@@ -31,7 +32,7 @@ if ! have_qemu; then
     echo "SKIP: native-codegen link31 mutation (no qemu)"; exit 0
 fi
 
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 fail=0; fail_test() { echo "FAIL: link31 mutation ($1)"; fail=$((fail + 1)); }
@@ -68,7 +69,7 @@ emit_for() { # elf byte -> captured e9 frame hex (e.g. de58ad) or "none"
     # M-decoyB's fast triple-fault to "none" -- leaves stderr EMPTY. Non-empty stderr is an unambiguous HARNESS
     # failure, NOT the "none" bite. (rc is NOT usable: isa-debug-exit yields arbitrary odd exit codes >124.)
     grep -qvE 'terminating on signal' "$W/qerr" 2>/dev/null && { echo "FAIL: link31 harness failure -- QEMU launch error: $(grep -vE 'terminating on signal' "$W/qerr" | head -1)" >&2; : > "$HVMARK"; }   # only a NON-timeout stderr line is a launch failure
-    local got; got=$(xxd -p "$W/e9.bin" 2>/dev/null | tr -d '\n'); rm -rf "$W"
+    local got; got=$(xxd -p "$W/e9.bin" 2>/dev/null | tr -d '\n'); kernel_test_cleanup "$W"
     [[ -n "$got" ]] && echo "$got" || echo "none"
 }
 # patch helpers (equal-length, on a fresh copy)

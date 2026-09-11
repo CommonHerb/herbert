@@ -21,7 +21,8 @@
 # C interpreter in the graded path -- the proof is about the C-free execution.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 fragment="$repo_root/stack/klondike.herb"
 probe="$repo_root/stack/metacircular_compute_probe.herb"
@@ -38,7 +39,7 @@ fail_test() { echo "FAIL: klondike native mutation ($1)"; FAILED=1; }
 [[ -f "$probe" ]] || { echo "FAIL: missing probe"; exit 1; }
 [[ -f "$oracle" ]] || { echo "FAIL: missing oracle"; exit 1; }
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || { echo "FAIL: could not acquire gen-1 compiler"; exit 1; }
 GEN1="$NATIVE_CODEGEN_COMPILER"
 [[ -x "$GEN1" ]] || { echo "FAIL: gen-1 not executable"; exit 1; }

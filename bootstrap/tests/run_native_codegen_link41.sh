@@ -21,7 +21,8 @@
 # The held-back MUTATION proof (run_native_codegen_link41_mutation.sh) proves each design choice non-vacuous.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -36,11 +37,11 @@ if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (m
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing mmj_ref.py $REF)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 source "$script_dir/bochs_f2_harness.sh"
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -64,7 +65,7 @@ HREFK="$work/href_kernel.elf"; python3 "$HREF" cleanelf "$HREFK"   # the frozen 
 
 emit() { # marker prog outfile label -> writes outfile on accept; fail on reject
     local marker="$1" prog="$2" out="$3" label="$4"
-    local cdir="$work/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '%s\n%s\n' "$marker" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(grep -o 'ERR [0-9]*' "$cdir/err" 2>/dev/null | head -1))"; return 1; fi
@@ -72,14 +73,14 @@ emit() { # marker prog outfile label -> writes outfile on accept; fail on reject
 }
 reject_probe() { # label marker prog -> PASS iff the compiler refuses (no a.out)
     local label="$1" marker="$2" prog="$3"
-    local cdir="$work/rej.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '%s\n%b\n' "$marker" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ -f "$cdir/a.out" ]]; then fail_test "reject $label: compiler ACCEPTED an out-of-subset program"; else ok "reject $label (refused: $(grep -o 'ERR [0-9]*' "$cdir/err" 2>/dev/null | head -1))"; fi
 }
 accept_probe() { # label marker prog -> PASS iff the compiler ACCEPTS (the renamed-twin: rejected-in-mmj prog is valid elsewhere)
     local label="$1" marker="$2" prog="$3"
-    local cdir="$work/acc.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/acc.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '%s\n%b\n' "$marker" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ -f "$cdir/a.out" ]]; then ok "twin $label compiles in its proper mode ($(wc -c <"$cdir/a.out") B) -- mmj-reject is specific"; else fail_test "twin $label should compile in its proper mode but was rejected"; fi

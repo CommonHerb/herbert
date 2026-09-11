@@ -16,7 +16,8 @@
 # about the C-free execution, not the faithfulness guard.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 fragment="$repo_root/stack/lexer_fragment.herb"
 oracle="$repo_root/stack/lexer_probe.expected"
@@ -30,7 +31,7 @@ FAILED=0
 
 [[ -f "$fragment" ]] || { echo "FAIL: missing fragment"; exit 1; }
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || { echo "FAIL: could not acquire gen-1 compiler"; exit 1; }
 GEN1="$NATIVE_CODEGEN_COMPILER"
 [[ -x "$GEN1" ]] || { echo "FAIL: gen-1 not executable"; exit 1; }
@@ -44,16 +45,8 @@ native_line1() {
     [[ -f "$wd/a.out" ]] || return 2          # rc 2 = did not compile
     [[ "$(head -c4 "$wd/a.out" | xxd -p)" == "7f454c46" ]] || return 2   # not a real ELF
     chmod +x "$wd/a.out" || return 1
-    ( "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" ); local r=$?
-    [[ $r -eq 0 ]] || return $r                # runtime crash -> propagate the rc
-    # Enforce the well-formed envelope (same binding as run_lexer_native.sh):
-    # exactly 2 lines, line 2 == "0". A mutation that breaks the output FORMAT (not
-    # just a token value) is rejected (rc 3) so each shipped mutation is proven to be
-    # a CLEAN WRONG-VALUE bite -- line 1 diverges while the transcript envelope stays
-    # intact -- not merely "broken output that happens to differ from the oracle".
-    [[ "$(wc -l <"$wd/run.out")" -eq 2 ]] || return 3
-    [[ "$(sed -n 2p "$wd/run.out")" == "0" ]] || return 3
-    head -1 "$wd/run.out" >"$out" 2>/dev/null
+    "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" || return 1
+    native_codegen_transcript_line1 "$wd/run.out" "$wd/run.err" "$out" || return 3
     return 0
 }
 

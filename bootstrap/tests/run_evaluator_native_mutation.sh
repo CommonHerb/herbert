@@ -15,7 +15,8 @@
 # proof is about the C-free execution, not the faithfulness guard.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 fragment="$repo_root/stack/evaluator_fragment.herb"
 oracle="$repo_root/stack/evaluator_probe.expected"
@@ -29,7 +30,7 @@ FAILED=0
 
 [[ -f "$fragment" ]] || { echo "FAIL: missing fragment"; exit 1; }
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || { echo "FAIL: could not acquire gen-1 compiler"; exit 1; }
 GEN1="$NATIVE_CODEGEN_COMPILER"
 [[ -x "$GEN1" ]] || { echo "FAIL: gen-1 not executable"; exit 1; }
@@ -46,9 +47,9 @@ native_line1() {
     # A mutated evaluator may fault (e.g. a broken termination rule overflows the
     # stack); that is still a divergence, but a CLEAN compiles-runs-wrong-value
     # bite (rc 0) is the strong form we require of the shipped mutations below.
-    ( "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" ); local r=$?
-    head -1 "$wd/run.out" >"$out" 2>/dev/null
-    return $r
+    "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" || return 1
+    native_codegen_transcript_line1 "$wd/run.out" "$wd/run.err" "$out" || return 3
+    return 0
 }
 
 # ===== CONTROL: the unmutated fragment must grade GREEN (else the grader is vacuous) =====

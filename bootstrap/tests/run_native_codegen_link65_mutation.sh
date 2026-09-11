@@ -36,13 +36,13 @@
 #   M-golden      : IMAGE -- perturb one byte -> the committed-golden hash pin RED.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 backend="$repo_root/stack/native_compile_fragment.herb"
 goldens_dir="$script_dir/gyre_goldens"
-source "$script_dir/native_codegen_oracle.sh"
-
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
+tmp="$(mktemp -d)"; trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: link65-mutation ($1)"; fail=$((fail + 1)); }

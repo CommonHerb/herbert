@@ -16,7 +16,8 @@
 # is about the C-free execution, not the faithfulness guard.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 fragment="$repo_root/stack/parser_fragment.herb"
 oracle="$repo_root/stack/parser_probe.expected"
@@ -32,7 +33,7 @@ FAILED=0
 [[ -f "$fragment" ]] || { echo "FAIL: missing fragment"; exit 1; }
 [[ -f "$gate" && -r "$gate" ]] || { echo "FAIL: missing parser native gate"; exit 1; }
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || { echo "FAIL: could not acquire gen-1 compiler"; exit 1; }
 GEN1="$NATIVE_CODEGEN_COMPILER"
 [[ -x "$GEN1" ]] || { echo "FAIL: gen-1 not executable"; exit 1; }
@@ -47,13 +48,8 @@ native_line1() {
     [[ -f "$wd/a.out" ]] || { echo "    (gen-1 compile produced no ELF: $(head -1 "$wd/compile.log" 2>/dev/null))"; return 2; }
     [[ "$(head -c4 "$wd/a.out" | xxd -p)" == "7f454c46" ]] || { echo "    (a.out is not an ELF)"; return 2; }
     chmod +x "$wd/a.out" || return 1
-    ( "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" ); local run_rc=$?
-    [[ "$run_rc" -eq 0 ]] || { echo "    (native ELF exited nonzero: rc=$run_rc)"; return 1; }
-    # Match the real gate's transcript qualification before judging a wrong value.
-    [[ "$(wc -l <"$wd/run.out")" -eq 2 ]] || { echo "    (native output is not exactly 2 lines: $(wc -l <"$wd/run.out"))"; return 1; }
-    tail -n +2 "$wd/run.out" | cmp -s - <(printf '0\n') || { echo "    (native output after line 1 is not exactly the return-0 marker)"; return 1; }
-    head -1 "$wd/run.out" >"$out"
-    [[ -s "$out" ]] || { echo "    (native ELF produced empty line 1)"; return 1; }
+    "$wd/a.out" >"$wd/run.out" 2>"$wd/run.err" || return 1
+    native_codegen_transcript_line1 "$wd/run.out" "$wd/run.err" "$out" || return 3
     return 0
 }
 

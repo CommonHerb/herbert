@@ -26,7 +26,8 @@
 # actually changed the source (a no-op mutation is a silent blind spot).
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -39,7 +40,7 @@ fail() { echo "FAIL: aggregate-render mutation proof ($1)"; exit 1; }
 [[ -f "$backend" ]] || fail "missing backend $backend"
 
 # C-free production compiler: the committed gen-1 seed (NOT the C interpreter).
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/gen1" || fail "could not acquire the C-free gen-1 seed"
 SEED="$NATIVE_CODEGEN_COMPILER"
 # retireable C cross-check: ON only when C is present and not opted out.

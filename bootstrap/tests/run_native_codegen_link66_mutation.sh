@@ -125,7 +125,7 @@ for f in "$backend" "$spec" "$feeder" "$gate"; do
     [[ -f "$f" ]] || { echo "FAIL: link66-mutation (missing $f)"; exit 1; }
 done
 
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+tmp="$(mktemp -d)"; trap 'kernel_test_cleanup "$tmp"' EXIT
 pass=0; fail=0
 fail_test() { echo "FAIL: link66-mutation ($1)"; fail=$((fail + 1)); }
 RAN=""
@@ -382,7 +382,7 @@ mint_mutant() { # mode -> mints a mutant compiler into $tmp/cc.<mode>, sets MUTC
     MUTC=""
     python3 -I "$tmp/frag_patch.py" "$mode" "$backend" "$frag" > "$tmp/patch.$mode.log" 2>&1 \
         || { fail_test "$mode: the fragment patcher did not apply ($(tail -1 "$tmp/patch.$mode.log"))"; return 1; }
-    rm -rf "$md"; mkdir -p "$md"
+    kernel_test_cleanup "$md"; mkdir -p "$md"
     ( cd -- "$md" && "$NATIVE_CODEGEN_COMPILER" < "$frag" >mint.out 2>mint.err )
     [[ -f "$md/a.out" ]] || { fail_test "$mode: the mutated fragment did not compile ($(head -1 "$md/mint.out" "$md/mint.err" 2>/dev/null | tr -d '\n'))"; return 1; }
     cp "$md/a.out" "$tmp/cc.$mode"; chmod +x "$tmp/cc.$mode"; MUTC="$tmp/cc.$mode"
@@ -392,7 +392,7 @@ mint_mutant() { # mode -> mints a mutant compiler into $tmp/cc.<mode>, sets MUTC
 COMPILE_RC=0; COMPILE_MSG=""
 compile_with() { # compiler src outdir -> sets COMPILE_RC/COMPILE_MSG, leaves $outdir/a.out on success
     local cc="$1" src="$2" d="$3"
-    rm -rf "$d"; mkdir -p "$d"; cp "$src" "$d/probe.herb"
+    kernel_test_cleanup "$d"; mkdir -p "$d"; cp "$src" "$d/probe.herb"
     ( cd -- "$d" && "$cc" < probe.herb >stdout.txt 2>err.txt )
     COMPILE_RC=$?
     COMPILE_MSG="$(head -1 "$d/stdout.txt" "$d/err.txt" 2>/dev/null | grep -v '^==>' | tr -d '\n')"
@@ -489,7 +489,7 @@ meta() { sed -n "s/^$2=//p" "$tmp/exp.$1.meta"; }
 S_GRADE=""; S_SEED=""; S_E9=""; S_RC=0; S_FRC=0; S_CAP=""; S_QKILL=0
 qsession() { # label elf pay qry draw feederpath [drainmode]
     local label="$1" elf="$2" pay="$3" qry="$4" d="$5" fdr="$6" dm="${7:-eof}"
-    local W="$tmp/$label.q"; rm -rf "$W"; mkdir -p "$W"
+    local W="$tmp/$label.q"; kernel_test_cleanup "$W"; mkdir -p "$W"
     S_QKILL=0
     local port; port=$(free_port)
     python3 -I "$fdr" "$port" --grade "$N:$Q" --draw "$d" --master-seed "$pay" --query-seed "$qry" \
@@ -578,7 +578,7 @@ qbare() { # label elf
     # assignments take effect, and `local` is DYNAMICALLY scoped, so `W="$tmp/$label.q"` on the
     # same line silently reads the CALLER's `label` instead of this one -- which works right up
     # until a caller names its variable something else.
-    local W; W="$tmp/$label.q"; rm -rf "$W"; mkdir -p "$W"
+    local W; W="$tmp/$label.q"; kernel_test_cleanup "$W"; mkdir -p "$W"
     local port; port=$(free_port)
     python3 -I "$feeder" "$port" --cap "$W/cap.bin" --hold 12 > "$W/feed.log" 2>&1 &
     local fp=$!
@@ -1832,7 +1832,7 @@ if have_bochs && declare -F f2_bochs_feed_attempt >/dev/null; then
     L66_GRUBCFG="$(printf 'set timeout=0\nset default=0\nmenuentry "l66m" {\n multiboot /boot/kernel.elf\n boot\n}\n')"
     bochs_probe() { # label elf expect(fault|answer)
         local label="$1" elf="$2" expect="$3"
-        local W; W="$tmp/$label.b"; rm -rf "$W"; mkdir -p "$W"
+        local W; W="$tmp/$label.b"; kernel_test_cleanup "$W"; mkdir -p "$W"
         local attempt cls=""
         for attempt in 1 2 3; do
             cls="$(f2_bochs_feed_attempt "--cap $W/cap.bin --hold 20" "$W/feed.log" "$L66_GRUBCFG" 240 64 "$W/out.log" "$elf:boot/kernel.elf")"
@@ -1908,7 +1908,7 @@ if have_bochs && declare -F f2_bochs_feed_attempt >/dev/null; then
         if [[ "${#_bs}" -ne 32 ]]; then
             fail_test "M-seedpin-internal-bochs: the driver did not draw"
         else
-            _W="$tmp/M-seedpin-internal-bochs.b"; rm -rf "$_W"; mkdir -p "$_W"
+            _W="$tmp/M-seedpin-internal-bochs.b"; kernel_test_cleanup "$_W"; mkdir -p "$_W"
             _feeder_save="$feeder"; feeder="$tmp/feed_pinned.py"
             _cls=""
             for _attempt in 1 2 3; do

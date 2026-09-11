@@ -41,7 +41,8 @@
 # defect each (the gate pins compiler-output==reference) and asserts each grades RED, control GREEN.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -53,10 +54,9 @@ if [[ "${NATIVE_CODEGEN_ORACLE:-golden}" == "c" && ! -x "$HERBERT" ]]; then echo
 if [[ ! -f "$backend" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing backend)"; exit 1; fi
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing lodger_ref.py $REF)"; exit 1; fi
 
-source "$script_dir/native_codegen_oracle.sh"
-
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -88,7 +88,7 @@ ALL_PROBES="lg_echo lg_xform lg_local"
 
 compile_probe() { # label outfile
     local label="$1" out="$2"
-    local cdir="$work/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32-lodger\n%s\n' "$(prog_src "$label")" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(head -1 "$cdir/err" 2>/dev/null))"; return 1; fi
@@ -185,7 +185,7 @@ bochs_attempt() { # elf mod outfile  -> stdout: COMPLETED | DISK-BUILD(step) | E
     local BXBIOS BXSHARE VGABIOS
     BXBIOS="$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)"
     VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXBIOS" || -z "$VGABIOS" ]]; then rm -rf "$W"; echo "DISK-BUILD(bios-images-missing)"; return; fi
+    if [[ -z "$BXBIOS" || -z "$VGABIOS" ]]; then kernel_test_cleanup "$W"; echo "DISK-BUILD(bios-images-missing)"; return; fi
     BXSHARE="$(dirname "$BXBIOS")"   # dirname of a VERIFIED non-empty path (dirname "" would yield "." -- Codex leg, change 3)
     local step
     step=$(
@@ -213,7 +213,7 @@ bochs_attempt() { # elf mod outfile  -> stdout: COMPLETED | DISK-BUILD(step) | E
       trap - EXIT
       exit 0
     ) || { # never rm -rf a tree that may still hold a live mount (Codex leg, change 2)
-           if mountpoint -q "$W/mnt" 2>/dev/null; then echo "DISK-BUILD(cleanup-umount-stuck; tempdir $W LEAKED deliberately)"; else rm -rf "$W"; echo "DISK-BUILD(${step:-unknown})"; fi; return; }
+           if mountpoint -q "$W/mnt" 2>/dev/null; then echo "DISK-BUILD(cleanup-umount-stuck; tempdir $W LEAKED deliberately)"; else kernel_test_cleanup "$W"; echo "DISK-BUILD(${step:-unknown})"; fi; return; }
     ( cd "$W"
       cat > bochsrc.txt <<BX
 romimage: file=$BXSHARE/BIOS-bochs-legacy
@@ -227,17 +227,17 @@ panic: action=report
 log: bochs_log.txt
 BX
       xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    if [[ ! -s "$W/bochs_out.txt" ]]; then rm -rf "$W"; echo "NO-OUTPUT"; return; fi
+    if [[ ! -s "$W/bochs_out.txt" ]]; then kernel_test_cleanup "$W"; echo "NO-OUTPUT"; return; fi
     local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"
-    if [[ "$sd" -lt 1 ]]; then rm -rf "$W"; echo "NO-SHUTDOWN"; return; fi
+    if [[ "$sd" -lt 1 ]]; then kernel_test_cleanup "$W"; echo "NO-SHUTDOWN"; return; fi
     # completed boot: extract the binary 0xE9 stream (first 0x9C entry tag through the DE??AD frame).
     # An extractor FAILURE is a harness event, never a gradeable completion (Codex leg, change 1).
-    python3 - "$W/bochs_out.txt" "$outfile" <<'PY' || { rm -rf "$W"; echo "EXTRACT-FAILURE"; return; }
+    python3 - "$W/bochs_out.txt" "$outfile" <<'PY' || { kernel_test_cleanup "$W"; echo "EXTRACT-FAILURE"; return; }
 import sys,re
 d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); m=re.search(rb'\xde.\xad', d[i:]) if i>=0 else None
 open(sys.argv[2],'wb').write(d[i:i+m.end()] if (i>=0 and m) else b'')
 PY
-    rm -rf "$W"; echo "COMPLETED"
+    kernel_test_cleanup "$W"; echo "COMPLETED"
 }
 
 bochs_leg() { # leg-label elf mod outfile kendhex goldenhex  -> 0 GREEN, 1 RED/harness-exhausted
@@ -258,7 +258,7 @@ bochs_leg() { # leg-label elf mod outfile kendhex goldenhex  -> 0 GREEN, 1 RED/h
 
 reject_probe() { # label directive "<body>"
     local label="$1" directive="$2" prog="$3"
-    local cdir="$work/rej.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- "%s\n%b\n" "$directive" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>/dev/null )
     if [[ -f "$cdir/a.out" ]] && grub-file --is-x86-multiboot "$cdir/a.out" >/dev/null 2>&1; then

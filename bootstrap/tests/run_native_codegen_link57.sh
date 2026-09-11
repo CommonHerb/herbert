@@ -19,7 +19,8 @@
 # GROWHEAP DIFFERENTIAL: the frozen larder kernel (168 B pool) on the growheap witness is RED (the page-scale allocs are
 # rejected). REQUIRE_EMU fail-closed (cairn/larder pattern): KERNEL_CODEGEN_REQUIRE_EMU=1 + a missing CI emulator -> FAIL.
 set -u
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 REF="$script_dir/growheap_ref.py"
 LB="$script_dir/growheap_latebound.py"
 LARDER_REF="$script_dir/larder_ref.py"
@@ -29,8 +30,8 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 for f in "$REF" "$LB" "$LARDER_REF" "$feeder"; do
     [[ -f "$f" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing $f)"; exit 1; }
 done
-source "$script_dir/native_codegen_oracle.sh"
-work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "$work" 2>/dev/null || true' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
+work="$(mktemp -d)"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -43,7 +44,7 @@ free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0)
 
 emit() { # marker prog outfile label
     local marker="$1" prog="$2" out="$3" label="$4"
-    local cdir="$work/$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '%s\n%s\n' "$marker" "$prog" > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "$label: compiler produced no a.out ($(grep -o 'ERR [0-9]*' "$cdir/err" 2>/dev/null | head -1))"; return 1; fi
@@ -116,7 +117,7 @@ build_kernel() { python3 "$LB" kernel "$1" "$2" >/dev/null; }   # out mut
 boot_feed() { # kernel out kvm stream...
     local kel="$1" out="$2" kvm="$3"; shift 3
     local acc=(-cpu qemu64); [[ -n "$kvm" ]] && acc=(-enable-kvm -cpu host)
-    local port; port="$(free_port)"; local d="$out.d"; rm -rf "$d"; mkdir -p "$d"
+    local port; port="$(free_port)"; local d="$out.d"; kernel_test_cleanup "$d"; mkdir -p "$d"
     python3 "$feeder" "$port" "$@" --hold 16 > "$d/feed.log" 2>&1 & local fp=$!
     local i; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
     timeout 70 qemu-system-x86_64 "${acc[@]}" -kernel "$kel" -initrd "$DRIVER" -debugcon file:"$out" \
@@ -215,7 +216,7 @@ if have_bochs; then
     echo "  SEED SEED=$SEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     STREAM="$(python3 "$LB" stream "$SEED")"
     kelf="$(readlink -f "$MKELF")"; drv="$(readlink -f "$DRIVER")"
-    d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"
+    d="$work/b.d"; kernel_test_cleanup "$d"; mkdir -p "$d"
     BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
     pkill -9 -f "$work" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)

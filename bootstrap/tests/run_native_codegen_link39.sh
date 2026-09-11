@@ -39,7 +39,8 @@
 # check. See the overflow leg's own header, and overflow_cross's, for what is and is not compared.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
+unset CDPATH
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
 backend="$repo_root/stack/native_compile_fragment.herb"
@@ -56,12 +57,12 @@ if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missi
 if [[ ! -f "$GREF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing geeking_ref.py $GREF)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
-source "$script_dir/native_codegen_oracle.sh"
+source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 source "$script_dir/replay_discriminator.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing replay_discriminator.sh)"; exit 1; }
 source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing bochs_f2_harness.sh)"; exit 1; }
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
@@ -79,7 +80,7 @@ KINDS="tri dbl fact branch chain threearg"
 
 # ---- the FROZEN geeking kernel = grading host (re-emit from source, prove == geeking_ref.build_elf) ----
 emit_kernel() {
-    local kcdir="$work/kernel.d"; rm -rf "$kcdir"; mkdir -p "$kcdir"
+    local kcdir="$work/kernel.d"; kernel_test_cleanup "$kcdir"; mkdir -p "$kcdir"
     printf -- '-- emit: multiboot32-geeking\nfunc main(): return module_byte() end\n' > "$kcdir/k.herb"
     ( cd "$kcdir" && "$NATIVE_CODEGEN_COMPILER" < k.herb >/dev/null 2>"$kcdir/err" )
     if [[ ! -f "$kcdir/a.out" ]]; then fail_test "frozen kernel: -- emit: multiboot32-geeking produced no a.out ($(head -1 "$kcdir/err" 2>/dev/null))"; return 1; fi
@@ -93,7 +94,7 @@ emit_kernel() {
 # ---- compile each ouroboros program + prove BYTE-IDENTICAL to the STEP-0 target (white-box pin) ----
 declare -A MODF
 compile_module() { # kind
-    local kind="$1"; local cdir="$work/cg.$kind.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local kind="$1"; local cdir="$work/cg.$kind.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32-ouroboros\n%s\n' "$(python3 "$REF" src "$kind")" > "$cdir/m.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < m.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "ouroboros $kind: compiler produced no module ($(head -1 "$cdir/err" 2>/dev/null))"; return 1; fi
@@ -123,7 +124,7 @@ PY
 
 # ---- reject probes (+ twins): out-of-subset sources must NOT emit a module ----
 reject_probe() { # label src
-    local label="$1" src="$2"; local cdir="$work/rej.$label.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local label="$1" src="$2"; local cdir="$work/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32-ouroboros\n%b\n' "$src" > "$cdir/r.herb"
     ( cd "$cdir" && rm -f a.out; "$NATIVE_CODEGEN_COMPILER" < r.herb >/dev/null 2>"$cdir/err" )
     if [[ -s "$cdir/a.out" ]]; then fail_test "reject $label: out-of-subset source emitted a module a.out"; else pass=$((pass + 1)); fi
@@ -261,7 +262,7 @@ attempt_overflow() { # out  (tri-state: sets ATT/ATT_SIG/ATT_HERR/ATT_CTX, never
     return 0
 }
 overflow_build() {
-    local cdir="$work/ovf.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="$work/ovf.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     printf -- '-- emit: multiboot32-ouroboros\n%s\n' "$(python3 "$REF" overflowsrc)" > "$cdir/m.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < m.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then fail_test "overflow probe: did not compile ($(head -1 "$cdir/err" 2>/dev/null))"; return 1; fi
