@@ -40,11 +40,11 @@ feeder="$script_dir/kernel_input_feed.py"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 for f in "$REF" "$LB" "$feeder"; do [[ -f "$f" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing $f)"; exit 1; }; done
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
-work="$(mktemp -d)"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
-ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -158,8 +158,10 @@ boot_feed() { # kernel out kvm ram seed [prober]
     timeout 70 qemu-system-x86_64 "${acc[@]}" -kernel "$kel" -initrd "$prb" -debugcon file:"$out" \
         -drive file="$DISK",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m "${ram}M" >/dev/null 2>&1
-    wait "$fp" 2>/dev/null
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m "${ram}M" >/dev/null 2>"$out.qerr"
+    wait "$fp" 2>/dev/null; local feed_rc=$?
+    kernel_test_record_boot "$d" "$out" "$kel" "$prb"
+    return "$feed_rc"
 }
 is_struct_flake() { echo "$1" | grep -qiE 'MAGIC banner not found|truncated|no HWDUMP|alloc entries|hwdump entries'; }
 # a REAL divergence = any RED that is NOT a struct flake (a materialized value-mismatch: wrong addr / not-in-window /
@@ -308,11 +310,7 @@ BX
         # re-rollable HARNESS-ERROR (cross-model Codex, uniform with link56/57). HARNESS-ERROR fires ONLY when NO
         # attempt ever passed the harness checks.
         bochs_harness_fail=0
-        python3 - "$d/bochs.txt" "$d/out" <<'PY'
-import sys
-d=open(sys.argv[1],'rb').read(); i=d.rfind(b'LARDER\xa5\x5a')
-open(sys.argv[2],'wb').write(d[i:] if i>=0 else b'')
-PY
+        python3 "$script_dir/debugcon_frames.py" extract "$d/bochs.txt" "$d/out"
         bochs_emit="$(python3 "$LB" grade "$d/out" "$RAM" "$SEED" 2>&1)"
         is_struct_flake "$bochs_emit" || break   # a definitive grade (GREEN or a real value-RED) -> stop retrying
     done

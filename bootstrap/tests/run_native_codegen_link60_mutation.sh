@@ -35,11 +35,11 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "$REQUIRE_EMU" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
-work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
-ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 
 WRITER="$work/writer.bin";  python3 "$LB" module writer  5 "$WRITER"
@@ -116,10 +116,10 @@ done
 MKN="$work/norunbound.elf"; python3 "$REF" tractkernel "$MKN" norunbound >/dev/null
 DISK="$work/disk_corrupt.img"; build_raw_disk "$DISK"; python3 "$LB" craftcorrupt "$DISK"
 boot_feed_emit "$MKN" "$GETTER" "$work/nrb.g" "$DISK" $(python3 "$LB" corruptname)   # retry until the leak frame appears
-leak=0; python3 "$LB" gradecorrupt "$work/nrb.g" >/dev/null 2>&1 || leak=1            # gradecorrupt exit!=0 => a frame => LEAK
+leak=0; python3 "$LB" gradeleak "$work/nrb.g" >/dev/null 2>&1 && leak=1               # positive, complete nonempty WRITE evidence
 wbn=1; python3 "$REF" assertvarsize "$MKN" >/dev/null 2>&1 && wbn=0                   # 1 => assert_varsize FALSE
 if [[ "$leak" -eq 1 && "$wbn" -eq 1 ]]; then
-    ok "M-norunbound the GET drops the run-window guard -> on a HOST-crafted corrupt dir entry whose run STRADDLES the window it LEAKS an out-of-window frame [$(python3 "$LB" gradecorrupt "$work/nrb.g" 2>&1)] (OUTPUT-FORCED by the hostile leg) AND assert_varsize FALSE (white-box co-pin); the genuine kernel REJECTS the same entry (no leak)"
+    ok "M-norunbound the GET drops the run-window guard -> on a HOST-crafted corrupt dir entry whose run STRADDLES the window it LEAKS an out-of-window frame [$(python3 "$LB" gradeleak "$work/nrb.g" 2>&1)] (OUTPUT-FORCED by the hostile leg) AND assert_varsize FALSE (white-box co-pin); the genuine kernel REJECTS the same entry (no leak)"
 elif [[ "$leak" -ne 1 ]]; then
     fail_test "M-norunbound did NOT leak on the corrupt straddle entry (the hostile leg is vacuous, or the mutant did not drop the guard)"
 else

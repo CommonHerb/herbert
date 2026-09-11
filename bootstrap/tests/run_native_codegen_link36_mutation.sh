@@ -38,10 +38,10 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 [[ -f "$REF" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing sitopia_ref.py)"; exit 1; }
 [[ -f "$feeder" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing feeder)"; exit 1; }
 
-work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 host_T() { python3 -c "v=$2

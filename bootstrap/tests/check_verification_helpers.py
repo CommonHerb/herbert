@@ -84,9 +84,13 @@ qemu-system-x86_64'''
             raw = bytes(range(256)) + b'\x00\nUNTERMINATED'
             (source/'arbitrary-output-name').write_bytes(raw)
             (source/'disk.img').write_bytes(b'not an output')
+            (source/'gen1x.compiler').write_bytes(b'\x7fELFcompiler variant')
+            (source/'gen1x.raw').write_bytes(raw)
             (source/'escape').symlink_to('/etc/passwd')
+            probe=p/'probe.out'; probe.write_bytes(raw)
+            (p/'probe.out.qerr').write_bytes(b'actual stderr\n')
             env = dict(os.environ, KERNEL_EVIDENCE_DIR=str(evidence))
-            result = bash('source "$1" || exit 1; kernel_test_cleanup "$2"', TESTS/'qemu_prefix.sh', source, env=env)
+            result = bash('source "$1" || exit 1; kernel_test_record_boot "$2" "$3" "$2/gen1x.compiler" "$2/gen1x.raw"; kernel_test_cleanup "$2"', TESTS/'qemu_prefix.sh', source, probe, env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(source.exists())
             captures = list(evidence.glob('capture-*'))
@@ -94,16 +98,30 @@ qemu-system-x86_64'''
             self.assertEqual((captures[0]/'arbitrary-output-name').read_bytes(), raw)
             self.assertFalse((captures[0]/'escape').exists())
             self.assertFalse((captures[0]/'disk.img').exists())
+            self.assertFalse((captures[0]/'gen1x.compiler').exists())
+            self.assertEqual((captures[0]/'gen1x.raw').read_bytes(), raw)
+            self.assertEqual((captures[0]/'probe.out').read_bytes(), raw)
+            self.assertEqual((captures[0]/'probe.out.qerr').read_bytes(), b'actual stderr\n')
+            self.assertIn(hashlib.sha256(raw).hexdigest(), (captures[0]/'BOOT-SHA256.txt').read_text())
             inventory = json.loads((captures[0]/'INVENTORY.json').read_text())
             self.assertLessEqual(inventory['started_utc'], inventory['completed_utc'])
             records = inventory['files']
             row = next(r for r in records if r['path']=='arbitrary-output-name')
             self.assertEqual(row['sha256'], hashlib.sha256(raw).hexdigest())
+            compiler = next(r for r in records if r['path']=='gen1x.compiler')
+            self.assertEqual(compiler['sha256'], hashlib.sha256(b'\x7fELFcompiler variant').hexdigest())
+            self.assertFalse(compiler['retained'])
             omitted = next(r for r in records if r['path']=='disk.img')
             self.assertEqual(omitted['sha256'], hashlib.sha256(b'not an output').hexdigest())
             # Capture failure in an EXIT trap must preserve failure status and
             # turn success red; it must also stop an in-script directory reuse.
             source.mkdir(); (source/'raw').write_bytes(raw)
+            (source/'probe.out').mkdir()  # destination conflict: copying must fail closed even inside a subshell
+            result = bash('source "$1" || exit 1; (kernel_test_record_boot "$2" "$3" "$2/raw" "$2/raw") || true; kernel_test_cleanup "$2"; echo BAD',
+                          TESTS/'qemu_prefix.sh', source, probe, env=env)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertNotIn(b'BAD', result.stdout)
+            (source/'probe.out').rmdir()
             bad_env = dict(env, KERNEL_EVIDENCE_DIR=str(source/'nested'))
             for status in (0, 7):
                 result = bash('''source "$1" || exit 1; trap 'kernel_test_cleanup "$2"' EXIT; exit "$3"''',

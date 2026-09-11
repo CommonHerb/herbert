@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run closed-loop-memory-diet reseed verify-local clean
+.PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run closed-loop-memory-diet reseed verify-local clean
 
 all: $(SCANNER)
 
@@ -38,6 +38,7 @@ compiler-conformance:
 
 verification-helpers:
 	@python3 bootstrap/tests/check_verification_helpers.py
+	@python3 bootstrap/tests/check_debugcon_frames.py
 
 # Real descriptor error/EOF checks; no ptrace, emulator, or partition change.
 stdin-contract:

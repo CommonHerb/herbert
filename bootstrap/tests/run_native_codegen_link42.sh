@@ -41,12 +41,12 @@ if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mi
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 source "$script_dir/bochs_f2_harness.sh"
 
-work="$(mktemp -d)"
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"
 trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
-ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -149,17 +149,7 @@ fi
 
 # ---- Bochs (2nd substrate, via GRUB disk) ----
 bochs_extract() { # bochslog e9out  (multi-frame last-match extractor, verbatim from the raw gate)
-    python3 - "$1" "$2" <<'PY'
-import sys,re
-d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); end=i
-if i>=0:
-    for pat in (rb'\xde.\xad', rb'\xd4.{16}[\s\S]*?\xd5', rb'\xca.{16}\xcb'):
-        m=None
-        for mm in re.finditer(pat, d[i:], re.S): m=mm
-        if m: end=max(end, i+m.end())
-    open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
-else: open(sys.argv[2],'wb').write(b'')
-PY
+    python3 "$script_dir/debugcon_frames.py" extract "$1" "$2"
     local prc=$?; [[ "$prc" -eq 0 ]] || { fail_test "Bochs extractor failed (rc=$prc; completed boot -- fail-closed, not a graded verdict)"; return 1; }
     return 0
 }

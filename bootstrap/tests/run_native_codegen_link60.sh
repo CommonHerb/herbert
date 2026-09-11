@@ -33,11 +33,11 @@ for f in "$REF" "$LB" "$DEL_REF" "$feeder"; do
     [[ -f "$f" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing $f)"; exit 1; }
 done
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
-work="$(mktemp -d)"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp -- the bochs cmdline carries the absolute bochsrc path under $work; a system-wide `pkill bochs` would false-RED a CONCURRENT gate's boot, the F4 class)
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp -- the bochs cmdline carries the absolute bochsrc path under $work; a system-wide `pkill bochs` would false-RED a CONCURRENT gate's boot, the F4 class)
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
-ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -197,7 +197,7 @@ if have_qemu; then
     if python3 "$LB" gradecorrupt "$work/corrupt.g" >/dev/null 2>&1; then
         ok "(C-HOSTILE-CORRUPT) the genuine overflow-safe GET guard REJECTS a host-crafted corrupt dir entry whose run straddles the FS window (data_lba=TRACT_DATA_HI-1, len=1024 -> runend>window) -- the getter emits NOTHING (no out-of-window confused-deputy read leak; the data_lba+need wrap is white-box-pinned by assert_varsize's carry-reject); M-norunbound leaks it (mutation gate)"
     else
-        fail_test "(C-HOSTILE-CORRUPT) the genuine kernel LEAKED a frame on a host-crafted out-of-window corrupt dir entry: [$(python3 "$LB" gradecorrupt "$work/corrupt.g" 2>&1)]"
+        fail_test "(C-HOSTILE-CORRUPT) the genuine kernel did not emit the exact rejection witness for a host-crafted out-of-window corrupt dir entry: [$(python3 "$LB" gradecorrupt "$work/corrupt.g" 2>&1)]"
     fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "QEMU required but not found"; else echo "  SKIP: qemu-system-x86_64 not found"; fi

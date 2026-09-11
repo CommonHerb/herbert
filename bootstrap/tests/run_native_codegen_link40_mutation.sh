@@ -37,10 +37,10 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing holler_ref.py $REF)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing input feeder $feeder)"; exit 1; fi
 
-work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
-ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
+ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
 no() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
@@ -111,7 +111,30 @@ if python3 "$REF" gradenoleak "$work/ne.bin" "$KEND_noendhi" >/dev/null 2>&1; th
 qemu_feed "$work/k_fakewrite.elf" "$MWRITE" "$work/fw.bin" "$FXD"
 if python3 "$REF" gradewrite "$work/fw.bin" "$KEND_fakewrite" "$FXH" >/dev/null 2>&1; then no "M-fakewrite should be RED but passed"; else ok "M-fakewrite -> gradewrite RED (relays a const, not [ecx]; subsumes srcswap)"; fi
 qemu_feed "$work/k_norelay.elf" "$MWRITE" "$work/nr.bin" "$FXD"
-if python3 "$REF" gradewrite "$work/nr.bin" "$KEND_norelay" "$FXH" >/dev/null 2>&1; then no "M-norelay should be RED but passed"; else ok "M-norelay -> gradewrite RED (no bytes relayed; subsumes loopguard)"; fi
+# This mutant deliberately violates D4's declared length. Prove its precise
+# missing relay bytes positively; an arbitrary parser exception is no evidence.
+if python3 - "$work/nr.bin" "$KEND_norelay" "$FXH" "$script_dir" <<'PY_NORELAY'
+import sys
+sys.path.insert(0,sys.argv[4])
+import holler_ref as H
+raw=open(sys.argv[1],'rb').read(); kend=int(sys.argv[2],16); fed=int(sys.argv[3],16)
+i=0
+while i+25<=len(raw) and raw[i]==0x9c: i+=25
+if i>=len(raw) or raw[i]!=0x9a: raise SystemExit('no OWN table')
+# Source: OWN header, one read(15), write header(17)+D5, exit(15), answer(3).
+head_end=i+1+16+4*len(H.CELLS)+1
+tail=raw[head_end:]
+if len(tail)!=51 or tail[15:20]!=b'\xd4\x03\x00\x00\x00' or tail[32]!=0xd5:
+    raise SystemExit('not the exact M-norelay empty-body witness')
+# Restore ONLY the missing three bytes at the source-derived boundary. The
+# ordinary grader must validate every remaining byte and witness unchanged.
+restored=raw[:head_end+32]+H.host_write_bytes(fed)+raw[head_end+32:]
+errors=H.grade_write(restored,kend,fed)
+if errors: raise SystemExit('; '.join(errors))
+print('exactly the three expected relay bytes are absent; all other write witnesses validate')
+PY_NORELAY
+then ok "M-norelay -> exact missing three-byte relay proved (subsumes loopguard)"
+else no "M-norelay did not produce its exact missing-relay witness"; fi
 # M-bakebounds bakes VACUOUS bounds (esi=0, edi=0xFFFFFFFF) -> the check always passes -> a HOSTILE kernel-ptr
 # write LEAKS (proving the by-value [alloc_lo]/[alloc_hi] load is load-bearing; a benign in-page write would
 # wrongly pass too, so the leak on HOWR is the genuine bite).

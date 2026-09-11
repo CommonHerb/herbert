@@ -279,17 +279,11 @@ def forge_module(kind='gx'):
     return emit([('main',0,main_body),('drain',1,drain_body)])
 
 def _read_frames(stream):
-    """count well-formed read-witness frames C0<byte><cs=UCODE3><eip><useresp>C1 (validate each candidate)."""
-    out = []; i = 0; n = len(stream)
-    while i < n:
-        i = stream.find(b'\xC0', i)
-        if i < 0: break
-        if i + 15 <= n:
-            cs, eip, esp = struct.unpack('<3I', stream[i+2:i+14])
-            if cs == UCODE3 and stream[i+14] == 0xC1:
-                out.append(dict(byte=stream[i+1], eip=eip, esp=esp)); i += 15; continue
-        i += 1
-    return out
+    r = H.parse(stream)
+    if r is None: return []
+    return [dict(byte=record.raw[1],eip=vals[1],esp=vals[2])
+            for record in H.debugcon.records(r['_tail'],'read')
+            for vals in [struct.unpack('<3I',record.raw[2:-1])] if vals[0]==UCODE3]
 
 # ===================== STEP-0 / gate grader =====================
 def grade(stream, kend_elf, arg='gx'):
@@ -340,21 +334,7 @@ def grade(stream, kend_elf, arg='gx'):
     return errs
 
 def _write_frames(stream):
-    """Robustly extract the well-formed SYS_WRITE relay frames D4<len=4><cs=UCODE3><eip><useresp><4 body>D5.
-       Scans every 0xD4 candidate and validates independently (advance by 1 on mismatch) -- so a spurious 0xD4
-       inside an address field (with a bogus large len) cannot skip past real frames, the way H._all_wframes
-       (which trusts the len) would. Returns ordered list of dicts {cs,eip,esp,body}."""
-    out = []; i = 0; n = len(stream)
-    while i < n:
-        i = stream.find(b'\xD4', i)
-        if i < 0: break
-        if i + 22 <= n:
-            ln, cs, eip, esp = struct.unpack('<4I', stream[i+1:i+17])
-            body = stream[i+17:i+21]
-            if ln == 4 and cs == UCODE3 and stream[i+21] == 0xD5:
-                out.append(dict(cs=cs, eip=eip, esp=esp, body=body)); i += 22; continue
-        i += 1
-    return out
+    return [w for w in H._all_wframes(stream,b'\xd4',b'\xd5',True) if w['ln']==4 and w['cs']==UCODE3]
 
 def assert_indexed_load(modbytes):
     """white-box: the module carries a SS-relative SIB register-indexed load (the bufget lowering 36 8B 04 8A)

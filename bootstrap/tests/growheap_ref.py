@@ -1662,6 +1662,8 @@ def build_elf(mut=None, stage='full', npages=1):   # cleave L847-859 + growheap 
 
 
 # ============================ PARSE (cleave L862-889, VERBATIM) ============================
+import debugcon_frames as debugcon
+
 def parse_head(stream):
     i=0
     while i<len(stream) and stream[i]==0x9C and i+25<=len(stream): i+=25
@@ -1673,22 +1675,18 @@ def parse_head(stream):
     cells=struct.unpack('<%dI'%nc,stream[i:i+4*nc]); i+=4*nc
     cd=dict(zip(CELLS,cells)); cd['k0']=k0; cd['k1']=k1
     cd['_blockok']=(i<len(stream) and stream[i]==0x9B); i+=1
-    cd['_tail']=stream[i:]
+    if not cd['_blockok']: return None
+    try:
+        cd['_tail']=debugcon.FramedTail(stream[i:], 'growheap', cd['nprocs'])
+    except debugcon.IncompleteTrace:
+        return None
     return cd
 
 def parr(cd,nm,i): return cd[f'{nm}#{i}']
 
 import re
-def _wframes(tail):     # cleave L880-889, VERBATIM
-    out=[];pos=0
-    while True:
-        j=tail.find(b'\xD4',pos)
-        if j<0: break
-        if j+17>len(tail): break
-        ln,cs,eip,esp=struct.unpack('<4I',tail[j+1:j+17]); body=tail[j+17:j+17+ln]
-        closed=tail[j+17+ln:j+18+ln]==b'\xD5'
-        out.append(dict(ln=ln,cs=cs,eip=eip,esp=esp,body=body,closed=closed,at=j)); pos=j+18+ln
-    return out
+def _wframes(tail):
+    return debugcon.write_frames(tail)
 
 
 # ============================ lethe FORCING: the alias-remap prober ============================

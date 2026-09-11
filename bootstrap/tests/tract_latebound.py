@@ -195,7 +195,9 @@ def emitbody(out_path):
        getter's GET+SYS_WRITE relays). Returns the list of frame bodies."""
     try: deb=open(out_path,'rb').read()
     except Exception: return []
-    r=parse_head(deb); tail=r['_tail'] if r else deb
+    r=parse_head(deb)
+    if r is None: return []
+    tail=r['_tail']
     wfs=[w for w in _wframes(tail) if w['closed'] and w['cs']==UCODE3 and (w['cs']&3)==3]
     return [w['body'] for w in wfs]
 
@@ -205,7 +207,7 @@ def _emit(b): print(' '.join(str(x) for x in b))
 def main():
     import base64
     cmd=sys.argv[1]
-    seed=bytes.fromhex(sys.argv[2]) if len(sys.argv)>2 and cmd not in ('module','reuseok','emitbody','gradeforce','gradeone','craftcorrupt','gradecorrupt') else None
+    seed=bytes.fromhex(sys.argv[2]) if len(sys.argv)>2 and cmd not in ('module','reuseok','emitbody','gradeforce','gradeone','craftcorrupt','gradecorrupt','gradeleak') else None
     if cmd=='putstream1':        # PUT R0..R4 (BOOT-1)
         _emit(putter_stream(make_records(seed)[0]))
     elif cmd=='delstream':       # DEL R1,R2 (BOOT-2)
@@ -220,18 +222,22 @@ def main():
     elif cmd=='gradeone':        # gradeone <out> <seedhex> <0|1|2> -> exit 0 iff the single-query getter emitted that payload byte-exact
         recs,newrecs=make_records(bytes.fromhex(sys.argv[3])); idx=int(sys.argv[4])
         want=[recs[0][1],newrecs[0][1],newrecs[1][1]][idx]; bodies=emitbody(sys.argv[2])
-        if want in bodies: print('ONE-OK'); sys.exit(0)
+        if bodies == [want]: print('ONE-OK'); sys.exit(0)
         print('ONE-ERR: idx=%d want %dB, got frames %s'%(idx,len(want),[len(b) for b in bodies])); sys.exit(1)
     elif cmd=='craftcorrupt':    # craftcorrupt <img>  -> write a HOSTILE dir entry whose run STRADDLES the window (data_lba=HI-1,len=1024 -> runend=HI+1)
         craft_corrupt_dir(sys.argv[2], TRACT_DATA_HI-1, 1024)
     elif cmd=='corruptname':     # the 16-byte CORRUPT query name stream (for the getter)
         _emit(CORRUPT_NAME)
-    elif cmd=='gradecorrupt':    # gradecorrupt <out> -> exit 0 iff NO NON-EMPTY ring-3 frame. The genuine getter on a
+    elif cmd in ('gradecorrupt', 'gradeleak'): # positive rejection / positive leak witnesses
+        # The genuine getter on a
         # REJECTED GET (found=0 -> len=0) still does SYS_WRITE(dst,0) -> a 0-byte frame; that is the rejection, NOT a leak.
         # A real out-of-window leak (M-norunbound) emits a NON-EMPTY frame (the out-of-window sector bytes).
-        nonempty=[b for b in emitbody(sys.argv[2]) if len(b)>0]
-        if not nonempty: print('CORRUPT-REJECTED'); sys.exit(0)
-        print('CORRUPT-LEAK: %d non-empty frame(s) lens=%s'%(len(nonempty),[len(b) for b in nonempty])); sys.exit(1)
+        bodies=emitbody(sys.argv[2])
+        if cmd=='gradeleak':
+            if len(bodies)==1 and bodies[0]: print('CORRUPT-LEAK: %d bytes' % len(bodies[0])); sys.exit(0)
+            print('CORRUPT-NO-LEAK: expected one nonempty frame; got lens=%s' % [len(b) for b in bodies]); sys.exit(1)
+        if bodies == [b'']: print('CORRUPT-REJECTED'); sys.exit(0)
+        print('CORRUPT-ERR: expected one empty rejection frame; got lens=%s'%([len(b) for b in bodies])); sys.exit(1)
     elif cmd=='counts':          # the (writer,deleter,getter) module record-counts for this scenario
         print(len(SIZES), len(DEL_IDX), len(make_records(seed)[1]), 3)   # writer1=5, del=2, writer3=2(N0,N1), get=3
     elif cmd=='exp':             # exp <seedhex> <R0|N0|N1> -> RAW expected getter payload bytes to stdout

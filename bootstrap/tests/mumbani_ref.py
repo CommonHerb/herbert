@@ -134,27 +134,13 @@ def recompute_alloc_mb(r, kend, npages=NPAGES):
     return cur,cur+span,region
 
 def _read_frames(stream):
-    out=[]; i=0; n=len(stream)
-    while i<n:
-        i=stream.find(b'\xC0', i)
-        if i<0: break
-        if i+15<=n:
-            cs,eip,esp=struct.unpack('<3I', stream[i+2:i+14])
-            if cs==UCODE3 and stream[i+14]==0xC1:
-                out.append(dict(byte=stream[i+1],eip=eip,esp=esp)); i+=15; continue
-        i+=1
-    return out
+    r = H.parse(stream)
+    if r is None: return []
+    return [dict(byte=record.raw[1],eip=vals[1],esp=vals[2])
+            for record in H.debugcon.records(r['_tail'],'read')
+            for vals in [struct.unpack('<3I',record.raw[2:-1])] if vals[0]==UCODE3]
 def _write_frames(stream):
-    out=[]; i=0; n=len(stream)
-    while i<n:
-        i=stream.find(b'\xD4', i)
-        if i<0: break
-        if i+22<=n:
-            ln,cs,eip,esp=struct.unpack('<4I', stream[i+1:i+17]); body=stream[i+17:i+21]
-            if ln==4 and cs==UCODE3 and stream[i+21]==0xD5:
-                out.append(dict(cs=cs,eip=eip,esp=esp,body=body)); i+=22; continue
-        i+=1
-    return out
+    return [w for w in H._all_wframes(stream,b'\xd4',b'\xd5',True) if w['ln']==4 and w['cs']==UCODE3]
 
 # ===================== STEP-0 / gate grader =====================
 def grade(stream, kend_elf, arg='gx', npages=NPAGES):

@@ -673,6 +673,8 @@ def module_B(kind='simple'): return module_emit(B_SIMPLE)
 
 # ============================ PARSE + GRADE ============================
 import re
+import debugcon_frames as debugcon
+
 def parse_head(stream):
     i=0
     while i<len(stream) and stream[i]==0x9C and i+25<=len(stream): i+=25
@@ -681,20 +683,16 @@ def parse_head(stream):
     nc=len(CELLS); cells=struct.unpack('<%dI'%nc,stream[i:i+4*nc]); i+=4*nc
     cd=dict(zip(CELLS,cells)); cd['k0']=k0; cd['k1']=k1
     cd['_blockok']=(i<len(stream) and stream[i]==0x9B); i+=1
-    cd['_tail']=stream[i:]
+    if not cd['_blockok']: return None
+    try:
+        cd['_tail']=debugcon.FramedTail(stream[i:], 'tandem', 2)
+    except debugcon.IncompleteTrace:
+        return None
     return cd
 def _wframes(tail):
-    out=[];pos=0
-    while True:
-        j=tail.find(b'\xD4',pos)
-        if j<0: break
-        if j+17>len(tail): break
-        ln,cs,eip,esp=struct.unpack('<4I',tail[j+1:j+17]); body=tail[j+17:j+17+ln]
-        closed=tail[j+17+ln:j+18+ln]==b'\xD5'
-        out.append(dict(ln=ln,cs=cs,eip=eip,esp=esp,body=body,closed=closed,at=j)); pos=j+18+ln
-    return out
+    return debugcon.write_frames(tail)
 def _rframes(tail):
-    return [m.start() for m in re.finditer(rb'\xC0.{13}\xC1', tail, re.S)]
+    return [r.at for r in debugcon.records(tail, 'read')]
 
 def grade(stream, kend_elf, arg='gx'):
     """RUNTIME grade for the two-program cooperative run. Pins, all on the existing debugcon/COM1 oracle:
@@ -738,12 +736,12 @@ def grade(stream, kend_elf, arg='gx'):
     if seq!=expect_seq:
         errs.append(f'write interleave {"".join(seq)[:20]}... != ABAB... (kernel-scheduled witness FAILED; run-A-then-B?)')
     # switch counter
-    m=re.search(rb'\xC8(.{4})\xC9', tail, re.S)
+    m=debugcon.search(tail, 'counter', rb'\xC8(.{4})\xC9')
     if not m: errs.append('no switch-counter frame (C8<sw>C9)')
     else:
         sw=struct.unpack('<I',m.group(1))[0]
         if sw < 2*N: errs.append(f'switches {sw} < 2N={2*N} (insufficient ping-pong)')
-    an=re.search(rb'\xDE(.)\xAD', tail, re.S)
+    an=debugcon.search(tail, 'answer', rb'\xDE(.)\xAD')
     if not an or an.group(1)[0]!=0: errs.append(f'answer {an.group(1)[0] if an else None} != 0 (A exit status)')
     return errs
 
@@ -771,7 +769,7 @@ def grade_hostile(stream, kend_elf, kind='write'):
     if not r: return ['no OWN table parsed']
     al,ah,al2,ah2=r['alloc_lo'],r['alloc_hi'],r['alloc_lo2'],r['alloc_hi2']; tail=r['_tail']
     want_err = 5 if kind=='read' else 7
-    pf=re.search(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', tail, re.S)
+    pf=debugcon.search(tail, 'pf', rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1')
     if not pf: return [f'no #PF witness frame (D0..D1) -- the hostile peer {kind} did NOT fault (isolation BROKEN)']
     err,eip,cs,cr2,esp=[struct.unpack('<I',pf.group(k))[0] for k in (1,2,3,4,5)]
     if err!=want_err: errs.append(f'#PF err 0x{err:x} != exact 0x{want_err:x} (a {kind} of a present supervisor peer page)')
@@ -779,7 +777,7 @@ def grade_hostile(stream, kend_elf, kind='write'):
     if not (al2<=cr2<ah2): errs.append(f'#PF CR2 0x{cr2:x} not in B region [0x{al2:x},0x{ah2:x}) -- not a PEER fault')
     if al<=cr2<ah: errs.append(f'#PF CR2 0x{cr2:x} is in A''s OWN region (not a peer fault)')
     if 0x100000<=cr2<kend_elf: errs.append(f'#PF CR2 0x{cr2:x} is in the kernel image (not a peer fault)')
-    an=re.search(rb'\xDE(.)\xAD', tail, re.S)
+    an=debugcon.search(tail, 'answer', rb'\xDE(.)\xAD')
     if not an or an.group(1)[0]!=0x50: errs.append('answer != 0x50 (P) -- fault->continue did not name the #PF')
     return errs
 

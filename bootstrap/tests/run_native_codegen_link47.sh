@@ -34,11 +34,11 @@ N="${TENEMENT_N:-6}"          # canonical: 6 workers
 M="${TENEMENT_M:-2}"          # MSLOTS baked in the kernel = 2 physical region pages (M<N -> reuse)
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $REF)"; exit 1; fi
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
-work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
-ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -160,11 +160,7 @@ panic: action=report
 log: bochs_log.txt
 BX
       xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    python3 - "$d/bochs_out.txt" "$e9" <<'PY'
-import sys
-d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c')
-open(sys.argv[2],'wb').write(d[i:] if i>=0 else b'')
-PY
+    python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$e9"
 }
 if have_bochs; then
     emu_ran=1

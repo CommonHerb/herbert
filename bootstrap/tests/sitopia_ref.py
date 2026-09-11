@@ -482,6 +482,8 @@ def mod_hostile_pt(pte_addr, tag='HOPT'):
 # ===================== host grader =====================
 CK={'mbinfo':'mb','modstart':'ms','modend':'me','str':'st','cmdline':'cm','elflo':'el','elfhi':'eh',
     'region_lo':'rl','region_hi':'rh','alloc_lo':'al','alloc_hi':'ah'}
+import debugcon_frames as debugcon
+
 def parse(stream):
     r={}; i=0; entries=[]; n=len(stream)
     while i<n and stream[i]==0x9C and i+25<=n:
@@ -489,6 +491,7 @@ def parse(stream):
         entries.append(dict(size=vals[0],blo=vals[1],bhi=vals[2],llo=vals[3],lhi=vals[4],ty=vals[5]))
     r['entries']=entries
     if i<n and stream[i]==0x9A:
+        if i+1+16+4*len(CELLS)+1 > n: return None
         i+=1; k0,k1,ma,ml=struct.unpack('<4I', stream[i:i+16]); i+=16
         r['k0'],r['k1'],r['ma'],r['ml']=k0,k1,ma,ml
         nc=len(CELLS); cells=struct.unpack('<%dI'%nc, stream[i:i+4*nc]); i+=4*nc
@@ -497,24 +500,29 @@ def parse(stream):
             else: r[nm]=v
         r['block_ok']=(i<n and stream[i]==0x9B); i+=1
     else: return None
-    tail=stream[i:]
-    rd=re.search(rb'\xC0(.)(.{4})(.{4})(.{4})\xC1', tail, re.S)    # read-witness frame (byte,cs,eip,useresp)
+    if not r['block_ok']: return None
+    try:
+        tail=debugcon.FramedTail(stream[i:], 'sitopia', 1)
+    except debugcon.IncompleteTrace:
+        return None
+    r['_tail']=tail
+    rd=debugcon.search(tail, 'read', rb'\xC0(.)(.{4})(.{4})(.{4})\xC1')    # read-witness frame (byte,cs,eip,useresp)
     if rd:
         r['rd_byte']=rd.group(1)[0]
         r['rd_cs'],r['rd_eip'],r['rd_esp']=[struct.unpack('<I',rd.group(k))[0] for k in (2,3,4)]
-    be=re.search(rb'\xE0(.)(.{4})(.{4})(.{4})\xE1', tail, re.S)    # exit-witness frame (status,cs,eip,useresp)
+    be=debugcon.search(tail, 'exit', rb'\xE0(.)(.{4})(.{4})(.{4})\xE1')    # exit-witness frame (status,cs,eip,useresp)
     if be:
         r['ex_status']=be.group(1)[0]
         r['ex_cs'],r['ex_eip'],r['ex_esp']=[struct.unpack('<I',be.group(k))[0] for k in (2,3,4)]
-    gp=re.search(rb'\xF0(.{4})(.{4})(.{4})(.{4})\xF1', tail, re.S)
+    gp=debugcon.search(tail, 'gp', rb'\xF0(.{4})(.{4})(.{4})(.{4})\xF1')
     if gp:
         r['gp_err'],r['gp_eip'],r['gp_cs'],r['gp_esp']=[struct.unpack('<I',gp.group(k))[0] for k in (1,2,3,4)]
-    pf=re.search(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', tail, re.S)
+    pf=debugcon.search(tail, 'pf', rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1')
     if pf:
         r['pf_err'],r['pf_eip'],r['pf_cs'],r['pf_cr2'],r['pf_esp']=[struct.unpack('<I',pf.group(k))[0] for k in (1,2,3,4,5)]
-    an=re.search(rb'\xDE(.)\xAD', tail, re.S)
+    an=debugcon.search(tail, 'answer', rb'\xDE(.)\xAD')
     if an: r['answer']=an.group(1)[0]
-    if b'\xBB' in tail: r['saw_bb']=True
+    if debugcon.records(tail, 'escaped'): r['saw_bb']=True
     return r
 
 def recompute_alloc(r, kend):

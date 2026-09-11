@@ -71,11 +71,11 @@ if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missi
 if [[ ! -f "$LB" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $LB)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing feeder $feeder)"; exit 1; fi
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
-work="$(mktemp -d)"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
-ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -170,6 +170,7 @@ boot_feed_emit() { # kernel mod out kvm stream...   (retries the genuine getter 
     for try in 1 2 3 4; do
         boot_feed "$kel" "$mod" "$out" "$kvm" "$@"
         local e; e="$(python3 "$LB" emitbody "$out" 2>/dev/null)"
+        [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1
         [[ -n "$e" && "$e" != "NO-TABLE" ]] && return 0
     done
     return 0   # fall through after retries; the caller's grade reports the (still-empty) failure honestly
@@ -218,6 +219,7 @@ boot_feed_b1() { # kernel out kvm tname tpay dname dpay stream...    (DISK must 
         : > "$out"
         boot_feed "$kel" "$PUTTER" "$out" "$kvm" "$@"
         B1_RCPT="$(python3 "$LB" b1receipt "$out" "$tn" "$tp" "$dn" "$dp" 2>&1)"; b1r=$?
+        [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1
         B1_STOR="$(python3 "$LB" b1storage "$DISK" "$FS_DIR" "$FS_LO" "$tn" "$tp" "$dn" "$dp" 2>&1)"; b1s=$?
         if [[ "$b1r" -eq 0 && "$b1s" -eq 0 ]]; then
             B1_RECEIPT="receipt byte-exact; $B1_STOR"
@@ -304,6 +306,7 @@ two_boot_two_query() { # kernel-elf seedhex kvmflag label [emit_retry]
     else
         TWB_B1="BOOT-1 receipt NOT byte-exact -- $TWB_B1"
     fi
+    [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1
     TWB_B2T="$work/${lbl}.b2t"; TWB_B2D="$work/${lbl}.b2d"
     "$getfn" "$kel" "$GETTER" "$TWB_B2T" "$kvm" $qt                         # BOOT-2(i): GET target
     "$getfn" "$kel" "$GETTER" "$TWB_B2D" "$kvm" $qd                         # BOOT-2(ii): GET decoy
@@ -331,6 +334,7 @@ run_qemu_gate() { # kvmflag label substlabel
         gt=1; gd=1
         python3 "$LB" gradefs "$TWB_B2T" "$KEND" "$TWB_TP" >/dev/null 2>&1 && gt=0
         python3 "$LB" gradefs "$TWB_B2D" "$KEND" "$TWB_DP" >/dev/null 2>&1 && gd=0
+        [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1
         if [[ "$gt" -eq 0 && "$gd" -eq 0 ]]; then
             local note=""
             [[ "$att" -eq 2 ]] && note=" [FLAKE-DISCRIMINATED: attempt-1 completed RED ($a1sig) did NOT recur under one same-seed replay -- no deterministic same-data RED reproduced; classed a one-shot transport/capture miss, NOT proof against an intermittent same-data race]"
@@ -790,11 +794,7 @@ BX
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b2.txt" "getter.bin(BOOT-2)" || return 1
     _feed_delivered "$d/feed2.log" "getter.bin(BOOT-2)" || return 1
-    python3 - "$d/bochs_b2.txt" "$b2out" <<'PY'
-import sys
-d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c')
-open(sys.argv[2],'wb').write(d[i:] if i>=0 else b'')
-PY
+    python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_b2.txt" "$b2out"
 }
 if have_bochs; then
     emu_ran=1
@@ -811,23 +811,27 @@ if have_bochs; then
     for attempt in 1 2 3 4; do
         BOCHS_HARNESS_ERR=""
         if [[ "$completed_red" -eq 0 ]]; then
-            BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
+            BSEED="${CAIRN_BOCHS_SEED:-$(python3 -c 'import os;print(os.urandom(8).hex())')}"
+            [[ "$BSEED" =~ ^[0-9a-fA-F]{16}$ ]] || { echo "FAIL: CAIRN_BOCHS_SEED must be 16 hexadecimal digits" >&2; exit 1; }
             echo "  SEED BSEED=$BSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
             read -r BTN BTP BDN BDP < <(python3 "$LB" records "$BSEED")
             BPUT="$(python3 "$LB" putstream "$BTN" "$BTP" "$BDN" "$BDP")"
             BQD="$(python3 "$LB" querystream "$BDN")"     # query the DECOY on Bochs (the harder, returnfirst-killing query)
         fi
         if ! bochs_two_boot_query "$BPUT" "$BQD" "$work/b.b2"; then
+            [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1
             echo "  HARNESS ERROR (Bochs two-boot attempt $attempt/4): $BOCHS_HARNESS_ERR -- re-rolling the two-boot (setup/no-completion failure, NOT a kernel grade; does not consume the same-seed replay budget)" >&2
             continue
         fi
         BEMIT="$(python3 "$LB" emitbody "$work/b.b2" 2>/dev/null)"
+        [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1
         if python3 "$LB" gradefs "$work/b.b2" "$KEND" "$BDP" >/dev/null 2>&1; then
             bnote=""
             [[ "$completed_red" -eq 1 ]] && bnote=" [FLAKE-DISCRIMINATED: attempt's completed RED (emitted=${B_A1:-EMPTY}) did NOT recur under one same-seed replay -- no deterministic same-data RED reproduced; classed a one-shot transport/capture miss, NOT proof against an intermittent same-data race]"
             ok "(C-Bochs) late-bound two-boot named lookup survives across two Bochs runs on the SAME GRUB disk: BOOT-1 putter PUT a TARGET + a DECOY (late-bound over com1) + flush; BOOT-2 getter resolved the DECOY name -> emitted P_D (${#BEMIT} hex chars == host-expected) -- the 2nd substrate's ATA controller persists the FS + resolves by name (the software-RESET prologue Bochs needs is inherited from durable)$bnote"
             bochs_done=1; break
         fi
+        [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1
         if [[ "$completed_red" -eq 0 ]]; then
             completed_red=1
             B_A1="${BEMIT:-EMPTY}"

@@ -375,45 +375,26 @@ def module_larder_driver():
 
 # ============================ the grader ============================
 def grade(stream, golden_off, golden_live):
-    """Locate the magic banner, positionally parse the 0xE0 alloc trace + the 0xE1..0xE2 live readback, compare to the
-       golden. pool_base is read from the kernel's OWN dumped cell table. Returns (errs, info); errs empty == GREEN."""
+    """Compare the complete, boundary-decoded heap witness to its independent oracle."""
+    import debugcon_frames as debugcon
     cd = parse_head(stream)
     if not cd:
-        return ['no parseable kernel cell-dump (boot failed before iret?)'], {}
+        return ['no parseable kernel cell-dump (no complete runtime trace)'], {}
     pool_base = cd['pool_base']
     info = {'pool_base': pool_base, 'pool_size': cd['pool_size'], 'alloc_ptrs': [], 'live': []}
-    i = stream.find(LARDER_MAGIC)
-    if i < 0:
-        return ['MAGIC banner not found -- kernel did not reach iret-to-proc0'], info
-    if stream.find(LARDER_MAGIC, i+1) != -1:
-        return ['MAGIC banner appears MORE THAN ONCE (ambiguous)'], info
-    p = i + len(LARDER_MAGIC)
+    observation = debugcon.heap_observation(cd['_tail'])
+    if observation is None:
+        return ['incomplete or unexpected heap witness sequence'], info
+    allocs, live = observation
+    info['alloc_ptrs'] = allocs
+    info['live'] = [(ptr, sent.hex()) for ptr, sent in live]
+    expected_allocs = [0 if off is None else pool_base + off for off in golden_off]
+    expected_live = [(pool_base + off, sent) for off, sent in golden_live]
     errs = []
-    for k, goff in enumerate(golden_off):
-        if p >= len(stream) or stream[p] != 0xE0:
-            errs.append('alloc %d: missing 0xE0 marker at byte %d (got %r)' % (k, p, stream[p:p+1])); return errs, info
-        p += 1
-        if p+4 > len(stream):
-            errs.append('alloc %d: truncated ptr' % k); return errs, info
-        ptr = int.from_bytes(stream[p:p+4], 'little'); p += 4
-        info['alloc_ptrs'].append(ptr)
-        want = 0 if goff is None else (pool_base + goff)
-        if ptr != want:
-            errs.append('alloc %d: emitted 0x%08x != expected 0x%08x (offset=%s)' % (k, ptr, want, goff))
-    if p >= len(stream) or stream[p] != 0xE1:
-        errs.append('dump: missing 0xE1 begin marker (got %r)' % (stream[p:p+1])); return errs, info
-    p += 1
-    for j, (goff, sent) in enumerate(golden_live):
-        if p+8 > len(stream):
-            errs.append('live %d: truncated' % j); return errs, info
-        ptr = int.from_bytes(stream[p:p+4], 'little'); s = stream[p+4:p+8]; p += 8
-        info['live'].append((ptr, s.hex()))
-        if ptr != pool_base + goff:
-            errs.append('live %d: ptr 0x%08x != expected 0x%08x (offset=%d)' % (j, ptr, pool_base+goff, goff))
-        if s != sent:
-            errs.append('live %d: sentinel %s != expected %s' % (j, s.hex(), sent.hex()))
-    if p >= len(stream) or stream[p] != 0xE2:
-        errs.append('dump: missing 0xE2 terminator (got %r) -- emitted MORE live chunks than golden' % (stream[p:p+1]))
+    if allocs != expected_allocs:
+        errs.append('allocation pointers %s != expected %s' % ([hex(p) for p in allocs], [hex(p) for p in expected_allocs]))
+    if live != expected_live:
+        errs.append('live pointers/sentinels %r != expected %r' % (info['live'], [(p, sent.hex()) for p, sent in expected_live]))
     return errs, info
 
 

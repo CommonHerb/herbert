@@ -741,7 +741,9 @@ def build_elf(mut=None, stage='full'):
 
 
 # ============================ PARSE (STEP-0 head grade) ============================
-def parse_head(stream):
+import debugcon_frames as debugcon
+
+def parse_head(stream, *, prefix=False):
     i=0
     while i<len(stream) and stream[i]==0x9C and i+25<=len(stream): i+=25
     if i>=len(stream) or stream[i]!=0x9A: return None
@@ -752,22 +754,19 @@ def parse_head(stream):
     cells=struct.unpack('<%dI'%nc,stream[i:i+4*nc]); i+=4*nc
     cd=dict(zip(CELLS,cells)); cd['k0']=k0; cd['k1']=k1
     cd['_blockok']=(i<len(stream) and stream[i]==0x9B); i+=1
-    cd['_tail']=stream[i:]
+    if not cd['_blockok']: return None
+    try:
+        decoder = debugcon.FramedPrefix if prefix else debugcon.FramedTail
+        cd['_tail']=decoder(stream[i:], 'furlough', cd['nprocs'])
+    except debugcon.IncompleteTrace:
+        return None
     return cd
 
 def parr(cd,nm,i): return cd[f'{nm}#{i}']
 
 import re
 def _wframes(tail):
-    out=[];pos=0
-    while True:
-        j=tail.find(b'\xD4',pos)
-        if j<0: break
-        if j+17>len(tail): break
-        ln,cs,eip,esp=struct.unpack('<4I',tail[j+1:j+17]); body=tail[j+17:j+17+ln]
-        closed=tail[j+17+ln:j+18+ln]==b'\xD5'
-        out.append(dict(ln=ln,cs=cs,eip=eip,esp=esp,body=body,closed=closed,at=j)); pos=j+18+ln
-    return out
+    return debugcon.write_frames(tail)
 
 def grade(stream, kend_elf, K, seed=0x501CA1):
     """FULL grade (timing-robust, per-program COMPLETENESS -- NOT interleave order):
@@ -814,12 +813,12 @@ def grade(stream, kend_elf, K, seed=0x501CA1):
             if w['body']!=want: errs.append(f'worker(proc{i}) wrote {w["body"].hex()} != le32(token) {want.hex()}')
             lo,hi=regions[i]
             if not (lo<=w['esp']<hi): errs.append(f'worker(proc{i}) write esp 0x{w["esp"]:x} not in region[{i}]')
-    m=re.search(rb'\xC8(.{4})\xC9', tail, re.S)
+    m=debugcon.search(tail, 'counter', rb'\xC8(.{4})\xC9')
     if not m: errs.append('no switch-counter frame (C8<sw>C9)')
     else:
         sw=struct.unpack('<I',m.group(1))[0]
         if sw < K: errs.append(f'context switches {sw} < K={K} (run-queue did not advance through all procs)')
-    an=re.search(rb'\xDE(.)\xAD', tail, re.S)
+    an=debugcon.search(tail, 'answer', rb'\xDE(.)\xAD')
     if not an or an.group(1)[0]!=0: errs.append(f'answer {an.group(1)[0] if an else None} != 0 (spinner exit status)')
     return errs
 
@@ -830,7 +829,7 @@ def grade_hostile(stream, kend_elf, kind='write'):
     if not r: return ['no OWN table parsed']
     K=r['nprocs']; regions=[(parr(r,'alloc_lo',i),parr(r,'alloc_hi',i)) for i in range(K)]; tail=r['_tail']
     want_err=5 if kind=='read' else 7
-    pf=re.search(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', tail, re.S)
+    pf=debugcon.search(tail, 'pf', rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1')
     if not pf: return [f'no #PF witness (D0..D1) -- the hostile {kind} did NOT fault (isolation BROKEN)']
     err,eip,cs,cr2,esp=[struct.unpack('<I',pf.group(k))[0] for k in (1,2,3,4,5)]
     if err!=want_err: errs.append(f'#PF err 0x{err:x} != exact 0x{want_err:x}')
@@ -840,7 +839,7 @@ def grade_hostile(stream, kend_elf, kind='write'):
     if 0x100000<=cr2<kend_elf: errs.append(f'#PF CR2 0x{cr2:x} in kernel image (not a peer fault)')
     if not any(lo<=cr2<hi for j,(lo,hi) in enumerate(regions) if j!=0):
         errs.append(f'#PF CR2 0x{cr2:x} not in ANY peer region')
-    an=re.search(rb'\xDE(.)\xAD', tail, re.S)
+    an=debugcon.search(tail, 'answer', rb'\xDE(.)\xAD')
     if not an or an.group(1)[0]!=0x50: errs.append('answer != 0x50 (P) -- fault->continue did not name the #PF')
     return errs
 
@@ -1015,27 +1014,18 @@ def grade_ten(stream, kend_elf, N, M, seed=0x501CA1):
     # switch counter advanced through all N workers; answer clean. The run-queue advances proc0 -> proc1 -> ... ->
     # proc(N-1) via N-1 inter-worker transitions (the boot iret into proc0 is NOT a sched_switch). A starving kernel
     # produces far fewer than N-1 (and missing tokens); >= N-1 is the robust, timing-independent floor.
-    m=re.search(rb'\xC8(.{4})\xC9', tail, re.S)
+    m=debugcon.search(tail, 'counter', rb'\xC8(.{4})\xC9')
     if not m: errs.append('no switch-counter frame (C8<sw>C9)')
     else:
         sw=struct.unpack('<I',m.group(1))[0]
         if sw < N-1: errs.append(f'context switches {sw} < N-1={N-1} (run-queue did not advance through all {N} workers)')
-    an=re.search(rb'\xDE(.)\xAD', tail, re.S)
+    an=debugcon.search(tail, 'answer', rb'\xDE(.)\xAD')
     if not an or an.group(1)[0]!=0: errs.append(f'answer {an.group(1)[0] if an else None} != 0 (last worker exit status)')
     return errs, sorted(pages)
 
 
 def _commit_frames(tail):
-    """parse the homestead COMMIT WITNESS frames: 0xC2 <err:4> <cr2:4> <pte_before:4> <pte_after:4> 0xC3."""
-    out=[]; pos=0
-    while True:
-        j=tail.find(b'\xC2',pos)
-        if j<0: break
-        if j+18>len(tail): break
-        if tail[j+17]!=0xC3: pos=j+1; continue
-        err,cr2,pb,pa=struct.unpack('<4I',tail[j+1:j+17])
-        out.append(dict(err=err,cr2=cr2,pte_before=pb,pte_after=pa,at=j)); pos=j+18
-    return out
+    return debugcon.fields(tail, 'commit', ('err', 'cr2', 'pte_before', 'pte_after'))
 
 
 def grade_homestead(stream, kend_elf, N=GROWER_N, seed=GROWER_SEED):
@@ -1108,9 +1098,9 @@ def grade_homestead(stream, kend_elf, N=GROWER_N, seed=GROWER_SEED):
         if (c['err'] & 1)!=0: errs.append(f'commit witness cr2=0x{c["cr2"]:x} err 0x{c["err"]:x} has P=1 (protection, not demand)')
         elif (c['pte_before'] & 1)!=0: errs.append(f'commit witness cr2=0x{c["cr2"]:x} pte_before 0x{c["pte_before"]:x} was ALREADY present (not demand)')
         elif (c['pte_after'] & 1)!=1: errs.append(f'commit witness cr2=0x{c["cr2"]:x} pte_after 0x{c["pte_after"]:x} NOT present after commit')
-    m=re.search(rb'\xC8(.{4})\xC9', tail, re.S)
+    m=debugcon.search(tail, 'counter', rb'\xC8(.{4})\xC9')
     if not m: errs.append('no switch-counter frame (C8<sw>C9) -- kernel did not run its scheduler')
-    an=re.search(rb'\xDE(.)\xAD', tail, re.S)
+    an=debugcon.search(tail, 'answer', rb'\xDE(.)\xAD')
     if not an or an.group(1)[0]!=0: errs.append(f'answer {an.group(1)[0] if an else None} != 0 (grower clean exit; 0x50=P means it was KILLED by a #PF)')
     return errs, len(good)
 
@@ -1368,28 +1358,15 @@ DISP_MAX = 1000  # a LOOSE gross-spin sanity bound (supporting evidence; Codex: 
 #   the reader blocked, so the wake arm never fires -> 0 wake witnesses); disp is the loose, timing-robust confirmation.
 
 def _wake_frames(tail):
-    """parse the furlough WAKE WITNESS frames: 0xCC <w:4> <byte:4> 0xCD."""
-    out=[]; pos=0
-    while True:
-        j=tail.find(b'\xCC',pos)
-        if j<0: break
-        if j+10>len(tail): break
-        if tail[j+9]!=0xCD: pos=j+1; continue
-        w,b=struct.unpack('<2I',tail[j+1:j+9])
-        out.append(dict(w=w,byte=b,at=j)); pos=j+10
-    return out
+    return debugcon.fields(tail, 'wake', ('w', 'byte'))
 
 def _disp_counts(tail, K):
-    """parse the furlough per-proc DISPATCH dump: 0xCA <disp[0]:4> .. <disp[K-1]:4> 0xCB. Returns a list or None.
-       Rescans on a bad terminator (like _wake_frames/_commit_frames) so a spurious 0xCA inside a placement-dependent
-       write-frame header cannot mis-parse the finalize dump."""
-    pos=0
-    while True:
-        j=tail.find(b'\xCA',pos)
-        if j<0: return None
-        if j+1+4*K+1<=len(tail) and tail[j+1+4*K]==0xCB:
-            return list(struct.unpack('<%dI'%K, tail[j+1:j+1+4*K]))
-        pos=j+1
+    if tail.nprocs != K:
+        return None
+    rs = debugcon.records(tail, 'dispatch')
+    if len(rs) != 1:
+        return None
+    return list(struct.unpack('<%dI' % K, rs[0].raw[1:-1]))
 
 
 def assert_furlough(kelf):
@@ -1434,7 +1411,7 @@ def grade_furlough(stream, kend_elf, K, run='run2', fbyte=FBYTE, seed=FURL_SEED)
     # parse the own-table to locate the clean tail (parse_head skips the cell block BY COUNT, so a spurious 0xD4 byte in
     # the boot cell-dump cannot derail the write-frame scan). On the FROZEN-kernel differential the cell count differs /
     # the output is short -> parse_head returns None or mis-aligns, but the peers never ran -> peer tokens absent -> RED.
-    r=parse_head(stream)
+    r=parse_head(stream, prefix=(run == 'run1'))
     if not r:
         return ['no OWN table parsed (frozen kernel froze before the peers ran, or early fault) -> peers absent']
     tail=r['_tail']
@@ -1468,7 +1445,7 @@ def grade_furlough(stream, kend_elf, K, run='run2', fbyte=FBYTE, seed=FURL_SEED)
         if disp[0] > DISP_MAX:
             errs.append(f'reader proc0 was DISPATCHED {disp[0]} times > DISP_MAX={DISP_MAX} -- it was NOT parked but '
                         f're-dispatched every cycle (runnable-retry forge: deschedule without a real blocked state)')
-    an=re.search(rb'\xDE(.)\xAD', tail, re.S)
+    an=debugcon.search(tail, 'answer', rb'\xDE(.)\xAD')
     if not an or an.group(1)[0]!=0:
         errs.append(f'answer {an.group(1)[0] if an else None} != 0 (reader clean exit / finalize)')
     return errs

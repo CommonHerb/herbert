@@ -58,11 +58,11 @@ if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mi
 
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 source "$script_dir/replay_discriminator.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing replay_discriminator.sh -- boot_qemu runner)"; exit 1; }
-work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 le32_val() { local h="${1:$2:8}"; echo $(( 16#${h:6:2}${h:4:2}${h:2:2}${h:0:2} )); }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
@@ -234,18 +234,20 @@ else
         # esp stays below alloc_lo) -- the RED must come from the cross-engine diff, not from a
         # stream that stopped being a valid overflow witness.
         ovf_patch() { # src dst field value   (field: err|eip|cr2|esp)
-            python3 - "$1" "$2" "$3" "$4" <<'PY2'
-import sys, struct, re
+            python3 - "$1" "$2" "$3" "$4" "$script_dir" <<'PY2'
+import sys, struct
+sys.path.insert(0, sys.argv[-1])
+import geeking_ref as G
+import debugcon_frames as frames
 src, dst, field, val = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 0)
 d = bytearray(open(src,'rb').read())
-ms_ = list(re.finditer(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', bytes(d), re.S))
-# G.parse reads frames only from the post-OWN-table TAIL, so patching a D0..D1 that lies in the
-# table prefix would edit bytes the grader never reads. Require exactly one so the patcher and the
-# grader are provably looking at the same frame (blind Opus 5 finding 9, 2026-09-01).
-if len(ms_) != 1: sys.exit('expected exactly ONE #PF frame in the capture, found %d' % len(ms_))
-m = ms_[0]
+r = G.parse(bytes(d))
+if not r: sys.exit('no complete OWN trace')
+pfs = frames.records(r['_tail'], 'pf')
+if len(pfs) != 1: sys.exit('expected exactly ONE boundary-decoded #PF frame')
+frame_at = len(d) - len(r['_tail']) + pfs[0].at
 gi = {'err': 1, 'eip': 2, 'cs': 3, 'cr2': 4, 'esp': 5}[field]
-lo = m.start(gi); cur = struct.unpack('<I', bytes(d[lo:lo+4]))[0]
+lo = frame_at + 1 + 4*(gi-1); cur = struct.unpack('<I', bytes(d[lo:lo+4]))[0]
 new = val if field == 'err' else cur + val
 d[lo:lo+4] = struct.pack('<I', new & 0xFFFFFFFF)
 open(dst,'wb').write(bytes(d))
@@ -280,11 +282,14 @@ PY2
         done
         # (b) MUST NOT FALSE-RED: only the page-fault ERROR CODE differs (the real TCG 0x5 / KVM 0x7
         #     divergence). Both carry the U bit; every engine-independent fact is untouched.
-        cur_err="$(python3 - "$OVFS" <<'PY3'
-import sys, struct, re
+        cur_err="$(python3 - "$OVFS" "$script_dir" <<'PY3'
+import sys, struct
+sys.path.insert(0, sys.argv[-1])
+import geeking_ref as G
+import debugcon_frames as frames
 d = open(sys.argv[1],'rb').read()
-m = re.search(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', d, re.S)
-print('0x%x' % struct.unpack('<I', m.group(1))[0] if m else '')
+r = G.parse(d)
+print('0x%x' % r['pf_err'] if r and 'pf_err' in r else '')
 PY3
 )"
         other_err=0x7; [[ "$cur_err" == "0x7" ]] && other_err=0x5
@@ -330,8 +335,11 @@ PY3
         #     comparison was decoration: deleting OVF_SAME_LOADER_FIELDS left every other check passing
         #     (cross-model Codex confirm-leg finding 3, 2026-09-02).
         ovf_shift() { # src dst delta -- shift the module/alloc window and the #PF eip/esp together
-            python3 - "$1" "$2" "$3" <<'PY4'
-import sys, struct, re
+            python3 - "$1" "$2" "$3" "$script_dir" <<'PY4'
+import sys, struct
+sys.path.insert(0, sys.argv[-1])
+import geeking_ref as G
+import debugcon_frames as frames
 src, dst, delta = sys.argv[1], sys.argv[2], int(sys.argv[3], 0)
 d = bytearray(open(src,'rb').read())
 i = 0
@@ -345,11 +353,13 @@ for nm in ('modstart','modend','alloc_lo','alloc_hi'):
     o = CELLBASE + CELLS.index(nm)*4
     v = struct.unpack('<I', bytes(d[o:o+4]))[0]
     d[o:o+4] = struct.pack('<I', (v + delta) & 0xFFFFFFFF)
-ms_ = list(re.finditer(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', bytes(d), re.S))
-if len(ms_) != 1: sys.exit('expected exactly ONE #PF frame, found %d' % len(ms_))
-m = ms_[0]
+r = G.parse(bytes(d))
+if not r: sys.exit('no complete OWN trace')
+pfs = frames.records(r['_tail'], 'pf')
+if len(pfs) != 1: sys.exit('expected exactly ONE boundary-decoded #PF frame')
+frame_at = len(d) - len(r['_tail']) + pfs[0].at
 for gi in (2, 5):                                                # eip, esp
-    o = m.start(gi)
+    o = frame_at + 1 + 4*(gi-1)
     v = struct.unpack('<I', bytes(d[o:o+4]))[0]
     d[o:o+4] = struct.pack('<I', (v + delta) & 0xFFFFFFFF)
 open(dst,'wb').write(bytes(d))

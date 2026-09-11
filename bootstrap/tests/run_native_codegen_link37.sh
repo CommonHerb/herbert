@@ -92,11 +92,11 @@ source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source nat
 source "$script_dir/replay_discriminator.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing replay_discriminator.sh)"; exit 1; }
 source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: stack/native_compile_fragment.herb (missing bochs_f2_harness.sh)"; exit 1; }
 
-work="$(mktemp -d)"
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"
 trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -370,19 +370,7 @@ qemu_generic() { # label kelf modfile probe
 BX_GRUBCFG=$'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/app.bin\n boot\n}\n'   # byte-identical to the pre-1b text (trailing newline kept)
 
 bx_extract_e9() { # bochslog e9out  (the debugcon stream: cell block .. through all frames, like link35)
-    python3 - "$1" "$2" <<'PY'
-import sys,re
-d=open(sys.argv[1],'rb').read(); i=d.find(b'\x9c'); end=i
-if i>=0:
-    for pat in (rb'\xde.\xad', rb'\xc0.{1}.{4}.{4}.{4}\xc1', rb'\xe0.{1}.{4}.{4}.{4}\xe1',
-                rb'\xf0.{4}.{4}.{4}.{4}\xf1', rb'\xd0.{4}.{4}.{4}.{4}.{4}\xd1',
-                rb'\xca.{4}.{4}.{4}.{4}\xcb', rb'\xe2.{4}.{4}\xe3'):
-        m=None
-        for mm in re.finditer(pat, d[i:], re.S): m=mm
-        if m: end=max(end, i+m.end())
-    open(sys.argv[2],'wb').write(d[i:end] if end>i else b'')
-else: open(sys.argv[2],'wb').write(b'')
-PY
+    python3 "$script_dir/debugcon_frames.py" extract "$1" "$2"
 }
 
 # replay-contract graders (0 GREEN / nonzero RED; one-line signature on stdout; never fail_test)

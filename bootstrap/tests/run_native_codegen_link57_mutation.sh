@@ -36,10 +36,10 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "$REQUIRE_EMU" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
-work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 pass=0; fail=0
-ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 
 DRIVER="$work/driver.bin"; python3 "$LB" driver "$DRIVER"
@@ -53,8 +53,10 @@ boot_feed() { # kernel out stream...
     timeout 70 qemu-system-x86_64 -cpu qemu64 -kernel "$kel" -initrd "$DRIVER" -debugcon file:"$out" \
         -drive file="$DISK",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
-    wait "$fp" 2>/dev/null
+        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>"$out.qerr"
+    wait "$fp" 2>/dev/null; local feed_rc=$?
+    kernel_test_record_boot "$d" "$out" "$kel" "$DRIVER"
+    return "$feed_rc"
 }
 is_struct_flake() { echo "$1" | grep -qE 'no parseable kernel cell-dump|MAGIC banner not found|truncated|missing 0xE'; }
 # a GENUINE divergence = a VALUE mismatch ('alloc N: emitted 0x0 != expected'), NOT the broad

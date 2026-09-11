@@ -41,9 +41,13 @@ def capture(source, destination):
             # have arbitrary names/extensions and must not be allowlisted away.
             rel = p.relative_to(source)
             omitted = p.suffix in {'.img', '.iso', '.elf', '.seed'} or name in {'a.out', 'gen1-herbert'}
-            row = {'path': str(rel), 'size': p.stat().st_size, 'retained': not omitted}
             with p.open('rb') as source_file:
-                row['sha256'] = hashlib.file_digest(source_file, 'sha256').hexdigest()
+                # Link28 mutation mints compiler variants under these exact
+                # basenames. Require ELF magic; similarly named raw data stays.
+                omitted = omitted or (name.startswith('gen1x.') and source_file.read(4) == b'\x7fELF')
+                source_file.seek(0)
+                row = {'path': str(rel), 'size': p.stat().st_size, 'retained': not omitted,
+                       'sha256': hashlib.file_digest(source_file, 'sha256').hexdigest()}
             if not omitted:
                 out = target/rel; out.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(p, out)

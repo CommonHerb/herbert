@@ -26,22 +26,20 @@ def build_tract():
     return img
 
 def parse_trace(stream):
-    # after MAGIC: (0xF0 + le32 addr)*N allocs ; 0xF1 ; (le32 addr + le32 readback)*N ; 0xF3
-    i = stream.rfind(MAGIC)
-    if i < 0: return None, 'MAGIC banner not found'
-    i += len(MAGIC)
-    allocs = []
-    while i < len(stream) and stream[i] == HW.HW_AMARK:
-        if i+5 > len(stream): return None, 'truncated alloc entry'
-        allocs.append(struct.unpack('<I', stream[i+1:i+5])[0]); i += 5
-    if i >= len(stream) or stream[i] != HW.HW_DBEGIN:
-        return None, 'no HWDUMP begin (truncated; %d allocs)' % len(allocs)
-    i += 1
-    pairs = []
-    while i+8 <= len(stream) and stream[i] != HW.HW_DEND:
-        pairs.append((struct.unpack('<I', stream[i:i+4])[0], struct.unpack('<I', stream[i+4:i+8])[0])); i += 8
-    if i >= len(stream) or stream[i] != HW.HW_DEND:
-        return None, 'no HWDUMP end (truncated; %d pairs)' % len(pairs)
+    # OWN-table boundaries, including the literal banner, come from the source
+    # profile. A marker-shaped word in an address or payload cannot redirect us.
+    cd = HW.parse_head(stream)
+    if cd is None: return None, 'truncated/incomplete kernel trace'
+    records = list(cd['_tail'].records)
+    if not records or records[0].kind != 'banner': return None, 'MAGIC banner not found'
+    i = 1; allocs = []
+    while i < len(records) and records[i].kind == 'falloc':
+        allocs.append(int.from_bytes(records[i].raw[1:], 'little')); i += 1
+    if i >= len(records) or records[i].kind != 'frames': return None, 'no HWDUMP begin'
+    body = records[i].raw[1:-1]
+    pairs = list(struct.iter_unpack('<II', body))
+    if [r.kind for r in records[i+1:]] != ['counter', 'dispatch', 'answer'] or records[-1].raw != b'\xde\x00\xad':
+        return None, 'no HWDUMP complete result'
     return {'allocs': allocs, 'pairs': pairs}, 'ok'
 
 MAXRESV = 0x40000   # max BIOS/firmware reservation below the RAM top we tolerate (QEMU reserves 0x20000; Bochs 0x1000).

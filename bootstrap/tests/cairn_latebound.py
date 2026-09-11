@@ -425,7 +425,7 @@ if __name__ == '__main__':
         if not r:
             print('NO-TABLE'); sys.exit(2)
         import re as _re
-        m = _re.search(rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1', r['_tail'], _re.S)
+        m = __import__('debugcon_frames').search(r['_tail'], 'pf', rb'\xD0(.{4})(.{4})(.{4})(.{4})(.{4})\xD1')
         if not m:
             print('NO-FAULT'); sys.exit(1)
         # FIELD ORDER. The emission is [esp],[esp+4],[esp+8],cr2,[esp+0x10] (cairn_ref.py:1186) and the CPU

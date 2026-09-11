@@ -39,10 +39,10 @@ REF="$script_dir/trikon_ref.py"
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 [[ -f "$REF" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing trikon_ref.py)"; exit 1; }
 
-work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead/timed-out QEMU run trips this -> hard fail at end
 pass=0; fail=0
-fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 
 python3 "$REF" module X "$work/mod_x.bin"
