@@ -62,7 +62,9 @@ jobs:
           - {lo: 33, hi: 43}
           - {lo: 44, hi: 51}
           - {lo: 52, hi: 55}
-          - {lo: 56, hi: 61}
+          - {lo: 56, hi: 57}
+          - {lo: 58, hi: 59}
+          - {lo: 60, hi: 61}
           - {lo: 62, hi: 66}
     runs-on: ubuntu-26.04
     steps:
