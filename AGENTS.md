@@ -55,3 +55,14 @@ it a pre-push blind panel) and written to canon just after. An earlier draft of 
 the artifact's mtime instead; that was wrong on its face (`ls -l --time-style=full-iso` reports
 `2026-09-02 00:10:38`, the file having been edited since) and mtime is not provenance evidence in any
 case. Corrected 2026-09-02 by the blind Opus 5 refuter, finding 1.
+
+## Review pointer addendum — 2026-09-11
+
+The already-pushed parser commit `c61d274` (original worker commit `7d085f5`)
+cites Fable review but omits its durable path. The three source reviews are
+`MEWTWO/audits/improvements-2026-09-11/verification/PARSER-SOURCE-REVIEW.md`,
+`PARSER-FOLLOWUP-REVIEW.md`, and `PARSER-LAST-DELTA-REVIEW.md` in that directory.
+Their empirical reconciliation is `verification/parser/README.md` under the same
+improvement packet. Final implementation qualification at `2f2fada` is retained
+in `verification/final-ci/` and `verification/final-local/`. This addendum repairs
+the pointer without rewriting the published commit or changing executable code.
