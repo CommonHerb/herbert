@@ -2,7 +2,12 @@
 
 This repo has several verification levels. They are intentionally separate because each one proves a different amount.
 
-## Local Smoke
+Choose checks that cover the behavior changed. Run affected checks first and
+use the aggregate below to qualify integrated hosted changes. Once the relevant
+checks pass, repeat or broaden them only for new changes, failures, or unresolved
+concerns. Prose changes need source and link review, not runtime reruns.
+
+## Integrated Hosted Qualification
 
 ```bash
 make verify-local
@@ -19,8 +24,11 @@ Runs:
 - `make lexer-copy-sync`: checks that accepted-token lexer copies in the stdin/parser/evaluator/emitter and Suke fragments stay synchronized with `stack/lexer_fragment.herb` (the line-aware token contract).
 - `make native-codegen-diagnostics`: checks the local helper used to enrich kernel QEMU mismatch logs.
 - `make switchover-cfree`: proves the C-free production surface stands with the C interpreter PHYSICALLY ABSENT, then proves it bites RED-first.
+- `make switchover-dry-run`: checks that the existing C-free mutation proofs still detect faults with the retired C toolchain absent.
+- `make compiler-cli-contract`: checks atomic output publication, including syscall fault injection and the emitted writer's instruction layout (tools described below).
+- `make wordcount`: compiles the maintained word counter with the committed seed and checks its output, input failures, and sustained input processing.
 
-This is the fast local confidence command. It does not run the full emulator-heavy kernel suite.
+This is the full hosted aggregate. It does not run the emulator-heavy kernel suite.
 
 ## Full Non-Emulator Suite
 

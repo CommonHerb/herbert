@@ -78,15 +78,16 @@ Normal program `main` return rendering, `clogger` and `flogger` are unchanged.
 ## Compiler invocation
 
 The compiler reads source from stdin before parsing or dispatching an emit mode.
-Success publishes `a.out`, prints `0` plus newline to stdout and exits 0. A
-checked input error writes `compiler: stdin read failed (errno N)` plus newline
+Successful compilation publishes `a.out`, prints `0` plus newline to stdout,
+and exits 0. A checked input error writes `compiler: stdin read failed (errno N)` plus newline
 to stderr and exits 1. Lexical, structural and native diagnostics retain their
 text but now go to stderr with status 1 and empty stdout. This deliberately
 changes the old status-zero/stdout rejection convention, including shared native
 diagnostics in historical emit modes. Callers must check the compiler status
 before using `a.out`; a failed invocation preserves the previous artifact.
-The internal `-- emit: ast-dump` inspection route still uses the unchecked
-lexer/parser and is outside the supported malformed-source diagnostic contract.
+The internal `-- emit: ast-dump` inspection route writes the parsed tree to
+stdout without publishing `a.out`. It still uses the unchecked lexer/parser
+and is outside the supported malformed-source diagnostic contract.
 
 `fwriter(bytes)` now publishes through an exclusive `.herbert*.tmp` file in
 an opened current-directory descriptor. It obtains the unpredictable name from
