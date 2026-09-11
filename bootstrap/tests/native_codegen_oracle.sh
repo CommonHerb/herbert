@@ -485,6 +485,8 @@ native_codegen_transcript_line1() {
     local result=$?
     rm -f "$expected"
     return "$result"
+}
+
 # Compiler CLI contract (2026-09): clean native rejection is status 1,
 # exactly one diagnostic on stderr, empty stdout and no published a.out.
 # Fresh directories make unexpected acceptance observable without writing into
