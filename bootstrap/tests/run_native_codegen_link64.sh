@@ -48,7 +48,7 @@
 # compile twins. HARNESS TAXONOMY (the L39 lesson, Codex-narrowed): a COMPLETED run (frame+exit
 # observed) with a wrong stream is a compiler RED -- NEVER re-rolled; only never-LISTENING /
 # never-completed signatures are harness errors (Bochs: bounded internal re-roll, marked, and
-# fail-closed only under KERNEL_CODEGEN_REQUIRE_EMU=1).
+# fail-closed after any attempted leg exhausts its setup/completion budget).
 #
 # Honest scope: ONE byte per op call (no stream-out verb, no flow control, no interrupt-driven
 # TX); the TEMT drain is runtime-load-bearing on Bochs (proven: THRE-only loses bytes) but
@@ -77,6 +77,7 @@ trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
@@ -218,43 +219,50 @@ qemu_run_duplex() { # label elf byte|-(none) want_cap want_e9 want_rc [kvm]
     return 1
 }
 
+# With KERNEL_EVIDENCE_DIR, capture each attempt before removing its directory.
+# F2 deliberately leaves a stuck mount/loop backing directory intact; it must
+# live outside $tmp so the gate's outer cleanup cannot cross that live mount.
+bochs_finish_attempt() { # directory class
+    local W="$1" cls="$2"
+    printf '%s\n' "$cls" > "$W/ATTEMPT-CLASS.txt" || { fail_test "Bochs: cannot record attempt class"; return 1; }
+    [[ "$cls" == *LEAKED* ]] || kernel_test_cleanup "$W"
+}
+
 bochs_run_duplex() { # label elf byte want_cap want_e9frame_hex
     local label="$1" elf="$2" byte="$3" want_cap="$4" want_e9="$5"
-    local W="$tmp/$label.b"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; return 1; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP" )
+    local W; W="$(mktemp -d)" || { fail_test "$label Bochs: cannot create attempt directory"; return 1; }
+    if ! f2__bios_find; then
+        BOCHS_HARNESS_ERR="DISK-BUILD(bios-images-missing)"
+        bochs_finish_attempt "$W" "$BOCHS_HARNESS_ERR" || return 1
+        return 2
+    fi
+    local cfg='set timeout=0
+set default=0
+menuentry "c" {
+ multiboot /boot/kernel.elf
+ boot
+}
+'
+    local bcls
+    if ! bcls="$(f2__disk_build_class "$W" "$cfg" "$elf:boot/kernel.elf" 2>"$W/disk-build.stderr")"; then
+        BOCHS_HARNESS_ERR="${bcls:-DISK-BUILD(unknown)}"
+        bochs_finish_attempt "$W" "$BOCHS_HARNESS_ERR" || return 1
+        return 2
+    fi
+    # Keep the full-duplex feeder and its EOF capture barrier. The shared feed
+    # wrapper has no drain-before-kill window for kernel_io_feed.py --cap.
     local port; port=$(free_port)
     python3 "$feeder" "$port" "$byte" --cap "$W/cap.bin" --hold 60 > "$W/feed.log" 2>&1 &
     local fp=$!
-    feeder_wait "$W/feed.log" || { BOCHS_HARNESS_ERR="feeder never LISTENING"; kill "$fp" 2>/dev/null; return 2; }
-    ( cd "$W"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 64
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-log: bochs_log.txt
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 120 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
+    if ! feeder_wait "$W/feed.log"; then
+        BOCHS_HARNESS_ERR="feeder never LISTENING"
+        kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
+        bochs_finish_attempt "$W" "$BOCHS_HARNESS_ERR" || return 1
+        return 2
+    fi
+    f2__boot "$W" 120 64 "com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port"
+    local boot_rc=$?
+    printf '%s\n' "$boot_rc" > "$W/boot.status"
     # drain-before-kill (completeness-critic catch): the feeder writes cap.bin only after its recv loop
     # ends (peer-close/hold); killing it first could vaporize a COMPLETED run's capture -> a false RED
     # the taxonomy forbids re-rolling. Bochs has exited here, so the socket is closed -- give the feeder
@@ -266,17 +274,21 @@ BX
     listened=$(grep -ac 'SENT' "$W/feed.log" 2>/dev/null)
     if [[ "$listened" -lt 1 || "$shutdown" -lt 1 ]]; then
         BOCHS_HARNESS_ERR="never completed (sent=$listened shutdown=$shutdown) -- emulator/feeder, not a kernel grade"
+        bochs_finish_attempt "$W" "$BOCHS_HARNESS_ERR" || return 1
         return 2
     fi
     # feeder SENT + boot ran THROUGH shutdown -> the output capture (cap.bin) + frame count are graded from here
-    # (never re-rolled). NOTE (parley/attest honesty): SENT is feeder-side; guest RECEIPT of the input byte is NOT
-    # independently proven, so a lone RED here may be a capture-class flake -- re-derive per the parley (57262f7)
-    # same-input replay discriminator, not the SENT+shutdown completion alone.
+    # (never re-rolled). SENT proves only feeder-side delivery, not independent
+    # guest receipt. A completed wrong stream remains RED without replay here.
     hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
     local nf; nf=$(grep -o "$want_e9" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
     local got_cap; got_cap=$(xxd -p "$W/cap.bin" 2>/dev/null | tr -d '\n')
-    if [[ "$nf" -eq 1 && "$got_cap" == "$want_cap" ]]; then return 0; fi
-    fail_test "$label Bochs byte=$byte (feeder SENT + ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator): frames($want_e9)=$nf(want 1) cap=${got_cap:-EMPTY}(want $want_cap)"
+    if [[ "$nf" -eq 1 && "$got_cap" == "$want_cap" ]]; then
+        bochs_finish_attempt "$W" "COMPLETED-GREEN" || return 1
+        return 0
+    fi
+    fail_test "$label Bochs byte=$byte (feeder SENT + ran through shutdown; guest receipt not independently proven; completed RED is not replayed): frames($want_e9)=$nf(want 1) cap=${got_cap:-EMPTY}(want $want_cap)"
+    bochs_finish_attempt "$W" "COMPLETED-RED" || return 1
     return 1
 }
 
@@ -380,12 +392,7 @@ if [[ "$run_bochs" -eq 1 && -n "${ELF[ro]:-}" ]]; then
         bochs_done=1; break
     done
     if [[ "$bochs_done" -eq 0 ]]; then
-        if [[ "$REQUIRE_EMU" == "1" ]]; then
-            echo "HARNESS-ERROR: (Bochs) 3 consecutive harness attempts failed -- $BOCHS_HARNESS_ERR (re-rollable emulator/feeder failure, NOT a kernel miscompile; RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"
-            fail=$((fail + 1))
-        else
-            echo "  HARNESS-ERROR (non-fatal): Bochs failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR" >&2
-        fi
+        f2_harness_error "ro.bochs.9" "$BOCHS_HARNESS_ERR"
     fi
 fi
 
@@ -407,6 +414,7 @@ if [[ "$REQUIRE_EMU" != "1" ]] && ! have_qemu; then
     echo "  NOTE: no emulator ran; byte-pin + white-box gates only (set KERNEL_CODEGEN_REQUIRE_EMU=1 for the silicon gate)"
 fi
 
+f2_harness_summary || exit 1
 if [[ "$fail" -gt 0 ]]; then
     echo "native-codegen link64 (riposte / DEVICE OUTPUT FROM SOURCE): pass=$pass fail=$fail"
     exit 1

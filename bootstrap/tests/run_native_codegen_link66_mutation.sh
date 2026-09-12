@@ -356,8 +356,9 @@ elif mode == "irgate2":
 elif mode == "singlefunc":
     # Route SINGLE-function programs down the multi-function tap path too, so the device-op
     # multi-function rule stops rejecting them. `reject-singlefunc` is the only leg that sees it.
+    # Folio already admits single-function boot_read users; this probe has no boot_read.
     src = infunc(src, "nc_emit_multiboot32_long64_program",
-                 "    if count(funcs) != 1:\n        return nc_tap_emit_program(funcs, prog.2)\n",
+                 "    if count(funcs) != 1 or nc_tap_uses_boot(funcs, 0, count(funcs)):\n        return nc_tap_emit_program(funcs, prog.2)\n",
                  "    if true:\n        return nc_tap_emit_program(funcs, prog.2)\n")
 elif mode == "pops":
     src = infunc(src, "nc_tap_pops", "    if op == 49:\n        return 0\n    end\n    if op == 50:\n        return 2\n    end\n    if op == 51:\n        return 3\n    end\n", "")
