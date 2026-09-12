@@ -31,11 +31,14 @@ examples/native_today_collections.expected
 examples/native_today_io.expected
 examples/wordcount.md
 examples/wordcount_long64.md
+examples/hexview_long64.md
 # Test tooling for the Herbert-authored sustained input utility.
 bootstrap/tests/check_wordcount.py
 # Serial host adapter and focused checks; counting runs in the Herbert guest.
 tools/wordcount_long64.py
 bootstrap/tests/check_wordcount_long64.py
+# Boot-file transport only; hexadecimal rendering runs in the Herbert guest.
+tools/hexview_long64.py
 stack/native_surface_ledger.expected
 bootstrap/tests/check_lexer_copy_sync.py
 # Hosted conformance harness + hand-authored data: deliberate test-tool boundary.
@@ -476,6 +479,10 @@ bootstrap/tests/link66_goldens/boundary_edge.sha256
 bootstrap/tests/link66_goldens/boundary_over.sha256
 bootstrap/tests/link66_goldens/boundary_under.sha256
 bootstrap/tests/longbuf_spec.py
+# folio: source-authored boot input and its focused verification tools.
+bootstrap/tests/run_native_codegen_link67.sh
+bootstrap/tests/run_native_codegen_link67_mutation.sh
+bootstrap/tests/check_boot_input.py
 
 # Shared verification machinery (test-only; no compiler/runtime dependency).
 bootstrap/tests/qemu_prefix.sh

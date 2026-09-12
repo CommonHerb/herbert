@@ -54,22 +54,22 @@ compiler-cli-contract:
 wordcount:
 	@python3 bootstrap/tests/check_wordcount.py
 
-# The same useful calculation on the sovereign long64 runtime. The host tool
-# transports stdin and prints the guest's result; it does not calculate counts.
-.PHONY: long64-wordcount check-long64-wordcount
+# Useful programs on the sovereign long64 runtime, built by the same seed.
+.PHONY: long64-wordcount check-long64-wordcount long64-hexview
 long64-wordcount: $(BUILD)/wordcount-long64.elf
+long64-hexview: $(BUILD)/hexview-long64.elf
 
-$(BUILD)/wordcount-long64.elf: examples/wordcount_long64.herb bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+$(BUILD)/%-long64.elf: examples/%_long64.herb bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
 	@set -eu; \
-	  mkdir -p $(BUILD)/wordcount-long64; \
-	  cp bootstrap/seed/gen1.seed $(BUILD)/wordcount-long64/compiler; \
-	  chmod u+x $(BUILD)/wordcount-long64/compiler; \
-	  (cd $(BUILD)/wordcount-long64 && ./compiler < ../../examples/wordcount_long64.herb > compiler.stdout 2> compiler.stderr) || { cat $(BUILD)/wordcount-long64/compiler.stderr >&2; exit 1; }; \
-	  printf '0\n' > $(BUILD)/wordcount-long64/expected.stdout; \
-	  cmp $(BUILD)/wordcount-long64/expected.stdout $(BUILD)/wordcount-long64/compiler.stdout; \
-	  test ! -s $(BUILD)/wordcount-long64/compiler.stderr; \
-	  mv $(BUILD)/wordcount-long64/a.out $@
+	  mkdir -p $(BUILD)/$*-long64; \
+	  cp bootstrap/seed/gen1.seed $(BUILD)/$*-long64/compiler; \
+	  chmod u+x $(BUILD)/$*-long64/compiler; \
+	  (cd $(BUILD)/$*-long64 && ./compiler < ../../examples/$*_long64.herb > compiler.stdout 2> compiler.stderr) || { cat $(BUILD)/$*-long64/compiler.stderr >&2; exit 1; }; \
+	  printf '0\n' > $(BUILD)/$*-long64/expected.stdout; \
+	  cmp $(BUILD)/$*-long64/expected.stdout $(BUILD)/$*-long64/compiler.stdout; \
+	  test ! -s $(BUILD)/$*-long64/compiler.stderr; \
+	  mv $(BUILD)/$*-long64/a.out $@
 
 check-long64-wordcount: $(BUILD)/wordcount-long64.elf
 	@python3 bootstrap/tests/check_wordcount_long64.py --image $(BUILD)/wordcount-long64.elf
@@ -117,14 +117,14 @@ lexer-copy-sync:
 
 # native-codegen-diagnostics: a small QEMU DIAGNOSTICS suite for the native-codegen
 # emitter -- NOT the kernel-arc boot gate. The boot gate is `make kernel-verify` (the
-# link17..66 dual/tri-substrate gates + mutation proofs under KERNEL_CODEGEN_REQUIRE_EMU=1)
+# link17..67 dual/tri-substrate gates + mutation proofs under KERNEL_CODEGEN_REQUIRE_EMU=1)
 # and its CI mirror `.github/workflows/kernel-codegen-l1.yml`. Do not read this target's
 # green as "the kernels boot" -- it is diagnostics, not the tri-substrate boot proof.
 native-codegen-diagnostics:
 	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
 
 # kernel-verify: the LOCAL kernel-arc boot gate. Runs every kernel-codegen link gate
-# (link17..66 = kernel-arc L1..L50) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
+# (link17..67) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
 # (a missing QEMU/Bochs is a HARD failure, never a silent skip), and REQUIRES the KVM
 # real-silicon leg when /dev/kvm is present -- the A11 tier-1 anchor CI cannot cover
 # (GitHub runners have no /dev/kvm). Run this before any kernel-arc push. See the driver

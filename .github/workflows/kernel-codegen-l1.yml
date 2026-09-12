@@ -65,7 +65,7 @@ jobs:
           - {lo: 56, hi: 57}
           - {lo: 58, hi: 59}
           - {lo: 60, hi: 61}
-          - {lo: 62, hi: 66}
+          - {lo: 62, hi: 67}
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
@@ -73,7 +73,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential \
+            build-essential gdb \
             qemu-system-x86 \
             bochs bochs-x bochsbios vgabios \
             xvfb \

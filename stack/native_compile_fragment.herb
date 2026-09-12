@@ -1544,6 +1544,13 @@ func op_stdin_read():
     return 56
 end
 
+-- folio (link67): sovereign boot-file input, admitted only by nc_tap_*.
+-- One scalar result: the next byte 0..255, or stable EOF 256. Unlike the
+-- historical module_byte answer cell, this consumes a validated module extent.
+func op_boot_read():
+    return 57
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1856,6 +1863,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "input_byte"):
         return emit_instr(ir, op_input_byte(), 0, 0)
+    end
+    if equal(name, "boot_read"):
+        return emit_instr(ir, op_boot_read(), 0, 0)
     end
     if equal(name, "output_byte"):
         return emit_instr(ir, op_output_byte(), 0, 0)
@@ -3281,6 +3291,9 @@ func err_parse_program(tokens, eof_line):
 end
 
 func err_is_builtin_name(name):
+    if equal(name, "boot_read"):
+        return true
+    end
     if equal(name, "length") or equal(name, "index") or equal(name, "slice"):
         return true
     end
@@ -3304,6 +3317,9 @@ func err_is_void_builtin(name):
 end
 
 func err_is_value_builtin(name):
+    if equal(name, "boot_read"):
+        return true
+    end
     if equal(name, "stdin_read"):
         return true
     end
@@ -3320,6 +3336,9 @@ func err_is_value_builtin(name):
 end
 
 func err_value_builtin_arity(name):
+    if equal(name, "boot_read"):
+        return 0
+    end
     if equal(name, "stdin_read"):
         return 0
     end
@@ -6207,6 +6226,9 @@ end
 -- calls here. Type constructors, void-as-value, unsupported calls and low-level
 -- target intrinsics have separate contracts; a default arity is not a whitelist.
 func nc_has_value_arity_guard(name):
+    if equal(name, "boot_read"):
+        return true
+    end
     if equal(name, "stderr_write") or equal(name, "stdin_read"):
         return true
     end
@@ -6342,6 +6364,9 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
             return (0, nc_type_int(), sw.1, sw.2, sw.3)
         end
         if equal(name, "input_byte"):
+            return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "boot_read"):
             return (0, nc_type_int(), env, sig, 0)
         end
         if equal(name, "module_byte"):
@@ -7069,6 +7094,9 @@ func nc_is_tail_call(code, i, n):
 end
 
 func nc_opcode_name_for_diag(op):
+    if op == 57:
+        return "BOOT_READ"
+    end
     if op == 1:
         return "PUSH_BOOL"
     end
@@ -20967,6 +20995,9 @@ end
 -- ============================================================================
 
 func nc_tap_op_allowed(op):
+    if op == 57:
+        return true
+    end
     if op == 20:
         return true
     end
@@ -20989,6 +21020,9 @@ func nc_tap_op_allowed(op):
 end
 
 func nc_tap_pops(op, nargs):
+    if op == 57:
+        return 0
+    end
     if op == 20:
         return nargs
     end
@@ -21011,6 +21045,9 @@ func nc_tap_pops(op, nargs):
 end
 
 func nc_tap_pushes(op):
+    if op == 57:
+        return 1
+    end
     if op == 20:
         return 1
     end
@@ -21075,6 +21112,9 @@ end
 -- op-20 size at 64-bit width: E8 rel32 (5) + caller cleanup (0 / add rsp,imm8 = 4 /
 -- add rsp,imm32 = 7) + push rax (1). Every other op reuses nc64_op_size.
 func nc_tap_op_size(op, nargs, is_last):
+    if op == 57:
+        return 19
+    end
     if op == 20:
         let cl = 0
         if nargs > 0:
@@ -21433,6 +21473,25 @@ func nc_tap_lower_body(obuf, code, i, n, offs, epi, bases, funcs, is_main, npara
         obuf = nc_append_le32(obuf, toff2 - endoff)
     elif op == 42:
         obuf = nc_emit_mul(obuf)
+    elif op == 57:
+        -- folio: R12/R13 are reserved cursor/end across all admitted ops and
+        -- ordinary/tail calls. Compare BEFORE loading; EOF leaves both alone.
+        do append(obuf, 184)  -- B8 00010000 mov eax,256
+        obuf = nc_append_le32(obuf, 256)
+        do append(obuf, 77)   -- 4D 39 EC cmp r12,r13
+        do append(obuf, 57)
+        do append(obuf, 236)
+        do append(obuf, 115)  -- 73 08 jae done (unsigned)
+        do append(obuf, 8)
+        do append(obuf, 65)   -- 41 0F B6 04 24 movzx eax,byte [r12]
+        do append(obuf, 15)
+        do append(obuf, 182)
+        do append(obuf, 4)
+        do append(obuf, 36)
+        do append(obuf, 73)   -- 49 FF C4 inc r12
+        do append(obuf, 255)
+        do append(obuf, 196)
+        do append(obuf, 80)   -- done: push rax
     elif op == 45:
         -- hearken op_input_byte on the long64 target: poll COM1 LSR (0x3FD) for Data-Ready,
         -- then read the RBR (0x3F8) and push the byte zero-extended. 18 bytes, byte-identical
@@ -21711,6 +21770,151 @@ func nc_tap_uses_uart(funcs, i, nf):
     return nc_tap_uses_uart(funcs, i + 1, nf)
 end
 
+-- folio activation examines every lowered function, not reachability. The
+-- non-input path emits neither capture nor validation and keeps its old bytes.
+func nc_tap_code_uses_boot(code, i, n):
+    if i >= n:
+        return false
+    end
+    if get(code, i).0 == 57:
+        return true
+    end
+    return nc_tap_code_uses_boot(code, i + 1, n)
+end
+
+func nc_tap_uses_boot(funcs, i, nf):
+    if i >= nf:
+        return false
+    end
+    let fn = get(funcs, i)
+    let code = fn.4
+    if nc_tap_code_uses_boot(code, 0, count(code)):
+        return true
+    end
+    return nc_tap_uses_boot(funcs, i + 1, nf)
+end
+
+-- All validation failures branch backward to this boot path's inline stub.
+-- Offsets are within cbuf, just like the existing tap layout; no patch table.
+func nc_tap_boot_fail_branch(buf, cc, fail_off):
+    do append(buf, 15)
+    do append(buf, cc)
+    let endoff = length(freeze(buf)) + 4
+    return nc_append_rel32(buf, fail_off, endoff)
+end
+
+-- Validate the COMPLETE span [rax,rax+span) before dereferencing metadata.
+-- RAX was loaded through EAX, so adding 16/28 at 64-bit width cannot wrap.
+-- Accept nonnull spans wholly below 0xA0000, or wholly in [esp_val,64 MiB).
+-- This appliance policy excludes image, guards, stack and the firmware hole;
+-- it is not general physical-memory discovery. Clobbers RCX, preserves RAX.
+-- Fixed 47 bytes; the forward JBE skips the 25-byte high-range checks.
+func nc_tap_boot_span(buf, span, esp_val, fail_off):
+    do append(buf, 72)   -- 48 85 C0 test rax,rax
+    do append(buf, 133)
+    do append(buf, 192)
+    buf = nc_tap_boot_fail_branch(buf, 132, fail_off)  -- jz
+    do append(buf, 72)   -- 48 8D 48 ib lea rcx,[rax+span]
+    do append(buf, 141)
+    do append(buf, 72)
+    do append(buf, span)
+    do append(buf, 72)   -- 48 81 F9 00000A00 cmp rcx,0xA0000
+    do append(buf, 129)
+    do append(buf, 249)
+    buf = nc_append_le32(buf, 655360)
+    do append(buf, 118)  -- 76 19 jbe accepted
+    do append(buf, 25)
+    do append(buf, 72)   -- 48 3D id cmp rax,esp_val
+    do append(buf, 61)
+    buf = nc_append_le32(buf, esp_val)
+    buf = nc_tap_boot_fail_branch(buf, 130, fail_off)  -- jb
+    do append(buf, 72)   -- 48 81 F9 00000004 cmp rcx,64 MiB
+    do append(buf, 129)
+    do append(buf, 249)
+    buf = nc_append_le32(buf, 67108864)
+    return nc_tap_boot_fail_branch(buf, 135, fail_off) -- ja
+end
+
+-- folio's 259-byte pre-main initializer, after mov esp,esp_val. The 32-bit
+-- capture used ESI/EDI; explicitly normalize both here in 64-bit mode before
+-- inspecting either value. Incoming upper register halves are not trustworthy.
+-- R12/R13 become cursor/end only after complete descriptor validation. All
+-- currently admitted tap operations, callee frames and TCO preserve them.
+func nc_tap_boot_init(buf, esp_val):
+    let start = length(freeze(buf))
+    do append(buf, 137)  -- 89 F6 mov esi,esi (zero-extend saved magic)
+    do append(buf, 246)
+    do append(buf, 137)  -- 89 FF mov edi,edi (zero-extend saved MBI pointer)
+    do append(buf, 255)
+    do append(buf, 235)  -- EB 49 jump over the 73-byte failure stub
+    do append(buf, 73)
+    let fail_off = length(freeze(buf))
+    do append(buf, 102)  -- 66 BA E900 mov dx,0xE9
+    do append(buf, 186)
+    do append(buf, 233)
+    do append(buf, 0)
+    buf = nc32_emit_out_char(buf, 66)  -- BI\n, before the ordinary grade-1 tail
+    buf = nc32_emit_out_char(buf, 73)
+    buf = nc32_emit_out_char(buf, 10)
+    do append(buf, 176)  -- B0 01 mov al,1
+    do append(buf, 1)
+    buf = nc32_emit_epilogue(buf)
+    do append(buf, 129)  -- 81 FE 02B0AD2B cmp esi,Multiboot magic
+    do append(buf, 254)
+    buf = nc_append_le32(buf, 732803074)
+    buf = nc_tap_boot_fail_branch(buf, 133, fail_off) -- jne (no metadata load yet)
+    do append(buf, 137)  -- 89 F8 mov eax,edi
+    do append(buf, 248)
+    buf = nc_tap_boot_span(buf, 28, esp_val, fail_off)
+    do append(buf, 246)  -- F6 00 08 test byte [rax],8 (module-present flag)
+    do append(buf, 0)
+    do append(buf, 8)
+    buf = nc_tap_boot_fail_branch(buf, 132, fail_off) -- jz
+    do append(buf, 131)  -- 83 78 14 01 cmp dword [rax+20],1
+    do append(buf, 120)
+    do append(buf, 20)
+    do append(buf, 1)
+    buf = nc_tap_boot_fail_branch(buf, 133, fail_off) -- jne
+    do append(buf, 139)  -- 8B 40 18 mov eax,[rax+24] (zero-extended descriptor)
+    do append(buf, 64)
+    do append(buf, 24)
+    buf = nc_tap_boot_span(buf, 16, esp_val, fail_off)
+    do append(buf, 68)   -- 44 8B 20 mov r12d,[rax] (module start)
+    do append(buf, 139)
+    do append(buf, 32)
+    do append(buf, 68)   -- 44 8B 68 04 mov r13d,[rax+4] (module end)
+    do append(buf, 139)
+    do append(buf, 104)
+    do append(buf, 4)
+    do append(buf, 77)   -- 4D 39 EC cmp r12,r13 (ordered extent)
+    do append(buf, 57)
+    do append(buf, 236)
+    buf = nc_tap_boot_fail_branch(buf, 135, fail_off) -- ja
+    do append(buf, 76)   -- 4C 89 E1 mov rcx,r12
+    do append(buf, 137)
+    do append(buf, 225)
+    do append(buf, 76)   -- 4C 09 E9 or rcx,r13
+    do append(buf, 9)
+    do append(buf, 233)
+    do append(buf, 116)  -- 74 1A jz accepted: GRUB's exact empty sentinel 0,0
+    do append(buf, 26)
+    do append(buf, 73)   -- 49 81 FC id cmp r12,esp_val
+    do append(buf, 129)
+    do append(buf, 252)
+    buf = nc_append_le32(buf, esp_val)
+    buf = nc_tap_boot_fail_branch(buf, 130, fail_off) -- jb
+    do append(buf, 73)   -- 49 81 FD 00000004 cmp r13,64 MiB
+    do append(buf, 129)
+    do append(buf, 253)
+    buf = nc_append_le32(buf, 67108864)
+    buf = nc_tap_boot_fail_branch(buf, 135, fail_off) -- ja
+    if length(freeze(buf)) != start + 259:
+        let failed = nc_fail(656, 0, "multiboot32-long64: boot initializer length invariant")
+        return buf
+    end
+    return buf
+end
+
 -- link66 BUFFER MODE, the exact mirror of the uart predicate above: any function body containing
 -- op 49 (bufbase), 50 (bufget) or 51 (bufset) means the image needs the runtime-indexed buffer, so
 -- the two-guard layout, the buffer page and the exact p_memsz are emitted. NONE of them anywhere ->
@@ -21772,8 +21976,9 @@ func nc_tap_idx_ops(funcs, i, nf, acc):
     return nc_tap_idx_ops(funcs, i + 1, nf, acc)
 end
 
--- the taproot driver (count(funcs) > 1). Layout (vaddr V0=0x10000c):
--- [56-byte head -> ljmp long_entry] [mov esp,esp_val] [uart init: 56 bytes iff any func
+-- the taproot driver (multiple functions, or folio input). Layout (V0=0x10000c):
+-- [folio capture: 4 bytes iff boot_read] [56-byte head -> ljmp long_entry]
+-- [mov esp,esp_val] [folio validation: 259 bytes iff boot_read] [uart init: 56 bytes iff any func
 -- reads input (hearken)] [optional main rbp frame] [main body -- calls to callees via E8
 -- rel32] [grading tail: shr rax,0x20] [shared 58-byte epilogue] [CALLEE BLOCK: funcs[1..],
 -- each prologue+body+epilogue] [GDT/GDTR 30] [pad to 4 KiB] [PML4][PDPT][PD w/ guard]. main
@@ -21804,14 +22009,22 @@ func nc_tap_emit_program(funcs, mainidx):
     if nc_tap_uses_uart(funcs, 0, nf):
         uart_len = 56
     end
+    let uses_boot = nc_tap_uses_boot(funcs, 0, nf)
+    let capture_len = 0
+    let boot_init_len = 0
+    if uses_boot:
+        capture_len = 4
+        boot_init_len = 259
+    end
+    let head_len = capture_len + 56
     let main_bodylen = nc_tap_body_size(maincode, 0, mainn, 0, funcs, 1, 0, main_frame)
     let v0 = 1048588
-    let long_entry_vaddr = v0 + 56
-    let main_body_base = 56 + main_prefix + uart_len
+    let long_entry_vaddr = v0 + head_len
+    let main_body_base = head_len + main_prefix + boot_init_len + uart_len
     let main_epi_abs = main_body_base + main_bodylen
     let callee_block_start = main_epi_abs + 4 + 58
     let bases = new_array(int)
-    do add(bases, 56)
+    do add(bases, head_len)
     bases = nc_tap_callee_bases(funcs, 1, nf, callee_block_start, bases)
     let callee_block_len = nc_tap_callees_total(funcs, 1, nf, 0)
     let gdt_off = callee_block_start + callee_block_len
@@ -21857,9 +22070,20 @@ func nc_tap_emit_program(funcs, mainidx):
         return 0
     end
     let cbuf = new_buffer()
+    if uses_boot:
+        -- Capture before the old 32-bit head clobbers EAX/ECX/EDX. Do not
+        -- push to the unspecified incoming stack; ESI/EDI survive the head.
+        do append(cbuf, 137)  -- 89 C6 mov esi,eax (Multiboot magic)
+        do append(cbuf, 198)
+        do append(cbuf, 137)  -- 89 DF mov edi,ebx (information pointer)
+        do append(cbuf, 223)
+    end
     cbuf = nc32_long_emit_head(cbuf, gdtr_vaddr, pml4_vaddr, long_entry_vaddr)
     do append(cbuf, 188)   -- BC mov esp,imm32
     cbuf = nc_append_le32(cbuf, esp_val)
+    if uses_boot:
+        cbuf = nc_tap_boot_init(cbuf, esp_val)
+    end
     if uart_len > 0:
         cbuf = nc32_uart_init(cbuf)   -- hearken: COM1 init once, before the main frame
     end
@@ -21871,6 +22095,10 @@ func nc_tap_emit_program(funcs, mainidx):
         do append(cbuf, 131)
         do append(cbuf, 236)
         do append(cbuf, 8 * main_frame)
+    end
+    if uses_boot and length(freeze(cbuf)) != main_body_base:
+        let fboot = nc_fail(656, 0, "multiboot32-long64: boot prefix length invariant")
+        return 0
     end
     let mlay = nc_tap_offsets_loop(maincode, 0, mainn, main_body_base, new_array(int), funcs, 1, 0, main_frame)
     cbuf = nc_tap_lower_body(cbuf, maincode, 0, mainn, mlay.0, mlay.1, bases, funcs, 1, 0, main_frame, buf_2m)
@@ -21914,6 +22142,12 @@ func nc_tap_emit_program(funcs, mainidx):
     if uses_buf:
         memsz = guard_2m - 1048576
     end
+    if uses_boot:
+        -- Reserve the COMPLETE new input image, including guards and stack,
+        -- before a loader places its module. Applied after buffer reservation.
+        -- Non-input images retain the historical p_memsz and D23 scope.
+        memsz = esp_val - 1048576
+    end
     let img = new_buffer()
     img = nc32_emit_ehdr(img, entry, shoff)
     img = nc32_emit_phdr(img, filesz, memsz)
@@ -21937,7 +22171,7 @@ func nc_emit_multiboot32_long64_program(source):
     end
     let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
     let funcs = prog.0
-    if count(funcs) != 1:
+    if count(funcs) != 1 or nc_tap_uses_boot(funcs, 0, count(funcs)):
         return nc_tap_emit_program(funcs, prog.2)
     end
     let mainfn = get(funcs, prog.2)

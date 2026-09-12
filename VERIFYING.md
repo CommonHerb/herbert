@@ -104,7 +104,7 @@ oracle cannot be sourced, before testing emulator availability. The helper is
 an explicit test-tooling allowlist addition; emitted Herbert programs gain no
 runtime dependency. A wrapper must use `exec` to preserve signal status.
 
-CI divides links 17..66 into independently scheduled groups. Each group runs
+CI divides links 17..67 into independently scheduled groups. Each group runs
 all its gates and mutation proofs even after a failure, records every exit
 status, and remains red if any gate fails. Each gate has a 25-minute limit
 with a 60-second termination grace period. Existing emulator package pins and
@@ -130,9 +130,18 @@ setup or feeder failures) separately from completed kernel results.
 `make check-long64-wordcount` separately builds and checks the maintained
 [streaming application](examples/wordcount_long64.md) under QEMU. It runs once
 in the 60..61 CI job, retaining application evidence alongside the kernel gate
-directories. The 99 kernel gates and their STATUS files keep their existing
-scope. The application checker has an optional `--kvm` case for local hardware;
+directories. Its application result remains separate from the kernel gate
+STATUS files. The application checker has an optional `--kvm` case for local hardware;
 its normal CI checks use QEMU TCG and do not claim a Bochs application run.
+
+Folio (link67) supplies boot-file input and exercises the
+[binary file viewer](examples/hexview_long64.md). Its normal and mutation gates
+join the existing 99 kernel gates. They check exact raw bytes and EOF, call
+continuity, ELF stack reservation and explicit refusal of invalid boot input.
+GDB changes selected boot registers/metadata at the real kernel entry to exercise
+invalid spans without adding production hooks. GRUB uses `module --nounzip`;
+Bochs exercises GRUB's empty-file sentinel; QEMU checks missing input. The local command
+for this link is `KERNEL_VERIFY_LO=67 KERNEL_VERIFY_HI=67 make kernel-verify`.
 
 ## What These Commands Do Not Prove
 

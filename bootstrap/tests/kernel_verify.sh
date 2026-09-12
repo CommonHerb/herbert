@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # kernel_verify.sh -- the LOCAL kernel-arc BOOT GATE (invoked by `make kernel-verify`).
 #
-# Runs every kernel-codegen link gate (link17..link65 = kernel-arc L1..L49) plus its
+# Runs every kernel-codegen link gate (link17..link67) plus its
 # mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1 -- so a missing QEMU-TCG or Bochs is a
 # HARD failure, never the silent skip you get from a bare `bash run_native_codegen_linkNN.sh`.
 #
@@ -16,7 +16,7 @@
 #     usable it FAILS LOUD rather than dropping the substrate. When /dev/kvm is genuinely absent
 #     it runs the CI-equivalent QEMU+Bochs gate and says so.
 #
-# Range override (for smoke tests): KERNEL_VERIFY_LO / KERNEL_VERIFY_HI (default 17..66).
+# Range override (for smoke tests): KERNEL_VERIFY_LO / KERNEL_VERIFY_HI (default 17..67).
 
 set -uo pipefail
 # CDPATH is unset FIRST and the cd is checked: `cd` with a RELATIVE operand searches $CDPATH before
@@ -33,7 +33,7 @@ LO="${KERNEL_VERIFY_LO:-17}"
 # silently stops short of the newest link while that link is still REQUIRED to exist -- which is
 # exactly what happened when the canonical range moved to 66 and this default was left at 65:
 # link66 would have been canonical, mandatory, and never run by the local sweep.
-HI="${KERNEL_VERIFY_HI:-66}"
+HI="${KERNEL_VERIFY_HI:-67}"
 
 # Validate the range up front: a non-integer or inverted range must FAIL, never fall
 # through to a vacuous "GREEN" with zero gates run (a false-green is the one outcome this
@@ -55,19 +55,16 @@ have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # mirrors the g
 
 # --- the canonical kernel-arc gate set (what MUST exist -- a missing member inside the requested range is a
 #     HARD failure, never the silent skip that yields a vacuous GREEN) --------------------------------------
-#   * gate script     for every link 17..66
-#   * mutation proof  for every link 18..66  (link17 predates the mutation-proof convention -- the ONE
+#   * gate script     for every link 17..67
+#   * mutation proof  for every link 18..67  (link17 predates the mutation-proof convention -- the ONE
 #                     documented gate-only exception)
-#   RANGE MOVED 65 -> 66 in link66's landing slice (longbuf, the 50th kernel-arc link). This line is
-#   also the SCORECARD's range authority for its section 4 (tools/scorecard.sh reads the declaration
-#   below out of this file's git HEAD blob), so until it moves the scorecard cannot see link66 and
+#   The declaration below is also the SCORECARD's range authority for section 4.
+#   folio extends it through link67, alongside the local default and CI matrix.
 #   NOTE TO ANYONE EDITING THIS COMMENT: the scorecard requires EXACTLY ONE occurrence each of the
 #   two assignment strings in this whole file, so do not spell them out in prose -- writing them
 #   here once broke section 4 outright (`declaration not unique: 2 assignment(s)`), which is a
 #   uniqueness invariant doing its job on a comment that meant well.
-#   reports 49 links with link65 as the newest -- which is why a landing that stops at the workflow
-#   leaves the project's own progress authority telling the truth about the wrong tree.
-GATE_LO=17; GATE_HI=66
+GATE_LO=17; GATE_HI=67
 mutation_expected() { local n="$1"; (( n >= 18 && n <= GATE_HI )); }
 
 # --- which requested links carry a KVM real-silicon leg. An explicit MEMBER SET, NOT a contiguous range
@@ -89,7 +86,7 @@ mutation_expected() { local n="$1"; (( n >= 18 && n <= GATE_HI )); }
 #     is unchanged in substance (blind Opus 5 finding 3, 2026-09-01). A stronger closure
 #     (a machine-readable KVM-ran sentinel per gate, or a KERNEL_CODEGEN_REQUIRE_KVM=1 the member gates
 #     honor) remains a future hardening, out of scope here. ---
-KVM_LINKS="39 $(seq -s' ' 44 66)"
+KVM_LINKS="39 $(seq -s' ' 44 67)"
 kvm_links_desc() {   # compact the member set for the banner -- DERIVED from KVM_LINKS, so the text a
                      # reader sees can never drift from the set the requirement is computed on.
     local n out="" s="" p=""
@@ -137,7 +134,7 @@ fi
 
 fail=0; ran=0; ran_mut=0
 for n in $(seq "$LO" "$HI"); do
-    (( n >= GATE_LO && n <= GATE_HI )) || continue   # kernel-verify runs ONLY the canonical kernel-arc set (17..66)
+    (( n >= GATE_LO && n <= GATE_HI )) || continue   # kernel-verify runs ONLY the canonical kernel-arc set (17..67)
     g="bootstrap/tests/run_native_codegen_link${n}.sh"
     [[ -f "$g" ]] || { echo "FAIL: canonical kernel-arc gate $g is MISSING (deleted/renamed?) -- refusing a vacuous GREEN." >&2; fail=1; break; }
     echo "== link${n} gate (kernel-arc L$((n-16))) =="

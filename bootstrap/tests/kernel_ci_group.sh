@@ -8,7 +8,7 @@ source "$script_dir/qemu_prefix.sh" || exit 1
 cd "$script_dir/../.." || exit 1
 [[ $# == 2 && "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ ]] || exit 2
 lo=$1 hi=$2
-(( lo >= 17 && hi <= 66 && lo <= hi )) || exit 2
+(( lo >= 17 && hi <= 67 && lo <= hi )) || exit 2
 evidence="${KERNEL_EVIDENCE_DIR:-$PWD/_kernel_evidence}"
 mkdir -p "$evidence" || exit 1
 if [[ -e "$evidence/GIT-HEAD.txt" || -e "$evidence/RESULTS.tsv" ]]; then

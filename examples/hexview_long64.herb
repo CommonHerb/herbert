@@ -1,0 +1,53 @@
+-- emit: multiboot32-long64
+-- Render the boot-supplied file as lowercase hexadecimal: sixteen bytes
+-- per row, separated by spaces. Empty input produces no text. A short
+-- final row ends with LF. The guest reads and renders every input byte;
+-- the host only supplies the boot module and carries the serial output.
+
+func digit(n):
+    if n == 10: return output_byte(97) end
+    if n == 11: return output_byte(98) end
+    if n == 12: return output_byte(99) end
+    if n == 13: return output_byte(100) end
+    if n == 14: return output_byte(101) end
+    if n == 15: return output_byte(102) end
+    return output_byte(n + 48)
+end
+
+-- The current long64 subset has no division. This bounded digit walk
+-- performs at most 255 steps, with constant call depth through self TCO.
+func byte_hex(remaining, high, low):
+    if remaining == 0:
+        let h = digit(high)
+        let l = digit(low)
+        return 0
+    end
+    if low == 15:
+        return byte_hex(remaining - 1, high + 1, 0)
+    end
+    return byte_hex(remaining - 1, high, low + 1)
+end
+
+func view(column):
+    let byte = boot_read()
+    if byte == 256:
+        if column != 0:
+            let final_line = output_byte(10)
+        end
+        return 0
+    end
+    if column != 0:
+        let space = output_byte(32)
+    end
+    let rendered = byte_hex(byte, 0, 0)
+    if column == 15:
+        let newline = output_byte(10)
+        return view(0)
+    end
+    return view(column + 1)
+end
+
+func main():
+    let status = view(0)
+    return status * 4294967296
+end
