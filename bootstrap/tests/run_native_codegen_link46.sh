@@ -31,6 +31,7 @@ native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -128,53 +129,52 @@ else
 fi
 
 # ---- Bochs (2nd substrate via GRUB; K `module` lines) ----
-bochs_run() { # K e9out
-    local K="$1" e9="$2"
-    local kelf; kelf="$(readlink -f "$MKELF")"
-    local d="$work/b.$K.d"; mkdir -p "$d"
-    local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    # build the module list + grub.cfg module lines
-    local modlines="" i; local cfg=" multiboot /boot/kernel.elf"
-    cp "$SP" "$d/sp.bin"; cfg="$cfg
- module /boot/sp.bin"
-    for i in $(seq 1 $((K-1))); do local w="$work/w_${K}_$i.bin"; cp "$w" "$d/w$i.bin"; cfg="$cfg
- module /boot/w$i.bin"; done
-    ( cd "$d"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp sp.bin mnt/boot/sp.bin
-      for i in $(seq 1 $((K-1))); do sudo cp "w$i.bin" "mnt/boot/w$i.bin"; done
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n%s\n boot\n}\n' "$cfg" | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-log: bochs_log.txt
-BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$e9"
+# F2 checks disk setup before copying/booting and grades only completed boots.
+# With KERNEL_EVIDENCE_DIR, each attempt is captured by kernel_test_cleanup.
+# A failed mount must never become an empty OWN trace called a scheduler failure.
+bochs_grade() { # completed raw log K
+    local raw="$1" K="$2"
+    # rollcall_ref expects the extracted OWN stream, not the Bochs text prefix.
+    # Keep the existing extractor, but invoke it only after F2 saw completion.
+    local e9="$raw.e9"
+    if ! python3 "$script_dir/debugcon_frames.py" extract "$raw" "$e9"; then
+        fail_test "(C) Bochs K=$K extraction failed (completed boot; no kernel verdict)"
+        return 1
+    fi
+    if python3 "$REF" grade "$e9" "$KEND" "$K" >/dev/null 2>&1; then
+        if [[ "$K" == 3 ]]; then
+            ok "(C) Bochs K=3: the runtime-K scheduler is byte-identical on the 2nd substrate (GRUB delivers 3 module lines)"
+        else
+            ok "(C) Bochs K=5: the SAME kernel runs a DIFFERENT program count on the 2nd substrate (5 module lines)"
+        fi
+        return 0
+    fi
+    fail_test "(C) Bochs K=$K -> $(python3 "$REF" grade "$e9" "$KEND" "$K" 2>&1 | tr '\n' ';')"
+    return 1
+}
+bochs_run() { # K rawout
+    local K="$1" rawout="$2" i
+    local files=("$MKELF:boot/kernel.elf" "$SP:boot/sp.bin")
+    local cfg='set timeout=0
+set default=0
+menuentry "c" {
+ multiboot /boot/kernel.elf
+ module /boot/sp.bin'
+    for ((i=1; i<K; i++)); do
+        files+=("$work/w_${K}_$i.bin:boot/w$i.bin")
+        cfg="$cfg
+ module /boot/w$i.bin"
+    done
+    cfg="$cfg
+ boot
+}
+"
+    f2_bochs_leg "K=$K" bochs_grade "$rawout" "$cfg" 150 32 "${files[@]}" -- "$K"
 }
 if have_bochs; then
     emu_ran=1
     bochs_run 3 "$work/b3"
-    if python3 "$REF" grade "$work/b3" "$KEND" 3 >/dev/null 2>&1; then ok "(C) Bochs K=3: the runtime-K scheduler is byte-identical on the 2nd substrate (GRUB delivers 3 module lines)"
-    else fail_test "(C) Bochs K=3 -> $(python3 "$REF" grade "$work/b3" "$KEND" 3 2>&1 | tr '\n' ';')"; fi
     bochs_run 5 "$work/b5"
-    if python3 "$REF" grade "$work/b5" "$KEND" 5 >/dev/null 2>&1; then ok "(C) Bochs K=5: the SAME kernel runs a DIFFERENT program count on the 2nd substrate (5 module lines)"
-    else fail_test "(C) Bochs K=5 -> $(python3 "$REF" grade "$work/b5" "$KEND" 5 2>&1 | tr '\n' ';')"; fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
@@ -183,6 +183,7 @@ if [[ "$REQUIRE_EMU" != "1" && "$emu_ran" -eq 0 ]]; then
     echo "  NOTE: no emulator ran; byte-pin + white-box gates only (set KERNEL_CODEGEN_REQUIRE_EMU=1 for the silicon gate)"
 fi
 
+f2_harness_summary || exit 1
 echo "native-codegen link46 (rollcall / RUNTIME-K PROCESS TABLE): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link46 rollcall / RUNTIME-K PROCESS TABLE)"
