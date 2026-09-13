@@ -48,12 +48,12 @@ def snapshot(source, target):
     return {"bytes": size, "sha256": digest.hexdigest()}
 
 
-def run_viewer(image, input_file, output, *, qemu=None, accel="tcg", timeout=60.0, evidence=None):
+def run_file_program(image, input_file, output, *, qemu=None, accel="tcg", timeout=60.0, evidence=None):
     """Boot a snapshotted file; publish guest output only after successful exit.
 
-    The guest reads module bytes and formats hexadecimal. This adapter performs
-    no rendering. Serial data stays on disk until completion and is copied to
-    the caller's binary output stream with bounded host memory.
+    The guest reads module bytes and produces the result. This adapter performs
+    no parsing or rendering. Serial data stays on disk until completion and is
+    copied to the caller's binary output stream with bounded host memory.
     """
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be a finite positive number of seconds")
@@ -63,7 +63,7 @@ def run_viewer(image, input_file, output, *, qemu=None, accel="tcg", timeout=60.
         raise ProtocolError("KVM is not accessible")
     binary = str(Path(qemu_path(qemu)).resolve())
     if evidence is None:
-        work = Path(tempfile.mkdtemp(prefix="herbert-hexview-"))
+        work = Path(tempfile.mkdtemp(prefix="herbert-long64-file-"))
     else:
         work = Path(evidence).resolve()
         work.mkdir(mode=0o700)
@@ -109,6 +109,8 @@ def run_viewer(image, input_file, output, *, qemu=None, accel="tcg", timeout=60.
         if process.returncode != 99 or debugcon != b"\xde\x00\xad":
             if debugcon == b"BI\n\xde\x01\xad":
                 raise ProtocolError("guest rejected invalid or unsupported boot input")
+            if process.returncode == 97 and debugcon == b"\xde\x01\xad":
+                raise ProtocolError("guest rejected the input")
             with (work / "qemu.stderr").open("rb") as errors:
                 detail = errors.readline(512).decode("utf-8", errors="replace").strip()
             raise ProtocolError(f"guest did not complete successfully (QEMU exit {process.returncode}): {detail}")
@@ -132,27 +134,31 @@ def run_viewer(image, input_file, output, *, qemu=None, accel="tcg", timeout=60.
             shutil.rmtree(work)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+# Keep the viewer's existing import interface for its callers and folio gate.
+run_viewer = run_file_program
+
+
+def main(argv=None, *, program="hexview", description=__doc__):
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("file", type=Path, help="regular file to supply as the boot module")
-    parser.add_argument("--image", type=Path, default=ROOT / "build/hexview-long64.elf")
+    parser.add_argument("--image", type=Path, default=ROOT / f"build/{program}-long64.elf")
     parser.add_argument("--qemu", help="QEMU executable (otherwise QEMU_PREFIX or PATH)")
     parser.add_argument("--accel", choices=("tcg", "kvm"), default="tcg")
     parser.add_argument("--timeout", type=float, default=60.0, help="seconds for the complete emulator run")
     parser.add_argument("--evidence", type=Path, help="new directory retaining input, image and raw emulator output")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         if sys.stdout is None:
             raise ProtocolError("standard output is closed")
-        run_viewer(
+        run_file_program(
             args.image, args.file, sys.stdout.buffer, qemu=args.qemu,
             accel=args.accel, timeout=args.timeout, evidence=args.evidence,
         )
     except (OSError, ValueError, ProtocolError) as exc:
-        print(f"hexview-long64: {exc}", file=sys.stderr)
+        print(f"{program}-long64: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("hexview-long64: interrupted", file=sys.stderr)
+        print(f"{program}-long64: interrupted", file=sys.stderr)
         return 130
     return 0
 

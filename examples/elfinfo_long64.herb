@@ -1,0 +1,553 @@
+-- emit: multiboot32-long64
+-- ELF header inspector on Herbert's own long64 runtime. The boot module is
+-- one raw file; the guest parses and renders everything, the host only carries
+-- serial text after complete success. Two little-endian executable envelopes
+-- are accepted, both with identification version 1, ET_EXEC, e_version 1 and
+-- e_phnum 1..65534:
+--   ELF64, x86-64, e_ehsize 64, e_phentsize 56, e_phoff at or above 64
+--   ELF32, i386,   e_ehsize 52, e_phentsize 32, e_phoff at or above 52
+-- The class, machine and header sizes must agree with one profile. Program
+-- headers are read in file order, so e_phoff must not precede the end of the
+-- ELF header. The ELF32 profile covers the Multiboot envelope of this
+-- inspector's own image; the report describes the container, not the CPU
+-- mode the entry code switches to.
+--
+-- Output on success (lowercase hex, leading zeros, one space between fields):
+--   ELF64 x86-64          or          ELF32 i386
+--   ENTRY <16 hex digits>
+--   PH <4 hex digits>
+--   <p_type 8> <p_flags 8> <p_offset 16> <p_vaddr 16> <p_paddr 16>
+--       <p_filesz 16> <p_memsz 16> <p_align 16>      (one row per header)
+-- ELF32 fields are zero-extended, so both profiles print the same widths in
+-- the same order. run() yields 0 only after the whole input was parsed and
+-- drained, 1 for unsupported, malformed or truncated data; main encodes that
+-- status in bits 32..39 of its result for the existing grading epilogue.
+--
+-- The long64 subset has no ordering comparison and no division. Every field
+-- that needs ordering (p_filesz <= p_memsz, PT_LOAD extents, actual length)
+-- stays as little-endian bytes in the guarded buffer and is compared most
+-- significant byte first with a bounded 0..255 equality walk. Integers are
+-- used only for counts the program consumes (skip length, header count).
+-- Fields used as input offsets or sizes must be below 64 MiB: bytes 4..7
+-- zero and byte 3 at most 3, checked before conversion, so sums never wrap.
+--
+-- Buffer slots (one byte per slot): 0..63 ELF header in ELF64 layout,
+-- 64..119 current program header in ELF64 layout, 120..124 candidate PT_LOAD
+-- end (offset + filesz, five bytes), 128..135 running maximum end, 136..143
+-- count of consumed bytes, 160..223 raw scratch for ELF32 input. An ELF32
+-- header tail lands at 176..211 (slot = 160 + file offset) and an ELF32
+-- program header at 160..191 (slot = 160 + byte); both are then copied
+-- field by field into the canonical slots, whose high bytes are zeroed
+-- first. Scratch and canonical ranges never overlap, so no copy reads a slot
+-- it has already written. The profile is the class byte at slot 4.
+-- Every byte the guest consumes passes through next(), which increments the
+-- base-256 counter, so table-end <= length is implied by the table reads
+-- succeeding. EOF (256) is sticky and is never stored as data.
+--
+-- Loops recurse only in equal-arity tail position; helper calls nest a few
+-- frames deep. Each function keeps parameters plus lets within 15 slots.
+
+func digit(n):
+    if n == 10: return output_byte(97) end
+    if n == 11: return output_byte(98) end
+    if n == 12: return output_byte(99) end
+    if n == 13: return output_byte(100) end
+    if n == 14: return output_byte(101) end
+    if n == 15: return output_byte(102) end
+    return output_byte(n + 48)
+end
+
+-- Two hex digits for one byte: a bounded walk of at most 255 steps that
+-- counts (high, low) up in base 16 while remaining counts down.
+func byte_hex(remaining, high, low):
+    if remaining == 0:
+        let h = digit(high)
+        let l = digit(low)
+        return 0
+    end
+    if low == 15:
+        return byte_hex(remaining - 1, high + 1, 0)
+    end
+    return byte_hex(remaining - 1, high, low + 1)
+end
+
+-- Print k little-endian bytes at slots i..i+k-1 most significant first.
+func hex_field(base, i, k):
+    if k == 0:
+        return 0
+    end
+    let b = bufget(base, i + k - 1)
+    let shown = byte_hex(b, 0, 0)
+    return hex_field(base, i, k - 1)
+end
+
+func field_sp(base, i, k):
+    let shown = hex_field(base, i, k)
+    let sp = output_byte(32)
+    return 0
+end
+
+func emit4(a, b, c, d):
+    let ea = output_byte(a)
+    let eb = output_byte(b)
+    let ec = output_byte(c)
+    let ed = output_byte(d)
+    return 0
+end
+
+-- Order of two values in 0..511 by an equality walk from 0: returns 0 when
+-- a == b, 1 when a < b, 2 when a > b. Cost is min(a, b) + 1 steps.
+func byte_order(a, b, k):
+    if k == a:
+        if k == b:
+            return 0
+        end
+        return 1
+    end
+    if k == b:
+        return 2
+    end
+    return byte_order(a, b, k + 1)
+end
+
+-- Unsigned order of two little-endian fields at slots i and j, comparing
+-- byte k first and walking toward byte 0. Same result codes as byte_order.
+func field_order(base, i, j, k):
+    let a = bufget(base, i + k)
+    let b = bufget(base, j + k)
+    let o = byte_order(a, b, 0)
+    if o != 0:
+        return o
+    end
+    if k == 0:
+        return 0
+    end
+    return field_order(base, i, j, k - 1)
+end
+
+-- 1 when the eight-byte field at slot i is below 64 MiB (bytes 4..7 zero,
+-- byte 3 at most 3), otherwise 0.
+func fits(base, i):
+    if bufget(base, i + 4) != 0: return 0 end
+    if bufget(base, i + 5) != 0: return 0 end
+    if bufget(base, i + 6) != 0: return 0 end
+    if bufget(base, i + 7) != 0: return 0 end
+    let top = bufget(base, i + 3)
+    if top == 0: return 1 end
+    if top == 1: return 1 end
+    if top == 2: return 1 end
+    if top == 3: return 1 end
+    return 0
+end
+
+-- 1 when the four-byte little-endian word at slot i equals v (v < 256).
+func word_is(base, i, v):
+    if bufget(base, i) != v: return 0 end
+    if bufget(base, i + 1) != 0: return 0 end
+    if bufget(base, i + 2) != 0: return 0 end
+    if bufget(base, i + 3) != 0: return 0 end
+    return 1
+end
+
+-- Low four bytes at slot i as an integer; callers check fits() first.
+func to_int(base, i):
+    let b0 = bufget(base, i)
+    let b1 = bufget(base, i + 1)
+    let b2 = bufget(base, i + 2)
+    let b3 = bufget(base, i + 3)
+    let t1 = b1 * 256
+    let t2 = b2 * 65536
+    let t3 = b3 * 16777216
+    return b0 + t1 + t2 + t3
+end
+
+func zero(base, at, n):
+    if n == 0:
+        return 0
+    end
+    let cleared = bufset(base, at, 0)
+    return zero(base, at + 1, n - 1)
+end
+
+func copy(base, from, to, n):
+    if n == 0:
+        return 0
+    end
+    let v = bufget(base, from)
+    let stored = bufset(base, to, v)
+    return copy(base, from + 1, to + 1, n - 1)
+end
+
+-- Add the low four bytes of the fields at slots i and j into five bytes at
+-- slot out. Byte k of the sum is in 0..511; a walk against 255 decides carry.
+func add4(base, i, j, out, k, carry):
+    if k == 4:
+        let last = bufset(base, out + 4, carry)
+        return 0
+    end
+    let s = bufget(base, i + k) + bufget(base, j + k) + carry
+    let big = byte_order(s, 255, 0)
+    if big == 2:
+        let wrapped = bufset(base, out + k, s - 256)
+        return add4(base, i, j, out, k + 1, 1)
+    end
+    let stored = bufset(base, out + k, s)
+    return add4(base, i, j, out, k + 1, 0)
+end
+
+-- Increment the base-256 counter at slots at..at+7. Wrap past eight bytes
+-- would need 2^64 input bytes and cannot occur inside the 64 MiB appliance.
+func count_inc(base, at, k):
+    if k == 8:
+        return 0
+    end
+    let d = bufget(base, at + k)
+    if d == 255:
+        let cleared = bufset(base, at + k, 0)
+        return count_inc(base, at, k + 1)
+    end
+    let stored = bufset(base, at + k, d + 1)
+    return 0
+end
+
+-- The only reader. Returns the next data byte and counts it, or 256 at EOF.
+func next(base):
+    let b = boot_read()
+    if b == 256:
+        return 256
+    end
+    let counted = count_inc(base, 136, 0)
+    return b
+end
+
+-- Read n bytes into slots at..at+n-1. Returns 1 when EOF arrives first.
+func read_into(base, at, n):
+    if n == 0:
+        return 0
+    end
+    let b = next(base)
+    if b == 256:
+        return 1
+    end
+    let stored = bufset(base, at, b)
+    return read_into(base, at + 1, n - 1)
+end
+
+-- Consume n bytes without storing them. Returns 1 when EOF arrives first.
+func skip(base, n):
+    if n == 0:
+        return 0
+    end
+    let b = next(base)
+    if b == 256:
+        return 1
+    end
+    return skip(base, n - 1)
+end
+
+-- Consume the rest of the input so the counter holds the actual length.
+func drain(base):
+    let b = next(base)
+    if b == 256:
+        return 0
+    end
+    return drain(base)
+end
+
+-- Profile constants selected by the class byte at slot 4 (1 ELF32, 2 ELF64).
+-- Callers only reach these after ident_ok() accepted the class.
+
+-- e_ehsize: also the lower bound of e_phoff and the skip origin.
+func head_len(base):
+    if bufget(base, 4) == 1: return 52 end
+    return 64
+end
+
+-- e_machine low byte: EM_386 or EM_X86_64.
+func machine_id(base):
+    if bufget(base, 4) == 1: return 3 end
+    return 62
+end
+
+-- e_phentsize.
+func ph_len(base):
+    if bufget(base, 4) == 1: return 32 end
+    return 56
+end
+
+func class_ok(c):
+    if c == 1: return 1 end
+    if c == 2: return 1 end
+    return 0
+end
+
+-- e_ident: 7f 'E' 'L' 'F', ELFCLASS32 or ELFCLASS64, ELFDATA2LSB, EV_CURRENT.
+-- OSABI, ABI version and padding are not constrained.
+func ident_ok(base):
+    if bufget(base, 0) != 127: return 0 end
+    if bufget(base, 1) != 69: return 0 end
+    if bufget(base, 2) != 76: return 0 end
+    if bufget(base, 3) != 70: return 0 end
+    let cls = bufget(base, 4)
+    let c = class_ok(cls)
+    if c == 0: return 0 end
+    if bufget(base, 5) != 1: return 0 end
+    if bufget(base, 6) != 1: return 0 end
+    return 1
+end
+
+-- Normalize an ELF32 header tail held at scratch slots 176..211 (slot =
+-- 160 + file offset) into the ELF64 slot layout: e_type, e_machine and
+-- e_version (file 16..23) to 16..23, e_entry (24..27) to 24..27, e_phoff
+-- (28..31) to 32..35, e_ehsize (40..41) to 52..53, e_phentsize (42..43) to
+-- 54..55, e_phnum (44..45) to 56..57. Everything else in 16..63, including
+-- the high halves of e_entry and e_phoff, is zero.
+func header32(base):
+    let cleared = zero(base, 16, 48)
+    let kind = copy(base, 176, 16, 8)
+    let entry = copy(base, 184, 24, 4)
+    let phoff = copy(base, 188, 32, 4)
+    let hsize = copy(base, 200, 52, 2)
+    let psize = copy(base, 202, 54, 2)
+    let pnum = copy(base, 204, 56, 2)
+    return 0
+end
+
+-- Read the header bytes after e_ident. ELF64 reads the remaining 48 bytes
+-- straight into slots 16..63; ELF32 reads exactly its remaining 36 bytes
+-- into scratch and normalizes them. Reading 64 up front would swallow the
+-- start of a program table placed at offset 52. Returns 1 at EOF.
+func header_rest(base):
+    if bufget(base, 4) == 2:
+        return read_into(base, 16, 48)
+    end
+    let raw = read_into(base, 176, 36)
+    if raw != 0: return 1 end
+    return header32(base)
+end
+
+-- e_type ET_EXEC, e_machine and e_ehsize/e_phentsize matching the class,
+-- e_version 1. e_shoff, e_flags and the section counts are ignored.
+func kind_ok(base):
+    if bufget(base, 16) != 2: return 0 end
+    if bufget(base, 17) != 0: return 0 end
+    let m = machine_id(base)
+    let mb = bufget(base, 18)
+    if mb != m: return 0 end
+    if bufget(base, 19) != 0: return 0 end
+    let version = word_is(base, 20, 1)
+    if version == 0: return 0 end
+    let hsize = head_len(base)
+    let hb = bufget(base, 52)
+    if hb != hsize: return 0 end
+    if bufget(base, 53) != 0: return 0 end
+    let psize = ph_len(base)
+    let pb = bufget(base, 54)
+    if pb != psize: return 0 end
+    if bufget(base, 55) != 0: return 0 end
+    return 1
+end
+
+-- e_phoff below 64 MiB and at least e_ehsize. Bytes 36..39 are zero after
+-- fits(); only when bytes 33..35 are also zero can the value be below 256.
+func phoff_ok(base):
+    let f = fits(base, 32)
+    if f == 0: return 0 end
+    if bufget(base, 33) != 0: return 1 end
+    if bufget(base, 34) != 0: return 1 end
+    if bufget(base, 35) != 0: return 1 end
+    let low = bufget(base, 32)
+    let bound = head_len(base)
+    let below = byte_order(low, bound, 0)
+    if below == 1: return 0 end
+    return 1
+end
+
+-- e_phnum as an integer, or 0 for the rejected values 0 and PN_XNUM 65535.
+func phnum(base):
+    let lo = bufget(base, 56)
+    let hi = bufget(base, 57)
+    if lo == 0:
+        if hi == 0: return 0 end
+    end
+    if lo == 255:
+        if hi == 255: return 0 end
+    end
+    let scaled = hi * 256
+    return lo + scaled
+end
+
+-- Read e_ident, select the profile, read the rest of the header and validate
+-- every supported field.
+func header_ok(base):
+    let ident = read_into(base, 0, 16)
+    if ident != 0: return 0 end
+    let magic = ident_ok(base)
+    if magic == 0: return 0 end
+    let rest = header_rest(base)
+    if rest != 0: return 0 end
+    let kind = kind_ok(base)
+    if kind == 0: return 0 end
+    let off = phoff_ok(base)
+    if off == 0: return 0 end
+    let n = phnum(base)
+    if n == 0: return 0 end
+    return 1
+end
+
+-- "ELF64 x86-64" LF
+func banner64():
+    let a = emit4(69, 76, 70, 54)
+    let b = emit4(52, 32, 120, 56)
+    let c = emit4(54, 45, 54, 52)
+    let nl = output_byte(10)
+    return 0
+end
+
+-- "ELF32 i386" LF
+func banner32():
+    let a = emit4(69, 76, 70, 51)
+    let b = emit4(50, 32, 105, 51)
+    let c = output_byte(56)
+    let d = output_byte(54)
+    let nl = output_byte(10)
+    return 0
+end
+
+func banner(base):
+    if bufget(base, 4) == 1:
+        return banner32()
+    end
+    return banner64()
+end
+
+-- "ENTRY " e_entry LF (ELF32 entries are zero-extended to 16 digits)
+func entry_line(base):
+    let a = emit4(69, 78, 84, 82)
+    let y = output_byte(89)
+    let sp = output_byte(32)
+    let value = hex_field(base, 24, 8)
+    let nl = output_byte(10)
+    return 0
+end
+
+-- "PH " e_phnum LF
+func count_line(base):
+    let p = output_byte(80)
+    let h = output_byte(72)
+    let sp = output_byte(32)
+    let value = hex_field(base, 56, 2)
+    let nl = output_byte(10)
+    return 0
+end
+
+func print_lines(base):
+    let a = banner(base)
+    let b = entry_line(base)
+    let c = count_line(base)
+    return 0
+end
+
+-- One row for the program header at slots 64..119: p_type p_flags p_offset
+-- p_vaddr p_paddr p_filesz p_memsz p_align.
+func ph_row(base):
+    let t = field_sp(base, 64, 4)
+    let f = field_sp(base, 68, 4)
+    let o = field_sp(base, 72, 8)
+    let v = field_sp(base, 80, 8)
+    let p = field_sp(base, 88, 8)
+    let s = field_sp(base, 96, 8)
+    let m = field_sp(base, 104, 8)
+    let a = hex_field(base, 112, 8)
+    let nl = output_byte(10)
+    return 0
+end
+
+-- Normalize an ELF32 program header held at scratch slots 160..191 (slot =
+-- 160 + byte) into the ELF64 slot layout. The 32-bit order is p_type,
+-- p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align, each four
+-- bytes; the 64-bit layout puts p_flags second and widens the rest to eight
+-- bytes. Slots 64..119 are zeroed first so every high half is zero.
+func phdr32(base):
+    let cleared = zero(base, 64, 56)
+    let t = copy(base, 160, 64, 4)
+    let f = copy(base, 184, 68, 4)
+    let o = copy(base, 164, 72, 4)
+    let v = copy(base, 168, 80, 4)
+    let p = copy(base, 172, 88, 4)
+    let s = copy(base, 176, 96, 4)
+    let m = copy(base, 180, 104, 4)
+    let a = copy(base, 188, 112, 4)
+    return 0
+end
+
+-- Read one program header into slots 64..119 in ELF64 layout. Returns 1 at
+-- EOF.
+func ph_read(base):
+    if bufget(base, 4) == 2:
+        return read_into(base, 64, 56)
+    end
+    let raw = read_into(base, 160, 32)
+    if raw != 0: return 1 end
+    return phdr32(base)
+end
+
+-- PT_LOAD checks: p_offset and p_filesz below 64 MiB, p_filesz <= p_memsz as
+-- eight unsigned bytes, and offset + filesz folded into the running maximum.
+-- Other header types are reported without interpreting their fields.
+func ph_load(base):
+    let load = word_is(base, 64, 1)
+    if load == 0: return 0 end
+    let fo = fits(base, 72)
+    if fo == 0: return 1 end
+    let fs = fits(base, 96)
+    if fs == 0: return 1 end
+    let order = field_order(base, 96, 104, 7)
+    if order == 2: return 1 end
+    let summed = add4(base, 72, 96, 120, 0, 0)
+    let beyond = field_order(base, 120, 128, 4)
+    if beyond == 2:
+        let raised = copy(base, 120, 128, 5)
+    end
+    return 0
+end
+
+func ph_loop(base, remaining):
+    if remaining == 0:
+        return 0
+    end
+    let got = ph_read(base)
+    if got != 0: return 1 end
+    let shown = ph_row(base)
+    let checked = ph_load(base)
+    if checked != 0: return 1 end
+    return ph_loop(base, remaining - 1)
+end
+
+-- Every slot the program uses (0..223) starts at zero: the running maximum
+-- and the byte counter must, and the rest keeps stale bytes out of any
+-- partially filled range.
+func run(base):
+    let cleared = zero(base, 0, 224)
+    let ok = header_ok(base)
+    if ok == 0: return 1 end
+    let shown = print_lines(base)
+    let n = phnum(base)
+    let phoff = to_int(base, 32)
+    let hsize = head_len(base)
+    let skipped = skip(base, phoff - hsize)
+    if skipped != 0: return 1 end
+    let rows = ph_loop(base, n)
+    if rows != 0: return 1 end
+    let drained = drain(base)
+    let short = field_order(base, 136, 128, 7)
+    if short == 1: return 1 end
+    return 0
+end
+
+func main():
+    let base = bufbase()
+    let status = run(base)
+    -- The existing long64 grading epilogue extracts bits 32..39 of main.
+    return status * 4294967296
+end

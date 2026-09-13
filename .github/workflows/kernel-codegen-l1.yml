@@ -135,6 +135,13 @@ jobs:
           python3 bootstrap/tests/check_wordcount_long64.py \
             --image build/wordcount-long64.elf \
             --evidence "$GITHUB_WORKSPACE/_kernel_evidence/wordcount-long64"
+      - name: source-authored ELF header inspector
+        if: ${{ always() && steps.pinned.outcome == 'success' && matrix.lo == 60 }}
+        run: |
+          make long64-elfinfo
+          python3 bootstrap/tests/check_elfinfo_long64.py \
+            --image build/elfinfo-long64.elf --require-bochs \
+            --evidence "$GITHUB_WORKSPACE/_kernel_evidence/elfinfo-long64"
       - name: retain actual gate results and raw emulator streams
         if: always()
         uses: actions/upload-artifact@v4

@@ -55,9 +55,10 @@ wordcount:
 	@python3 bootstrap/tests/check_wordcount.py
 
 # Useful programs on the sovereign long64 runtime, built by the same seed.
-.PHONY: long64-wordcount check-long64-wordcount long64-hexview
+.PHONY: long64-wordcount check-long64-wordcount long64-hexview long64-elfinfo check-long64-elfinfo
 long64-wordcount: $(BUILD)/wordcount-long64.elf
 long64-hexview: $(BUILD)/hexview-long64.elf
+long64-elfinfo: $(BUILD)/elfinfo-long64.elf
 
 $(BUILD)/%-long64.elf: examples/%_long64.herb bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
@@ -73,6 +74,9 @@ $(BUILD)/%-long64.elf: examples/%_long64.herb bootstrap/seed/gen1.seed bootstrap
 
 check-long64-wordcount: $(BUILD)/wordcount-long64.elf
 	@python3 bootstrap/tests/check_wordcount_long64.py --image $(BUILD)/wordcount-long64.elf
+
+check-long64-elfinfo: $(BUILD)/elfinfo-long64.elf
+	@python3 bootstrap/tests/check_elfinfo_long64.py --image $(BUILD)/elfinfo-long64.elf
 
 test-timeout:
 	@python3 tools/check_timeout.py

@@ -143,6 +143,12 @@ invalid spans without adding production hooks. GRUB uses `module --nounzip`;
 Bochs exercises GRUB's empty-file sentinel; QEMU checks missing input. The local command
 for this link is `KERNEL_VERIFY_LO=67 KERNEL_VERIFY_HI=67 make kernel-verify`.
 
+`make check-long64-elfinfo` builds the [ELF inspector](examples/elfinfo_long64.md)
+and checks the actual compiler and inspector images, both supported header
+formats and focused malformed inputs. It uses KVM and Bochs when available;
+the 60..61 CI job requires Bochs and retains the application evidence in its own
+subdirectory of the same kernel-job artifact. This application adds no kernel gate.
+
 ## What These Commands Do Not Prove
 
 - They do not prove arbitrary-program compiler correctness.

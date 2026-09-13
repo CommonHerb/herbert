@@ -32,13 +32,16 @@ examples/native_today_io.expected
 examples/wordcount.md
 examples/wordcount_long64.md
 examples/hexview_long64.md
+examples/elfinfo_long64.md
 # Test tooling for the Herbert-authored sustained input utility.
 bootstrap/tests/check_wordcount.py
 # Serial host adapter and focused checks; counting runs in the Herbert guest.
 tools/wordcount_long64.py
 bootstrap/tests/check_wordcount_long64.py
-# Boot-file transport only; hexadecimal rendering runs in the Herbert guest.
+# Boot-file transport only; rendering and ELF inspection run in Herbert guests.
 tools/hexview_long64.py
+tools/elfinfo_long64.py
+bootstrap/tests/check_elfinfo_long64.py
 stack/native_surface_ledger.expected
 bootstrap/tests/check_lexer_copy_sync.py
 # Hosted conformance harness + hand-authored data: deliberate test-tool boundary.

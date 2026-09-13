@@ -12,6 +12,10 @@ The [binary file viewer](examples/hexview_long64.md) reads a raw file supplied
 at boot through `boot_read()` and renders hexadecimal on the same runtime.
 The guest handles both EOF and rendering; the host carries the input and output.
 
+The [ELF inspector](examples/elfinfo_long64.md) uses that file input to report
+the compiler's executable headers and its own boot image's headers. Both formats
+are parsed and rendered by the Herbert program.
+
 ## Layout
 
 - `bootstrap/` contains the committed native gen-1 seed, verification harnesses,
