@@ -1,9 +1,10 @@
 # Herbert roadmap
 
-Herbert's direction is a sovereign computing stack: a small mother language,
-one compiler backend, and source-authored layers that eventually run the
-compiler on Herbert's own operating system. Ambition has no size cap. Each
-piece must remain understandable and verifiable on demand.
+Herbert's active direction is a useful self-hosting language for ordinary Linux
+programs (Ben's September 12 priority change). New OS feature development is
+paused, with existing work, history and evidence preserved. An independent OS
+remains a possible later destination. Each piece must remain understandable and
+verifiable on demand.
 
 ## What exists
 
@@ -31,11 +32,20 @@ piece must remain understandable and verifiable on demand.
 
 ## What progress should address next
 
-Use concrete programs to choose the next missing facility. The compiler itself
-is the eventual integration program: it needs process entry/exit, sufficient
-memory, input through EOF, named file output and diagnostics on the sovereign
-long64 target. Each facility must compose with the layer below it and serve a
-real program before a larger layer depends on it.
+Use concrete programs to improve the language and reusable application support.
+The first checkpoint is a normal Linux window with a keyboard-controlled
+character, ongoing updates and clean shutdown. Stop there for Ben to try it;
+the maze game follows later. Do not start a general engine or another language.
+The family-language idea remains open when actual usage gives it a purpose.
+
+Own the language, compiler, runtime support and applications. Existing Linux,
+desktop/display services and drivers are accepted dependencies; no foreign
+compiler, language runtime or third-party graphics library enters the compiled
+implementation. Development/test tools remain separately declared.
+
+The compiler running on Herbert's own OS is deferred. Its memory, input, file
+output, diagnostics and process-integration work is preserved for that later
+decision; it does not direct the active hosted checkpoint.
 
 The counters, file viewer and executable inspector exercise today's facilities.
 The serial protocol supplies logical stream completion; boot input supplies

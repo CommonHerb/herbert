@@ -1,6 +1,18 @@
 # Herbert
 
-Herbert is a self-hosting language and native compiler, with a developing bare-metal kernel stack. The production compiler is a committed Linux/x86-64 executable that compiles Herbert source without a foreign compiler or runtime.
+Herbert is a self-hosting language and native compiler. The current priority is
+making it useful for ordinary Linux programs. New OS feature development is
+paused; existing kernel work, history and evidence are preserved. The production
+compiler is a committed Linux/x86-64 executable that compiles Herbert source
+without a foreign compiler or runtime.
+
+The first interactive checkpoint is [First steps](examples/first_steps.md):
+a normal desktop window with a keyboard-controlled character and ongoing updates.
+Herbert owns the application and X11 support code; Linux and the existing
+X11/XWayland desktop supply system, display and device services. No foreign
+graphics library is linked into the executable. This checkpoint stops for Ben's
+trial before expanding the game. The [support guide](lib/README.md) describes
+the reusable byte and Linux interfaces and their unsafe boundary.
 
 Start with [the word counter](examples/wordcount.md) to compile a useful program and process real input. Current capabilities and limitations are established by the source and executable checks.
 

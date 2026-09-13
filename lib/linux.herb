@@ -1,0 +1,316 @@
+-- Herbert-owned Linux/x86-64 helpers, using the kernel syscall ABI directly.
+-- This file has no main and is concatenated before its consumer. No libc.
+-- Integer syscall results retain Linux's raw two's-complement -errno values.
+-- Constants/layouts: Linux x86-64 UAPI; pollfd=8, timespec=16, utsname=390.
+-- https://man7.org/linux/man-pages/man2/send.2.html
+-- https://man7.org/linux/man-pages/man2/recv.2.html
+-- https://man7.org/linux/man-pages/man2/poll.2.html
+-- https://man7.org/linux/man-pages/man5/proc_pid_environ.5.html
+
+func linux_error(r):
+    return r >= 0 - 4095
+end
+
+-- The caller includes any desired newline; messages must never contain secrets.
+func linux_die(message):
+    let ignored = stderr_write(message)
+    do process_exit(1)
+    return 0
+end
+
+func linux_buffer_fill(b, size, i):
+    if i >= size:
+        return b
+    end
+    do append(b, 0)
+    return linux_buffer_fill(b, size, i + 1)
+end
+
+-- Startup allocation only. Its size never changes unless the caller appends.
+-- Take buffer_address only after the last append; growth can relocate storage.
+func linux_buffer(size):
+    return linux_buffer_fill(new_buffer(), size, 0)
+end
+
+func linux_range(b, offset, size):
+    if offset > buffer_length(b):
+        return false
+    end
+    return size <= buffer_length(b) - offset
+end
+
+func linux_require_range(b, offset, size):
+    if linux_range(b, offset, size):
+        return 0
+    end
+    return linux_die("linux: byte-buffer range is outside its allocation\n")
+end
+
+func linux_u16(b, o):
+    let checked = linux_require_range(b, o, 2)
+    return buffer_get(b, o) | (buffer_get(b, o + 1) << 8)
+end
+
+func linux_u32(b, o):
+    let checked = linux_require_range(b, o, 4)
+    return linux_u16(b, o) | (linux_u16(b, o + 2) << 16)
+end
+
+func linux_u64(b, o):
+    let checked = linux_require_range(b, o, 8)
+    return linux_u32(b, o) | (linux_u32(b, o + 4) << 32)
+end
+
+-- Field stores keep the low 16/32/64 bits, in little-endian byte order.
+func linux_put16(b, o, v):
+    let checked = linux_require_range(b, o, 2)
+    let first = buffer_set(b, o, v & 255)
+    let second = buffer_set(b, o + 1, (v >> 8) & 255)
+    return 0
+end
+
+func linux_put32(b, o, v):
+    let checked = linux_require_range(b, o, 4)
+    let low = linux_put16(b, o, v)
+    let high = linux_put16(b, o + 2, v >> 16)
+    return 0
+end
+
+func linux_put64(b, o, v):
+    let checked = linux_require_range(b, o, 8)
+    let low = linux_put32(b, o, v)
+    let high = linux_put32(b, o + 4, v >> 32)
+    return 0
+end
+
+func linux_copy_loop(dst, offset, src, from, n):
+    if n == 0:
+        return 0
+    end
+    let stored = buffer_set(dst, offset, buffer_get(src, from))
+    return linux_copy_loop(dst, offset + 1, src, from + 1, n - 1)
+end
+
+-- Forward byte copy; overlapping ranges require destination <= source offset.
+func linux_copy(dst, offset, src, from, n):
+    let checked_dst = linux_require_range(dst, offset, n)
+    let checked_src = linux_require_range(src, from, n)
+    return linux_copy_loop(dst, offset, src, from, n)
+end
+
+func linux_text_loop(dst, offset, s, i):
+    if i >= length(s):
+        return 0
+    end
+    let stored = buffer_set(dst, offset + i, index(s, i))
+    return linux_text_loop(dst, offset, s, i + 1)
+end
+
+func linux_text(dst, offset, s):
+    let checked = linux_require_range(dst, offset, length(s))
+    return linux_text_loop(dst, offset, s, 0)
+end
+
+func linux_cstring(s):
+    let b = linux_buffer(length(s) + 1)
+    let copied = linux_text(b, 0, s)
+    return b
+end
+
+-- Scratch buffer must have at least 16 bytes. Error is a raw -errno value.
+func linux_clock_ms(clockbuf):
+    let checked = linux_require_range(clockbuf, 0, 16)
+    let result = linux_syscall6(228, 1, buffer_address(clockbuf), 0, 0, 0, 0)
+    if linux_error(result):
+        return result
+    end
+    return linux_u64(clockbuf, 0) * 1000 + linux_u64(clockbuf, 8) / 1000000
+end
+
+-- Scratch buffer must have at least 8 bytes. Returns revents, zero on timeout,
+-- or raw -errno. EINTR is returned to the caller, which owns its deadline.
+func linux_poll(fd, pollbuf, events, timeout):
+    let checked = linux_require_range(pollbuf, 0, 8)
+    let descriptor = linux_put32(pollbuf, 0, fd)
+    let requested = linux_put16(pollbuf, 4, events)
+    let cleared = linux_put16(pollbuf, 6, 0)
+    let result = linux_syscall6(7, buffer_address(pollbuf), 1, timeout, 0, 0, 0)
+    if linux_error(result):
+        return result
+    elif result == 0:
+        return 0
+    end
+    return linux_u16(pollbuf, 6)
+end
+
+-- Shared exact socket transfer: every retry, including partial progress and
+-- EINTR, shares one five-second monotonic deadline. No heap allocation here.
+-- Send uses MSG_NOSIGNAL|MSG_DONTWAIT; receive uses MSG_DONTWAIT.
+func linux_transfer(fd, b, offset, remaining, pollbuf, clockbuf, started, sending):
+    if remaining == 0:
+        return 0
+    end
+    let now = linux_clock_ms(clockbuf)
+    if linux_error(now):
+        return now
+    elif now - started >= 5000:
+        return 0 - 110
+    end
+    let number = 45
+    let flags = 64
+    let events = 1
+    if sending:
+        number = 44
+        flags = 16448
+        events = 4
+    end
+    let result = linux_syscall6(number, fd, buffer_address(b) + offset, remaining, flags, 0, 0)
+    if result == 0 - 4:
+        return linux_transfer(fd, b, offset, remaining, pollbuf, clockbuf, started, sending)
+    elif result == 0 - 11:
+        let waited = linux_poll(fd, pollbuf, events, 5000 - (now - started))
+        if linux_error(waited) and waited != 0 - 4:
+            return waited
+        elif waited == 0 - 4:
+            return linux_transfer(fd, b, offset, remaining, pollbuf, clockbuf, started, sending)
+        elif (waited & 32) != 0:
+            return 0 - 9
+        end
+        return linux_transfer(fd, b, offset, remaining, pollbuf, clockbuf, started, sending)
+    elif linux_error(result):
+        return result
+    elif result == 0:
+        return 0 - 104
+    end
+    return linux_transfer(fd, b, offset + result, remaining - result, pollbuf, clockbuf, started, sending)
+end
+
+-- Connected stream sockets only. Zero means ALL requested bytes transferred;
+-- failure may follow partial progress, so callers must abandon the transaction.
+-- EOF before completion maps to -ECONNRESET (104), timeout to -ETIMEDOUT (110).
+func linux_send_all(fd, b, offset, count, pollbuf, clockbuf):
+    if not linux_range(b, offset, count):
+        return 0 - 22
+    end
+    let started = linux_clock_ms(clockbuf)
+    if linux_error(started):
+        return started
+    end
+    return linux_transfer(fd, b, offset, count, pollbuf, clockbuf, started, true)
+end
+
+func linux_read_exact(fd, b, offset, count, pollbuf, clockbuf):
+    if not linux_range(b, offset, count):
+        return 0 - 22
+    end
+    let started = linux_clock_ms(clockbuf)
+    if linux_error(started):
+        return started
+    end
+    return linux_transfer(fd, b, offset, count, pollbuf, clockbuf, started, false)
+end
+
+func linux_read_file_loop(fd, b, used, cap):
+    let result = linux_syscall6(0, fd, buffer_address(b) + used, cap + 1 - used, 0, 0, 0)
+    if result == 0 - 4:
+        return linux_read_file_loop(fd, b, used, cap)
+    elif linux_error(result):
+        return (result, used)
+    elif result == 0:
+        return (0, used)
+    elif used + result > cap:
+        return (0 - 27, used + result)
+    end
+    return linux_read_file_loop(fd, b, used + result, cap)
+end
+
+-- Startup whole-file reader for regular files and /proc/self/environ.
+-- Returns (status, fixed buffer of cap+1 bytes, actual bytes read). The spare
+-- byte probes EOF at exact capacity; oversize is -EFBIG (27), never truncation.
+-- Errors preserve count for diagnosis, but content is usable only on status 0.
+-- This bounds memory, not blocking duration; do not use it for sockets/FIFOs.
+func linux_read_file(path, cap):
+    if cap >= 0 - 4095:
+        return (0 - 22, new_buffer(), 0)
+    end
+    let b = linux_buffer(cap + 1)
+    let pathname = linux_cstring(path)
+    let fd = linux_syscall6(2, buffer_address(pathname), 524288, 0, 0, 0, 0)
+    if linux_error(fd):
+        return (fd, b, 0)
+    end
+    let incoming = linux_read_file_loop(fd, b, 0, cap)
+    let closed = linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    if incoming.0 != 0:
+        return (incoming.0, b, incoming.1)
+    elif linux_error(closed):
+        return (closed, b, incoming.1)
+    end
+    return (0, b, incoming.1)
+end
+
+-- Read the exec-time environment once. Never print these potentially secret
+-- bytes. Remaining zero-filled capacity terminates lookup after the last entry.
+func linux_environment():
+    let incoming = linux_read_file("/proc/self/environ", 1048576)
+    if incoming.0 != 0:
+        let failed = linux_die("linux: cannot read the process environment\n")
+    end
+    return incoming.1
+end
+
+func linux_nul_end(b, from, limit):
+    if from >= limit:
+        return limit
+    elif buffer_get(b, from) == 0:
+        return from
+    end
+    return linux_nul_end(b, from + 1, limit)
+end
+
+func linux_name_matches(b, offset, limit, name, i):
+    if i >= length(name):
+        return offset + i < limit and buffer_get(b, offset + i) == 61
+    elif offset + i >= limit:
+        return false
+    elif buffer_get(b, offset + i) != index(name, i):
+        return false
+    end
+    return linux_name_matches(b, offset, limit, name, i + 1)
+end
+
+func linux_string_loop(b, from, limit, out):
+    if from >= limit:
+        return freeze(out)
+    end
+    do append(out, buffer_get(b, from))
+    return linux_string_loop(b, from + 1, limit, out)
+end
+
+func linux_env_loop(env, name, offset):
+    if offset >= buffer_length(env):
+        return ""
+    elif buffer_get(env, offset) == 0:
+        return ""
+    end
+    let limit = linux_nul_end(env, offset, buffer_length(env))
+    if linux_name_matches(env, offset, limit, name, 0):
+        return linux_string_loop(env, offset + length(name) + 1, limit, new_buffer())
+    end
+    return linux_env_loop(env, name, limit + 1)
+end
+
+-- Startup lookup only; absent and empty values both return the empty string.
+-- Scans without allocation, then copies only the first matching value.
+func linux_env(env, name):
+    return linux_env_loop(env, name, 0)
+end
+
+func linux_hostname():
+    let b = linux_buffer(390)
+    let result = linux_syscall6(63, buffer_address(b), 0, 0, 0, 0, 0)
+    if linux_error(result):
+        let failed = linux_die("linux: cannot read the host name\n")
+    end
+    return linux_string_loop(b, 65, linux_nul_end(b, 65, 130), new_buffer())
+end

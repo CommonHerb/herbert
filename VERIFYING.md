@@ -27,6 +27,11 @@ Runs:
 - `make switchover-dry-run`: checks that the existing C-free mutation proofs still detect faults with the retired C toolchain absent.
 - `make compiler-cli-contract`: checks atomic output publication, including syscall fault injection and the emitted writer's instruction layout (tools described below).
 - `make wordcount`: compiles the maintained word counter with the committed seed and checks its output, input failures, and sustained input processing.
+- `make hosted-memory-io`: checks the general hosted byte-buffer/syscall interfaces,
+  including Linux ABI arguments, rejection and sustained mutation memory use.
+- `make check-desktop`: builds First steps, then observes pixels, real keyboard
+  events, focus/shutdown and sustained memory on a private Xvfb display. Python,
+  libX11, libXtst and Xvfb are independent test tooling, not program dependencies.
 
 This is the full hosted aggregate. It does not run the emulator-heavy kernel suite.
 

@@ -54,6 +54,34 @@ compiler-cli-contract:
 wordcount:
 	@python3 bootstrap/tests/check_wordcount.py
 
+# Native Linux desktop checkpoint. These .herb library units are concatenated
+# as source, then compiled ONLY by the committed Herbert seed. No host compiler,
+# graphics library, runtime, or launcher is linked into the resulting executable.
+DESKTOP_SOURCES := lib/linux.herb lib/x11.herb lib/pixel_text.herb examples/first_steps.herb
+.PHONY: first-steps hosted-memory-io check-desktop
+first-steps: $(BUILD)/first-steps
+
+$(BUILD)/first-steps: $(DESKTOP_SOURCES) bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
+	@set -eu; \
+	  mkdir -p $(BUILD)/first-steps-work; \
+	  cat $(DESKTOP_SOURCES) > $(BUILD)/first-steps-work/source.herb; \
+	  cp bootstrap/seed/gen1.seed $(BUILD)/first-steps-work/compiler; \
+	  chmod u+x $(BUILD)/first-steps-work/compiler; \
+	  (cd $(BUILD)/first-steps-work && ./compiler < source.herb > compiler.stdout 2> compiler.stderr) || { cat $(BUILD)/first-steps-work/compiler.stderr >&2; exit 1; }; \
+	  printf '0\n' > $(BUILD)/first-steps-work/expected.stdout; \
+	  cmp $(BUILD)/first-steps-work/expected.stdout $(BUILD)/first-steps-work/compiler.stdout; \
+	  test ! -s $(BUILD)/first-steps-work/compiler.stderr; \
+	  chmod u+x $(BUILD)/first-steps-work/a.out; \
+	  mv $(BUILD)/first-steps-work/a.out $@
+
+hosted-memory-io:
+	@python3 bootstrap/tests/check_hosted_memory_io.py
+
+# Xvfb/libX11/libXtst are independent TEST tools, never program dependencies.
+check-desktop: first-steps
+	@python3 bootstrap/tests/check_desktop.py --image $(BUILD)/first-steps
+
 # Useful programs on the sovereign long64 runtime, built by the same seed.
 .PHONY: long64-wordcount check-long64-wordcount long64-hexview long64-elfinfo check-long64-elfinfo
 long64-wordcount: $(BUILD)/wordcount-long64.elf
@@ -167,7 +195,7 @@ closed-loop-memory-diet:
 reseed:
 	@bash bootstrap/tests/reseed_gen1.sh
 
-verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract wordcount
+verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

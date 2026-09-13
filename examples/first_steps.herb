@@ -1,0 +1,94 @@
+-- Hosted checkpoint: a normal window, responsive character, repeated drawing.
+-- Linked with lib/linux.herb, lib/x11.herb and lib/pixel_text.herb by Make.
+-- Application logic lives here; the compiler knows nothing about this example.
+-- World coordinates remain bounded; every frame reuses the same byte buffers.
+
+func first_grid_columns(c, x):
+    if x >= 614: return 0 end
+    let drawn = x11_rect(c, x, 102, 1, 316)
+    return first_grid_columns(c, x + 32)
+end
+
+func first_grid_rows(c, y):
+    if y >= 418: return 0 end
+    let drawn = x11_rect(c, 26, y, 588, 1)
+    return first_grid_rows(c, y + 32)
+end
+
+func first_draw(c, x, y, tick):
+    let bg = x11_color(c, 1054759)
+    let canvas = x11_rect(c, 0, 0, 640, 480)
+    let heading = x11_color(c, 15265527)
+    let title = pixel_text(c, "HERBERT", 28, 27, 3)
+    let secondary = x11_color(c, 8820395)
+    let subtitle = pixel_text(c, "FIRST STEPS", 192, 40, 1)
+    let label = pixel_text(c, "MOVE AROUND", 28, 80, 1)
+    let bordercolor = x11_color(c, 2767956)
+    let border = x11_rect(c, 24, 100, 592, 320)
+    let fieldcolor = x11_color(c, 1384240)
+    let field = x11_rect(c, 26, 102, 588, 316)
+    let gridcolor = x11_color(c, 1977151)
+    let columns = first_grid_columns(c, 56)
+    let rows = first_grid_rows(c, 132)
+    let shadowcolor = x11_color(c, 660510)
+    let shadow = x11_ellipse(c, x - 15, y + 10, 32, 10)
+    -- Gold is unique to the character, permitting independent pixel checks.
+    let gold = x11_color(c, 16173151)
+    let body = x11_ellipse(c, x - 14, y - 14, 28, 28)
+    let eyes = x11_color(c, 1054759)
+    let eyeheight = 6
+    if tick % 180 >= 174: eyeheight = 2 end
+    let left = x11_rect(c, x - 6, y - 5, 3, eyeheight)
+    let right = x11_rect(c, x + 3, y - 5, 3, eyeheight)
+    let instructions = x11_color(c, 11255503)
+    let move = pixel_text(c, "ARROWS / WASD", 28, 441, 1)
+    let close = pixel_text(c, "ESC TO CLOSE", 538 - 12 * 6, 441, 1)
+    let quiet = x11_color(c, 5793911)
+    let credit = pixel_text(c, "MADE IN HERBERT", 28, 462, 1)
+    -- A small breathing indicator makes ongoing idle updates visible too.
+    let pulse = 3832176
+    if tick % 60 >= 30: pulse = 6867876 end
+    let indicatorcolor = x11_color(c, pulse)
+    let indicator = x11_ellipse(c, 600, 40, 8, 8)
+    return x11_present(c)
+end
+
+func first_position(value, decrease, increase, low, high):
+    if decrease and not increase:
+        if value <= low + 3: return low end
+        return value - 3
+    elif increase and not decrease:
+        if value + 3 >= high: return high end
+        return value + 3
+    end
+    return value
+end
+
+func first_loop(c, x, y, tick, last):
+    let events = x11_events(c)
+    if x11_closed(c) or x11_key(c, 65307):
+        let closed = x11_close(c)
+        let checked = x11_need(closed == 0, "desktop: display close failed\n")
+        do process_exit(0)
+        return 0
+    end
+    let now = linux_clock_ms(c.4)
+    let checked = x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
+    if now - last < 16:
+        let waited = linux_poll(linux_u64(c.0, 0), c.3, 1, 16 - (now - last))
+        let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "desktop: input wait failed\n")
+        return first_loop(c, x, y, tick, last)
+    end
+    let nx = first_position(x, x11_key(c, 65361) or x11_key(c, 97), x11_key(c, 65363) or x11_key(c, 100), 42, 598)
+    let ny = first_position(y, x11_key(c, 65362) or x11_key(c, 119), x11_key(c, 65364) or x11_key(c, 115), 118, 402)
+    let drawn = first_draw(c, nx, ny, tick)
+    return first_loop(c, nx, ny, (tick + 1) % 180, now)
+end
+
+func main():
+    let c = x11_open(640, 480, "Herbert - First steps")
+    let first = first_draw(c, 320, 270, 0)
+    let now = linux_clock_ms(c.4)
+    let checked = x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
+    return first_loop(c, 320, 270, 1, now)
+end

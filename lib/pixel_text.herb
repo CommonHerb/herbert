@@ -1,0 +1,52 @@
+-- Small original 5x7 bitmap lettering for Herbert X11 examples.
+-- No font files or font service. Scale is an integer pixel size.
+-- Glyph literals and drawing requests allocate nothing during a frame.
+func pixel_glyph(ch):
+    if ch == 65: return "01110100011000111111100011000110001" end
+    if ch == 66: return "11110100011000111110100011000111110" end
+    if ch == 67: return "01111100001000010000100001000001111" end
+    if ch == 68: return "11110100011000110001100011000111110" end
+    if ch == 69: return "11111100001000011110100001000011111" end
+    if ch == 70: return "11111100001000011110100001000010000" end
+    if ch == 71: return "01111100001000010111100011000101111" end
+    if ch == 72: return "10001100011000111111100011000110001" end
+    if ch == 73: return "11111001000010000100001000010011111" end
+    if ch == 74: return "00111000100001000010100101001001100" end
+    if ch == 75: return "10001100101010011000101001001010001" end
+    if ch == 76: return "10000100001000010000100001000011111" end
+    if ch == 77: return "10001110111010110101100011000110001" end
+    if ch == 78: return "10001110011010110011100011000110001" end
+    if ch == 79: return "01110100011000110001100011000101110" end
+    if ch == 80: return "11110100011000111110100001000010000" end
+    if ch == 81: return "01110100011000110001101011001001101" end
+    if ch == 82: return "11110100011000111110101001001010001" end
+    if ch == 83: return "01111100001000001110000010000111110" end
+    if ch == 84: return "11111001000010000100001000010000100" end
+    if ch == 85: return "10001100011000110001100011000101110" end
+    if ch == 86: return "10001100011000110001100010101000100" end
+    if ch == 87: return "10001100011000110101101011101110001" end
+    if ch == 88: return "10001100010101000100010101000110001" end
+    if ch == 89: return "10001100010101000100001000010000100" end
+    if ch == 90: return "11111000010001000100010001000011111" end
+    if ch == 47: return "00001000100001000100010000100010000" end
+    if ch == 45: return "00000000000000011111000000000000000" end
+    return "00000000000000000000000000000000000"
+end
+
+func pixel_letter(c, glyph, x, y, scale, i):
+    if i == 35: return 0 end
+    if index(glyph, i) == 49:
+        let drawn = x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
+    end
+    return pixel_letter(c, glyph, x, y, scale, i + 1)
+end
+
+func pixel_text_loop(c, text, x, y, scale, i):
+    if i == length(text): return 0 end
+    let drawn = pixel_letter(c, pixel_glyph(index(text, i)), x + i * 6 * scale, y, scale, 0)
+    return pixel_text_loop(c, text, x, y, scale, i + 1)
+end
+
+func pixel_text(c, text, x, y, scale):
+    return pixel_text_loop(c, text, x, y, scale, 0)
+end

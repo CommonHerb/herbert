@@ -1551,6 +1551,35 @@ func op_boot_read():
     return 57
 end
 
+-- Linux/x86-64 hosted boundary. These generic operations are deliberately not
+-- admitted by any freestanding target or by the VM. The syscall and borrowed
+-- address are UNSAFE escape hatches: Linux can read/write the pointed storage,
+-- and append may move a buffer's backing allocation. Safe byte access is bounded
+-- by the initialized length; buffer_set requires a byte exactly as append does.
+func op_linux_syscall6():
+    return 58
+end
+
+func op_buffer_address():
+    return 59
+end
+
+func op_buffer_get():
+    return 60
+end
+
+func op_buffer_set():
+    return 61
+end
+
+func op_buffer_length():
+    return 62
+end
+
+func nc_is_hosted_memory_builtin(name):
+    return equal(name, "linux_syscall6") or equal(name, "buffer_address") or equal(name, "buffer_get") or equal(name, "buffer_set") or equal(name, "buffer_length")
+end
+
 func emit_instr(ir, op, a, b):
     do add(ir, (0, op, a, b, 0, "", 0))
     return ir
@@ -1828,6 +1857,21 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         return emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_intern_array(type_pool, elem.1))
     end
     ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    if equal(name, "linux_syscall6"):
+        return emit_instr(ir, op_linux_syscall6(), 0, 0)
+    end
+    if equal(name, "buffer_address"):
+        return emit_instr(ir, op_buffer_address(), 0, 0)
+    end
+    if equal(name, "buffer_get"):
+        return emit_instr_line(ir, op_buffer_get(), 0, 0, call_line)
+    end
+    if equal(name, "buffer_set"):
+        return emit_instr_line(ir, op_buffer_set(), 0, 0, call_line)
+    end
+    if equal(name, "buffer_length"):
+        return emit_instr(ir, op_buffer_length(), 0, 0)
+    end
     if equal(name, "clogger"):
         return emit_instr(ir, op_clogger(), 0, 0)
     end
@@ -2145,6 +2189,9 @@ func lower_program(nodes, prog_idx, type_pool):
 end
 
 func opcode_name(op):
+    if op >= 58 and op <= 62:
+        return nc_opcode_name_for_diag(op)
+    end
     if op == op_push_int():
         return "PUSH_INT"
     end
@@ -3291,6 +3338,9 @@ func err_parse_program(tokens, eof_line):
 end
 
 func err_is_builtin_name(name):
+    if nc_is_hosted_memory_builtin(name):
+        return true
+    end
     if equal(name, "boot_read"):
         return true
     end
@@ -3317,6 +3367,9 @@ func err_is_void_builtin(name):
 end
 
 func err_is_value_builtin(name):
+    if nc_is_hosted_memory_builtin(name):
+        return true
+    end
     if equal(name, "boot_read"):
         return true
     end
@@ -3336,6 +3389,18 @@ func err_is_value_builtin(name):
 end
 
 func err_value_builtin_arity(name):
+    if equal(name, "linux_syscall6"):
+        return 7
+    end
+    if equal(name, "buffer_address") or equal(name, "buffer_length"):
+        return 1
+    end
+    if equal(name, "buffer_get"):
+        return 2
+    end
+    if equal(name, "buffer_set"):
+        return 3
+    end
     if equal(name, "boot_read"):
         return 0
     end
@@ -6226,6 +6291,9 @@ end
 -- calls here. Type constructors, void-as-value, unsupported calls and low-level
 -- target intrinsics have separate contracts; a default arity is not a whitelist.
 func nc_has_value_arity_guard(name):
+    if nc_is_hosted_memory_builtin(name):
+        return true
+    end
     if equal(name, "boot_read"):
         return true
     end
@@ -6239,6 +6307,24 @@ func nc_has_value_arity_guard(name):
         return true
     end
     return equal(name, "index") or equal(name, "equal") or equal(name, "get")
+end
+
+-- All five hosted calls return int. Buffer calls constrain their first argument
+-- to buffer; the syscall's seven arguments and the remaining byte arguments are
+-- ints. Keep this in normal inference so wrappers and polymorphic calls work.
+func nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, i, n, is_buffer, env, sig, fn_idx, funcs, n_params, line, changed):
+    if i >= n:
+        return (0, nc_type_int(), env, sig, changed)
+    end
+    let want = nc_type_int()
+    if is_buffer and i == 0:
+        want = nc_type_buffer()
+    end
+    let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, i), env, want, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, 0, r.1, r.2, nc_or_changed(changed, r.3))
+    end
+    return nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, i + 1, n, is_buffer, r.1, r.2, fn_idx, funcs, n_params, line, nc_or_changed(changed, r.3))
 end
 
 func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params):
@@ -6349,6 +6435,9 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         -- must not escape inference and reach lowering without call metadata.
         if nc_has_value_arity_guard(name) and count(kids) != err_value_builtin_arity(name):
             return (nc_fail(420, node.3, name), 0, env, sig, 0)
+        end
+        if nc_is_hosted_memory_builtin(name):
+            return nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, 0, count(kids), not equal(name, "linux_syscall6"), env, sig, fn_idx, funcs, n_params, node.3, 0)
         end
         if equal(name, "clogger"):
             return (0, nc_type_string(), env, sig, 0)
@@ -7094,6 +7183,21 @@ func nc_is_tail_call(code, i, n):
 end
 
 func nc_opcode_name_for_diag(op):
+    if op == 58:
+        return "LINUX_SYSCALL6"
+    end
+    if op == 59:
+        return "BUFFER_ADDRESS"
+    end
+    if op == 60:
+        return "BUFFER_GET"
+    end
+    if op == 61:
+        return "BUFFER_SET"
+    end
+    if op == 62:
+        return "BUFFER_LENGTH"
+    end
     if op == 57:
         return "BOOT_READ"
     end
@@ -7403,6 +7507,21 @@ end
 func nc_meta_call_arg_words(pool, funcs, sig, callee_idx):
     let fn = get(funcs, callee_idx)
     return nc_meta_call_arg_words_loop(pool, sig, callee_idx, 0, fn.2, 0)
+end
+
+func nc_meta_pop_hosted_memory(pool, stack, remaining, is_buffer):
+    if remaining == 0:
+        return (0, stack)
+    end
+    let want = nc_type_int()
+    if is_buffer and remaining == 1:
+        want = nc_type_buffer()
+    end
+    let p = nc_meta_pop_expect(pool, stack, want, 0)
+    if p.0 != 0:
+        return (p.0, p.1)
+    end
+    return nc_meta_pop_hosted_memory(pool, p.1, remaining - 1, is_buffer)
 end
 
 func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, code, new_array_meta, i, n, stack, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap):
@@ -7727,6 +7846,20 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             return (sw.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         stack = nc_stack_push(sw.1, nc_type_int())
+    elif op >= 58 and op <= 62:
+        let arity = 1
+        if op == 58:
+            arity = 7
+        elif op == 60:
+            arity = 2
+        elif op == 61:
+            arity = 3
+        end
+        let hm = nc_meta_pop_hosted_memory(pool, stack, arity, op != 58)
+        if hm.0 != 0:
+            return (hm.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        stack = nc_stack_push(hm.1, nc_type_int())
     elif op == 56:
         if fn_idx != main_idx:
             return (nc_fail(408, 0, "STDIN_READ"), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
@@ -7836,7 +7969,7 @@ func nc_code_has_faultable_loop(code, i, n):
     -- 23/29/31 = index/get/append OOB faults; 43/44 = div/mod by-zero fault.
     -- A faultable op forces the fault-helper block (incl. the exit1 routine the
     -- div/mod zero-check jumps to) to be emitted. op_mul (42) never faults.
-    if op == 23 or op == 29 or op == 31 or op == 43 or op == 44:
+    if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61:
         return 1
     end
     return nc_code_has_faultable_loop(code, i + 1, n)
@@ -8375,6 +8508,21 @@ func nc_group_single_len(op):
     end
     if op == 56:
         return 106
+    end
+    if op == 58:
+        return 13
+    end
+    if op == 59:
+        return 6
+    end
+    if op == 60:
+        return 33
+    end
+    if op == 61:
+        return 56
+    end
+    if op == 62:
+        return 5
     end
     -- Bitwise / shift (36-41). LOAD-BEARING for branch-displacement layout:
     -- pass 1 sizes every instruction here; a missing arm would give the new
@@ -10775,6 +10923,108 @@ func nc_emit_stdin_read(buf):
     return buf
 end
 
+-- The operand stack contains nr,a1,a2,a3,a4,a5,a6 in that order. Linux takes
+-- rax,rdi,rsi,rdx,r10,r8,r9 and destroys rcx/r11 (both caller scratch here).
+-- No libc, errno conversion, allocation, EINTR retry, or descriptor policy is
+-- hidden in this primitive. Higher-level Herbert code owns those decisions.
+func nc_emit_linux_syscall6(buf):
+    do append(buf, 65)
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 65)
+    do append(buf, 90)
+    do append(buf, 90)
+    do append(buf, 94)
+    do append(buf, 95)
+    do append(buf, 88)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_buffer_address(buf):
+    -- pop rax; mov rax,[rax+16]; push rax. The header stays private.
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 64)
+    do append(buf, 16)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_buffer_get(buf, line, diag_get_off, instr_off):
+    -- rcx=index, r8=header, r9=length. Reuse the located get-bounds route.
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 114)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 23)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    -- movzx eax,byte [r10+rcx]; push rax.
+    do append(buf, 65)
+    do append(buf, 15)
+    do append(buf, 182)
+    do append(buf, 4)
+    do append(buf, 10)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_buffer_set(buf, line, diag_get_off, diag_append_off, instr_off):
+    -- Validate the value before the index, consistently with append's byte
+    -- contract. Failure is located and cannot write outside the initialized span.
+    do append(buf, 89)
+    do append(buf, 72)
+    do append(buf, 129)
+    do append(buf, 249)
+    do append(buf, 255)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 118)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_append_off, instr_off + 22)
+    -- Save the validated byte in edx; then load index, header and length.
+    do append(buf, 137)
+    do append(buf, 202)
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 114)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 47)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    -- mov byte [r10+rcx],dl; push rdx (the written byte).
+    do append(buf, 65)
+    do append(buf, 136)
+    do append(buf, 20)
+    do append(buf, 10)
+    do append(buf, 82)
+    return buf
+end
+
 func nc_emit_process_exit(buf):
     -- 10 bytes: pop rdi; mov eax,231; syscall; ud2. Linux exit_group
     -- supplies the low eight status bits to the parent. Never fall through
@@ -12107,6 +12357,16 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         buf = nc_emit_stderr_write(buf)
     elif op == 56:
         buf = nc_emit_stdin_read(buf)
+    elif op == 58:
+        buf = nc_emit_linux_syscall6(buf)
+    elif op == 59:
+        buf = nc_emit_buffer_address(buf)
+    elif op == 60:
+        buf = nc_emit_buffer_get(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
+    elif op == 61:
+        buf = nc_emit_buffer_set(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), diag_base + nc_fault_diag_append_rel(), instr_off)
+    elif op == 62:
+        buf = nc_emit_count(buf)
     end
     return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, g.1, n, buf)
 end
