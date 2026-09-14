@@ -33,6 +33,16 @@ Runs:
   events, focus/shutdown and sustained memory on a private Xvfb display. Python,
   libX11, libXtst and Xvfb are independent test tooling, not program dependencies.
 
+- `make check-app-support`: independent map/parser and text-buffer models,
+  file validation, atomic saving, external conflicts and syscall fault injection.
+  Requires strace for file-failure checks; it is development tooling only.
+- `make check-hosted-apps`: maze wall/collection/completion/restart behavior and
+  editor typing/navigation/save/reopen/dirty-close on private XTest windows,
+  plus 120 seconds each of repeated play/restart and edit/save/scroll memory checks.
+  Strace also tests the visible post-publication sync warning and retry.
+  Evidence includes screenshots, input history, saved bytes and memory samples;
+  the hosted CI workflow uploads retained application evidence even on failure.
+
 This is the full hosted aggregate. It does not run the emulator-heavy kernel suite.
 
 ## Full Non-Emulator Suite

@@ -79,7 +79,9 @@ libX11, libXtst and Xvfb belong to the independent tests, not to the executable.
 smoke check: window, idle animation, held Right/release, and window-manager close.
 It addresses synthetic events only to its test window. The full control and
 sustained-memory checks run on the private display.
-Ben's own keyboard/focus/close experience remains a separate manual check.
+Ben reported a successful manual trial on September 13 and authorized the maze
+and notes-editor expansion. His report is separate from automated observations
+and does not identify the cause of the original Down-test failure.
 
 Build diagnostics refer to the combined source retained at
 `build/first-steps-work/source.herb`. Source ownership and the low-level interfaces

@@ -1,0 +1,230 @@
+-- A small complete game. This file owns its rules; the compiler has none.
+-- Linked after linux.herb, x11.herb, pixel_text.herb and grid_map.herb.
+-- A move commits to one adjacent floor tile and animates over eight frames.
+-- Every frame and restart reuses fixed buffers allocated before the main loop.
+
+-- State u64 fields: source cell, target cell, transition frame, dots left,
+-- and completed steps. Cells retain the loaded map.
+func maze_restart(map, cells, state):
+    let restored = linux_copy(cells, 0, map.5, 0, map.1 * map.2)
+    let source = linux_put64(state, 0, map.3)
+    let target = linux_put64(state, 8, map.3)
+    let frame = linux_put64(state, 16, 0)
+    let dots = linux_put64(state, 24, map.4)
+    let steps = linux_put64(state, 32, 0)
+    return 0
+end
+
+-- A single cardinal direction per move. Opposites cancel; horizontal wins
+-- if both axes are held. Starting another move always checks its target tile.
+func maze_target(c, map, cells, cell):
+    let left = x11_key(c, 65361) or x11_key(c, 97)
+    let right = x11_key(c, 65363) or x11_key(c, 100)
+    let up = x11_key(c, 65362) or x11_key(c, 119)
+    let down = x11_key(c, 65364) or x11_key(c, 115)
+    let target = cell
+    if left and not right:
+        if cell % map.1 != 0: target = cell - 1 end
+    elif right and not left:
+        if cell % map.1 + 1 < map.1: target = cell + 1 end
+    elif up and not down:
+        if cell >= map.1: target = cell - map.1 end
+    elif down and not up:
+        if cell + map.1 < map.1 * map.2: target = cell + map.1 end
+    end
+    if buffer_get(cells, target) == 35: return cell end
+    return target
+end
+
+func maze_update(c, map, cells, state):
+    if linux_u64(state, 24) == 0: return 0 end
+    let source = linux_u64(state, 0)
+    let target = linux_u64(state, 8)
+    let frame = linux_u64(state, 16)
+    if frame == 0:
+        target = maze_target(c, map, cells, source)
+        let saved = linux_put64(state, 8, target)
+        if target == source: return 0 end
+    end
+    frame = frame + 1
+    if frame == 8:
+        if buffer_get(cells, target) == 46:
+            let collected = buffer_set(cells, target, 32)
+            let remaining = linux_put64(state, 24, linux_u64(state, 24) - 1)
+        end
+        let arrived = linux_put64(state, 0, target)
+        let count = linux_put64(state, 32, linux_u64(state, 32) + 1)
+        frame = 0
+    end
+    return linux_put64(state, 16, frame)
+end
+
+-- Command presses survive a quick press/release between animation frames.
+-- Movement still uses held state. Result: 0 ordinary, 1 close, 2 restarted.
+func maze_commands(c, map, cells, state, event, result):
+    if not x11_next_key(c, event): return result end
+    let key = linux_u32(event, 0)
+    if key == 65307: return 1 end
+    if key == 114 or key == 82:
+        let restarted = maze_restart(map, cells, state)
+        result = 2
+    end
+    return maze_commands(c, map, cells, state, event, result)
+end
+
+-- Two drawing passes keep wall colors grouped and the X11 batch bounded.
+func maze_walls(c, map, cells, ox, oy, cell, accent):
+    if cell >= map.1 * map.2: return 0 end
+    if buffer_get(cells, cell) == 35:
+        let x = ox + (cell % map.1) * 24
+        let y = oy + (cell / map.1) * 24
+        if accent:
+            let drawn = x11_rect(c, x + 3, y + 3, 18, 2)
+        else:
+            let drawn = x11_rect(c, x + 1, y + 1, 22, 22)
+        end
+    end
+    return maze_walls(c, map, cells, ox, oy, cell + 1, accent)
+end
+
+func maze_dots(c, map, cells, ox, oy, cell):
+    if cell >= map.1 * map.2: return 0 end
+    if buffer_get(cells, cell) == 46:
+        let drawn = x11_ellipse(c, ox + (cell % map.1) * 24 + 9, oy + (cell / map.1) * 24 + 9, 6, 6)
+    end
+    return maze_dots(c, map, cells, ox, oy, cell + 1)
+end
+
+func maze_draw(c, map, cells, state, tick):
+    let ox = (800 - map.1 * 24) / 2
+    let oy = 112 + (456 - map.2 * 24) / 2
+    let background = x11_color(c, 1054759)
+    let canvas = x11_rect(c, 0, 0, 800, 640)
+    let white = x11_color(c, 15265527)
+    let title = pixel_text(c, "HERBERT", 28, 27, 3)
+    let muted = x11_color(c, 8820395)
+    let subtitle = pixel_text(c, "MAZE", 192, 40, 1)
+    let collect = pixel_text(c, "DOTS LEFT", 28, 79, 1)
+    let stepslabel = pixel_text(c, "STEPS", 650, 79, 1)
+    let bright = x11_color(c, 15265527)
+    let count = pixel_number(c, linux_u64(state, 24), 94, 77, 2)
+    let stepcount = pixel_number(c, linux_u64(state, 32) % 1000000, 692, 79, 1)
+    let fieldcolor = x11_color(c, 1384240)
+    let field = x11_rect(c, ox - 4, oy - 4, map.1 * 24 + 8, map.2 * 24 + 8)
+    let wallcolor = x11_color(c, 2377568)
+    let walls = maze_walls(c, map, cells, ox, oy, 0, false)
+    let accentcolor = x11_color(c, 3958662)
+    let accents = maze_walls(c, map, cells, ox, oy, 0, true)
+    let dotcolor = x11_color(c, 14868688)
+    let dots = maze_dots(c, map, cells, ox, oy, 0)
+    let source = linux_u64(state, 0)
+    let target = linux_u64(state, 8)
+    let distance = linux_u64(state, 16) * 3
+    let x = ox + (source % map.1) * 24 + 12
+    let y = oy + (source / map.1) * 24 + 12
+    if target % map.1 > source % map.1: x = x + distance end
+    if target % map.1 < source % map.1: x = x - distance end
+    if target / map.1 > source / map.1: y = y + distance end
+    if target / map.1 < source / map.1: y = y - distance end
+    let shadowcolor = x11_color(c, 660510)
+    let shadow = x11_ellipse(c, x - 9, y + 6, 18, 6)
+    -- Character gold stays unique for independent image observations.
+    let gold = x11_color(c, 16173151)
+    let body = x11_ellipse(c, x - 9, y - 9, 18, 18)
+    let eyecolor = x11_color(c, 1054759)
+    let eyeheight = 4
+    if tick % 180 >= 174: eyeheight = 1 end
+    let eye1 = x11_rect(c, x - 4, y - 3, 2, eyeheight)
+    let eye2 = x11_rect(c, x + 2, y - 3, 2, eyeheight)
+    if linux_u64(state, 24) == 0:
+        let panelborder = x11_color(c, 6867876)
+        let border = x11_rect(c, 216, 280, 368, 104)
+        let panelcolor = x11_color(c, 1054759)
+        let panel = x11_rect(c, 219, 283, 362, 98)
+        let headingcolor = x11_color(c, 15265527)
+        let won = pixel_text(c, "MAZE COMPLETE", 322, 304, 2)
+        let againcolor = x11_color(c, 11255503)
+        let again = pixel_text(c, "PRESS R TO PLAY AGAIN", 340, 350, 1)
+    end
+    let instructions = x11_color(c, 11255503)
+    let move = pixel_text(c, "ARROWS / WASD TO MOVE", 28, 591, 1)
+    let restart = pixel_text(c, "R TO RESTART", 336, 591, 1)
+    let close = pixel_text(c, "ESC TO CLOSE", 650, 591, 1)
+    let quiet = x11_color(c, 5793911)
+    let credit = pixel_text(c, "COLLECT EVERY DOT", 28, 617, 1)
+    let author = pixel_text(c, "MADE IN HERBERT", 680, 617, 1)
+    let pulse = 3832176
+    if tick % 60 >= 30: pulse = 6867876 end
+    let indicatorcolor = x11_color(c, pulse)
+    let indicator = x11_ellipse(c, 764, 40, 8, 8)
+    return x11_present(c)
+end
+
+func maze_loop(c, map, cells, state, event, tick, last):
+    let events = x11_events(c)
+    let command = maze_commands(c, map, cells, state, event, 0)
+    if x11_closed(c) or command == 1:
+        let closed = x11_close(c)
+        let checked = x11_need(closed == 0, "maze: display close failed\n")
+        do process_exit(0)
+        return 0
+    end
+    let now = linux_clock_ms(c.4)
+    let checked = x11_need(not linux_error(now), "maze: monotonic clock failed\n")
+    if command == 2:
+        let resetframe = maze_draw(c, map, cells, state, 0)
+        return maze_loop(c, map, cells, state, event, 1, now)
+    end
+    if now - last < 16:
+        let waited = linux_poll(linux_u64(c.0, 0), c.3, 1, 16 - (now - last))
+        let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "maze: input wait failed\n")
+        return maze_loop(c, map, cells, state, event, tick, last)
+    end
+    let updated = maze_update(c, map, cells, state)
+    let drawn = maze_draw(c, map, cells, state, tick)
+    return maze_loop(c, map, cells, state, event, (tick + 1) % 180, now)
+end
+
+-- Startup diagnostics only; no number-to-string allocation in the game loop.
+func maze_error_number(number):
+    let digits = linux_buffer(20)
+    let count = linux_decimal(digits, 0, number)
+    return stderr_write(linux_string_loop(digits, 0, count, new_buffer()))
+end
+
+func maze_map_error(map):
+    let prefix = stderr_write("maze: ")
+    let detail = stderr_write(grid_map_error(map.0))
+    if map.6 != 0:
+        let rowlabel = stderr_write(" (row ")
+        let row = maze_error_number(map.6)
+        let columnlabel = stderr_write(", column ")
+        let column = maze_error_number(map.7)
+        let ending = stderr_write(")")
+    end
+    return linux_die("\n")
+end
+
+func main():
+    let args = linux_arguments()
+    let path = linux_argument(args, 1)
+    if length(path) == 0: path = "examples/maze.txt" end
+    if length(linux_argument(args, 2)) != 0: return linux_die("maze: usage: maze [map-file]\n") end
+    let loaded = linux_read_file(path, 4096)
+    if loaded.0 != 0:
+        if loaded.0 == 0 - 27: return linux_die("maze: map file exceeds 4096 bytes\n") end
+        return linux_die("maze: cannot read map file; check its path and permissions\n")
+    end
+    let map = grid_map_parse(loaded.1, loaded.2, 31, 19)
+    if map.0 != 0: return maze_map_error(map) end
+    let cells = linux_buffer(map.1 * map.2)
+    let state = linux_buffer(40)
+    let started = maze_restart(map, cells, state)
+    let c = x11_open(800, 640, "Herbert - Maze")
+    let commands = x11_enable_text(c)
+    let event = linux_buffer(16)
+    let first = maze_draw(c, map, cells, state, 0)
+    let now = linux_clock_ms(c.4)
+    let checked = x11_need(not linux_error(now), "maze: monotonic clock failed\n")
+    return maze_loop(c, map, cells, state, event, 1, now)
+end

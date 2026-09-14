@@ -34,8 +34,8 @@ verifiable on demand.
 
 Use concrete programs to improve the language and reusable application support.
 The first checkpoint is a normal Linux window with a keyboard-controlled
-character, ongoing updates and clean shutdown. Stop there for Ben to try it;
-the maze game follows later. Do not start a general engine or another language.
+character, ongoing updates and clean shutdown. Ben reported a successful manual
+trial on September 13 and authorized a maze, reusable support and notes editor. Do not start a general engine or another language.
 The family-language idea remains open when actual usage gives it a purpose.
 
 Own the language, compiler, runtime support and applications. Existing Linux,

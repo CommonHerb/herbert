@@ -6,13 +6,24 @@ paused; existing kernel work, history and evidence are preserved. The production
 compiler is a committed Linux/x86-64 executable that compiles Herbert source
 without a foreign compiler or runtime.
 
-The first interactive checkpoint is [First steps](examples/first_steps.md):
-a normal desktop window with a keyboard-controlled character and ongoing updates.
-Herbert owns the application and X11 support code; Linux and the existing
-X11/XWayland desktop supply system, display and device services. No foreign
-graphics library is linked into the executable. This checkpoint stops for Ben's
-trial before expanding the game. The [support guide](lib/README.md) describes
-the reusable byte and Linux interfaces and their unsafe boundary.
+The Linux examples now include [a maze game](examples/maze.md) and
+[a plain-text notes editor](examples/notes.md). The original
+[First steps](examples/first_steps.md) window remains available as a small baseline;
+Ben completed its manual trial and authorized this expansion on September 13.
+
+```sh
+make maze notes
+./build/maze
+./build/notes my-notes.txt
+```
+
+The maze reads an editable text map, checks walls, counts collected dots and
+supports completion and restart. Notes opens, edits and saves a bounded ASCII
+text file. These are small usable applications, not a general game engine or a
+full word processor. The [support guide](lib/README.md) explains the reusable
+Herbert code and the actual host boundary: Linux and X11/XWayland supply system,
+display and device services; no foreign runtime or graphics library is linked
+into the applications.
 
 Start with [the word counter](examples/wordcount.md) to compile a useful program and process real input. Current capabilities and limitations are established by the source and executable checks.
 

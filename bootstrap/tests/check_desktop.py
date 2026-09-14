@@ -322,10 +322,10 @@ def memory(pid):
 
 
 @contextlib.contextmanager
-def private_display(directory):
+def private_display(directory, size="800x600"):
     readfd, writefd = os.pipe()
     log = (directory / "xvfb.log").open("wb")
-    process = subprocess.Popen(["Xvfb", "-displayfd", str(writefd), "-screen", "0", "800x600x24",
+    process = subprocess.Popen(["Xvfb", "-displayfd", str(writefd), "-screen", "0", f"{size}x24",
                                 "-nolisten", "tcp"], pass_fds=(writefd,), stdout=log, stderr=log)
     os.close(writefd)
     try:
@@ -460,7 +460,7 @@ def run(args, display, evidence):
     result = {"mode": "desktop-targeted-synthetic-events" if args.desktop else "private-Xvfb-XTest",
               "scope": "desktop-smoke" if args.desktop else "full-interactive-and-errors",
               "image_sha256": hashlib.sha256(args.image.read_bytes()).hexdigest(),
-              "checks": [], "focus_events": []}
+              "checks": [], "focus_events": [], "input_events": [], "boundary_observations": []}
     application = None
 
     def passed(label, **data):
@@ -484,7 +484,13 @@ def run(args, display, evidence):
         def snapshot():
             result["focus_events"].extend(connection.focus_events(window))
             return connection.snapshot(window)
-        key = lambda name, down: connection.key(window, name, down, synthetic=args.desktop)
+        def key(name, down):
+            event = {"seconds": round(time.monotonic() - connection.started, 3),
+                     "key": name, "down": down, "synthetic": args.desktop,
+                     "owns_actual_focus": connection.owns_focus(window), "sent": False}
+            result["input_events"].append(event)
+            connection.key(window, name, down, synthetic=args.desktop)
+            event["sent"] = True
         initial = snapshot()
         assert (initial["width"], initial["height"]) == (640, 480), "window dimensions changed"
         initial_position = center(initial)
@@ -600,6 +606,9 @@ def run(args, display, evidence):
             key(name, True)
             began = time.monotonic()
             path = []
+            boundary = {"key": name, "axis": axis, "limit": limit, "path": path,
+                        "started_seconds": round(began - connection.started, 3)}
+            result["boundary_observations"].append(boundary)
             while True:
                 time.sleep(0.20)
                 edge = center(snapshot())
@@ -610,9 +619,12 @@ def run(args, display, evidence):
                 assert time.monotonic() - began < 8, (name, "did not reach edge", path)
             time.sleep(0.15)
             later = center(snapshot())
+            boundary.update(arrived=edge, stability_sample=later,
+                            stability_seconds=round(time.monotonic() - began, 3),
+                            owns_actual_focus=connection.owns_focus(window))
             assert later == edge, (name, "edge does not clamp", edge, later)
             key(name, False)
-            # X11 fills may put the pixel bounding center half a pixel below
+            # X11 fills may put the pixel bounding center half a pixel smaller than
             # the integer logical center for an even-sized character.
             assert abs(edge[axis] - limit) <= 0.5, (name, edge, limit)
             edges.append({"key": name, "center": edge, "seconds": round(time.monotonic() - began, 3)})
@@ -634,13 +646,17 @@ def run(args, display, evidence):
     except BaseException as error:
         result["status"] = "FAIL"
         result["error"] = f"{type(error).__name__}: {error}"
+        if application:
+            result["process_status_at_failure"] = application.process.poll()
         if application and application.window and application.process.poll() is None:
             try:
                 result["owns_actual_focus_at_failure"] = connection.owns_focus(application.window)
                 result["focus_events"].extend(connection.focus_events(application.window))
-                save_png(evidence / "failure.png", connection.snapshot(application.window))
-            except Exception:
-                pass
+                frame = connection.snapshot(application.window)
+                result["failure_character_bbox"] = frame["bbox"]
+                save_png(evidence / "failure.png", frame)
+            except Exception as capture_error:
+                result["failure_capture_error"] = f"{type(capture_error).__name__}: {capture_error}"
         raise
     finally:
         if application:

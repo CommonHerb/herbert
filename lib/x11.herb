@@ -3,7 +3,11 @@
 -- Requires lib/linux.herb. X11 core protocol 11.0; screen 0, depth-24 TrueColor
 -- with RGB masks ff0000/00ff00/0000ff. Fixed buffers bound incoming messages.
 -- Context: (metadata, requests, replies/events, poll scratch, clock scratch,
---           pressed keycodes, keycode-to-first-keysym map).
+--           pressed keycodes, unshifted keysym map, shifted keysym map,
+--           optional bounded key-event queue). Text input supports core group 1.
+-- Metadata offsets100/104/108 are queue enabled/read-index/count; 256 entries.
+-- Offset96 requests a map refresh;112 stores pending reply sequence plus one
+-- (zero means none, so wrapped X11 sequence0 is still representable).
 -- All steady-state operations reuse these buffers. Raw pointers stay inside
 -- Linux calls; no buffer is appended to after its address is borrowed.
 
@@ -198,7 +202,11 @@ end
 
 func x11_request(c, opcode, detail, bytes):
     let p = linux_u32(c.0, 64)
-    let checked = x11_need(bytes >= 4 and bytes % 4 == 0 and p <= buffer_length(c.1) and bytes <= buffer_length(c.1) - p, "desktop: request batch capacity exceeded\n")
+    let checked = x11_need(bytes >= 4 and bytes % 4 == 0 and bytes <= buffer_length(c.1) and p <= buffer_length(c.1), "desktop: request batch capacity exceeded\n")
+    if bytes > buffer_length(c.1) - p:
+        let flushed = x11_flush(c)
+        p = 0
+    end
     let cleared = x11_zero(c.1, p, bytes)
     let a = buffer_set(c.1, p, opcode)
     let b = buffer_set(c.1, p + 1, detail)
@@ -226,11 +234,16 @@ func x11_dispatch(c):
             let value = 0
             if kind == 2: value = 1 end
             let changed = buffer_set(c.5, code, value)
+            if kind == 2 and linux_u32(c.0, 100) != 0 and linux_u32(c.0, 80) != 0:
+                let queued = x11_queue_key(c, code, linux_u16(r, 28), linux_u32(r, 4))
+            end
         end
     end
     if kind == 9 and linux_u32(r, 4) == linux_u32(c.0, 36):
         let focused = linux_put32(c.0, 80, 1)
     end
+    -- Focus/unmap/mapping changes clear held state, not already accepted text.
+    -- Queued presses retain their translated symbol and arrival order.
     if kind == 10 and linux_u32(r, 4) == linux_u32(c.0, 36):
         let cleared = x11_zero(c.5, 0, 256)
         let focused = linux_put32(c.0, 80, 0)
@@ -292,26 +305,60 @@ func x11_keyboard_fill(c, i, n, stride):
     if i == n: return 0 end
     let symbol = linux_u32(c.2, 32 + i * stride * 4)
     let stored = linux_put32(c.6, (linux_u32(c.0, 68) + i) * 4, symbol)
+    let shifted = 0
+    if stride > 1: shifted = linux_u32(c.2, 36 + i * stride * 4) end
+    if shifted == 0:
+        shifted = symbol
+        if symbol >= 97 and symbol <= 122: shifted = symbol - 32 end
+    end
+    let saved = linux_put32(c.7, (linux_u32(c.0, 68) + i) * 4, shifted)
     return x11_keyboard_fill(c, i + 1, n, stride)
 end
 
-func x11_keyboard(c):
+func x11_keyboard_request(c):
     let low = linux_u32(c.0, 68)
     let n = linux_u32(c.0, 72) - low + 1
     let p = x11_request(c, 101, 0, 8)
     let a = buffer_set(c.1, p + 4, low)
     let b = buffer_set(c.1, p + 5, n)
-    let sent = x11_flush(c)
-    let reply = x11_reply(c, linux_u64(c.0, 8))
+    let pending = linux_put32(c.0, 112, linux_u64(c.0, 8) + 1)
+    -- A subsequent MappingNotify sets96 again, including while this reply is
+    -- pending. Completing this request must not erase that later notification.
+    let requested = linux_put32(c.0, 96, 0)
+    return x11_flush(c)
+end
+
+func x11_keyboard_complete(c, bytes):
+    let n = linux_u32(c.0, 72) - linux_u32(c.0, 68) + 1
     let stride = buffer_get(c.2, 1)
-    let checked = x11_need(stride > 0 and reply == n * stride * 4, "desktop: invalid keyboard mapping reply\n")
+    let checked = x11_need(stride > 0 and bytes == n * stride * 4, "desktop: invalid keyboard mapping reply\n")
     let filled = x11_keyboard_fill(c, 0, n, stride)
-    return linux_put32(c.0, 96, 0)
+    return linux_put32(c.0, 112, 0)
+end
+
+-- Startup only, before the window is mapped or ordered text input enabled.
+func x11_keyboard(c):
+    let sent = x11_keyboard_request(c)
+    let bytes = x11_reply(c, linux_u32(c.0, 112) - 1)
+    return x11_keyboard_complete(c, bytes)
+end
+
+-- Runtime refresh consumes one bounded reply body, never an unbounded sequence
+-- of interleaved key events. The ordinary event drain below handles those keys
+-- and yields whenever the application's queue is full.
+func x11_keyboard_reply(c):
+    let pending = linux_u32(c.0, 112)
+    let checked = x11_need(pending != 0 and linux_u16(c.2, 2) == pending - 1, "desktop: unexpected X11 keyboard reply\n")
+    let bytes = linux_u32(c.2, 4) * 4
+    let checked2 = x11_need(bytes <= buffer_length(c.2) - 32, "desktop: keyboard reply exceeds fixed buffer\n")
+    let got = linux_read_exact(linux_u64(c.0, 0), c.2, 32, bytes, c.3, c.4)
+    let checked3 = x11_need(got == 0, "desktop: truncated keyboard mapping reply\n")
+    return x11_keyboard_complete(c, bytes)
 end
 
 func x11_open(width, height, title):
     let checked = x11_need(width > 0 and width <= 32767 and height > 0 and height <= 32767 and length(title) <= 1024, "desktop: invalid window size or title\n")
-    let c = (linux_buffer(128), linux_buffer(65536), linux_buffer(65536), linux_buffer(8), linux_buffer(16), linux_buffer(256), linux_buffer(1024))
+    let c = (linux_buffer(128), linux_buffer(65536), linux_buffer(65536), linux_buffer(8), linux_buffer(16), linux_buffer(256), linux_buffer(1024), linux_buffer(1024), linux_buffer(4096))
     let env = linux_environment()
     let display = x11_display(linux_env(env, "DISPLAY"))
     let fd = x11_connect(display, c.3, c.4)
@@ -338,7 +385,7 @@ func x11_open(width, height, title):
     let name = linux_text(c.1, namepos, title)
     let classpos = x11_property(c, 67, 31, 8, 19)
     let classname = linux_text(c.1, classpos, "herbert")
-    let classname2 = linux_text(c.1, classpos + 8, "FirstSteps")
+    let classname2 = linux_text(c.1, classpos + 8, "HerbertApp")
     let protocolpos = x11_property(c, protocols, 4, 32, 1)
     let prot = linux_put32(c.1, protocolpos, deleted)
     -- ICCCM normal hints: min=max for this deliberately fixed-size surface.
@@ -368,7 +415,7 @@ end
 -- Nonblocking event drain preserves partial 32-byte messages between frames.
 -- A bounded drain prevents a busy event source from starving screen updates.
 func x11_events_loop(c, budget):
-    if budget == 0: return 0 end
+    if budget == 0 or linux_u32(c.0, 108) >= 256: return 0 end
     let have = linux_u32(c.0, 88)
     let n = linux_syscall6(45, linux_u64(c.0, 0), buffer_address(c.2) + have, 32 - have, 64, 0, 0)
     if n == 0 - 11: return 0 end
@@ -376,8 +423,11 @@ func x11_events_loop(c, budget):
     let checked = x11_need(not linux_error(n) and n > 0 and n <= 32 - have, "desktop: display connection closed\n")
     let total = have + n
     if total == 32:
-        let checked2 = x11_need(buffer_get(c.2, 0) != 1, "desktop: unexpected X11 reply in event stream\n")
-        let event = x11_dispatch(c)
+        if buffer_get(c.2, 0) == 1:
+            let keyboard = x11_keyboard_reply(c)
+        else:
+            let event = x11_dispatch(c)
+        end
         let reset = linux_put32(c.0, 88, 0)
     else:
         let saved = linux_put32(c.0, 88, total)
@@ -387,8 +437,8 @@ end
 
 func x11_events(c):
     let events = x11_events_loop(c, 512)
-    if linux_u32(c.0, 96) != 0 and linux_u32(c.0, 88) == 0:
-        return x11_keyboard(c)
+    if linux_u32(c.0, 96) != 0 and linux_u32(c.0, 112) == 0 and linux_u32(c.0, 88) == 0:
+        return x11_keyboard_request(c)
     end
     return 0
 end
@@ -448,3 +498,44 @@ func x11_close(c):
     -- Closing this connection destroys its window, pixmap and GC server-side.
     return linux_syscall6(3, linux_u64(c.0, 0), 0, 0, 0, 0, 0)
 end
+
+-- Opt-in ordered press events for text/command consumers. Held-key consumers
+-- need not enable/drain a queue. No allocations occur while queuing or reading.
+-- Each press uses the last completed keyboard map when its event is processed.
+-- A refreshed map becomes active at its reply; queued symbols do not change.
+-- This preserves input across refreshes, not atomic remapping while typing.
+func x11_enable_text(c):
+    let cleared = linux_put32(c.0, 108, 0)
+    return linux_put32(c.0, 100, 1)
+end
+
+func x11_queue_key(c, code, state, timestamp):
+    let count = linux_u32(c.0, 108)
+    let checked = x11_need(count < 256, "desktop: key queue capacity exceeded\n")
+    let symbol = linux_u32(c.6, code * 4)
+    let shifted = (state & 1) != 0
+    if (state & 2) != 0 and symbol >= 97 and symbol <= 122: shifted = not shifted end
+    if shifted: symbol = linux_u32(c.7, code * 4) end
+    let at = ((linux_u32(c.0, 104) + count) % 256) * 16
+    let a = linux_put32(c.8, at, symbol)
+    let b = linux_put32(c.8, at + 4, state)
+    let d = linux_put32(c.8, at + 8, code)
+    let e = linux_put32(c.8, at + 12, timestamp)
+    return linux_put32(c.0, 108, count + 1)
+end
+
+-- Writes keysym/modifiers/keycode/time into caller-owned 16-byte storage.
+-- The bounded event drain yields at a full queue, preserving later socket data.
+func x11_next_key(c, event):
+    let count = linux_u32(c.0, 108)
+    if count == 0: return false end
+    let head = linux_u32(c.0, 104)
+    let copied = linux_copy(event, 0, c.8, head * 16, 16)
+    let advanced = linux_put32(c.0, 104, (head + 1) % 256)
+    let remaining = linux_put32(c.0, 108, count - 1)
+    return true
+end
+
+-- An application with unsaved data may acknowledge a WM_DELETE request and
+-- present a confirmation. A destroyed/disconnected window still cannot recover.
+func x11_ack_close(c): return linux_put32(c.0, 84, 0) end

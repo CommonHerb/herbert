@@ -34,10 +34,18 @@ examples/wordcount_long64.md
 examples/hexview_long64.md
 examples/elfinfo_long64.md
 examples/first_steps.md
+examples/maze.md
+examples/maze.txt
+examples/notes.md
 lib/README.md
 # Independent Linux syscall/memory and interactive desktop TEST tooling.
 bootstrap/tests/check_hosted_memory_io.py
 bootstrap/tests/check_desktop.py
+bootstrap/tests/check_hosted_apps.py
+bootstrap/tests/check_grid_map.py
+bootstrap/tests/check_notes_support.py
+bootstrap/tests/check_x11_text.py
+bootstrap/tests/check_link44_attempts.py
 # Test tooling for the Herbert-authored sustained input utility.
 bootstrap/tests/check_wordcount.py
 # Serial host adapter and focused checks; counting runs in the Herbert guest.

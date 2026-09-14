@@ -1,0 +1,277 @@
+-- A bounded plain-text editor, compiled and supported entirely in Herbert.
+-- Libraries: linux, file_io, text_buffer, x11, pixel_text. ASCII + LF + TAB.
+-- App state u64: top row0, left column8, dirty16, confirming24, message32,
+-- save result40, redraw48. No per-event/frame/save string or tuple creation.
+
+func notes_message(s, message):
+    let stored = linux_put64(s, 32, message)
+    return linux_put64(s, 48, 1)
+end
+
+func notes_changed(s):
+    let dirty = linux_put64(s, 16, 1)
+    return notes_message(s, 1)
+end
+
+func notes_quit(c, f):
+    let closedfile = file_close(f)
+    let closedwindow = x11_close(c)
+    do process_exit(0)
+    return 0
+end
+
+func notes_request_close(c, f, s):
+    let acknowledged = x11_ack_close(c)
+    if linux_u64(s, 16) == 0: return notes_quit(c, f) end
+    let confirming = linux_put64(s, 24, 1)
+    return notes_message(s, 5)
+end
+
+func notes_save(f, t, s):
+    let result = file_save(f, t.0, text_length(t))
+    let recorded = linux_put64(s, 40, result)
+    if result == 0:
+        let clean = linux_put64(s, 16, 0)
+        let confirmed = linux_put64(s, 24, 0)
+        return notes_message(s, 2)
+    elif result == 1:
+        -- Publication happened; retain dirty/confirmation so the warning is
+        -- visible. A successful retry can establish durability and clear it.
+        let unconfirmed = linux_put64(s, 16, 1)
+        return notes_message(s, 6)
+    end
+    return notes_message(s, 4)
+end
+
+func notes_save_copy(f, t, s):
+    let result = file_save_copy(f, t.0, text_length(t))
+    let recorded = linux_put64(s, 40, result)
+    -- A rescue never adopts a new document or clears the original's dirty or
+    -- close-confirmation state. Its exact sibling basename is shown below.
+    if result == 0: return notes_message(s, 7) end
+    if result == 1: return notes_message(s, 8) end
+    return notes_message(s, 9)
+end
+
+func notes_key(c, f, t, s, key, mods):
+    let control = (mods & 4) != 0
+    if control and (mods & 1) != 0 and (key == 115 or key == 83): return notes_save_copy(f, t, s) end
+    if control and (key == 115 or key == 83): return notes_save(f, t, s) end
+    if linux_u64(s, 24) != 0:
+        if key == 65307:
+            let cancelled = linux_put64(s, 24, 0)
+            return notes_message(s, 1)
+        elif (key == 121 or key == 89) and not control and (mods & 8) == 0:
+            return notes_quit(c, f)
+        end
+        return 0
+    end
+    if key == 65307 or (control and (key == 113 or key == 81)):
+        return notes_request_close(c, f, s)
+    end
+    if (mods & 8) != 0: return 0 end
+    let cursor = text_cursor(t)
+    let changed = 0
+    if key == 65361:
+        if cursor > 0: let moved = text_seek(t, cursor - 1) end
+    elif key == 65363:
+        let moved = text_seek(t, cursor + 1)
+    elif key == 65362:
+        let moved = text_vertical(t, false, 1)
+    elif key == 65364:
+        let moved = text_vertical(t, true, 1)
+    elif key == 65360:
+        let target = text_line_start(t, cursor)
+        if control: target = 0 end
+        let moved = text_seek(t, target)
+    elif key == 65367:
+        let target = text_line_end(t, cursor)
+        if control: target = text_length(t) end
+        let moved = text_seek(t, target)
+    elif key == 65365:
+        let moved = text_vertical(t, false, 20)
+    elif key == 65366:
+        let moved = text_vertical(t, true, 20)
+    elif control:
+        return 0
+    elif key == 65288:
+        changed = text_backspace(t)
+    elif key == 65535:
+        changed = text_delete(t)
+    else:
+        let ch = key
+        if key == 65293: ch = 10 end
+        if key == 65289: ch = 9 end
+        if text_ascii(ch):
+            changed = text_insert(t, ch)
+            if changed == 0: return notes_message(s, 3) end
+        end
+    end
+    if changed != 0: return notes_changed(s) end
+    if cursor != text_cursor(t): return linux_put64(s, 48, 1) end
+    return 0
+end
+
+func notes_keys(c, f, t, s, event):
+    if not x11_next_key(c, event): return 0 end
+    let handled = notes_key(c, f, t, s, linux_u32(event, 0), linux_u32(event, 4))
+    return notes_keys(c, f, t, s, event)
+end
+
+func notes_view(t, s):
+    let row = text_row(t, text_cursor(t))
+    let col = text_column(t, text_cursor(t))
+    let top = linux_u64(s, 0)
+    let left = linux_u64(s, 8)
+    if row < top: top = row end
+    if row >= top + 21: top = row - 20 end
+    if col < left: left = col end
+    if col >= left + 70: left = col - 69 end
+    let a = linux_put64(s, 0, top)
+    return linux_put64(s, 8, left)
+end
+
+func notes_draw_line(c, t, p, col, left, y):
+    if p >= text_length(t) or col >= left + 70: return 0 end
+    let ch = buffer_get(t.0, p)
+    if ch == 10: return 0 end
+    if col >= left and ch != 9:
+        let letter = pixel_letter(c, pixel_glyph(ch), 28 + (col - left) * 12, y, 2, 0)
+    end
+    return notes_draw_line(c, t, p + 1, text_next_column(col, ch), left, y)
+end
+
+func notes_draw_rows(c, t, p, left, row):
+    if row == 21: return 0 end
+    let line = notes_draw_line(c, t, p, 0, left, 102 + row * 20)
+    let e = text_line_end(t, p)
+    if e >= text_length(t): return 0 end
+    return notes_draw_rows(c, t, e + 1, left, row + 1)
+end
+
+func notes_status(c, f, t, s):
+    let color = x11_color(c, 11255503)
+    let rowlabel = pixel_text(c, "Line", 28, 542, 1)
+    let row = pixel_number(c, text_row(t, text_cursor(t)) + 1, 62, 542, 1)
+    let collabel = pixel_text(c, "Column", 124, 542, 1)
+    let col = pixel_number(c, text_column(t, text_cursor(t)) + 1, 170, 542, 1)
+    let byteslabel = pixel_text(c, "Bytes", 248, 542, 1)
+    let bytes = pixel_number(c, text_length(t), 288, 542, 1)
+    let cap = pixel_text(c, "/ 65536", 330, 542, 1)
+    let dirty = "Saved"
+    if linux_u64(s, 16) != 0: dirty = "UNSAVED" end
+    let label = pixel_text(c, dirty, 806, 542, 1)
+    let message = linux_u64(s, 32)
+    let status = "Ready. ASCII text, TAB and LF newlines."
+    if message == 1: status = "Edited. Ctrl+S saves this document." end
+    if message == 2: status = "Saved. File and containing directory synced." end
+    if message == 3: status = "Buffer full (65536 bytes). Delete text before inserting more." end
+    if message == 4: status = "Save failed; no replacement this attempt. Ctrl+Shift+S saves a rescue copy." end
+    if message == 5: status = "Unsaved: Y discards and closes. Esc returns. Ctrl+S saves. Ctrl+Shift+S rescues." end
+    if message == 6: status = "Written; sync/verification failed. Ctrl+S retries; Ctrl+Shift+S rescues." end
+    if message == 7: status = "Rescue copy saved. Original stays open; its unsaved state is unchanged." end
+    if message == 8: status = "Rescue copy written, but directory sync failed. Keep this window open." end
+    if message == 9: status = "Rescue failed; no copy published this attempt. Your edits remain here." end
+    if linux_u64(s, 24) != 0 and message == 7:
+        status = "Rescue saved. Close pending: Y closes; Esc returns to editing."
+    end
+    if linux_u64(s, 24) != 0 and message == 8:
+        status = "Copy written; sync uncertain. Close pending: Y closes; Esc returns."
+    end
+    if message >= 3: let warning = x11_color(c, 16173151) end
+    let statusline = pixel_text(c, status, 28, 560, 1)
+    if message == 4 or message == 9:
+        let code = pixel_number(c, 0 - linux_u64(s, 40), 830, 560, 1)
+    end
+    if message == 7 or message == 8:
+        let label = pixel_text(c, "Sibling file:", 28, 580, 1)
+        let name = file_copy_name(f)
+        let shown = pixel_text_buffer(c, name, 0, linux_nul_end(name, 0, buffer_length(name)), 112, 580, 1)
+    elif linux_u64(s, 24) != 0 and message != 5:
+        let help = pixel_text(c, "Close pending: Y discards | Esc returns | Ctrl+S saves | Ctrl+Shift+S rescues", 28, 580, 1)
+    else:
+        let help = pixel_text(c, "Ctrl+S save | Ctrl+Shift+S rescue copy | Ctrl+Q / Esc close | Arrows, Home/End, PgUp/PgDn", 28, 580, 1)
+    end
+    return 0
+end
+
+func notes_draw(c, f, t, s, path, blink):
+    let view = notes_view(t, s)
+    let background = x11_color(c, 1054759)
+    let canvas = x11_rect(c, 0, 0, 900, 600)
+    let heading = x11_color(c, 15265527)
+    let title = pixel_text(c, "Herbert Notes", 28, 24, 3)
+    let subtitle = x11_color(c, 8820395)
+    let hint = pixel_text(c, "PLAIN TEXT", 688, 39, 2)
+    let label = pixel_text(c, "File:", 28, 72, 1)
+    let pathcount = length(path)
+    if pathcount > 130: pathcount = 130 end
+    let pathname = pixel_text_buffer(c, f.6, 0, pathcount, 70, 72, 1)
+    let bordercolor = x11_color(c, 2767956)
+    let border = x11_rect(c, 24, 96, 852, 428)
+    let papercolor = x11_color(c, 1384240)
+    let paper = x11_rect(c, 26, 98, 848, 424)
+    let ink = x11_color(c, 15265527)
+    let first = text_row_start(t, 0, linux_u64(s, 0))
+    let text = notes_draw_rows(c, t, first, linux_u64(s, 8), 0)
+    if blink:
+        let cursorcolor = x11_color(c, 16173151)
+        let col = text_column(t, text_cursor(t)) - linux_u64(s, 8)
+        let row = text_row(t, text_cursor(t)) - linux_u64(s, 0)
+        let cursor = x11_rect(c, 28 + col * 12, 100 + row * 20, 2, 18)
+    end
+    let status = notes_status(c, f, t, s)
+    let clean = linux_put64(s, 48, 0)
+    return x11_present(c)
+end
+
+func notes_loop(c, f, t, s, path, event, lastblink):
+    let events = x11_events(c)
+    -- Accepted typing belongs to the document before a batched WM close is
+    -- considered. In particular, a queued ordinary Y must not confirm discard.
+    let keys = notes_keys(c, f, t, s, event)
+    if x11_closed(c): let requested = notes_request_close(c, f, s) end
+    let now = linux_clock_ms(c.4)
+    let checked = x11_need(not linux_error(now), "notes: monotonic clock failed\n")
+    let blink = (now / 500) % 2
+    if linux_u64(s, 48) != 0 or blink != lastblink:
+        let drawn = notes_draw(c, f, t, s, path, blink == 0)
+    else:
+        -- Refresh the retained pixmap after uncovering/expose without rebuilding
+        -- all glyphs. Repainting and blinking allocate no new objects.
+        let presented = x11_present(c)
+    end
+    let waited = linux_poll(linux_u64(c.0, 0), c.3, 1, 16)
+    let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "notes: input wait failed\n")
+    return notes_loop(c, f, t, s, path, event, blink)
+end
+
+func main():
+    let args = linux_arguments()
+    let path = linux_argument(args, 1)
+    if equal(path, ""): path = "notes.txt" end
+    if not equal(linux_argument(args, 2), ""): return linux_die("usage: notes [plain-text-file]\n") end
+    let opened = file_open(path, 65536)
+    if file_status(opened) != 0:
+        let status = file_status(opened)
+        let closed = file_close(opened)
+        if status == 0 - 27: return linux_die("notes: file exceeds the 65536-byte limit. No file changed.\n") end
+        if status == 0 - 40: return linux_die("notes: symbolic-link documents are refused. Open the intended regular file directly.\n") end
+        if status == 0 - 31: return linux_die("notes: multiply hardlinked documents are refused to preserve their link structure.\n") end
+        if status == 0 - 116: return linux_die("notes: file changed while opening. Try again after the other writer finishes.\n") end
+        return linux_die("notes: cannot open a regular, singly linked file owned by you (or its parent). No file changed.\n")
+    end
+    let t = text_buffer(65536)
+    let loaded = text_load(t, opened.1, file_count(opened))
+    if loaded != 0:
+        let closed = file_close(opened)
+        return linux_die("notes: file must be at most 65536 bytes of ASCII text, TAB and LF. Unicode/CRLF/binary files are refused unchanged.\n")
+    end
+    let f = opened
+    let s = linux_buffer(56)
+    let draw = linux_put64(s, 48, 1)
+    let c = x11_open(900, 600, "Herbert - Notes")
+    let textkeys = x11_enable_text(c)
+    let event = linux_buffer(16)
+    return notes_loop(c, f, t, s, path, event, 0 - 1)
+end

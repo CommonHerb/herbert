@@ -1,0 +1,127 @@
+-- Checked ASCII tile maps for small hosted programs. Depends on linux.herb.
+-- # = wall, space = floor, . = collectible, P = the unique starting cell.
+-- Parse once at startup. Returned cells are packed row-major ASCII bytes.
+-- LF and CRLF line endings are accepted, with an optional final line ending.
+-- No padding or whitespace is discarded; all outer cells must be walls.
+
+func grid_map_dimensions(b, n, maxw, maxh, p, width, rows, column):
+    if p >= n:
+        if column != 0:
+            if width == 0: width = column end
+            if column != width: return (4, width, rows, rows + 1, column + 1) end
+            rows = rows + 1
+        end
+        if width == 0: return (1, 0, 0, 0, 0) end
+        if width < 3 or rows < 3: return (2, width, rows, 0, 0) end
+        return (0, width, rows, 0, 0)
+    end
+    let ch = buffer_get(b, p)
+    if ch == 10 or ch == 13:
+        let next = p + 1
+        if ch == 13:
+            if next >= n: return (12, width, rows, rows + 1, column + 1) end
+            if buffer_get(b, next) != 10: return (12, width, rows, rows + 1, column + 1) end
+            next = next + 1
+        end
+        if column == 0: return (5, width, rows, rows + 1, 1) end
+        if width == 0: width = column end
+        if column != width: return (4, width, rows, rows + 1, column + 1) end
+        return grid_map_dimensions(b, n, maxw, maxh, next, width, rows + 1, 0)
+    end
+    if column >= maxw or rows >= maxh: return (3, width, rows, rows + 1, column + 1) end
+    return grid_map_dimensions(b, n, maxw, maxh, p + 1, width, rows, column + 1)
+end
+
+func grid_map_decode(b, n, cells, width, height, p, cell, spawn, spawns, dots):
+    if p >= n:
+        if spawns == 0: return (9, spawn, dots, 0, 0) end
+        if dots == 0: return (10, spawn, dots, 0, 0) end
+        return (0, spawn, dots, 0, 0)
+    end
+    let ch = buffer_get(b, p)
+    if ch == 10 or ch == 13:
+        return grid_map_decode(b, n, cells, width, height, p + 1, cell, spawn, spawns, dots)
+    end
+    let row = cell / width
+    let column = cell % width
+    if ch != 35 and ch != 32 and ch != 46 and ch != 80:
+        return (6, spawn, dots, row + 1, column + 1)
+    end
+    if row == 0 or row + 1 == height or column == 0 or column + 1 == width:
+        if ch != 35: return (7, spawn, dots, row + 1, column + 1) end
+    end
+    if ch == 80:
+        if spawns != 0: return (8, spawn, dots, row + 1, column + 1) end
+        spawn = cell
+        spawns = spawns + 1
+    elif ch == 46:
+        dots = dots + 1
+    end
+    let stored = buffer_set(cells, cell, ch)
+    return grid_map_decode(b, n, cells, width, height, p + 1, cell + 1, spawn, spawns, dots)
+end
+
+-- Enqueue at most once. The caller supplies an in-range adjacent cell.
+func grid_map_visit(cells, visited, queue, cell, tail):
+    if buffer_get(cells, cell) == 35 or buffer_get(visited, cell) != 0: return tail end
+    let marked = buffer_set(visited, cell, 1)
+    let queued = linux_put32(queue, tail * 4, cell)
+    return tail + 1
+end
+
+func grid_map_walk(cells, visited, queue, width, height, head, tail):
+    if head >= tail: return 0 end
+    let cell = linux_u32(queue, head * 4)
+    if cell % width != 0: tail = grid_map_visit(cells, visited, queue, cell - 1, tail) end
+    if cell % width + 1 < width: tail = grid_map_visit(cells, visited, queue, cell + 1, tail) end
+    if cell >= width: tail = grid_map_visit(cells, visited, queue, cell - width, tail) end
+    if cell + width < width * height: tail = grid_map_visit(cells, visited, queue, cell + width, tail) end
+    return grid_map_walk(cells, visited, queue, width, height, head + 1, tail)
+end
+
+func grid_map_unreachable(cells, visited, cell):
+    if cell >= buffer_length(cells): return cell end
+    if buffer_get(cells, cell) == 46 and buffer_get(visited, cell) == 0: return cell end
+    return grid_map_unreachable(cells, visited, cell + 1)
+end
+
+-- (status, width, height, spawn index, dot count, cells, error row, error col)
+-- Row/column are one-based, or zero if the error has no single location.
+-- Success is status 0. On error only status/error coordinates are meaningful.
+-- maxw/maxh are caller limits, each 3..255; n is actual input bytes, not capacity.
+func grid_map_parse(b, n, maxw, maxh):
+    if n > buffer_length(b) or maxw < 3 or maxw > 255 or maxh < 3 or maxh > 255:
+        return (13, 0, 0, 0, 0, new_buffer(), 0, 0)
+    end
+    let size = grid_map_dimensions(b, n, maxw, maxh, 0, 0, 0, 0)
+    if size.0 != 0: return (size.0, 0, 0, 0, 0, new_buffer(), size.3, size.4) end
+    let cells = linux_buffer(size.1 * size.2)
+    let decoded = grid_map_decode(b, n, cells, size.1, size.2, 0, 0, 0, 0, 0)
+    if decoded.0 != 0: return (decoded.0, 0, 0, 0, 0, cells, decoded.3, decoded.4) end
+    let visited = linux_buffer(size.1 * size.2)
+    let queue = linux_buffer(size.1 * size.2 * 4)
+    let marked = buffer_set(visited, decoded.1, 1)
+    let queued = linux_put32(queue, 0, decoded.1)
+    let walked = grid_map_walk(cells, visited, queue, size.1, size.2, 0, 1)
+    let unreachable = grid_map_unreachable(cells, visited, 0)
+    if unreachable < buffer_length(cells):
+        return (11, 0, 0, 0, 0, cells, unreachable / size.1 + 1, unreachable % size.1 + 1)
+    end
+    return (0, size.1, size.2, decoded.1, decoded.2, cells, 0, 0)
+end
+
+func grid_map_error(status):
+    if status == 1: return "map is empty" end
+    if status == 2: return "map must be at least 3 columns by 3 rows" end
+    if status == 3: return "map exceeds the supported width or height" end
+    if status == 4: return "rows have different widths" end
+    if status == 5: return "empty rows are not allowed" end
+    if status == 6: return "unknown map symbol; use # . space or P" end
+    if status == 7: return "the outside edge must contain only # walls" end
+    if status == 8: return "map contains more than one P starting cell" end
+    if status == 9: return "map needs exactly one P starting cell" end
+    if status == 10: return "map needs at least one dot to collect" end
+    if status == 11: return "a dot cannot be reached from P" end
+    if status == 12: return "a carriage return must be followed by a newline" end
+    return "invalid parser input range or size limits"
+end

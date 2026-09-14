@@ -1,0 +1,291 @@
+-- Linux x86-64 regular-file documents. No libc, no per-read/save allocation.
+-- Open the parent directory once; all later operations are relative to that
+-- descriptor. Final symlinks, nonregular and multiply linked files are refused.
+-- Existing-target replacement preserves rwx mode, not ACLs/xattrs/ownership.
+-- Concurrent changes observed before publication are refused. There is no
+-- interprocess lock: another writer can still race the final check and rename.
+-- Result: 0 success; raw -errno failure; 1 means published but durability or
+-- baseline refresh failed (do not claim the old file survived that result).
+-- f tuple: state, read bytes (cap+1), basename, temp name, stat, baseline,
+-- original path bytes (NUL terminated, useful for display), temp-file stat,
+-- last published bytes (recovery after an unsuccessful post-rename stat),
+-- latest rescue-copy basename (NUL terminated; valid after copy result 0 or 1).
+-- State u64: dirfd0, last-operation status8, exists16, count24, serial32,
+-- last-operation published40, mode48. Status/publication include rescue calls.
+-- State u64: uncertain baseline56, last published count64.
+
+func file_status(f): return linux_u64(f.0, 8) end
+func file_count(f): return linux_u64(f.0, 24) end
+func file_copy_name(f): return f.9 end
+func file_result(f, result):
+    let stored = linux_put64(f.0, 8, result)
+    return result
+end
+
+func file_path_scan(path, p, slash):
+    if p >= length(path): return slash end
+    if index(path, p) == 0: return 0 - 2 end
+    if index(path, p) == 47: slash = p end
+    return file_path_scan(path, p + 1, slash)
+end
+
+func file_path_part(path, from, stop, bytes):
+    if from >= stop: return freeze(bytes) end
+    do append(bytes, index(path, from))
+    return file_path_part(path, from + 1, stop, bytes)
+end
+
+func file_stat(f):
+    return linux_syscall6(262, linux_u64(f.0, 0), buffer_address(f.2), buffer_address(f.4), 256, 0, 0)
+end
+
+func file_regular(stat):
+    if (linux_u32(stat, 24) & 61440) == 40960: return 0 - 40 end
+    if (linux_u32(stat, 24) & 61440) != 32768: return 0 - 22 end
+    if linux_u64(stat, 16) != 1: return 0 - 31 end
+    if linux_u32(stat, 28) != linux_syscall6(107, 0, 0, 0, 0, 0, 0): return 0 - 13 end
+    return 0
+end
+
+-- Detect ordinary independent edits/replacements, including same-size edits.
+func file_same(a, b):
+    return linux_u64(a, 0) == linux_u64(b, 0) and linux_u64(a, 8) == linux_u64(b, 8) and linux_u64(a, 16) == linux_u64(b, 16) and linux_u32(a, 24) == linux_u32(b, 24) and linux_u64(a, 48) == linux_u64(b, 48) and linux_u64(a, 88) == linux_u64(b, 88) and linux_u64(a, 96) == linux_u64(b, 96) and linux_u64(a, 104) == linux_u64(b, 104) and linux_u64(a, 112) == linux_u64(b, 112)
+end
+
+-- Rename can change ctime. Other ordinary content/identity fields must match
+-- the synced temporary file before adopting its published name as a baseline.
+func file_renamed_same(a, b):
+    return linux_u64(a, 0) == linux_u64(b, 0) and linux_u64(a, 8) == linux_u64(b, 8) and linux_u64(a, 16) == linux_u64(b, 16) and linux_u32(a, 24) == linux_u32(b, 24) and linux_u64(a, 48) == linux_u64(b, 48) and linux_u64(a, 88) == linux_u64(b, 88) and linux_u64(a, 96) == linux_u64(b, 96)
+end
+
+func file_read_bytes(f, fd, used):
+    let got = linux_syscall6(0, fd, buffer_address(f.1) + used, buffer_length(f.1) - used, 0, 0, 0)
+    if got == 0 - 4: return file_read_bytes(f, fd, used) end
+    if linux_error(got): return got end
+    let count = linux_put64(f.0, 24, used + got)
+    if used + got >= buffer_length(f.1): return 0 - 27 end
+    if got == 0: return 0 end
+    return file_read_bytes(f, fd, used + got)
+end
+
+func file_read(f):
+    let fd = linux_syscall6(257, linux_u64(f.0, 0), buffer_address(f.2), 657408, 0, 0, 0)
+    if linux_error(fd): return file_result(f, fd) end
+    let status = linux_syscall6(5, fd, buffer_address(f.4), 0, 0, 0, 0)
+    if status == 0: status = file_regular(f.4) end
+    if status == 0:
+        let baseline = linux_copy(f.5, 0, f.4, 0, 144)
+        status = file_read_bytes(f, fd, 0)
+    end
+    if status == 0:
+        status = linux_syscall6(5, fd, buffer_address(f.4), 0, 0, 0, 0)
+        if status == 0 and not file_same(f.4, f.5): status = 0 - 116 end
+    end
+    let closed = linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    if status == 0 and linux_error(closed): status = closed end
+    if status == 0:
+        status = file_stat(f)
+        if status == 0 and not file_same(f.4, f.5): status = 0 - 116 end
+        let mode = linux_put64(f.0, 48, linux_u32(f.5, 24) & 511)
+    end
+    return file_result(f, status)
+end
+
+-- Startup only. Missing leaf is a new empty document; missing parent is error.
+-- Call file_close even on errors; -1 represents a parent not successfully open.
+-- Capacity is a caller-chosen byte limit, from zero through 16 MiB.
+func file_open(path, capacity):
+    let badcapacity = capacity > 16777216
+    if badcapacity: capacity = 0 end
+    let slash = file_path_scan(path, 0, 0 - 1)
+    let parent = "."
+    let leaf = path
+    if slash < length(path):
+        parent = file_path_part(path, 0, slash, new_buffer())
+        if slash == 0: parent = "/" end
+        leaf = file_path_part(path, slash + 1, length(path), new_buffer())
+    end
+    let f = (linux_buffer(72), linux_buffer(capacity + 1), linux_cstring(leaf), linux_buffer(128), linux_buffer(144), linux_buffer(144), linux_cstring(path), linux_buffer(144), linux_buffer(capacity), linux_buffer(128))
+    let invalidfd = linux_put64(f.0, 0, 0 - 1)
+    let defaultmode = linux_put64(f.0, 48, 384)
+    if badcapacity or slash == 0 - 2 or length(path) == 0 or length(path) > 4095 or length(leaf) == 0 or equal(leaf, ".") or equal(leaf, ".."):
+        let failed = file_result(f, 0 - 22)
+        return f
+    end
+    let dirname = linux_cstring(parent)
+    let dirfd = linux_syscall6(2, buffer_address(dirname), 589824, 0, 0, 0, 0)
+    if linux_error(dirfd):
+        let failed = file_result(f, dirfd)
+        return f
+    end
+    let recorded = linux_put64(f.0, 0, dirfd)
+    let stat = file_stat(f)
+    if stat == 0 - 2: return f end
+    if stat == 0: stat = file_regular(f.4) end
+    if stat != 0:
+        let failed = file_result(f, stat)
+        return f
+    end
+    let exists = linux_put64(f.0, 16, 1)
+    let loaded = file_read(f)
+    return f
+end
+
+func file_temp(f, tries):
+    if tries == 0: return 0 - 17 end
+    let serial = linux_u64(f.0, 32) + 1
+    let remembered = linux_put64(f.0, 32, serial)
+    let prefix = linux_text(f.3, 0, ".herbert-save-")
+    let pidend = linux_decimal(f.3, 14, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
+    let dash = buffer_set(f.3, pidend, 45)
+    let serialend = linux_decimal(f.3, pidend + 1, serial)
+    let suffix = linux_text(f.3, serialend, ".tmp")
+    let nul = buffer_set(f.3, serialend + 4, 0)
+    let fd = linux_syscall6(257, linux_u64(f.0, 0), buffer_address(f.3), 655553, 384, 0, 0)
+    if fd == 0 - 17: return file_temp(f, tries - 1) end
+    return fd
+end
+
+func file_write_bytes(fd, bytes, offset, count):
+    if count == 0: return 0 end
+    let sent = linux_syscall6(1, fd, buffer_address(bytes) + offset, count, 0, 0, 0)
+    if sent == 0 - 4: return file_write_bytes(fd, bytes, offset, count) end
+    if linux_error(sent): return sent end
+    if sent == 0: return 0 - 5 end
+    return file_write_bytes(fd, bytes, offset + sent, count - sent)
+end
+
+-- Prepare and close an already exclusively created temporary file. A rescue
+-- copy must not disturb f.7, which can identify an uncertain original save.
+func file_fill_temp(f, fd, bytes, count, mode, record_version):
+    let status = file_write_bytes(fd, bytes, 0, count)
+    if status == 0: status = linux_syscall6(91, fd, mode, 0, 0, 0, 0) end
+    if status == 0: status = linux_syscall6(74, fd, 0, 0, 0, 0, 0) end
+    if status == 0 and record_version: status = linux_syscall6(5, fd, buffer_address(f.7), 0, 0, 0, 0) end
+    let closed = linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    if status == 0 and linux_error(closed): status = closed end
+    return status
+end
+
+func file_bytes_same(a, b, count, p):
+    if p >= count: return true end
+    if buffer_get(a, p) != buffer_get(b, p): return false end
+    return file_bytes_same(a, b, count, p + 1)
+end
+
+-- A failed post-publication stat must not turn our own successful rename into
+-- an apparent external edit. Retry verifies inode, stable metadata AND bytes
+-- before accepting a new baseline. Any failed check remains fail-closed.
+func file_recover_baseline(f):
+    let checked = file_stat(f)
+    if checked != 0: return checked end
+    if not file_renamed_same(f.4, f.7): return 0 - 116 end
+    let loaded = file_read(f)
+    if loaded != 0: return loaded end
+    if not file_renamed_same(f.5, f.7) or file_count(f) != linux_u64(f.0, 64): return 0 - 116 end
+    if not file_bytes_same(f.1, f.8, file_count(f), 0): return 0 - 116 end
+    let certain = linux_put64(f.0, 56, 0)
+    return 0
+end
+
+func file_conflict(f):
+    if linux_u64(f.0, 56) != 0: return file_recover_baseline(f) end
+    let status = file_stat(f)
+    if linux_u64(f.0, 16) == 0:
+        if status == 0 - 2: return 0 end
+        if status == 0: return 0 - 17 end
+        return status
+    end
+    if status != 0: return status end
+    let regular = file_regular(f.4)
+    if regular != 0: return regular end
+    if not file_same(f.4, f.5): return 0 - 116 end
+    return 0
+end
+
+func file_save(f, bytes, count):
+    let unpublished = linux_put64(f.0, 40, 0)
+    if not linux_range(bytes, 0, count): return file_result(f, 0 - 22) end
+    if count > buffer_length(f.8): return file_result(f, 0 - 27) end
+    -- Recovery rereads into f.1. Do not silently overwrite a caller's proposed
+    -- content if it aliases that internal scratch; keep edits in its own buffer.
+    if linux_u64(f.0, 56) != 0 and buffer_address(bytes) == buffer_address(f.1): return file_result(f, 0 - 22) end
+    let checked = file_conflict(f)
+    if checked != 0: return file_result(f, checked) end
+    let fd = file_temp(f, 32)
+    if linux_error(fd): return file_result(f, fd) end
+    let status = file_fill_temp(f, fd, bytes, count, linux_u64(f.0, 48), true)
+    if status == 0: status = file_conflict(f) end
+    if status == 0:
+        if linux_u64(f.0, 16) == 0:
+            status = linux_syscall6(316, linux_u64(f.0, 0), buffer_address(f.3), linux_u64(f.0, 0), buffer_address(f.2), 1, 0)
+        else:
+            status = linux_syscall6(264, linux_u64(f.0, 0), buffer_address(f.3), linux_u64(f.0, 0), buffer_address(f.2), 0, 0)
+        end
+    end
+    if status != 0:
+        let removed = linux_syscall6(263, linux_u64(f.0, 0), buffer_address(f.3), 0, 0, 0, 0)
+        return file_result(f, status)
+    end
+    let published = linux_put64(f.0, 40, 1)
+    let exists = linux_put64(f.0, 16, 1)
+    let savedbytes = linux_copy(f.8, 0, bytes, 0, count)
+    let savedcount = linux_put64(f.0, 64, count)
+    let uncertain = linux_put64(f.0, 56, 1)
+    let synced = linux_syscall6(74, linux_u64(f.0, 0), 0, 0, 0, 0, 0)
+    let refreshed = file_stat(f)
+    if refreshed == 0 and file_renamed_same(f.4, f.7):
+        let baseline = linux_copy(f.5, 0, f.4, 0, 144)
+        let certain = linux_put64(f.0, 56, 0)
+    else:
+        refreshed = 0 - 116
+    end
+    if synced != 0 or refreshed != 0: return file_result(f, 1) end
+    return file_result(f, 0)
+end
+
+func file_copy_publish(f, tries):
+    if tries == 0: return 0 - 17 end
+    let prefix = linux_text(f.9, 0, "herbert-rescue-")
+    let pidend = linux_decimal(f.9, 15, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
+    let dash = buffer_set(f.9, pidend, 45)
+    let serialend = linux_decimal(f.9, pidend + 1, linux_u64(f.0, 32))
+    let suffix = linux_text(f.9, serialend, ".txt")
+    let nul = buffer_set(f.9, serialend + 4, 0)
+    let status = linux_syscall6(316, linux_u64(f.0, 0), buffer_address(f.3), linux_u64(f.0, 0), buffer_address(f.9), 1, 0)
+    if status == 0 - 17:
+        let next = linux_put64(f.0, 32, linux_u64(f.0, 32) + 1)
+        return file_copy_publish(f, tries - 1)
+    end
+    return status
+end
+
+-- Persist edits to a new private sibling without replacing or adopting the
+-- original document. No original-file conflict check is needed. Existing copy
+-- names are never overwritten; at most 32 candidate names are attempted.
+-- The returned basename is file_copy_name(f), only after result 0 or 1.
+-- Return 1 means the copy was published but its directory sync failed.
+func file_save_copy(f, bytes, count):
+    let unpublished = linux_put64(f.0, 40, 0)
+    if not linux_range(bytes, 0, count): return file_result(f, 0 - 22) end
+    if count > buffer_length(f.8): return file_result(f, 0 - 27) end
+    let fd = file_temp(f, 32)
+    if linux_error(fd): return file_result(f, fd) end
+    let status = file_fill_temp(f, fd, bytes, count, 384, false)
+    if status == 0: status = file_copy_publish(f, 32) end
+    if status != 0:
+        let removed = linux_syscall6(263, linux_u64(f.0, 0), buffer_address(f.3), 0, 0, 0, 0)
+        return file_result(f, status)
+    end
+    let published = linux_put64(f.0, 40, 1)
+    let synced = linux_syscall6(74, linux_u64(f.0, 0), 0, 0, 0, 0, 0)
+    if synced != 0: return file_result(f, 1) end
+    return file_result(f, 0)
+end
+
+func file_close(f):
+    let fd = linux_u64(f.0, 0)
+    if linux_error(fd): return 0 end
+    let invalid = linux_put64(f.0, 0, 0 - 1)
+    return linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+end

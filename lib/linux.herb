@@ -314,3 +314,33 @@ func linux_hostname():
     end
     return linux_string_loop(b, 65, linux_nul_end(b, 65, 130), new_buffer())
 end
+
+-- Startup-only argument access. Linux exposes NUL-separated argv in procfs.
+-- Read once and reuse; returned strings are allocated only for requested args.
+func linux_arguments():
+    let incoming = linux_read_file("/proc/self/cmdline", 65536)
+    if incoming.0 != 0:
+        let failed = linux_die("linux: cannot read program arguments\n")
+    end
+    return (incoming.1, incoming.2)
+end
+
+func linux_argument_at(args, wanted, current, offset):
+    if offset >= args.1: return "" end
+    let limit = linux_nul_end(args.0, offset, args.1)
+    if wanted == current: return linux_string_loop(args.0, offset, limit, new_buffer()) end
+    return linux_argument_at(args, wanted, current + 1, limit + 1)
+end
+
+func linux_argument(args, wanted):
+    return linux_argument_at(args, wanted, 0, 0)
+end
+
+-- Write unsigned decimal into caller-owned storage; return the next offset.
+func linux_decimal(b, offset, n):
+    let at = offset
+    if n >= 10: at = linux_decimal(b, offset, n / 10) end
+    let checked = linux_require_range(b, at, 1)
+    let stored = buffer_set(b, at, 48 + n % 10)
+    return at + 1
+end

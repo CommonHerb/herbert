@@ -36,7 +36,14 @@ if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing feeder $feeder)"; exit 1; fi
 
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
-work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"
+trap 'if [[ -f "$work/KEEP-WORK" ]]; then
+    echo "FAIL: disk cleanup incomplete; preserving work directory $work" >&2
+    if [[ -n "${KERNEL_EVIDENCE_DIR:-}" ]]; then
+        python3 "$kernel_evidence_helper_dir/kernel_evidence.py" "$work" "$KERNEL_EVIDENCE_DIR"
+    fi
+    exit 1
+else kernel_test_cleanup "$work"; fi' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -183,41 +190,85 @@ else
 fi
 
 # ---- Bochs (2nd substrate via GRUB; two `module` lines) ----
-bochs_run() { # kind e9out  -> nonzero (sets BOCHS_HARNESS_ERR) on a harness failure (F2 sweep 2026-07-04)
-    local kind="$1"; local e9="$2"
-    # Harness-failure detectors (mirror of the link60 reference): a single Bochs boot whose COM1 feeder never bound
-    # (no LISTENING), never delivered its payload (no SENT -> Bochs never connected COM1), or never reached the
-    # kernel's shutdown() tail (no 'shutdown requested' -> killed/hung mid-run) got NO/incomplete input or died --
-    # a HARNESS failure, not a kernel miscompile; the caller re-rolls instead of grading a truncated/absent emit.
-    _feed_ok() { local fl="$1" lbl="$2" i; for i in $(seq 1 50); do grep -q LISTENING "$fl" 2>/dev/null && break; sleep 0.1; done
-        grep -q LISTENING "$fl" 2>/dev/null && return 0
-        BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING for $lbl (log: $fl -- feeder/port-bind failure, not a kernel miscompile)"; return 1; }
-    _bochs_ran_ok() { local bl="$1" lbl="$2"; [[ -s "$bl" ]] || { BOCHS_HARNESS_ERR="Bochs produced NO output booting $lbl (log: $bl empty/missing -- the emulator did not run)"; return 1; }
-        grep -qa 'shutdown requested' "$bl" && return 0   # the kernel's shutdown() writes "Shutdown" to Bochs port 0x8900 -> logged on ANY completed boot
-        BOCHS_HARNESS_ERR="Bochs did NOT run $lbl through to a kernel shutdown tail (log: $bl has no 'shutdown requested' -- the boot died or was timeout-killed mid-run, not a kernel miscompile)"; return 1; }
-    _feed_delivered() { local fl="$1" lbl="$2"; grep -q '^SENT' "$fl" 2>/dev/null && return 0
-        BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload for $lbl (log: $fl has LISTENING but no SENT / shows NOCONN -- Bochs did not connect COM1, the kernel received no input, not a kernel miscompile)"; return 1; }
-    local ma; ma="$(readlink -f "$AMOD")"; local mb; mb="$(readlink -f "$BMOD")"; local kelf; kelf="$(readlink -f "$MKELF")"
-    local stream; stream=$(python3 "$REF" stream "$kind")
-    local d="$work/b.$kind.d"; mkdir -p "$d"
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" $stream --hold 40 > "$d/feed.log" 2>&1 & local fp=$!
-    _feed_ok "$d/feed.log" "$kind" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
-    local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    ( cd "$d"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp "$ma" mnt/boot/a.bin; sudo cp "$mb" mnt/boot/b.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/a.bin\n module /boot/b.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
+bochs_run() { # kind attempt -> BOCHS_OUTPUT; retain each attempt until normal evidence capture
+    local kind="$1" attempt="$2"
+    BOCHS_ATTEMPT_DIR=$(mktemp -d "$work/b.$kind.attempt-$attempt.XXXXXX") || {
+        BOCHS_HARNESS_ERR="cannot create a fresh Bochs attempt directory"; return 1;
+    }
+    local d="$BOCHS_ATTEMPT_DIR"
+    BOCHS_OUTPUT="$d/debugcon.bin"
+    printf 'attempt=%s\nstarted_utc=%s\n' "$attempt" "$(date -u +%FT%TZ)" > "$d/process-status.txt"
+    _bochs_failure() {
+        BOCHS_HARNESS_ERR="$1 (attempt evidence: $d)"
+        printf '%s\n' "$BOCHS_HARNESS_ERR" > "$d/attempt-result.txt"
+        return 1
+    }
+    _stop_feeder() {
+        local status
+        kill "$fp" 2>/dev/null; status=$?
+        printf 'feeder_terminate_request_exit=%s\n' "$status" >> "$d/process-status.txt"
+        wait "$fp" 2>/dev/null; status=$?
+        printf 'feeder_wait_exit=%s\n' "$status" >> "$d/process-status.txt"
+    }
+    local ma mb kelf stream port fp status i
+    ma="$(readlink -f "$AMOD")"; mb="$(readlink -f "$BMOD")"; kelf="$(readlink -f "$MKELF")"
+    stream=$(python3 "$REF" stream "$kind") || { _bochs_failure "input stream generation failed"; return 1; }
+    port=$(free_port) || { _bochs_failure "cannot allocate feeder port"; return 1; }
+    python3 "$feeder" "$port" $stream --hold 40 > "$d/feed.log" 2>&1 & fp=$!
+    printf 'feeder_pid=%s\n' "$fp" >> "$d/process-status.txt"
+    for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" 2>/dev/null && break; sleep 0.1; done
+    if ! grep -q LISTENING "$d/feed.log" 2>/dev/null; then
+        _stop_feeder
+        _bochs_failure "COM1 feeder never reached LISTENING"
+        return 1
+    fi
+    local BXSHARE VGABIOS
+    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
+    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
+    # Setup errors must not continue into an invalid boot. Explicit exits are
+    # needed here: errexit is suppressed when this function is called from if.
+    ( cd "$d" || exit
+      LOOP=""; mounted=0
+      disk_cleanup() {
+          local original=$? cleanup_status=0
+          if (( mounted )); then
+              sudo umount mnt; cleanup_status=$?
+              printf 'disk_umount_exit=%s\n' "$cleanup_status" >> process-status.txt
+          fi
+          if [[ -n "$LOOP" && "$cleanup_status" -eq 0 ]]; then
+              sudo losetup -d "$LOOP"; cleanup_status=$?
+              printf 'disk_detach_exit=%s\n' "$cleanup_status" >> process-status.txt
+          fi
+          (( cleanup_status == 0 )) || touch "$work/KEEP-WORK"
+          (( original != 0 )) && exit "$original"
+          exit "$cleanup_status"
+      }
+      trap disk_cleanup EXIT
+      dd if=/dev/zero of=disk.img bs=1M count=64 status=none || exit
+      parted -s disk.img mklabel msdos || exit
+      parted -s disk.img mkpart primary fat32 1MiB 100% || exit
+      parted -s disk.img set 1 boot on || exit
+      LOOP="$(sudo losetup -fP --show disk.img)" || exit
+      sudo mkfs.vfat -F 32 "${LOOP}p1" || exit
+      mkdir -p mnt || exit
+      sudo mount "${LOOP}p1" mnt || exit
+      mounted=1
+      sudo mkdir -p mnt/boot/grub || exit
+      sudo cp "$kelf" mnt/boot/kernel.elf || exit
+      sudo cp "$ma" mnt/boot/a.bin || exit
+      sudo cp "$mb" mnt/boot/b.bin || exit
+      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/a.bin\n module /boot/b.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null || exit
+      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" || exit
+    ) > "$d/disk-setup.log" 2>&1
+    status=$?
+    printf 'disk_setup_exit=%s\n' "$status" >> "$d/process-status.txt"
+    if (( status != 0 )); then
+        _stop_feeder
+        _bochs_failure "boot disk setup failed with status $status"
+        [[ ! -f "$work/KEEP-WORK" ]] || exit 1
+        return 1
+    fi
+    cat > "$d/bochsrc.txt" <<BX
 romimage: file=$BXSHARE/BIOS-bochs-legacy
 vgaromimage: file=$VGABIOS
 megs: 32
@@ -229,34 +280,63 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
-    kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
-    _bochs_ran_ok "$d/bochs_out.txt" "$kind" || return 1
-    _feed_delivered "$d/feed.log" "$kind" || return 1
-    python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$e9"
+    ( cd "$d" || exit
+      xvfb-run -a bash -c '
+          yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt
+          statuses=("${PIPESTATUS[@]}")
+          printf "yes_exit=%s\ntimeout_bochs_exit=%s\n" "${statuses[0]}" "${statuses[1]}" > emulator-pipeline-status.txt
+          exit "${statuses[1]}"
+      ' > bochs_out.txt 2>&1
+    )
+    status=$?
+    printf 'xvfb_run_exit=%s\nemulator_finished_utc=%s\n' "$status" "$(date -u +%FT%TZ)" >> "$d/process-status.txt"
+    _stop_feeder
+    # Process statuses aid diagnosis; the required shutdown and behavior grade
+    # remain authoritative. An unfinished boot alone does not identify its cause.
+    if ! grep -qa 'shutdown requested' "$d/bochs_out.txt"; then
+        _bochs_failure "Bochs did not reach a kernel shutdown tail (process status $status; cause requires raw-log investigation)"
+        return 1
+    fi
+    if ! grep -q '^SENT' "$d/feed.log"; then
+        _bochs_failure "COM1 feeder did not record sending its payload"
+        return 1
+    fi
+    python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$BOCHS_OUTPUT" > "$d/extract.log" 2>&1
+    status=$?
+    printf 'extract_exit=%s\n' "$status" >> "$d/process-status.txt"
+    if (( status != 0 )); then
+        _bochs_failure "Bochs output extraction failed with status $status"
+        return 1
+    fi
+    printf 'shutdown marker and feeder SENT present; behavior grade pending\n' > "$d/attempt-result.txt"
 }
 if have_bochs; then
     emu_ran=1
     bochs_done=0
     for attempt in 1 2 3; do
         BOCHS_HARNESS_ERR=""
-        if ! bochs_run gx "$work/b.gx"; then
-            echo "  HARNESS ERROR (Bochs attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2
+        if ! bochs_run gx "$attempt"; then
+            echo "  HARNESS ERROR (Bochs attempt $attempt/3): $BOCHS_HARNESS_ERR" >&2
             continue
         fi
-        # the feeder LISTENED + SENT + the kernel ran THROUGH shutdown() -- but guest RECEIPT is unproven feeder-side, so a lone RED may be a capture-class flake (re-derive per the parley replay discriminator), not necessarily a genuine kernel verdict
-        if python3 "$REF" grade "$work/b.gx" "$KEND" gx >/dev/null 2>&1; then ok "(C) Bochs: the two programs run interleaved on the 2nd substrate (gx; GRUB delivers two module lines)"
-        else fail_test "(C) Bochs gx (feeder SENT + ran through shutdown; guest RECEIPT unproven feeder-side -- a lone RED may be a capture-class flake, re-derive per the parley replay discriminator) -> $(python3 "$REF" grade "$work/b.gx" "$KEND" gx 2>&1 | tr '\n' ';')"; fi
+        # Host-side SENT does not establish guest receipt; retain the actual
+        # grader output even on failure. A failed behavior grade is never retried.
+        python3 "$REF" grade "$BOCHS_OUTPUT" "$KEND" gx > "$BOCHS_ATTEMPT_DIR/grade.log" 2>&1
+        grade_status=$?
+        printf 'grade_exit=%s\n' "$grade_status" >> "$BOCHS_ATTEMPT_DIR/process-status.txt"
+        printf 'behavior_grade_exit=%s\n' "$grade_status" >> "$BOCHS_ATTEMPT_DIR/attempt-result.txt"
+        if (( grade_status == 0 )); then ok "(C) Bochs: the two programs run interleaved on the 2nd substrate (gx; GRUB delivers two module lines)"
+        else fail_test "(C) Bochs gx behavior grade failed (evidence: $BOCHS_ATTEMPT_DIR) -> $(tr '\n' ';' < "$BOCHS_ATTEMPT_DIR/grade.log")"; fi
         bochs_done=1; break
     done
     if [[ "$bochs_done" -eq 0 ]]; then
-        # 3 consecutive HARNESS failures (never the kernel). Distinct greppable marker (NOT the kernel-RED FAIL: prefix);
-        # fatal only when the Bochs substrate is REQUIRED (REQUIRE_EMU=1).
+        # The same finite three-attempt allowance as before, with independent
+        # disk paths and complete per-attempt logs. No missing required grade passes.
         if [[ "$REQUIRE_EMU" == "1" ]]; then
-            echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"
+            echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR"
             fail=$((fail + 1))
         else
-            echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (re-rollable; REQUIRE_EMU=0 so the gate is NOT RED on a harness flake -- re-roll, or set KERNEL_CODEGEN_REQUIRE_EMU=1 to require the Bochs substrate)" >&2
+            echo "  HARNESS-ERROR (non-fatal): (C-Bochs) Bochs failed 3 consecutive harness attempts -- $BOCHS_HARNESS_ERR (REQUIRE_EMU=0; no Bochs behavior result)" >&2
         fi
     fi
 else

@@ -39,6 +39,7 @@ compiler-conformance:
 verification-helpers:
 	@python3 bootstrap/tests/check_verification_helpers.py
 	@python3 bootstrap/tests/check_debugcon_frames.py
+	@python3 bootstrap/tests/check_link44_attempts.py
 
 # Real descriptor error/EOF checks; no ptrace, emulator, or partition change.
 stdin-contract:
@@ -57,23 +58,32 @@ wordcount:
 # Native Linux desktop checkpoint. These .herb library units are concatenated
 # as source, then compiled ONLY by the committed Herbert seed. No host compiler,
 # graphics library, runtime, or launcher is linked into the resulting executable.
-DESKTOP_SOURCES := lib/linux.herb lib/x11.herb lib/pixel_text.herb examples/first_steps.herb
-.PHONY: first-steps hosted-memory-io check-desktop
+DESKTOP_LIBS := lib/linux.herb lib/x11.herb lib/pixel_text.herb
+first-steps_SOURCES := $(DESKTOP_LIBS) examples/first_steps.herb
+maze_SOURCES := $(DESKTOP_LIBS) lib/grid_map.herb examples/maze.herb
+notes_SOURCES := $(DESKTOP_LIBS) lib/file_io.herb lib/text_buffer.herb examples/notes.herb
+.PHONY: first-steps maze notes hosted-apps hosted-memory-io check-desktop check-hosted-apps
 first-steps: $(BUILD)/first-steps
+maze: $(BUILD)/maze
+notes: $(BUILD)/notes
+hosted-apps: first-steps maze notes
 
-$(BUILD)/first-steps: $(DESKTOP_SOURCES) bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+$(BUILD)/first-steps: $(first-steps_SOURCES)
+$(BUILD)/maze: $(maze_SOURCES)
+$(BUILD)/notes: $(notes_SOURCES)
+$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes: bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
 	@set -eu; \
-	  mkdir -p $(BUILD)/first-steps-work; \
-	  cat $(DESKTOP_SOURCES) > $(BUILD)/first-steps-work/source.herb; \
-	  cp bootstrap/seed/gen1.seed $(BUILD)/first-steps-work/compiler; \
-	  chmod u+x $(BUILD)/first-steps-work/compiler; \
-	  (cd $(BUILD)/first-steps-work && ./compiler < source.herb > compiler.stdout 2> compiler.stderr) || { cat $(BUILD)/first-steps-work/compiler.stderr >&2; exit 1; }; \
-	  printf '0\n' > $(BUILD)/first-steps-work/expected.stdout; \
-	  cmp $(BUILD)/first-steps-work/expected.stdout $(BUILD)/first-steps-work/compiler.stdout; \
-	  test ! -s $(BUILD)/first-steps-work/compiler.stderr; \
-	  chmod u+x $(BUILD)/first-steps-work/a.out; \
-	  mv $(BUILD)/first-steps-work/a.out $@
+	  mkdir -p $@-work; \
+	  cat $($(notdir $@)_SOURCES) > $@-work/source.herb; \
+	  cp bootstrap/seed/gen1.seed $@-work/compiler; \
+	  chmod u+x $@-work/compiler; \
+	  (cd $@-work && ./compiler < source.herb > compiler.stdout 2> compiler.stderr) || { cat $@-work/compiler.stderr >&2; exit 1; }; \
+	  printf '0\n' > $@-work/expected.stdout; \
+	  cmp $@-work/expected.stdout $@-work/compiler.stdout; \
+	  test ! -s $@-work/compiler.stderr; \
+	  chmod u+x $@-work/a.out; \
+	  mv $@-work/a.out $@
 
 hosted-memory-io:
 	@python3 bootstrap/tests/check_hosted_memory_io.py
@@ -81,6 +91,15 @@ hosted-memory-io:
 # Xvfb/libX11/libXtst are independent TEST tools, never program dependencies.
 check-desktop: first-steps
 	@python3 bootstrap/tests/check_desktop.py --image $(BUILD)/first-steps
+
+.PHONY: check-app-support
+check-app-support: maze
+	@python3 bootstrap/tests/check_grid_map.py --maze $(BUILD)/maze
+	@python3 bootstrap/tests/check_notes_support.py
+	@python3 bootstrap/tests/check_x11_text.py
+
+check-hosted-apps: maze notes
+	@python3 bootstrap/tests/check_hosted_apps.py --maze $(BUILD)/maze --notes $(BUILD)/notes
 
 # Useful programs on the sovereign long64 runtime, built by the same seed.
 .PHONY: long64-wordcount check-long64-wordcount long64-hexview long64-elfinfo check-long64-elfinfo
@@ -195,7 +214,7 @@ closed-loop-memory-diet:
 reseed:
 	@bash bootstrap/tests/reseed_gen1.sh
 
-verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop
+verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

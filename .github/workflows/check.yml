@@ -27,6 +27,10 @@ jobs:
         run: make check-desktop
       - name: install compiler fault-test tools
         run: sudo apt-get update && sudo apt-get install -y gdb strace binutils
+      - name: Herbert reusable map, text and atomic-file support
+        run: make check-app-support
+      - name: Herbert maze and notes interaction and sustained memory
+        run: make check-hosted-apps
       - name: compiler invocation fault contract
         run: make compiler-cli-contract
       # verify-local suites CI historically skipped (2026-07-03 canon-cleanup, §4). The
@@ -46,3 +50,17 @@ jobs:
       # (a fresh checkout has none), so it runs in this emulator-free job.
       - name: switchover-dry-run (C-free bite-proofs survive C's removal + mutation proof)
         run: make switchover-dry-run
+      - name: retain hosted application test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-application-evidence
+          path: |
+            /tmp/herbert-hosted-apps-*/
+            /tmp/herbert-notes-support-*/
+            /tmp/herbert-x11-text-check-*/
+            /tmp/herbert-desktop-check-*/
+            /tmp/herbert-grid-map-*/
+          if-no-files-found: ignore
+          retention-days: 14
+          include-hidden-files: true
