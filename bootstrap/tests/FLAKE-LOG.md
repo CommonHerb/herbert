@@ -1,17 +1,20 @@
 # Kernel-arc gate FLAKE LOG — adjudicate CI/local REDs from evidence, not habit
 
-**Purpose.** A standing record of *known* flake classes on the kernel-arc gates (`run_native_codegen_link17..66.sh`
-+ `_mutation.sh`), so a RED is adjudicated against evidence: "is this a known re-rollable flake, or a real
-miscompile?" A miscompile changes the emitted bytes (the seed sha moves, or a byte-pin/white-box gate fails). A
-flake is a transient emulator/harness event on an **unchanged, byte-identical** kernel (the seed sha stays equal to
-the live pin in `bootstrap/seed/gen1.seed.sha256` -- NEVER a literal copied into prose, which rots on every legitimate
-reseed (blind-audit R2, 2026-08-29: two stale literals were found here); historical rows below quote the value current
-at their date; QEMU-TCG/KVM/Bochs disagree on a run that later passes clean). **When in doubt, re-roll once and
-compare** — a real bug reproduces deterministically; a flake does not.
+**Purpose.** Record known failure classes on the kernel-arc gates
+(`run_native_codegen_link17..67.sh` and mutation siblings), so each RED is
+investigated against evidence. Unchanged compiler and kernel bytes are useful
+controls, but can still contain input-dependent or intermittent defects.
+Read the current seed pin from `bootstrap/seed/gen1.seed.sha256`; historical
+rows retain the values and diagnoses recorded at their dates.
 
-**How to use.** On a CI/local RED: (1) find the failing step + signature; (2) match it below; (3) if it's a known
-flake class on an untouched gate, re-run (record the outcome); (4) if it does NOT match, or reproduces
-deterministically, treat it as real and investigate before landing/declaring green. Append new classes here.
+**How to use.** Preserve the failing input, raw captures, statuses, tool versions
+and artifact hashes before any replay. Match the signature against the known
+classes below and investigate the compiler, kernel, grader and harness as
+appropriate. A controlled replay should retain the same input and record its
+outcome separately. One successful replay, unchanged pins or disagreement
+between emulators does not establish a benign transient cause. An unexplained
+failure remains unresolved; do not rerun until green and discard the failure.
+Historical diagnoses below do not override this evidence standard.
 
 ---
 
@@ -43,11 +46,13 @@ The original row is preserved below as incident history, not a current work orde
 
 ---
 
-## The invariant that separates flake from bug
+## What the evidence can establish
 
-- **Real miscompile:** the emitted bytes changed. Symptoms: the gen-1 seed sha moves off the value pinned in
-  `bootstrap/seed/gen1.seed.sha256` (the michoi seed gate in `make test` goes RED -- read the file, not this prose); a full-image
-  byte-pin (`… image != committed golden`) fails; a white-box `assert_*` fails; a mutation FAILS TO BITE
-  *deterministically* across re-rolls. Investigate — do NOT re-roll away.
-- **Flake:** the kernel is byte-identical (seed sha stable, byte-pins pass) and the disagreement is a substrate/harness
-  event that does not reproduce. Re-roll and record.
+- A seed hash differing from its committed pin, failed byte pin, failed
+  structural assertion or mutation that does not bite requires investigation.
+  These are signals, not a complete
+  definition of a compiler defect; byte-identical output can still be wrong.
+- A specific emulator or harness diagnosis needs supporting captures and a
+  controlled discriminator. Non-recurrence alone leaves the cause unproved.
+  Intermittent defects remain defects, and a later pass never erases a failed
+  attempt or substitutes for its missing evidence.
