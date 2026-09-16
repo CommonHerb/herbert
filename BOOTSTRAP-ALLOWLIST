@@ -515,3 +515,6 @@ bootstrap/tests/fixtures/rollcall-bochs-2.8.e9
 
 # Public language guide, canonical source for the parent pack.
 docs/LANGUAGE.md
+
+# Compiler source composition and stage contracts (documentation).
+docs/COMPILER.md

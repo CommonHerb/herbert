@@ -1,0 +1,4468 @@
+func nc_code_has_faultable_loop(code, i, n):
+    if i >= n:
+        return 0
+    end
+    let op = get(code, i).0
+    -- 23/29/31 = index/get/append OOB faults; 43/44 = div/mod by-zero fault.
+    -- A faultable op forces the fault-helper block (incl. the exit1 routine the
+    -- div/mod zero-check jumps to) to be emitted. op_mul (42) never faults.
+    if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61:
+        return 1
+    end
+    return nc_code_has_faultable_loop(code, i + 1, n)
+end
+
+func nc_funcs_have_faultable_loop(funcs, i, n):
+    if i >= n:
+        return 0
+    end
+    if nc_code_has_faultable_loop(get(funcs, i).4, 0, count(get(funcs, i).4)) != 0:
+        return 1
+    end
+    return nc_funcs_have_faultable_loop(funcs, i + 1, n)
+end
+
+func nc_prog_has_faultable(prog):
+    return nc_funcs_have_faultable_loop(prog.0, 0, count(prog.0))
+end
+
+-- Little-endian byte-serialization helpers. Now that tonka added * / %, these
+-- use real remainder/division. Pre-tonka (no * / %) they were O(value)
+-- repeated-subtraction loops, which hung compilation on a large literal whose
+-- PUSH_INT byte split ran billions of iterations (D15 -- throne). The byte
+-- values are unchanged; only the cost is (O(value) -> O(1) per byte).
+func nc_mod256(v):
+    return v % 256
+end
+
+func nc_div256(v):
+    return v / 256
+end
+
+func nc_append_le32(buf, v):
+    let b0 = nc_mod256(v)
+    let v1 = nc_div256(v)
+    let b1 = nc_mod256(v1)
+    let v2 = nc_div256(v1)
+    let b2 = nc_mod256(v2)
+    let v3 = nc_div256(v2)
+    let b3 = nc_mod256(v3)
+    do append(buf, b0)
+    do append(buf, b1)
+    do append(buf, b2)
+    do append(buf, b3)
+    return buf
+end
+
+func nc_append_le64(buf, v):
+    let b0 = nc_mod256(v)
+    let v1 = nc_div256(v)
+    let b1 = nc_mod256(v1)
+    let v2 = nc_div256(v1)
+    let b2 = nc_mod256(v2)
+    let v3 = nc_div256(v2)
+    let b3 = nc_mod256(v3)
+    let v4 = nc_div256(v3)
+    let b4 = nc_mod256(v4)
+    let v5 = nc_div256(v4)
+    let b5 = nc_mod256(v5)
+    let v6 = nc_div256(v5)
+    let b6 = nc_mod256(v6)
+    let v7 = nc_div256(v6)
+    let b7 = nc_mod256(v7)
+    do append(buf, b0)
+    do append(buf, b1)
+    do append(buf, b2)
+    do append(buf, b3)
+    do append(buf, b4)
+    do append(buf, b5)
+    do append(buf, b6)
+    do append(buf, b7)
+    return buf
+end
+
+func nc_append_s32(buf, neg, mag):
+    if neg == 0:
+        return nc_append_le32(buf, mag)
+    end
+    let m = mag - 1
+    let b0 = nc_mod256(m)
+    let v1 = nc_div256(m)
+    let b1 = nc_mod256(v1)
+    let v2 = nc_div256(v1)
+    let b2 = nc_mod256(v2)
+    let v3 = nc_div256(v2)
+    let b3 = nc_mod256(v3)
+    do append(buf, 255 - b0)
+    do append(buf, 255 - b1)
+    do append(buf, 255 - b2)
+    do append(buf, 255 - b3)
+    return buf
+end
+
+func nc_append_s8(buf, neg, mag):
+    if neg == 0:
+        do append(buf, mag)
+    elif mag == 0:
+        do append(buf, 0)
+    else:
+        do append(buf, 256 - mag)
+    end
+    return buf
+end
+
+func nc_signed_fits8(neg, mag):
+    if neg == 0:
+        return mag <= 127
+    end
+    return mag <= 128
+end
+
+func nc_rel_ok(target, base):
+    if target >= base:
+        return target - base < 2147483648
+    end
+    return base - target <= 2147483648
+end
+
+func nc_append_rel32(buf, target, base):
+    if target >= base:
+        return nc_append_le32(buf, target - base)
+    end
+    return nc_append_s32(buf, 1, base - target)
+end
+
+func nc_mul8_loop(acc, n):
+    if n <= 0:
+        return acc
+    end
+    return nc_mul8_loop(acc + 8, n - 1)
+end
+
+func nc_mul8(n):
+    return nc_mul8_loop(0, n)
+end
+
+func nc_mod16_loop(v):
+    if v < 16:
+        return v
+    end
+    return nc_mod16_loop(v - 16)
+end
+
+func nc_mod16(v):
+    return nc_mod16_loop(v)
+end
+
+func nc_round16_up(v):
+    let m = nc_mod16(v)
+    if m == 0:
+        return v
+    end
+    return v + 16 - m
+end
+
+func nc_mod8_loop(v):
+    if v < 8:
+        return v
+    end
+    return nc_mod8_loop(v - 8)
+end
+
+func nc_round8_up(v):
+    let m = nc_mod8_loop(v)
+    if m == 0:
+        return v
+    end
+    return v + 8 - m
+end
+
+func nc_disp_len_rbp(neg, mag):
+    if nc_signed_fits8(neg, mag):
+        return 4
+    end
+    return 7
+end
+
+func nc_disp_len_rbp_mzb(neg, mag):
+    if nc_signed_fits8(neg, mag):
+        return 5
+    end
+    return 8
+end
+
+func nc_disp_len_rsp(mag):
+    if mag <= 127:
+        return 5
+    end
+    return 8
+end
+
+func nc_disp_len_rdi(mag):
+    if mag == 0:
+        return 3
+    end
+    if mag <= 127:
+        return 4
+    end
+    return 7
+end
+
+func nc_disp_len_rsi(mag):
+    if mag == 0:
+        return 3
+    end
+    if mag <= 127:
+        return 4
+    end
+    return 7
+end
+
+func nc_disp_len_rsp_r8(mag):
+    if mag <= 127:
+        return 5
+    end
+    return 8
+end
+
+func nc_disp_pair_from_pos_minus(pos, sub):
+    if pos >= sub:
+        return (0, pos - sub)
+    end
+    return (1, sub - pos)
+end
+
+func nc_rslot_pair(ng, nf):
+    let pos = 8 + nc_mul8(ng)
+    let sub = nc_mul8(nf)
+    return nc_disp_pair_from_pos_minus(pos, sub)
+end
+
+func nc_tail_dst_pair(ng, k):
+    let pos = 8 + nc_mul8(ng)
+    let sub = nc_mul8(k)
+    return nc_disp_pair_from_pos_minus(pos, sub)
+end
+
+func nc_tail_copy_len_loop(k, nf, ng, acc):
+    if k >= nf:
+        return acc
+    end
+    let src = nc_mul8(nf - 1 - k)
+    let dst = nc_tail_dst_pair(ng, k)
+    return nc_tail_copy_len_loop(k + 1, nf, ng, acc + nc_disp_len_rsp(src) + nc_disp_len_rbp(dst.0, dst.1))
+end
+
+func nc_tail_len(ng, nf):
+    let rslot = nc_rslot_pair(ng, nf)
+    return 8 + nc_tail_copy_len_loop(0, nf, ng, 0) + nc_disp_len_rbp(rslot.0, rslot.1) + nc_disp_len_rbp(rslot.0, rslot.1) + 3 + 5
+end
+
+func nc_cleanup_len(nargs):
+    if nc_mul8(nargs) <= 127:
+        return 4
+    end
+    return 7
+end
+
+func nc_call_len(nargs):
+    return 5 + nc_cleanup_len(nargs) + 1
+end
+
+func nc_local_mag(slot):
+    return nc_mul8(slot + 1)
+end
+
+func nc_sub_len(frame_sz):
+    if frame_sz <= 127:
+        return 4
+    end
+    return 7
+end
+
+func nc_prologue_len(frame_sz):
+    return 4 + nc_sub_len(frame_sz)
+end
+
+func nc_max_i(a, b):
+    if a > b:
+        return a
+    end
+    return b
+end
+
+func nc_frame_total_words(meta):
+    let hidden = 0
+    if meta.6 != 0 - 1:
+        hidden = 1
+    end
+    return meta.5 + hidden + meta.8
+end
+
+func nc_frame_total(meta):
+    return nc_round16_up(nc_mul8(nc_frame_total_words(meta)))
+end
+
+func nc_fault_route_len():
+    return 12
+end
+
+func nc_fault_rodata_len():
+    return 135
+end
+
+func nc_fault_helper_len():
+    return 418
+end
+
+func nc_write_helper_len():
+    return 46
+end
+
+func nc_render_int_body_len():
+    return 58
+end
+
+func nc_render_bool_body_len():
+    return 75
+end
+
+func nc_render_body_len(main_ret):
+    if main_ret == nc_type_bool():
+        return nc_render_bool_body_len()
+    end
+    return nc_render_int_body_len()
+end
+
+func nc_render_len(main_ret):
+    return nc_render_body_len(main_ret) + nc_write_helper_len()
+end
+
+func nc_entry_head_len():
+    return 19
+end
+
+func nc_entry_layout(has_heap, has_faultable, main_ret, rplan):
+    let heap_len = 0
+    if has_heap != 0:
+        heap_len = 70
+    end
+    let head_len = nc_entry_head_len()
+    let render_len = nc_render_len(main_ret)
+    -- link11/link12: a renderable AGGREGATE main (non-empty render plan) inlines its
+    -- whole render into the entry head and places the int/bool/str/write helpers in
+    -- the render region; the single-word int/bool path keeps the scalar head +
+    -- body+write. (A flat int/bool tuple's plan reproduces the garland byte length.)
+    if count(rplan) > 0:
+        let s = nc_tuple_sret_size(nc_rplan_words(rplan))
+        head_len = nc_render_agg_head_len(s, rplan)
+        render_len = nc_render_helpers_len()
+    end
+    let fault_len = 0
+    if has_faultable != 0:
+        fault_len = nc_fault_helper_len()
+    end
+    let fault_start = heap_len + head_len
+    let render_start = fault_start + fault_len
+    let function_start = render_start + render_len
+    return (heap_len, head_len, fault_len, render_len, fault_start, render_start, function_start)
+end
+
+func nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan):
+    return nc_entry_layout(has_heap, has_faultable, main_ret, rplan).4
+end
+
+func nc_fault_diag_index_rel():
+    return 0
+end
+
+func nc_fault_diag_get_rel():
+    return 106
+end
+
+func nc_fault_diag_append_rel():
+    return 212
+end
+
+func nc_fault_write_fd2_rel():
+    return 307
+end
+
+func nc_fault_dec_fd2_rel():
+    return 353
+end
+
+func nc_fault_exit1_rel():
+    return 406
+end
+
+func nc_fault_prefix_off():
+    return 0
+end
+
+func nc_fault_sep_index_off():
+    return 14
+end
+
+func nc_fault_sep_get_off():
+    return 32
+end
+
+func nc_fault_sep_append_off():
+    return 48
+end
+
+func nc_fault_mid_len_off():
+    return 69
+end
+
+func nc_fault_mid_cnt_off():
+    return 91
+end
+
+func nc_fault_mid_byte_off():
+    return 112
+end
+
+func nc_fault_close_paren_nl_off():
+    return 132
+end
+
+func nc_fault_just_nl_off():
+    return 134
+end
+
+func nc_arg_copy_len_loop(k, nwords, acc):
+    if k >= nwords:
+        return acc
+    end
+    let src_mag = 16 + nc_mul8(nwords - 1 - k)
+    let dst_mag = nc_local_mag(k)
+    return nc_arg_copy_len_loop(k + 1, nwords, acc + nc_disp_len_rbp(0, src_mag) + nc_disp_len_rbp(1, dst_mag))
+end
+
+func nc_load_local_len_loop(base, j, width, acc):
+    if j >= width:
+        return acc
+    end
+    return nc_load_local_len_loop(base, j + 1, width, acc + nc_disp_len_rbp(1, nc_local_mag(base + j)) + 1)
+end
+
+func nc_load_local_len(base, width):
+    return nc_load_local_len_loop(base, 0, width, 0)
+end
+
+func nc_store_local_len_loop(base, j, acc):
+    if j == 0 - 1:
+        return acc
+    end
+    return nc_store_local_len_loop(base, j - 1, acc + 1 + nc_disp_len_rbp(1, nc_local_mag(base + j)))
+end
+
+func nc_store_local_len(base, width):
+    return nc_store_local_len_loop(base, width - 1, 0)
+end
+
+func nc_sret_save_len(meta):
+    if meta.6 == 0 - 1:
+        return 0
+    end
+    return nc_disp_len_rbp(1, nc_local_mag(meta.6))
+end
+
+func nc_group_single_len(op):
+    if op == 0:
+        return 11
+    end
+    if op == 1:
+        return 2
+    end
+    if op == 2:
+        return 16
+    end
+    if op == 5 or op == 6:
+        return 6
+    end
+    if op == 7 or op == 8 or op == 9 or op == 10 or op == 11 or op == 12:
+        return 13
+    end
+    if op == 13:
+        return 12
+    end
+    if op == 14:
+        return 0
+    end
+    if op == 16:
+        return 5
+    end
+    if op == 17:
+        return 10
+    end
+    if op == 18 or op == 19:
+        return 17
+    end
+    if op == 21:
+        return 3
+    end
+    if op == 22:
+        return 3
+    end
+    if op == 23:
+        return 27
+    end
+    if op == 25:
+        return 50
+    end
+    if op == 26:
+        return 84
+    end
+    if op == 27:
+        return 75
+    end
+    if op == 28:
+        return 84
+    end
+    if op == 30:
+        return 5
+    end
+    if op == 31:
+        return 135
+    end
+    if op == 33:
+        return 91
+    end
+    if op == 34:
+        return 44
+    end
+    if op == 35:
+        return 593
+    end
+    if op == 54:
+        return 10
+    end
+    if op == 55:
+        return 55
+    end
+    if op == 56:
+        return 106
+    end
+    if op == 58:
+        return 13
+    end
+    if op == 59:
+        return 6
+    end
+    if op == 60:
+        return 33
+    end
+    if op == 61:
+        return 56
+    end
+    if op == 62:
+        return 5
+    end
+    -- Bitwise / shift (36-41). LOAD-BEARING for branch-displacement layout:
+    -- pass 1 sizes every instruction here; a missing arm would give the new
+    -- ops length 0 and silently rot every branch offset in any function that
+    -- uses them. band/bor/bxor/shl/shr are the same 6-byte shape as add/sub
+    -- (pop rcx; pop rax; <3-byte op>; push rax); bnot is 5 bytes (pop rax;
+    -- not rax; push rax) like op 30 (count).
+    if op == 36 or op == 37 or op == 38 or op == 39 or op == 40:
+        return 6
+    end
+    if op == 41:
+        return 5
+    end
+    -- Multiplicative (42-44). LOAD-BEARING for branch-displacement layout: a
+    -- wrong length here silently rots every branch offset in any function that
+    -- uses these ops. mul is 7 bytes (pop rcx; pop rax; imul rax,rcx [4 bytes];
+    -- push rax). div and mod are 18 bytes each: pop rcx; pop rax; test rcx,rcx
+    -- [3]; jz exit1 [6]; xor rdx,rdx [3]; div rcx [3]; push rax|rdx [1]. These
+    -- MUST match the byte counts emitted by nc_emit_mul / nc_emit_div_or_mod.
+    if op == 42:
+        return 7
+    end
+    if op == 43 or op == 44:
+        return 18
+    end
+    return 0
+end
+
+func nc_heap_trap_len():
+    return 12
+end
+
+func nc_heap_alloc_len():
+    return 25
+end
+
+func nc_get_loads_len(width, j, acc):
+    if j >= width:
+        return acc
+    end
+    return nc_get_loads_len(width, j + 1, acc + nc_disp_len_rsi(nc_mul8(j)) + 1)
+end
+
+func nc_get_len(width):
+    if width == 1:
+        return 32
+    end
+    return 51 + nc_get_loads_len(width, 0, 0)
+end
+
+func nc_arr_add_store_len(width, k, acc):
+    if k == 0 - 1:
+        return acc
+    end
+    return nc_arr_add_store_len(width, k - 1, acc + 1 + nc_disp_len_rsi(nc_mul8(k)))
+end
+
+func nc_arr_add_len(width):
+    return nc_disp_len_rsp_r8(nc_mul8(width)) + 177 + nc_arr_add_store_len(width, width - 1, 0)
+end
+
+func nc_rsp_store_len(mag):
+    return nc_disp_len_rsp(mag)
+end
+
+func nc_tuple_get_copy_len_loop(j, f, w, s, acc):
+    if j >= f:
+        return acc
+    end
+    let src = nc_mul8(w - 1 - (s + j))
+    let dst = nc_mul8(w - 1 - j)
+    return nc_tuple_get_copy_len_loop(j + 1, f, w, s, acc + nc_disp_len_rsp(src) + nc_rsp_store_len(dst))
+end
+
+func nc_tuple_get_len(meta, pc):
+    let tm = get(meta.10, pc)
+    let drop = tm.0 - tm.2
+    let cleanup = 0
+    if drop > 0:
+        cleanup = nc_cleanup_len(drop)
+    end
+    return nc_tuple_get_copy_len_loop(0, tm.2, tm.0, tm.1, 0) + cleanup
+end
+
+func nc_sret_scratch_mag(base_word, ret_width, k):
+    return nc_mul8(base_word + ret_width - k)
+end
+
+func nc_call_ret_push_len_loop(base_word, ret_width, k, n, acc):
+    if k >= n:
+        return acc
+    end
+    return nc_call_ret_push_len_loop(base_word, ret_width, k + 1, n, acc + nc_disp_len_rbp(1, nc_sret_scratch_mag(base_word, ret_width, k)) + 1)
+end
+
+func nc_normal_call_len(meta, pc):
+    let cm = get(meta.11, pc)
+    if cm.2 == 1:
+        return nc_disp_len_rbp(1, nc_sret_scratch_mag(meta.7, cm.1, 0)) + 5 + nc_cleanup_len(cm.0) + nc_call_ret_push_len_loop(meta.7, cm.1, 0, cm.1, 0)
+    end
+    return 5 + nc_cleanup_len(cm.0) + 1
+end
+
+func nc_tail_len_for_meta(meta, pc):
+    let cm = get(meta.11, pc)
+    let extra = 0
+    if cm.2 == 3:
+        extra = nc_disp_len_rbp(1, nc_local_mag(meta.6))
+    end
+    return nc_tail_len(meta.0, cm.0) + extra
+end
+
+func nc_aggregate_ret_store_len_loop(k, retw, acc):
+    if k == 0 - 1:
+        return acc
+    end
+    return nc_aggregate_ret_store_len_loop(k - 1, retw, acc + 1 + nc_disp_len_rdi(nc_mul8(k)))
+end
+
+func nc_ret_len(meta):
+    if meta.2 <= 1:
+        return 3
+    end
+    return nc_disp_len_rbp(1, nc_local_mag(meta.6)) + nc_aggregate_ret_store_len_loop(meta.2 - 1, meta.2, 0) + 2
+end
+
+func nc_group(code, i, n, fn, funcs, meta, metas):
+    if i >= n:
+        return (0, n)
+    end
+    let instr = get(code, i)
+    let op = instr.0
+    if op == 3:
+        let base = get(meta.3, instr.1)
+        let width = get(meta.4, instr.1)
+        return (nc_load_local_len(base, width), i + 1)
+    end
+    if op == 4:
+        let base = get(meta.3, instr.1)
+        let width = get(meta.4, instr.1)
+        return (nc_store_local_len(base, width), i + 1)
+    end
+    if op == 15:
+        return (nc_tuple_get_len(meta, i), i + 1)
+    end
+    if op == 29:
+        return (nc_get_len(get(meta.14, i).1), i + 1)
+    end
+    if op == 32:
+        return (nc_arr_add_len(get(meta.14, i).1), i + 1)
+    end
+    if op == 20:
+        let cm = get(meta.11, i)
+        if cm.2 == 2 or cm.2 == 3:
+            return (nc_tail_len_for_meta(meta, i), i + 2)
+        end
+        return (nc_normal_call_len(meta, i), i + 1)
+    end
+    if op == 21:
+        return (nc_ret_len(meta), i + 1)
+    end
+    return (nc_group_single_len(op), i + 1)
+end
+
+func nc_pass1_fill_group(offs, bounds, j, next_i, cur, start):
+    if j >= next_i:
+        return (offs, bounds)
+    end
+    do add(offs, cur)
+    if j == start:
+        do add(bounds, 1)
+    else:
+        do add(bounds, 0)
+    end
+    return nc_pass1_fill_group(offs, bounds, j + 1, next_i, cur, start)
+end
+
+func nc_pass1_layout_loop(code, i, n, cur, offs, bounds, fn, funcs, meta, metas):
+    if i >= n:
+        do add(offs, cur)
+        do add(bounds, 0)
+        return (offs, bounds, cur)
+    end
+    let g = nc_group(code, i, n, fn, funcs, meta, metas)
+    let filled = nc_pass1_fill_group(offs, bounds, i, g.1, cur, i)
+    return nc_pass1_layout_loop(code, g.1, n, cur + g.0, filled.0, filled.1, fn, funcs, meta, metas)
+end
+
+func nc_pass1_layout(fn, funcs, meta, metas, prefix_len):
+    return nc_pass1_layout_loop(fn.4, 0, count(fn.4), prefix_len, new_array(int), new_array(int), fn, funcs, meta, metas)
+end
+
+func nc_branch_end_delta(op):
+    if op == 16:
+        return 5
+    end
+    if op == 17:
+        return 10
+    end
+    return 13
+end
+
+func nc_branch_and_rel_verify_loop(code, i, n, fn, funcs, meta, metas, layout, layouts):
+    if i >= n:
+        return 0
+    end
+    let instr = get(code, i)
+    let op = instr.0
+    let g = nc_group(code, i, n, fn, funcs, meta, metas)
+    if op == 16 or op == 17 or op == 18 or op == 19:
+        let target = instr.1
+        if target >= n or target <= i:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        if get(layout.2, target) == 0:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        let base = layout.0 + get(layout.1, i) + nc_branch_end_delta(op)
+        let dest = layout.0 + get(layout.1, target)
+        if dest <= base:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        if not nc_rel_ok(dest, base):
+            return nc_fail(427, 0, "")
+        end
+    end
+    if op == 20:
+        let callee_layout = get(layouts, instr.1)
+        let target_entry = callee_layout.0
+        let base = 0
+        let cm = get(meta.11, i)
+        if cm.2 == 2 or cm.2 == 3:
+            base = layout.0 + get(layout.1, i) + g.0
+        elif cm.2 == 1:
+            base = layout.0 + get(layout.1, i) + nc_disp_len_rbp(1, nc_sret_scratch_mag(meta.7, cm.1, 0)) + 5
+        else:
+            base = layout.0 + get(layout.1, i) + 5
+        end
+        if not nc_rel_ok(target_entry, base):
+            return nc_fail(427, 0, "")
+        end
+    end
+    return nc_branch_and_rel_verify_loop(code, g.1, n, fn, funcs, meta, metas, layout, layouts)
+end
+
+func nc_verify_layout_rels_loop(funcs, metas, layouts, i, n):
+    if i >= n:
+        return 0
+    end
+    let fn = get(funcs, i)
+    let meta = get(metas, i)
+    let layout = get(layouts, i)
+    let r = nc_branch_and_rel_verify_loop(fn.4, 0, count(fn.4), fn, funcs, meta, metas, layout, layouts)
+    if r != 0:
+        return r
+    end
+    return nc_verify_layout_rels_loop(funcs, metas, layouts, i + 1, n)
+end
+
+func nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret, rplan):
+    return nc_entry_layout(has_heap, has_faultable, main_ret, rplan).6
+end
+
+func nc_pass1_program_loop(funcs, metas, i, n, entry, layouts):
+    if i >= n:
+        return (0, layouts, entry)
+    end
+    let fn = get(funcs, i)
+    let meta = get(metas, i)
+    let frame_sz = nc_frame_total(meta)
+    let prefix_len = nc_prologue_len(frame_sz) + nc_sret_save_len(meta) + nc_arg_copy_len_loop(0, meta.0, 0)
+    let lay = nc_pass1_layout(fn, funcs, meta, metas, prefix_len)
+    let fn_len = lay.2
+    do add(layouts, (entry, lay.0, lay.1, frame_sz, prefix_len, fn_len))
+    return nc_pass1_program_loop(funcs, metas, i + 1, n, entry + fn_len, layouts)
+end
+
+func nc_pass1_program(prog, metas, has_clogger, has_heap, has_faultable, rplan):
+    let funcs = prog.0
+    let layouts = new_array((int, array(int), array(int), int, int, int))
+    let main_ret = get(metas, prog.2).1
+    let entry_layout = nc_entry_layout(has_heap, has_faultable, main_ret, rplan)
+    let stub_len = nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret, rplan)
+    let r = nc_pass1_program_loop(funcs, metas, 0, count(funcs), stub_len, layouts)
+    if r.0 != 0:
+        return r
+    end
+    let main_layout = get(r.1, prog.2)
+    let call_main_base = entry_layout.0 + 5
+    if not nc_rel_ok(main_layout.0, call_main_base):
+        return (nc_fail(427, 0, ""), r.1, r.2)
+    end
+    let call_render_base = entry_layout.0 + 10
+    if not nc_rel_ok(entry_layout.5, call_render_base):
+        return (nc_fail(427, 0, ""), r.1, r.2)
+    end
+    let vr = nc_verify_layout_rels_loop(funcs, metas, r.1, 0, count(funcs))
+    if vr != 0:
+        return (vr, r.1, r.2)
+    end
+    return r
+end
+
+func nc_emit_ehdr(buf):
+    do append(buf, 127)
+    do append(buf, 69)
+    do append(buf, 76)
+    do append(buf, 70)
+    do append(buf, 2)
+    do append(buf, 1)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 62)
+    do append(buf, 0)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 120)
+    do append(buf, 0)
+    do append(buf, 64)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 64)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 64)
+    do append(buf, 0)
+    do append(buf, 56)
+    do append(buf, 0)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    return buf
+end
+
+func nc_emit_phdr(buf, img, align_hi):
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 5)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 64)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 64)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_append_le64(buf, img)
+    buf = nc_append_le64(buf, img)
+    do append(buf, 0)
+    do append(buf, 16)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, align_hi)
+    return buf
+end
+
+func nc_code_has_call_loop(code, i, n):
+    if i >= n:
+        return false
+    end
+    if get(code, i).0 == 20:
+        return true
+    end
+    return nc_code_has_call_loop(code, i + 1, n)
+end
+
+func nc_funcs_have_call_loop(funcs, i, n):
+    if i >= n:
+        return false
+    end
+    if nc_code_has_call_loop(get(funcs, i).4, 0, count(get(funcs, i).4)):
+        return true
+    end
+    return nc_funcs_have_call_loop(funcs, i + 1, n)
+end
+
+func nc_funcs_have_call(funcs):
+    return nc_funcs_have_call_loop(funcs, 0, count(funcs))
+end
+
+func nc_mod4096_loop(v):
+    if v < 4096:
+        return v
+    end
+    return nc_mod4096_loop(v - 4096)
+end
+
+func nc_roundup_page(v):
+    let rem = nc_mod4096_loop(v)
+    if rem == 0:
+        return v
+    end
+    return v + 4096 - rem
+end
+
+func nc_emit_disp_rbp_load_rax(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 139)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 69)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 133)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_disp_rbp_store_rax(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 137)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 69)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 133)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_disp_rbp_read_byte(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 15)
+    do append(buf, 182)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 69)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 133)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_disp_rbp_lea_rsi(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 141)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 117)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 181)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_disp_rbp_lea_rsp(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 141)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 101)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 165)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_rsp_load_rax(buf, mag):
+    do append(buf, 72)
+    do append(buf, 139)
+    if mag <= 127:
+        do append(buf, 68)
+        do append(buf, 36)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 132)
+    do append(buf, 36)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_disp_rbp_store_r11(buf, neg, mag):
+    do append(buf, 76)
+    do append(buf, 137)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 93)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 157)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_prologue(buf, frame_sz):
+    do append(buf, 85)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 229)
+    if frame_sz <= 127:
+        do append(buf, 72)
+        do append(buf, 131)
+        do append(buf, 236)
+        do append(buf, frame_sz)
+    else:
+        do append(buf, 72)
+        do append(buf, 129)
+        do append(buf, 236)
+        buf = nc_append_le32(buf, frame_sz)
+    end
+    return buf
+end
+
+func nc_emit_disp_rbp_load_rdi(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 139)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 125)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 189)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_disp_rbp_store_rdi(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 137)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 125)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 189)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_disp_rbp_lea_rdi(buf, neg, mag):
+    do append(buf, 72)
+    do append(buf, 141)
+    if nc_signed_fits8(neg, mag):
+        do append(buf, 125)
+        return nc_append_s8(buf, neg, mag)
+    end
+    do append(buf, 189)
+    return nc_append_s32(buf, neg, mag)
+end
+
+func nc_emit_rsp_store_rax(buf, mag):
+    do append(buf, 72)
+    do append(buf, 137)
+    if mag <= 127:
+        do append(buf, 68)
+        do append(buf, 36)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 132)
+    do append(buf, 36)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_rsp_load_r8(buf, mag):
+    do append(buf, 76)
+    do append(buf, 139)
+    if mag <= 127:
+        do append(buf, 68)
+        do append(buf, 36)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 132)
+    do append(buf, 36)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_rsi_load_rax(buf, mag):
+    do append(buf, 72)
+    do append(buf, 139)
+    if mag == 0:
+        do append(buf, 6)
+        return buf
+    end
+    if mag <= 127:
+        do append(buf, 70)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 134)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_rsi_store_rax(buf, mag):
+    do append(buf, 72)
+    do append(buf, 137)
+    if mag == 0:
+        do append(buf, 6)
+        return buf
+    end
+    if mag <= 127:
+        do append(buf, 70)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 134)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_heap_trap(buf):
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    return buf
+end
+
+func nc_emit_heap_alloc(buf):
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 240)
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 254)
+    do append(buf, 114)
+    do append(buf, 5)
+    do append(buf, 77)
+    do append(buf, 57)
+    do append(buf, 254)
+    do append(buf, 118)
+    do append(buf, 12)
+    return nc_emit_heap_trap(buf)
+end
+
+func nc_emit_call_abs(buf, target):
+    let base = length(freeze(buf)) + 5
+    do append(buf, 232)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_jmp_abs(buf, target):
+    let base = length(freeze(buf)) + 5
+    do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_fault_route(buf, line, target, base):
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 194)
+    buf = nc_append_le32(buf, line)
+    do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_fault_fragment(buf, ro_base, frag_off, frag_len, write_off):
+    let instr_off = length(freeze(buf))
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 53)
+    buf = nc_append_rel32(buf, ro_base + frag_off, instr_off + 7)
+    do append(buf, 186)
+    buf = nc_append_le32(buf, frag_len)
+    return nc_emit_call_abs(buf, write_off)
+end
+
+func nc_emit_diag_dec_r12(buf, dec_off):
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 224)
+    return nc_emit_call_abs(buf, dec_off)
+end
+
+func nc_emit_diag_dec_r13(buf, dec_off):
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 232)
+    return nc_emit_call_abs(buf, dec_off)
+end
+
+func nc_emit_diag_dec_r14(buf, dec_off):
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 240)
+    return nc_emit_call_abs(buf, dec_off)
+end
+
+func nc_emit_diag_index(buf, ro_base, write_off, dec_off, exit_off):
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 204)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 213)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 214)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
+    buf = nc_emit_diag_dec_r14(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_index_off(), 18, write_off)
+    buf = nc_emit_diag_dec_r12(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_mid_len_off(), 22, write_off)
+    buf = nc_emit_diag_dec_r13(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_close_paren_nl_off(), 2, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+func nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off):
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 204)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 205)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 214)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
+    buf = nc_emit_diag_dec_r14(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_get_off(), 16, write_off)
+    buf = nc_emit_diag_dec_r12(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_mid_cnt_off(), 21, write_off)
+    buf = nc_emit_diag_dec_r13(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_close_paren_nl_off(), 2, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+func nc_emit_diag_append(buf, ro_base, write_off, dec_off, exit_off):
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 204)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 214)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
+    buf = nc_emit_diag_dec_r14(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_append_off(), 21, write_off)
+    buf = nc_emit_diag_dec_r12(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_mid_byte_off(), 20, write_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_just_nl_off(), 1, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+func nc_emit_write_fd(buf, fd):
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 116)
+    do append(buf, 28)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, fd)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 12)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 117)
+    do append(buf, 228)
+    do append(buf, 195)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    return buf
+end
+
+func nc_emit_write_fd2(buf):
+    return nc_emit_write_fd(buf, 2)
+end
+
+func nc_emit_dec_fd2(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 32)
+    do append(buf, 76)
+    do append(buf, 141)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, 20)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 214)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 193)
+    do append(buf, 10)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 241)
+    do append(buf, 128)
+    do append(buf, 194)
+    do append(buf, 48)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 206)
+    do append(buf, 136)
+    do append(buf, 22)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 238)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 242)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 32)
+    do append(buf, 195)
+    return buf
+end
+
+func nc_emit_render_int_fd1(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 32)
+    do append(buf, 76)
+    do append(buf, 141)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, 20)
+    do append(buf, 65)
+    do append(buf, 198)
+    do append(buf, 2)
+    do append(buf, 10)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 214)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 193)
+    do append(buf, 10)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 241)
+    do append(buf, 128)
+    do append(buf, 194)
+    do append(buf, 48)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 206)
+    do append(buf, 136)
+    do append(buf, 22)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 238)
+    do append(buf, 73)
+    do append(buf, 141)
+    do append(buf, 82)
+    do append(buf, 1)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 242)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 32)
+    do append(buf, 195)
+    return buf
+end
+
+func nc_emit_render_bool_fd1(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 116)
+    do append(buf, 34)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 116)
+    do append(buf, 114)
+    do append(buf, 117)
+    do append(buf, 101)
+    do append(buf, 198)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 4)
+    do append(buf, 10)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    buf = nc_append_le32(buf, 5)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 195)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 102)
+    do append(buf, 97)
+    do append(buf, 108)
+    do append(buf, 115)
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 4)
+    do append(buf, 101)
+    do append(buf, 10)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    buf = nc_append_le32(buf, 6)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 195)
+    return buf
+end
+
+func nc_emit_render_main(buf, main_ret, render_start):
+    let write_off = render_start + nc_render_body_len(main_ret)
+    if main_ret == nc_type_bool():
+        buf = nc_emit_render_bool_fd1(buf, write_off)
+    else:
+        buf = nc_emit_render_int_fd1(buf, write_off)
+    end
+    return nc_emit_write_fd(buf, 1)
+end
+
+-- ====================================================================
+-- link11: render a returned FLAT int/bool TUPLE to stdout in Herbert's
+-- canonical form, byte-identical to the C reference v_print_canonical_rec:
+--   "(" + elements joined by ", " + ")" + "\n"
+-- The single-word int/bool render path above (kringle, D14) is unchanged.
+-- The N result words are delivered by the aggregate-return ABI: the entry
+-- stub does `sub rsp,S; lea rdi,[rsp]; call main`, and main stores word k
+-- to [rdi+8k] = [rsp+8k]. The render runs with rsp at that scratch base; the
+-- structural literals are staged at [rsp+8N] (above the N results). Each
+-- element renderer (int/bool, no newline) and the shared write helper are
+-- placed once after the (optional) fault helpers; the inline render body
+-- calls them. Lengths are exact (the ERR-418 sub-boundary check verifies).
+-- Validated on silicon before wiring.
+
+-- sret scratch size: N words rounded up to 16 + 16 (staging+pad), so that
+-- `call main` keeps the rsp%16==0 the single-word path already relies on.
+func nc_tuple_sret_size(n):
+    let base = nc_mul8(n)
+    if nc_mod16(base) != 0:
+        base = base + 8
+    end
+    return base + 16
+end
+
+func nc_imm_rsp_len(s):
+    if s <= 127:
+        return 4
+    end
+    return 7
+end
+
+func nc_emit_sub_rsp_imm(buf, s):
+    do append(buf, 72)
+    if s <= 127:
+        do append(buf, 131)
+        do append(buf, 236)
+        do append(buf, s)
+        return buf
+    end
+    do append(buf, 129)
+    do append(buf, 236)
+    return nc_append_le32(buf, s)
+end
+
+func nc_emit_add_rsp_imm(buf, s):
+    do append(buf, 72)
+    if s <= 127:
+        do append(buf, 131)
+        do append(buf, 196)
+        do append(buf, s)
+        return buf
+    end
+    do append(buf, 129)
+    do append(buf, 196)
+    return nc_append_le32(buf, s)
+end
+
+func nc_render_int_noln_len():
+    return 53
+end
+
+func nc_render_bool_noln_len():
+    return 68
+end
+
+func nc_render_helpers_len():
+    return nc_render_int_noln_len() + nc_render_bool_noln_len() + nc_render_str_noln_len() + nc_write_helper_len()
+end
+
+-- link12: a string element load+call stub (RSTR), 15 bytes:
+--   mov rsi,[rsp+8w]; mov rdx,[rsp+8(w+1)]; call str_off
+func nc_render_str_elem_len():
+    return 15
+end
+
+-- link12: the string escaping helper (nc_emit_render_str_noln), 161 bytes
+-- (hand-assembled + validated byte-exact vs C's print_string_lit before wiring).
+func nc_render_str_noln_len():
+    return 161
+end
+
+-- link12: per-token byte length of a render plan (see nc_build_render_plan).
+func nc_rtok_len(kind):
+    if kind == 0:
+        return nc_render_putc_len()
+    end
+    if kind == 1:
+        return nc_render_putsep_len()
+    end
+    if kind == 4:
+        return nc_render_str_elem_len()
+    end
+    return nc_render_elem_len()
+end
+
+func nc_rplan_body_len_loop(rplan, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    return nc_rplan_body_len_loop(rplan, i + 1, n, acc + nc_rtok_len(get(rplan, i).0))
+end
+
+func nc_rplan_body_len(rplan):
+    return nc_rplan_body_len_loop(rplan, 0, count(rplan), 0)
+end
+
+-- Total result-word width W referenced by a plan (max word + the referenced
+-- element's width). Drives the sret scratch size + the staging-slot offset 8W.
+func nc_rtok_words(tok):
+    if tok.0 == 2 or tok.0 == 3:
+        return tok.1 + 1
+    end
+    if tok.0 == 4:
+        return tok.1 + 2
+    end
+    return 0
+end
+
+func nc_rplan_words_loop(rplan, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    let w = nc_rtok_words(get(rplan, i))
+    let m = acc
+    if w > m:
+        m = w
+    end
+    return nc_rplan_words_loop(rplan, i + 1, n, m)
+end
+
+func nc_rplan_words(rplan):
+    return nc_rplan_words_loop(rplan, 0, count(rplan), 0)
+end
+
+func nc_render_putc_len():
+    return 20
+end
+
+func nc_render_putsep_len():
+    return 22
+end
+
+func nc_render_elem_len():
+    return 10
+end
+
+-- sret_head = sub rsp,S (imm8/imm32) + lea rdi,[rsp] (4) + call main (5).
+func nc_render_sret_head_len(s):
+    return nc_imm_rsp_len(s) + 4 + 5
+end
+
+-- tail = add rsp,S (imm8/imm32) + exit_group(0) (9).
+func nc_render_tuple_tail_len(s):
+    return nc_imm_rsp_len(s) + 9
+end
+
+-- link12: the entry-stub render head for ANY renderable aggregate, driven by the
+-- linearized plan. (For a flat int/bool tuple the plan is PUTC'(' + elems +
+-- PUTC')' + PUTC'\n', reproducing the garland flat byte length exactly.)
+func nc_render_agg_head_len(s, rplan):
+    return nc_render_sret_head_len(s) + nc_rplan_body_len(rplan) + nc_render_tuple_tail_len(s)
+end
+
+-- rax (unsigned 64-bit) -> decimal digits, NO newline, written to fd1 via the
+-- shared write helper at write_off; ends in ret. 53 bytes.
+func nc_emit_render_int_noln(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 32)
+    do append(buf, 76)
+    do append(buf, 141)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, 20)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 214)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 193)
+    do append(buf, 10)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 241)
+    do append(buf, 128)
+    do append(buf, 194)
+    do append(buf, 48)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 206)
+    do append(buf, 136)
+    do append(buf, 22)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 238)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 242)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 32)
+    do append(buf, 195)
+    return buf
+end
+
+-- rax (0/1) -> "false"/"true", NO newline, fd1 via write_off; ends in ret. 68 bytes.
+func nc_emit_render_bool_noln(buf, write_off):
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 116)
+    do append(buf, 29)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 116)
+    do append(buf, 114)
+    do append(buf, 117)
+    do append(buf, 101)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 4)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 195)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 102)
+    do append(buf, 97)
+    do append(buf, 108)
+    do append(buf, 115)
+    do append(buf, 198)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 4)
+    do append(buf, 101)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 5)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 195)
+    return buf
+end
+
+-- write a single literal byte `ch` to fd1 via the staging slot [rsp+stage]
+-- (rsp = scratch base, unchanged), calling the write helper. 20 bytes.
+func nc_emit_render_putc(buf, ch, stage, write_off):
+    do append(buf, 198)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, stage)
+    do append(buf, ch)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 116)
+    do append(buf, 36)
+    do append(buf, stage)
+    do append(buf, 186)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    return buf
+end
+
+-- write ", " (comma, space) via the staging slot. 22 bytes.
+func nc_emit_render_putsep(buf, stage, write_off):
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, stage)
+    do append(buf, 44)
+    do append(buf, 32)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 116)
+    do append(buf, 36)
+    do append(buf, stage)
+    do append(buf, 186)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    return buf
+end
+
+-- load result word k (at [rsp+8k]) into rax, then call the int/bool renderer. 10 bytes.
+-- link12: render an int/bool result word: mov rax,[rsp+8w]; call target. 10 bytes.
+-- Indexed by the plan's WORD offset so mixed-width elements (strings, nested tuples)
+-- address the right flattened slot.
+func nc_emit_render_word_elem(buf, word, target_off):
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, nc_mul8(word))
+    return nc_emit_call_abs(buf, target_off)
+end
+
+-- link12: render a string result word pair: mov rsi,[rsp+8w] (ptr);
+-- mov rdx,[rsp+8(w+1)] (length); call str_off. 15 bytes.
+func nc_emit_render_str_elem(buf, word, str_off):
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 116)
+    do append(buf, 36)
+    do append(buf, nc_mul8(word))
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, nc_mul8(word + 1))
+    return nc_emit_call_abs(buf, str_off)
+end
+
+-- link12: the string escaping helper. rsi=ptr, rdx=len -> write  "  + escaped bytes
+-- +  "  to fd1 (no newline), escaping byte 10->\n, 92->\\, 34->\" else raw, byte-
+-- identical to C's print_string_lit (bootstrap/value.c). Self-contained subroutine
+-- (saves r12/r13, calls the shared write helper per byte). 161 bytes; hand-assembled
+-- and validated byte-exact vs C over a 12-case torture battery before wiring.
+func nc_emit_render_str_noln(buf, write_off):
+    do append(buf, 65)
+    do append(buf, 84)
+    do append(buf, 65)
+    do append(buf, 85)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 244)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 213)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 16)
+    do append(buf, 198)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 34)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 52)
+    do append(buf, 36)
+    do append(buf, 186)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 16)
+    do append(buf, 77)
+    do append(buf, 133)
+    do append(buf, 237)
+    do append(buf, 116)
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 15)
+    do append(buf, 182)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 16)
+    do append(buf, 60)
+    do append(buf, 10)
+    do append(buf, 116)
+    do append(buf, 18)
+    do append(buf, 60)
+    do append(buf, 92)
+    do append(buf, 116)
+    do append(buf, 27)
+    do append(buf, 60)
+    do append(buf, 34)
+    do append(buf, 116)
+    do append(buf, 36)
+    do append(buf, 136)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 186)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 235)
+    do append(buf, 37)
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 92)
+    do append(buf, 110)
+    do append(buf, 186)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 235)
+    do append(buf, 24)
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 92)
+    do append(buf, 92)
+    do append(buf, 186)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 235)
+    do append(buf, 11)
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 92)
+    do append(buf, 34)
+    do append(buf, 186)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 52)
+    do append(buf, 36)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 16)
+    do append(buf, 73)
+    do append(buf, 255)
+    do append(buf, 196)
+    do append(buf, 73)
+    do append(buf, 255)
+    do append(buf, 205)
+    do append(buf, 235)
+    do append(buf, 162)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 16)
+    do append(buf, 198)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 34)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 52)
+    do append(buf, 36)
+    do append(buf, 186)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_call_abs(buf, write_off)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 16)
+    do append(buf, 65)
+    do append(buf, 93)
+    do append(buf, 65)
+    do append(buf, 92)
+    do append(buf, 195)
+    return buf
+end
+
+-- link12: emit the render-plan body (the inline render in the entry stub). Walks the
+-- SAME flat token list the length pass sums, so the two cannot drift.
+func nc_emit_rplan(buf, rplan, i, n, stage, int_off, bool_off, str_off, write_off):
+    if i >= n:
+        return buf
+    end
+    let tok = get(rplan, i)
+    if tok.0 == 0:
+        buf = nc_emit_render_putc(buf, tok.1, stage, write_off)
+    end
+    if tok.0 == 1:
+        buf = nc_emit_render_putsep(buf, stage, write_off)
+    end
+    if tok.0 == 2:
+        buf = nc_emit_render_word_elem(buf, tok.1, int_off)
+    end
+    if tok.0 == 3:
+        buf = nc_emit_render_word_elem(buf, tok.1, bool_off)
+    end
+    if tok.0 == 4:
+        buf = nc_emit_render_str_elem(buf, tok.1, str_off)
+    end
+    return nc_emit_rplan(buf, rplan, i + 1, n, stage, int_off, bool_off, str_off, write_off)
+end
+
+func nc_emit_fault_exit1(buf):
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    return buf
+end
+
+func nc_emit_fault_helpers(buf, ro_base, helper_start):
+    let write_off = helper_start + nc_fault_write_fd2_rel()
+    let dec_off = helper_start + nc_fault_dec_fd2_rel()
+    let exit_off = helper_start + nc_fault_exit1_rel()
+    buf = nc_emit_diag_index(buf, ro_base, write_off, dec_off, exit_off)
+    buf = nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off)
+    buf = nc_emit_diag_append(buf, ro_base, write_off, dec_off, exit_off)
+    buf = nc_emit_write_fd2(buf)
+    buf = nc_emit_dec_fd2(buf, write_off)
+    return nc_emit_fault_exit1(buf)
+end
+
+func nc_emit_rdi_store_rax(buf, mag):
+    do append(buf, 72)
+    do append(buf, 137)
+    if mag == 0:
+        do append(buf, 7)
+        return buf
+    end
+    if mag <= 127:
+        do append(buf, 71)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 135)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_arg_copies_loop(buf, k, nwords):
+    if k >= nwords:
+        return buf
+    end
+    let src_mag = 16 + nc_mul8(nwords - 1 - k)
+    let dst_mag = nc_local_mag(k)
+    buf = nc_emit_disp_rbp_load_rax(buf, 0, src_mag)
+    buf = nc_emit_disp_rbp_store_rax(buf, 1, dst_mag)
+    return nc_emit_arg_copies_loop(buf, k + 1, nwords)
+end
+
+func nc_emit_sret_save(buf, meta):
+    if meta.6 == 0 - 1:
+        return buf
+    end
+    return nc_emit_disp_rbp_store_rdi(buf, 1, nc_local_mag(meta.6))
+end
+
+func nc_emit_push_int(buf, n):
+    do append(buf, 72)
+    do append(buf, 184)
+    buf = nc_append_le64(buf, n)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_push_bool(buf, n):
+    do append(buf, 106)
+    do append(buf, n)
+    return buf
+end
+
+func nc_string_offset_loop(strings, i, target, acc):
+    if i >= target:
+        return acc
+    end
+    return nc_string_offset_loop(strings, i + 1, target, acc + length(get(strings, i)))
+end
+
+func nc_string_offset(strings, idx):
+    return nc_string_offset_loop(strings, 0, idx, 0)
+end
+
+func nc_rodata_len_loop(strings, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    return nc_rodata_len_loop(strings, i + 1, n, acc + length(get(strings, i)))
+end
+
+func nc_rodata_len(strings):
+    return nc_rodata_len_loop(strings, 0, count(strings), 0)
+end
+
+func nc_emit_push_str(buf, strings, idx, instr_off, code_len):
+    let s = get(strings, idx)
+    let lit_off = code_len + nc_string_offset(strings, idx)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 53)
+    buf = nc_append_rel32(buf, lit_off, instr_off + 7)
+    do append(buf, 86)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 192)
+    buf = nc_append_le32(buf, length(s))
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_load_local_loop(buf, base, j, width):
+    if j >= width:
+        return buf
+    end
+    buf = nc_emit_disp_rbp_load_rax(buf, 1, nc_local_mag(base + j))
+    do append(buf, 80)
+    return nc_emit_load_local_loop(buf, base, j + 1, width)
+end
+
+func nc_emit_load_local(buf, base, width):
+    return nc_emit_load_local_loop(buf, base, 0, width)
+end
+
+func nc_emit_store_local_loop(buf, base, j):
+    if j == 0 - 1:
+        return buf
+    end
+    do append(buf, 88)
+    buf = nc_emit_disp_rbp_store_rax(buf, 1, nc_local_mag(base + j))
+    return nc_emit_store_local_loop(buf, base, j - 1)
+end
+
+func nc_emit_store_local(buf, base, width):
+    return nc_emit_store_local_loop(buf, base, width - 1)
+end
+
+func nc_emit_add(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 200)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_sub(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 200)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_cmp_setcc(buf, setcc_byte):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 200)
+    do append(buf, 15)
+    do append(buf, setcc_byte)
+    do append(buf, 194)
+    do append(buf, 72)
+    do append(buf, 15)
+    do append(buf, 182)
+    do append(buf, 194)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_not(buf):
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 148)
+    do append(buf, 192)
+    do append(buf, 72)
+    do append(buf, 15)
+    do append(buf, 182)
+    do append(buf, 192)
+    do append(buf, 80)
+    return buf
+end
+
+-- Bitwise / shift emitters. The stack convention pops the right operand into
+-- rcx (0x59) and the left into rax (0x58), computes lhs OP rhs into rax, then
+-- pushes rax (0x50). Each is 6 bytes (matching the add/sub layout arm); bnot is
+-- 5. For shifts the count is already in rcx (so cl), and `shl/shr rax,cl` reads
+-- the count from cl, which x86 masks to 6 bits for 64-bit operands -- exactly
+-- the `& 63` the C oracle and the meta-circular VM use.
+func nc_emit_band(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 33)
+    do append(buf, 200)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_bor(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 9)
+    do append(buf, 200)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_bxor(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 49)
+    do append(buf, 200)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_shl(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 211)
+    do append(buf, 224)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_shr(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 211)
+    do append(buf, 232)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_bnot(buf):
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 208)
+    do append(buf, 80)
+    return buf
+end
+
+-- Multiply: pop rhs->rcx (0x59), pop lhs->rax (0x58), imul rax,rcx
+-- (48 0F AF C1), push rax (0x50). imul keeps the low 64 bits, which is the
+-- u64 modular-wrap product (identical for signed/unsigned). 7 bytes; must equal
+-- nc_group_single_len(42).
+func nc_emit_mul(buf):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 15)
+    do append(buf, 175)
+    do append(buf, 193)
+    do append(buf, 80)
+    return buf
+end
+
+-- Divide / modulo. pop rhs(divisor)->rcx (0x59), pop lhs(dividend)->rax (0x58).
+-- Guard divide-by-zero BEFORE `div`: test rcx,rcx (48 85 C9); jz exit1
+-- (0F 84 rel32) routes to the shared clean fault-exit (exit 1, empty stdout) --
+-- exit-status parity with the C oracle's `herbert: line N: division by zero`.
+-- (Exact-stderr text is deferred per the D13 fault-parity convention; the C
+-- side keeps the located message, the native side matches exit status + empty
+-- stdout. Reusing the located-diagnostic helper would be a much larger addition
+-- -- a new ro-data fragment + diag handler -- so exit-status parity is used.)
+-- Then xor rdx,rdx (48 31 D2) zero-extends the dividend, div rcx (48 F7 F1)
+-- gives the unsigned 64-bit quotient in rax / remainder in rdx; push rax (0x50)
+-- for `/`, push rdx (0x52) for `%`. 18 bytes; must equal
+-- nc_group_single_len(43/44). The jz rel32 base is instr_off + 11 (the byte
+-- after the rel32 field: 1+1+3 prefix + 2 jz opcode + 4 rel32).
+func nc_emit_div_or_mod(buf, is_mod, exit_off, instr_off):
+    do append(buf, 89)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 201)
+    do append(buf, 15)
+    do append(buf, 132)
+    buf = nc_append_rel32(buf, exit_off, instr_off + 11)
+    do append(buf, 72)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 241)
+    if is_mod != 0:
+        do append(buf, 82)
+    else:
+        do append(buf, 80)
+    end
+    return buf
+end
+
+func nc_emit_length(buf):
+    do append(buf, 88)
+    do append(buf, 94)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_index(buf, line, diag_index_off, instr_off):
+    do append(buf, 89)
+    do append(buf, 90)
+    do append(buf, 94)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 209)
+    do append(buf, 114)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_index_off, instr_off + 20)
+    do append(buf, 76)
+    do append(buf, 15)
+    do append(buf, 182)
+    do append(buf, 4)
+    do append(buf, 14)
+    do append(buf, 65)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_equal(buf):
+    do append(buf, 90)
+    do append(buf, 95)
+    do append(buf, 89)
+    do append(buf, 94)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 209)
+    do append(buf, 117)
+    do append(buf, 37)
+    do append(buf, 77)
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 73)
+    do append(buf, 57)
+    do append(buf, 200)
+    do append(buf, 115)
+    do append(buf, 20)
+    do append(buf, 78)
+    do append(buf, 15)
+    do append(buf, 182)
+    do append(buf, 12)
+    do append(buf, 6)
+    do append(buf, 78)
+    do append(buf, 15)
+    do append(buf, 182)
+    do append(buf, 20)
+    do append(buf, 7)
+    do append(buf, 77)
+    do append(buf, 57)
+    do append(buf, 209)
+    do append(buf, 117)
+    do append(buf, 14)
+    do append(buf, 73)
+    do append(buf, 255)
+    do append(buf, 192)
+    do append(buf, 235)
+    do append(buf, 231)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 192)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 235)
+    do append(buf, 3)
+    do append(buf, 72)
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_br(buf, target, base):
+    do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_br_if_false(buf, target, base):
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 132)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_br_and(buf, target, base):
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 132)
+    buf = nc_append_rel32(buf, target, base)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    return buf
+end
+
+func nc_emit_br_or(buf, target, base):
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 133)
+    buf = nc_append_rel32(buf, target, base)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    return buf
+end
+
+func nc_emit_cleanup(buf, words):
+    let cleanup = nc_mul8(words)
+    if cleanup <= 127:
+        do append(buf, 72)
+        do append(buf, 131)
+        do append(buf, 196)
+        do append(buf, cleanup)
+    else:
+        do append(buf, 72)
+        do append(buf, 129)
+        do append(buf, 196)
+        buf = nc_append_le32(buf, cleanup)
+    end
+    return buf
+end
+
+func nc_emit_call_rel(buf, target, base):
+    do append(buf, 232)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_call_ret_words(buf, base_word, ret_width, k, n):
+    if k >= n:
+        return buf
+    end
+    buf = nc_emit_disp_rbp_load_rax(buf, 1, nc_sret_scratch_mag(base_word, ret_width, k))
+    do append(buf, 80)
+    return nc_emit_call_ret_words(buf, base_word, ret_width, k + 1, n)
+end
+
+func nc_emit_normal_call(buf, target, base, meta, cm):
+    if cm.2 == 1:
+        buf = nc_emit_disp_rbp_lea_rdi(buf, 1, nc_sret_scratch_mag(meta.7, cm.1, 0))
+        buf = nc_emit_call_rel(buf, target, base)
+        buf = nc_emit_cleanup(buf, cm.0)
+        return nc_emit_call_ret_words(buf, meta.7, cm.1, 0, cm.1)
+    end
+    buf = nc_emit_call_rel(buf, target, base)
+    buf = nc_emit_cleanup(buf, cm.0)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_tail_copy_loop(buf, k, nf, ng):
+    if k >= nf:
+        return buf
+    end
+    let src = nc_mul8(nf - 1 - k)
+    let dst = nc_tail_dst_pair(ng, k)
+    buf = nc_emit_rsp_load_rax(buf, src)
+    buf = nc_emit_disp_rbp_store_rax(buf, dst.0, dst.1)
+    return nc_emit_tail_copy_loop(buf, k + 1, nf, ng)
+end
+
+func nc_emit_tail_call(buf, target, base, ng, nf, sret_word, aggregate):
+    do append(buf, 76)
+    do append(buf, 139)
+    do append(buf, 93)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 139)
+    do append(buf, 85)
+    do append(buf, 0)
+    buf = nc_emit_tail_copy_loop(buf, 0, nf, ng)
+    let rslot = nc_rslot_pair(ng, nf)
+    buf = nc_emit_disp_rbp_store_r11(buf, rslot.0, rslot.1)
+    if aggregate != 0:
+        buf = nc_emit_disp_rbp_load_rdi(buf, 1, nc_local_mag(sret_word))
+    end
+    buf = nc_emit_disp_rbp_lea_rsp(buf, rslot.0, rslot.1)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 213)
+    do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+func nc_emit_tuple_get_copy_loop(buf, j, f, w, s):
+    if j >= f:
+        return buf
+    end
+    let src = nc_mul8(w - 1 - (s + j))
+    let dst = nc_mul8(w - 1 - j)
+    buf = nc_emit_rsp_load_rax(buf, src)
+    buf = nc_emit_rsp_store_rax(buf, dst)
+    return nc_emit_tuple_get_copy_loop(buf, j + 1, f, w, s)
+end
+
+func nc_emit_tuple_get(buf, meta, pc):
+    let tm = get(meta.10, pc)
+    buf = nc_emit_tuple_get_copy_loop(buf, 0, tm.2, tm.0, tm.1)
+    let drop = tm.0 - tm.2
+    if drop > 0:
+        buf = nc_emit_cleanup(buf, drop)
+    end
+    return buf
+end
+
+func nc_emit_ret(buf, meta):
+    if meta.2 <= 1:
+        do append(buf, 88)
+        do append(buf, 201)
+        do append(buf, 195)
+        return buf
+    end
+    buf = nc_emit_disp_rbp_load_rdi(buf, 1, nc_local_mag(meta.6))
+    buf = nc_emit_aggregate_ret_stores(buf, meta.2 - 1)
+    do append(buf, 201)
+    do append(buf, 195)
+    return buf
+end
+
+func nc_emit_aggregate_ret_stores(buf, k):
+    if k == 0 - 1:
+        return buf
+    end
+    do append(buf, 88)
+    buf = nc_emit_rdi_store_rax(buf, nc_mul8(k))
+    return nc_emit_aggregate_ret_stores(buf, k - 1)
+end
+
+func nc_emit_clogger(buf):
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 244)
+    do append(buf, 77)
+    do append(buf, 49)
+    do append(buf, 237)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 250)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 226)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 234)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 116)
+    do append(buf, 22)
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 49)
+    do append(buf, 255)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 76)
+    do append(buf, 1)
+    do append(buf, 238)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 44)
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 197)
+    do append(buf, 235)
+    do append(buf, 220)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 49)
+    do append(buf, 255)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 116)
+    do append(buf, 12)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 77)
+    do append(buf, 1)
+    do append(buf, 238)
+    do append(buf, 65)
+    do append(buf, 84)
+    do append(buf, 65)
+    do append(buf, 85)
+    return buf
+end
+
+func nc_emit_flogger(buf):
+    do append(buf, 90)
+    do append(buf, 94)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 116)
+    do append(buf, 37)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 235)
+    do append(buf, 226)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    return buf
+end
+
+func nc_emit_stdin_read(buf):
+    -- Checked hosted input. Preserve r12/r13/r15/rbp and all prior heap data.
+    -- Return one (int, string); a failed read never exposes a partial prefix.
+    -- 0: mov r8,r14; xor r9d,r9d. Original bump and uncommitted length.
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 240)
+    do append(buf, 69)
+    do append(buf, 49)
+    do append(buf, 201)
+    -- loop (6): remaining = r15-r8-r9; jz probe (45). Never read count zero.
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 250)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 202)
+    do append(buf, 116)
+    do append(buf, 28)
+    -- read(0, r8+r9, remaining). r8/r9 survive the syscall.
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 49)
+    do append(buf, 255)
+    do append(buf, 75)
+    do append(buf, 141)
+    do append(buf, 52)
+    do append(buf, 8)
+    do append(buf, 15)
+    do append(buf, 5)
+    -- Retry EINTR at loop (6); other errors -> errno (87); EOF -> success (95).
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 229)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 120)
+    do append(buf, 49)
+    do append(buf, 116)
+    do append(buf, 55)
+    -- Accumulate positive short transfer; loop (6).
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 193)
+    do append(buf, 235)
+    do append(buf, 217)
+    -- probe (45): reserve ONE scratch word; retry (49) does not reserve again.
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 8)
+    -- read(0, rsp, 1); retry EINTR at (49).
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 49)
+    do append(buf, 255)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 236)
+    -- Restore probe scratch before every terminal path; errno (87), EOF (95).
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 120)
+    do append(buf, 9)
+    do append(buf, 116)
+    do append(buf, 15)
+    -- Extra byte means overflow: positive synthetic ENOMEM; failure (90).
+    do append(buf, 184)
+    do append(buf, 12)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 235)
+    do append(buf, 3)
+    -- errno (87): positive errno; failure (90): discard prefix, preserve r14.
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 216)
+    do append(buf, 69)
+    do append(buf, 49)
+    do append(buf, 201)
+    do append(buf, 235)
+    do append(buf, 6)
+    -- success (95): commit complete input and status zero.
+    do append(buf, 79)
+    do append(buf, 141)
+    do append(buf, 52)
+    do append(buf, 8)
+    do append(buf, 49)
+    do append(buf, 192)
+    -- result (101): status / original pointer / length. Total 106 bytes.
+    do append(buf, 80)
+    do append(buf, 65)
+    do append(buf, 80)
+    do append(buf, 65)
+    do append(buf, 81)
+    return buf
+end
+
+-- The operand stack contains nr,a1,a2,a3,a4,a5,a6 in that order. Linux takes
+-- rax,rdi,rsi,rdx,r10,r8,r9 and destroys rcx/r11 (both caller scratch here).
+-- No libc, errno conversion, allocation, EINTR retry, or descriptor policy is
+-- hidden in this primitive. Higher-level Herbert code owns those decisions.
+func nc_emit_linux_syscall6(buf):
+    do append(buf, 65)
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 65)
+    do append(buf, 90)
+    do append(buf, 90)
+    do append(buf, 94)
+    do append(buf, 95)
+    do append(buf, 88)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_buffer_address(buf):
+    -- pop rax; mov rax,[rax+16]; push rax. The header stays private.
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 64)
+    do append(buf, 16)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_buffer_get(buf, line, diag_get_off, instr_off):
+    -- rcx=index, r8=header, r9=length. Reuse the located get-bounds route.
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 114)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 23)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    -- movzx eax,byte [r10+rcx]; push rax.
+    do append(buf, 65)
+    do append(buf, 15)
+    do append(buf, 182)
+    do append(buf, 4)
+    do append(buf, 10)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_buffer_set(buf, line, diag_get_off, diag_append_off, instr_off):
+    -- Validate the value before the index, consistently with append's byte
+    -- contract. Failure is located and cannot write outside the initialized span.
+    do append(buf, 89)
+    do append(buf, 72)
+    do append(buf, 129)
+    do append(buf, 249)
+    do append(buf, 255)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 118)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_append_off, instr_off + 22)
+    -- Save the validated byte in edx; then load index, header and length.
+    do append(buf, 137)
+    do append(buf, 202)
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 114)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 47)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    -- mov byte [r10+rcx],dl; push rdx (the written byte).
+    do append(buf, 65)
+    do append(buf, 136)
+    do append(buf, 20)
+    do append(buf, 10)
+    do append(buf, 82)
+    return buf
+end
+
+func nc_emit_process_exit(buf):
+    -- 10 bytes: pop rdi; mov eax,231; syscall; ud2. Linux exit_group
+    -- supplies the low eight status bits to the parent. Never fall through
+    -- to main's renderer, even if the syscall unexpectedly returns.
+    do append(buf, 95)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 15)
+    do append(buf, 11)
+    return buf
+end
+
+func nc_emit_stderr_write(buf):
+    -- 55 bytes. Pop len/ptr into rdx/rsi; push one int result. No heap,
+    -- frame, or callee-saved register changes. Empty input succeeds without
+    -- a syscall. Retry EINTR; advance after real partial writes. Other raw
+    -- negative syscall results become positive errno; zero progress is EIO.
+    -- SIGPIPE remains inherited: a broken pipe may terminate the process.
+    do append(buf, 90)
+    do append(buf, 94)
+    -- loop (2): test rdx,rdx; jz success (52)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 210)
+    do append(buf, 116)
+    do append(buf, 45)
+    -- mov eax,1; mov edi,2; syscall
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    -- cmp rax,-4; je loop (2)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 233)
+    -- test rax,rax; js errno (40); jz zero (45)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 120)
+    do append(buf, 10)
+    do append(buf, 116)
+    do append(buf, 13)
+    -- add rsi,rax; sub rdx,rax; jmp loop (2)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 235)
+    do append(buf, 218)
+    -- errno (40): neg rax; jmp done (54)
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 216)
+    do append(buf, 235)
+    do append(buf, 9)
+    -- zero (45): mov eax,5; jmp done (54)
+    do append(buf, 184)
+    do append(buf, 5)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 235)
+    do append(buf, 2)
+    -- success (52): xor eax,eax; done (54): push rax
+    do append(buf, 49)
+    do append(buf, 192)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_fwriter(buf):
+    -- Atomic Linux publication of a.out. The instruction-level reference is
+    -- bootstrap/tests/fixtures/fwriter_linux_x86_64.s (test-only assembly).
+    -- Open the directory, create an unpredictable exclusive temporary, write
+    -- all bytes, fsync, check close without retry, then renameat. Errors before
+    -- rename preserve a.out and clean our temporary; successful concurrent
+    -- writers publish complete last-writer-wins images. Replaces symlinks,
+    -- never follows their targets. No directory crash-durability guarantee.
+    -- Preserve rbx/r12..r15 and the caller stack. getrandom fails closed.
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 65)
+    do append(buf, 89)
+    do append(buf, 83)
+    do append(buf, 65)
+    do append(buf, 84)
+    do append(buf, 65)
+    do append(buf, 85)
+    do append(buf, 65)
+    do append(buf, 86)
+    do append(buf, 65)
+    do append(buf, 87)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 236)
+    do append(buf, 96)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 206)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 199)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 196)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 197)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 49)
+    do append(buf, 219)
+    do append(buf, 72)
+    do append(buf, 184)
+    do append(buf, 46)
+    do append(buf, 104)
+    do append(buf, 101)
+    do append(buf, 114)
+    do append(buf, 98)
+    do append(buf, 101)
+    do append(buf, 114)
+    do append(buf, 116)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 4)
+    do append(buf, 36)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 24)
+    do append(buf, 46)
+    do append(buf, 116)
+    do append(buf, 109)
+    do append(buf, 112)
+    do append(buf, 198)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 28)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 184)
+    do append(buf, 97)
+    do append(buf, 46)
+    do append(buf, 111)
+    do append(buf, 117)
+    do append(buf, 116)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 40)
+    do append(buf, 102)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 48)
+    do append(buf, 46)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 128)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 156)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 116)
+    do append(buf, 36)
+    do append(buf, 48)
+    do append(buf, 186)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 9)
+    do append(buf, 0)
+    do append(buf, 69)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 225)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 136)
+    do append(buf, 52)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 196)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 76)
+    do append(buf, 36)
+    do append(buf, 72)
+    do append(buf, 15)
+    do append(buf, 136)
+    do append(buf, 38)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 124)
+    do append(buf, 36)
+    do append(buf, 80)
+    do append(buf, 190)
+    do append(buf, 8)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 184)
+    do append(buf, 62)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 241)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 142)
+    do append(buf, 4)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 240)
+    do append(buf, 15)
+    do append(buf, 135)
+    do append(buf, 251)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 199)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 198)
+    do append(buf, 117)
+    do append(buf, 215)
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 68)
+    do append(buf, 36)
+    do append(buf, 80)
+    do append(buf, 185)
+    do append(buf, 16)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 137)
+    do append(buf, 194)
+    do append(buf, 131)
+    do append(buf, 226)
+    do append(buf, 15)
+    do append(buf, 131)
+    do append(buf, 194)
+    do append(buf, 48)
+    do append(buf, 131)
+    do append(buf, 250)
+    do append(buf, 57)
+    do append(buf, 118)
+    do append(buf, 3)
+    do append(buf, 131)
+    do append(buf, 194)
+    do append(buf, 39)
+    do append(buf, 136)
+    do append(buf, 84)
+    do append(buf, 12)
+    do append(buf, 7)
+    do append(buf, 72)
+    do append(buf, 193)
+    do append(buf, 232)
+    do append(buf, 4)
+    do append(buf, 255)
+    do append(buf, 201)
+    do append(buf, 117)
+    do append(buf, 228)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 186)
+    do append(buf, 193)
+    do append(buf, 0)
+    do append(buf, 10)
+    do append(buf, 0)
+    do append(buf, 65)
+    do append(buf, 186)
+    do append(buf, 164)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 226)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 239)
+    do append(buf, 15)
+    do append(buf, 132)
+    do append(buf, 116)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 15)
+    do append(buf, 136)
+    do append(buf, 156)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 197)
+    do append(buf, 187)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 77)
+    do append(buf, 133)
+    do append(buf, 255)
+    do append(buf, 116)
+    do append(buf, 40)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 239)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 246)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 250)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 229)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 116)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 248)
+    do append(buf, 119)
+    do append(buf, 111)
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 73)
+    do append(buf, 41)
+    do append(buf, 199)
+    do append(buf, 235)
+    do append(buf, 211)
+    do append(buf, 184)
+    do append(buf, 74)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 239)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 240)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 82)
+    do append(buf, 184)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 239)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 197)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 60)
+    do append(buf, 184)
+    do append(buf, 8)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 226)
+    do append(buf, 76)
+    do append(buf, 141)
+    do append(buf, 84)
+    do append(buf, 36)
+    do append(buf, 40)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 229)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 117)
+    do append(buf, 28)
+    do append(buf, 184)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 96)
+    do append(buf, 65)
+    do append(buf, 95)
+    do append(buf, 65)
+    do append(buf, 94)
+    do append(buf, 65)
+    do append(buf, 93)
+    do append(buf, 65)
+    do append(buf, 92)
+    do append(buf, 91)
+    do append(buf, 233)
+    do append(buf, 148)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 77)
+    do append(buf, 133)
+    do append(buf, 237)
+    do append(buf, 120)
+    do append(buf, 10)
+    do append(buf, 184)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 239)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 133)
+    do append(buf, 219)
+    do append(buf, 116)
+    do append(buf, 21)
+    do append(buf, 184)
+    do append(buf, 7)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 49)
+    do append(buf, 210)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 235)
+    do append(buf, 77)
+    do append(buf, 133)
+    do append(buf, 228)
+    do append(buf, 120)
+    do append(buf, 10)
+    do append(buf, 184)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 231)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 53)
+    do append(buf, 50)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 186)
+    do append(buf, 36)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 184)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 248)
+    do append(buf, 252)
+    do append(buf, 116)
+    do append(buf, 238)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 126)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 194)
+    do append(buf, 117)
+    do append(buf, 225)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 15)
+    do append(buf, 11)
+    do append(buf, 99)
+    do append(buf, 111)
+    do append(buf, 109)
+    do append(buf, 112)
+    do append(buf, 105)
+    do append(buf, 108)
+    do append(buf, 101)
+    do append(buf, 114)
+    do append(buf, 58)
+    do append(buf, 32)
+    do append(buf, 111)
+    do append(buf, 117)
+    do append(buf, 116)
+    do append(buf, 112)
+    do append(buf, 117)
+    do append(buf, 116)
+    do append(buf, 32)
+    do append(buf, 112)
+    do append(buf, 117)
+    do append(buf, 98)
+    do append(buf, 108)
+    do append(buf, 105)
+    do append(buf, 99)
+    do append(buf, 97)
+    do append(buf, 116)
+    do append(buf, 105)
+    do append(buf, 111)
+    do append(buf, 110)
+    do append(buf, 32)
+    do append(buf, 102)
+    do append(buf, 97)
+    do append(buf, 105)
+    do append(buf, 108)
+    do append(buf, 101)
+    do append(buf, 100)
+    do append(buf, 10)
+    return buf
+end
+
+func nc_emit_new_heap_header(buf, backing_size):
+    do append(buf, 191)
+    do append(buf, 24)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_heap_alloc(buf)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 192)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 64)
+    do append(buf, 8)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 191)
+    buf = nc_append_le32(buf, backing_size)
+    buf = nc_emit_heap_alloc(buf)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 64)
+    do append(buf, 16)
+    do append(buf, 65)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_new_buffer(buf):
+    return nc_emit_new_heap_header(buf, 2)
+end
+
+func nc_emit_new_array(buf, width):
+    return nc_emit_new_heap_header(buf, nc_mul8(width + width))
+end
+
+func nc_emit_count(buf):
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 0)
+    do append(buf, 80)
+    return buf
+end
+
+func nc_emit_get_loads(buf, width, j):
+    if j >= width:
+        return buf
+    end
+    buf = nc_emit_rsi_load_rax(buf, nc_mul8(j))
+    do append(buf, 80)
+    return nc_emit_get_loads(buf, width, j + 1)
+end
+
+func nc_emit_get(buf, width, line, diag_get_off, instr_off):
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 114)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 23)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    if width == 1:
+        do append(buf, 73)
+        do append(buf, 139)
+        do append(buf, 4)
+        do append(buf, 202)
+        do append(buf, 80)
+        return buf
+    end
+    do append(buf, 72)
+    do append(buf, 105)
+    do append(buf, 241)
+    buf = nc_append_le32(buf, nc_mul8(width))
+    do append(buf, 113)
+    do append(buf, 12)
+    buf = nc_emit_heap_trap(buf)
+    do append(buf, 76)
+    do append(buf, 1)
+    do append(buf, 214)
+    return nc_emit_get_loads(buf, width, 0)
+end
+
+func nc_emit_arr_add_stores(buf, k):
+    if k == 0 - 1:
+        return buf
+    end
+    do append(buf, 88)
+    buf = nc_emit_rsi_store_rax(buf, nc_mul8(k))
+    return nc_emit_arr_add_stores(buf, k - 1)
+end
+
+func nc_emit_arr_add(buf, width):
+    buf = nc_emit_rsp_load_r8(buf, nc_mul8(width))
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 8)
+    do append(buf, 77)
+    do append(buf, 57)
+    do append(buf, 209)
+    do append(buf, 15)
+    do append(buf, 133)
+    buf = nc_append_le32(buf, 126)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 211)
+    do append(buf, 73)
+    do append(buf, 209)
+    do append(buf, 227)
+    do append(buf, 115)
+    do append(buf, 12)
+    buf = nc_emit_heap_trap(buf)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 223)
+    do append(buf, 73)
+    do append(buf, 105)
+    do append(buf, 251)
+    buf = nc_append_le32(buf, nc_mul8(width))
+    do append(buf, 113)
+    do append(buf, 12)
+    buf = nc_emit_heap_trap(buf)
+    buf = nc_emit_heap_alloc(buf)
+    do append(buf, 73)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 207)
+    do append(buf, 72)
+    do append(buf, 105)
+    do append(buf, 255)
+    buf = nc_append_le32(buf, width)
+    do append(buf, 113)
+    do append(buf, 12)
+    buf = nc_emit_heap_trap(buf)
+    do append(buf, 72)
+    do append(buf, 49)
+    do append(buf, 201)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 249)
+    do append(buf, 115)
+    do append(buf, 13)
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 52)
+    do append(buf, 202)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 52)
+    do append(buf, 200)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 193)
+    do append(buf, 235)
+    do append(buf, 238)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 64)
+    do append(buf, 16)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 88)
+    do append(buf, 8)
+    do append(buf, 73)
+    do append(buf, 105)
+    do append(buf, 241)
+    buf = nc_append_le32(buf, nc_mul8(width))
+    do append(buf, 113)
+    do append(buf, 12)
+    buf = nc_emit_heap_trap(buf)
+    do append(buf, 73)
+    do append(buf, 3)
+    do append(buf, 112)
+    do append(buf, 16)
+    buf = nc_emit_arr_add_stores(buf, width - 1)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    do append(buf, 73)
+    do append(buf, 255)
+    do append(buf, 193)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 8)
+    return buf
+end
+
+func nc_emit_buf_append(buf, line, diag_append_off, instr_off):
+    do append(buf, 89)
+    do append(buf, 72)
+    do append(buf, 129)
+    do append(buf, 249)
+    do append(buf, 255)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 118)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_append_off, instr_off + 22)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 8)
+    do append(buf, 77)
+    do append(buf, 57)
+    do append(buf, 209)
+    do append(buf, 15)
+    do append(buf, 133)
+    buf = nc_append_le32(buf, 81)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 211)
+    do append(buf, 73)
+    do append(buf, 209)
+    do append(buf, 227)
+    do append(buf, 115)
+    do append(buf, 12)
+    buf = nc_emit_heap_trap(buf)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 223)
+    buf = nc_emit_heap_alloc(buf)
+    do append(buf, 73)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    do append(buf, 72)
+    do append(buf, 49)
+    do append(buf, 246)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 206)
+    do append(buf, 115)
+    do append(buf, 13)
+    do append(buf, 64)
+    do append(buf, 138)
+    do append(buf, 60)
+    do append(buf, 50)
+    do append(buf, 64)
+    do append(buf, 136)
+    do append(buf, 60)
+    do append(buf, 48)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 198)
+    do append(buf, 235)
+    do append(buf, 238)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 64)
+    do append(buf, 16)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 88)
+    do append(buf, 8)
+    do append(buf, 73)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    do append(buf, 66)
+    do append(buf, 136)
+    do append(buf, 12)
+    do append(buf, 10)
+    do append(buf, 73)
+    do append(buf, 255)
+    do append(buf, 193)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 8)
+    return buf
+end
+
+func nc_emit_freeze(buf):
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 207)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 255)
+    do append(buf, 117)
+    do append(buf, 5)
+    do append(buf, 191)
+    do append(buf, 1)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    buf = nc_emit_heap_alloc(buf)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 195)
+    do append(buf, 72)
+    do append(buf, 49)
+    do append(buf, 201)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 115)
+    do append(buf, 13)
+    do append(buf, 65)
+    do append(buf, 138)
+    do append(buf, 60)
+    do append(buf, 10)
+    do append(buf, 65)
+    do append(buf, 136)
+    do append(buf, 60)
+    do append(buf, 11)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 193)
+    do append(buf, 235)
+    do append(buf, 238)
+    do append(buf, 65)
+    do append(buf, 83)
+    do append(buf, 65)
+    do append(buf, 81)
+    return buf
+end
+
+func nc_emit_heap_stub(buf):
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 192)
+    do append(buf, 9)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 72)
+    do append(buf, 49)
+    do append(buf, 255)
+    do append(buf, 190)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 224)
+    do append(buf, 72)
+    do append(buf, 199)
+    do append(buf, 194)
+    do append(buf, 3)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 194)
+    do append(buf, 34)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 73)
+    do append(buf, 199)
+    do append(buf, 192)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 255)
+    do append(buf, 77)
+    do append(buf, 49)
+    do append(buf, 201)
+    do append(buf, 15)
+    do append(buf, 5)
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 192)
+    do append(buf, 121)
+    do append(buf, 12)
+    buf = nc_emit_heap_trap(buf)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 198)
+    do append(buf, 65)
+    do append(buf, 191)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 224)
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 199)
+    return buf
+end
+
+func nc_emit_entry_check(start_len, buf, want, label):
+    let got = length(freeze(buf)) - start_len
+    if got != want:
+        return nc_fail(418, 0, label)
+    end
+    return 0
+end
+
+func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, main_ret, code_len, strings, rplan):
+    let layout = nc_entry_layout(has_heap, has_faultable, main_ret, rplan)
+    let start_len = length(freeze(buf))
+    if has_heap != 0:
+        buf = nc_emit_heap_stub(buf)
+    end
+    let ck = nc_emit_entry_check(start_len, buf, layout.0, "entry-heap")
+    if ck != 0:
+        return (ck, buf)
+    end
+    if count(rplan) > 0:
+        -- link11/link12: aggregate-returning main. The entry head sets up the sret
+        -- scratch, calls main, then INLINES the canonical render by walking the
+        -- render plan (calling the int/bool/str/write helpers placed in the render
+        -- region at layout.5), then exits. The plan already carries the structural
+        -- '(' ')' ',' and the trailing '\n'.
+        let n_words = nc_rplan_words(rplan)
+        let stage = nc_mul8(n_words)
+        let sret_size = nc_tuple_sret_size(n_words)
+        let int_off = layout.5
+        let bool_off = layout.5 + nc_render_int_noln_len()
+        let str_off = layout.5 + nc_render_int_noln_len() + nc_render_bool_noln_len()
+        let write_off = layout.5 + nc_render_int_noln_len() + nc_render_bool_noln_len() + nc_render_str_noln_len()
+        buf = nc_emit_sub_rsp_imm(buf, sret_size)
+        do append(buf, 72)
+        do append(buf, 141)
+        do append(buf, 60)
+        do append(buf, 36)
+        buf = nc_emit_call_abs(buf, main_entry)
+        buf = nc_emit_rplan(buf, rplan, 0, count(rplan), stage, int_off, bool_off, str_off, write_off)
+        buf = nc_emit_add_rsp_imm(buf, sret_size)
+        do append(buf, 184)
+        do append(buf, 231)
+        do append(buf, 0)
+        do append(buf, 0)
+        do append(buf, 0)
+        do append(buf, 49)
+        do append(buf, 255)
+        do append(buf, 15)
+        do append(buf, 5)
+        ck = nc_emit_entry_check(start_len, buf, layout.4, "entry-head")
+        if ck != 0:
+            return (ck, buf)
+        end
+        if has_faultable != 0:
+            let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
+            buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan))
+        end
+        ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
+        if ck != 0:
+            return (ck, buf)
+        end
+        buf = nc_emit_render_int_noln(buf, write_off)
+        buf = nc_emit_render_bool_noln(buf, write_off)
+        buf = nc_emit_render_str_noln(buf, write_off)
+        buf = nc_emit_write_fd(buf, 1)
+        ck = nc_emit_entry_check(start_len, buf, layout.6, "entry-render")
+        if ck != 0:
+            return (ck, buf)
+        end
+        return (0, buf)
+    end
+    do append(buf, 232)
+    buf = nc_append_rel32(buf, main_entry, layout.0 + 5)
+    do append(buf, 232)
+    buf = nc_append_rel32(buf, layout.5, layout.0 + 10)
+    do append(buf, 184)
+    do append(buf, 231)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 49)
+    do append(buf, 255)
+    do append(buf, 15)
+    do append(buf, 5)
+    ck = nc_emit_entry_check(start_len, buf, layout.4, "entry-head")
+    if ck != 0:
+        return (ck, buf)
+    end
+    if has_faultable != 0:
+        let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
+        buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan))
+    end
+    ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
+    if ck != 0:
+        return (ck, buf)
+    end
+    buf = nc_emit_render_main(buf, main_ret, layout.5)
+    ck = nc_emit_entry_check(start_len, buf, layout.6, "entry-render")
+    if ck != 0:
+        return (ck, buf)
+    end
+    return (0, buf)
+end
+
+func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, i, n, buf):
+    if i >= n:
+        return buf
+    end
+    let code = fn.4
+    let instr = get(code, i)
+    let op = instr.0
+    let a = instr.1
+    let g = nc_group(code, i, n, fn, funcs, meta, metas)
+    let instr_off = layout.0 + get(layout.1, i)
+    if op == 0:
+        buf = nc_emit_push_int(buf, a)
+    elif op == 1:
+        buf = nc_emit_push_bool(buf, a)
+    elif op == 2:
+        buf = nc_emit_push_str(buf, strings, a, instr_off, code_len)
+    elif op == 3:
+        buf = nc_emit_load_local(buf, get(meta.3, a), get(meta.4, a))
+    elif op == 4:
+        buf = nc_emit_store_local(buf, get(meta.3, a), get(meta.4, a))
+    elif op == 5:
+        buf = nc_emit_add(buf)
+    elif op == 6:
+        buf = nc_emit_sub(buf)
+    elif op == 7:
+        buf = nc_emit_cmp_setcc(buf, 146)
+    elif op == 8:
+        buf = nc_emit_cmp_setcc(buf, 150)
+    elif op == 9:
+        buf = nc_emit_cmp_setcc(buf, 151)
+    elif op == 10:
+        buf = nc_emit_cmp_setcc(buf, 147)
+    elif op == 11:
+        buf = nc_emit_cmp_setcc(buf, 148)
+    elif op == 12:
+        buf = nc_emit_cmp_setcc(buf, 149)
+    elif op == 13:
+        buf = nc_emit_not(buf)
+    elif op == 36:
+        buf = nc_emit_band(buf)
+    elif op == 37:
+        buf = nc_emit_bor(buf)
+    elif op == 38:
+        buf = nc_emit_bxor(buf)
+    elif op == 39:
+        buf = nc_emit_shl(buf)
+    elif op == 40:
+        buf = nc_emit_shr(buf)
+    elif op == 41:
+        buf = nc_emit_bnot(buf)
+    elif op == 42:
+        buf = nc_emit_mul(buf)
+    elif op == 43:
+        buf = nc_emit_div_or_mod(buf, 0, diag_base + nc_fault_exit1_rel(), instr_off)
+    elif op == 44:
+        buf = nc_emit_div_or_mod(buf, 1, diag_base + nc_fault_exit1_rel(), instr_off)
+    elif op == 15:
+        buf = nc_emit_tuple_get(buf, meta, i)
+    elif op == 16:
+        buf = nc_emit_br(buf, layout.0 + get(layout.1, a), instr_off + 5)
+    elif op == 17:
+        buf = nc_emit_br_if_false(buf, layout.0 + get(layout.1, a), instr_off + 10)
+    elif op == 18:
+        buf = nc_emit_br_and(buf, layout.0 + get(layout.1, a), instr_off + 13)
+    elif op == 19:
+        buf = nc_emit_br_or(buf, layout.0 + get(layout.1, a), instr_off + 13)
+    elif op == 20:
+        let callee_layout = get(layouts, instr.1)
+        let cm = get(meta.11, i)
+        if cm.2 == 2:
+            buf = nc_emit_tail_call(buf, callee_layout.0, instr_off + g.0, meta.0, cm.0, meta.6, 0)
+        elif cm.2 == 3:
+            buf = nc_emit_tail_call(buf, callee_layout.0, instr_off + g.0, meta.0, cm.0, meta.6, 1)
+        else:
+            let call_base = instr_off + 5
+            if cm.2 == 1:
+                call_base = instr_off + nc_disp_len_rbp(1, nc_sret_scratch_mag(meta.7, cm.1, 0)) + 5
+            end
+            buf = nc_emit_normal_call(buf, callee_layout.0, call_base, meta, cm)
+        end
+    elif op == 21:
+        buf = nc_emit_ret(buf, meta)
+    elif op == 22:
+        buf = nc_emit_length(buf)
+    elif op == 23:
+        buf = nc_emit_index(buf, get(fn.6, i), diag_base + nc_fault_diag_index_rel(), instr_off)
+    elif op == 25:
+        buf = nc_emit_equal(buf)
+    elif op == 26:
+        buf = nc_emit_new_buffer(buf)
+    elif op == 27:
+        buf = nc_emit_freeze(buf)
+    elif op == 28:
+        buf = nc_emit_new_array(buf, get(meta.14, i).1)
+    elif op == 29:
+        buf = nc_emit_get(buf, get(meta.14, i).1, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
+    elif op == 30:
+        buf = nc_emit_count(buf)
+    elif op == 31:
+        buf = nc_emit_buf_append(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
+    elif op == 32:
+        buf = nc_emit_arr_add(buf, get(meta.14, i).1)
+    elif op == 33:
+        buf = nc_emit_clogger(buf)
+    elif op == 34:
+        buf = nc_emit_flogger(buf)
+    elif op == 35:
+        buf = nc_emit_fwriter(buf)
+    elif op == 54:
+        buf = nc_emit_process_exit(buf)
+    elif op == 55:
+        buf = nc_emit_stderr_write(buf)
+    elif op == 56:
+        buf = nc_emit_stdin_read(buf)
+    elif op == 58:
+        buf = nc_emit_linux_syscall6(buf)
+    elif op == 59:
+        buf = nc_emit_buffer_address(buf)
+    elif op == 60:
+        buf = nc_emit_buffer_get(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
+    elif op == 61:
+        buf = nc_emit_buffer_set(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), diag_base + nc_fault_diag_append_rel(), instr_off)
+    elif op == 62:
+        buf = nc_emit_count(buf)
+    end
+    return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, g.1, n, buf)
+end
+
+func nc_emit_function(buf, fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base):
+    if get(layout.1, 0) != layout.4:
+        return (nc_fail(418, 0, "prefix"), buf)
+    end
+    if get(layout.1, count(fn.4)) != layout.5:
+        return (nc_fail(418, 0, "length"), buf)
+    end
+    buf = nc_emit_prologue(buf, layout.3)
+    buf = nc_emit_sret_save(buf, meta)
+    buf = nc_emit_arg_copies_loop(buf, 0, meta.0)
+    buf = nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, 0, count(fn.4), buf)
+    return (0, buf)
+end
+
+func nc_emit_functions_loop(buf, funcs, metas, layouts, strings, code_len, diag_base, i, n):
+    if i >= n:
+        return (0, buf)
+    end
+    let r = nc_emit_function(buf, get(funcs, i), funcs, get(metas, i), metas, get(layouts, i), layouts, strings, code_len, diag_base)
+    if r.0 != 0:
+        return r
+    end
+    return nc_emit_functions_loop(r.1, funcs, metas, layouts, strings, code_len, diag_base, i + 1, n)
+end
+
+func nc_emit_zeroes_loop(buf, n):
+    if n <= 0:
+        return buf
+    end
+    do append(buf, 0)
+    return nc_emit_zeroes_loop(buf, n - 1)
+end
+
+func nc_emit_rodata_loop(buf, strings, i, n):
+    if i >= n:
+        return buf
+    end
+    buf = append_str(buf, get(strings, i))
+    return nc_emit_rodata_loop(buf, strings, i + 1, n)
+end
+
+func nc_emit_rodata(buf, strings):
+    return nc_emit_rodata_loop(buf, strings, 0, count(strings))
+end
+
+func nc_append_fault_rodata(strings):
+    do add(strings, "herbert: line ")
+    do add(strings, ": index: position ")
+    do add(strings, ": get: position ")
+    do add(strings, ": append: byte value ")
+    do add(strings, " out of range (length ")
+    do add(strings, " out of range (count ")
+    do add(strings, " out of range 0..255")
+    do add(strings, ")\n")
+    do add(strings, "\n")
+    return strings
+end
+

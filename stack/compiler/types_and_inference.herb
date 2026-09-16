@@ -1,0 +1,2657 @@
+-- ====================================================================
+-- NATIVE CODEGEN LINK 4 BACK END
+-- ====================================================================
+
+func nc_diag_msg(code, payload):
+    if code == 401:
+        return "native-subset: bare clogger() call not allowed; use let h=clogger() then index(h,k)"
+    end
+    if code == 402:
+        return "native-subset: index() must be called as index(<input-handle>,<int-literal>)"
+    end
+    if code == 403:
+        return "native-subset: input handle must only be used as index(h,k); cannot return/pass/use-in-arithmetic/re-store it"
+    end
+    if code == 404:
+        return diagnostic_with_payload("native-subset: forbidden construct '", payload, "'")
+    end
+    if code == 408:
+        return diagnostic_with_payload("native-subset: forbidden bytecode opcode '", payload, "'")
+    end
+    if code == 409:
+        return diagnostic_with_payload("native-subset: user-defined function calls are forbidden '", payload, "'")
+    end
+    if code == 411:
+        if equal(payload, "stdin_read"):
+            return "native-subset: more than one input operation (clogger()/stdin_read()) is not allowed"
+        end
+        return "native-subset: more than one clogger() call is not allowed"
+    end
+    if code == 412:
+        return diagnostic_with_payload("native-subset: expected int expression", payload, "")
+    end
+    if code == 413:
+        return diagnostic_with_payload("native-subset: expected bool expression", payload, "")
+    end
+    if code == 414:
+        return "native-subset: branch join has conflicting local classes"
+    end
+    if code == 415:
+        return diagnostic_with_payload("native-subset: invalid branch target ", payload, "")
+    end
+    if code == 416:
+        return "native-subset: stack depth mismatch or underflow"
+    end
+    if code == 417:
+        return "native-subset: bad push_bool payload"
+    end
+    if code == 418:
+        return diagnostic_with_payload("native-subset: native layout invariant failed ", payload, "")
+    end
+    if code == 419:
+        return diagnostic_with_payload("native-subset: unknown callee '", payload, "'")
+    end
+    if code == 420:
+        return diagnostic_with_payload("native-subset: arity mismatch at call to '", payload, "'")
+    end
+    if code == 421:
+        return "native-subset: user functions may not call main"
+    end
+    if code == 422:
+        return "native-subset: argument/parameter class conflict"
+    end
+    if code == 423:
+        return "native-subset: return class conflict"
+    end
+    if code == 424:
+        return "native-subset: ambiguous or unconstrained function signature"
+    end
+    if code == 425:
+        return "native-subset: input handle crosses a function boundary"
+    end
+    if code == 426:
+        return "native-subset: invalid bytecode CALL target or arity"
+    end
+    if code == 427:
+        return "native-subset: call/jmp/branch rel32 out of range"
+    end
+    if code == 428:
+        return "native-subset: frame, signed displacement, or layout overflow"
+    end
+    if code == 429:
+        return "native-subset: invalid function table"
+    end
+    if code == 430:
+        return "native-subset: structural type conflict"
+    end
+    if code == 431:
+        return "native-subset: tuple access on non-tuple or out of range"
+    end
+    if code == 432:
+        return "native-subset: main must return int or bool"
+    end
+    if code == 433:
+        return "native-subset: local rebind changes value width"
+    end
+    if code == 434:
+        return "native-subset: invalid new_array type expression"
+    end
+    if code == 435:
+        return "native-subset: array operation on non-array"
+    end
+    if code == 436:
+        return "native-subset: array element type mismatch"
+    end
+    if code == 437:
+        return "native-subset: buffer operation on non-buffer"
+    end
+    if code == 438:
+        return "native-subset: deferred native operation"
+    end
+    if code == 439:
+        return "native-subset: missing NEW_ARRAY metadata"
+    end
+    if code == 440:
+        return "native-subset: value-less builtin used as a value"
+    end
+    if code == 441:
+        return "native-subset: polymorphic instantiation does not terminate"
+    end
+    if code == 442:
+        return "native-subset: bitwise/shift operator mixed with another operator class without parentheses"
+    end
+    return "native-subset: unknown error"
+end
+
+func nc_serialize_diag(code, line, payload):
+    let msg = nc_diag_msg(code, payload)
+    let buf = new_buffer()
+    if line > 0:
+        buf = append_str(buf, "line ")
+        buf = append_str(buf, int_to_str(line))
+        buf = append_str(buf, ": ")
+    else:
+        buf = append_str(buf, "program: ")
+    end
+    buf = append_str(buf, msg)
+    buf = append_str(buf, " (ERR ")
+    buf = append_str(buf, int_to_str(code))
+    buf = append_str(buf, ")")
+    return freeze(buf)
+end
+
+func nc_fail(code, line, payload):
+    let reported = stderr_write(nc_serialize_diag(code, line, payload))
+    let newline = stderr_write("\n")
+    do process_exit(1)
+    return 1
+end
+
+func nc_type_unknown():
+    return 0
+end
+
+func nc_type_int():
+    return 1
+end
+
+func nc_type_bool():
+    return 2
+end
+
+func nc_type_string():
+    return 3
+end
+
+func nc_type_buffer():
+    return 4
+end
+
+func nc_type_struct_base():
+    return 5
+end
+
+func nc_type_pool_new():
+    return new_array((int, array(int)))
+end
+
+func nc_type_kind(pool, t):
+    if t < nc_type_struct_base():
+        return 0
+    end
+    return get(pool, t - nc_type_struct_base()).0
+end
+
+func nc_type_children(pool, t):
+    return get(pool, t - nc_type_struct_base()).1
+end
+
+func nc_type_is_tuple(pool, t):
+    return nc_type_kind(pool, t) == 1
+end
+
+func nc_type_is_array(pool, t):
+    return nc_type_kind(pool, t) == 2
+end
+
+func nc_type_tuple_children(pool, t):
+    return nc_type_children(pool, t)
+end
+
+func nc_type_array_elem(pool, t):
+    return get(nc_type_children(pool, t), 0)
+end
+
+-- link12 (D14 string/nested): a result type the native back end can canonically
+-- render is int, bool, string, or a tuple (>= 2 children) whose every element is
+-- itself renderable -- recursively. (Arrays/buffers as result/element are a later
+-- D14 installment and still ERR432.) This SUPERSEDES the garland flat-int/bool
+-- predicate at the main-return gate; a flat int/bool tuple is the special case
+-- where every leaf is int/bool, and renders byte-identically (the plan below emits
+-- the same primitives at the same word offsets).
+func nc_renderable_kids_loop(pool, kids, i, n):
+    if i >= n:
+        return true
+    end
+    if not nc_type_renderable_rec(pool, get(kids, i)):
+        return false
+    end
+    return nc_renderable_kids_loop(pool, kids, i + 1, n)
+end
+
+func nc_type_renderable_rec(pool, t):
+    if t == nc_type_int() or t == nc_type_bool() or t == nc_type_string():
+        return true
+    end
+    if nc_type_is_tuple(pool, t):
+        let kids = nc_type_tuple_children(pool, t)
+        let n = count(kids)
+        if n < 2:
+            return false
+        end
+        return nc_renderable_kids_loop(pool, kids, 0, n)
+    end
+    return false
+end
+
+-- A renderable AGGREGATE (the entry-stub render-head case): renderable AND width
+-- 2..15 result words. The 15-word cap keeps every render disp/imm at the byte
+-- encoding the layout-length math assumes (the staging slot at [rsp+8W] needs a
+-- disp8, and the per-element [rsp+8w] loads too). A bare string is width 2; a
+-- scalar int/bool is width 1 (the kringle single-word path, not this one).
+func nc_type_is_renderable_aggregate(pool, t):
+    if not nc_type_renderable_rec(pool, t):
+        return false
+    end
+    let w = nc_type_width(pool, t)
+    if w < 2:
+        return false
+    end
+    if w > 15:
+        return false
+    end
+    return true
+end
+
+-- Linearize a renderable result type into a flat RENDER PLAN of tokens (kind, arg)
+-- consumed identically by the byte-length pass (nc_rplan_body_len) and the emitter
+-- (nc_emit_rplan) -- so the length/emit lockstep is structural, not a fragile
+-- parallel recursion. Token kinds:
+--   0 PUTC  arg=byte  : write one literal byte         (20 bytes)  '(' ')' '\n'
+--   1 PUTSEP          : write ", "                      (22 bytes)
+--   2 RINT  arg=word  : render int  at result word arg (10 bytes)
+--   3 RBOOL arg=word  : render bool at result word arg (10 bytes)
+--   4 RSTR  arg=word  : render str  at words arg,arg+1 (15 bytes)
+-- Result words are the flattened sret buffer; a string is 2 words (ptr at w,
+-- length at w+1: nc_emit_push_str pushes ptr then length, nc_emit_ret stores them
+-- low->high). A nested tuple flattens contiguously, so the word offset accumulates
+-- by each element's width (int/bool +1, string +2).
+func nc_build_plan_kids(pool, kids, i, n, word, out):
+    if i >= n:
+        return (out, word)
+    end
+    if i > 0:
+        do add(out, (1, 0))
+    end
+    let r = nc_build_plan_rec(pool, get(kids, i), word, out)
+    return nc_build_plan_kids(pool, kids, i + 1, n, r.1, r.0)
+end
+
+func nc_build_plan_rec(pool, t, word, out):
+    if t == nc_type_int():
+        do add(out, (2, word))
+        return (out, word + 1)
+    end
+    if t == nc_type_bool():
+        do add(out, (3, word))
+        return (out, word + 1)
+    end
+    if t == nc_type_string():
+        do add(out, (4, word))
+        return (out, word + 2)
+    end
+    do add(out, (0, 40))
+    let kids = nc_type_tuple_children(pool, t)
+    let r = nc_build_plan_kids(pool, kids, 0, count(kids), word, out)
+    do add(r.0, (0, 41))
+    return (r.0, r.1)
+end
+
+func nc_build_render_plan(pool, t):
+    let out = new_array((int, int))
+    if not nc_type_is_renderable_aggregate(pool, t):
+        return out
+    end
+    let r = nc_build_plan_rec(pool, t, 0, out)
+    do add(r.0, (0, 10))
+    return r.0
+end
+
+func nc_type_equal_children(pool, a, b, i, n):
+    if i >= n:
+        return true
+    end
+    if not nc_type_equal(pool, get(a, i), get(b, i)):
+        return false
+    end
+    return nc_type_equal_children(pool, a, b, i + 1, n)
+end
+
+func nc_type_equal(pool, a, b):
+    if a == b:
+        return true
+    end
+    if nc_type_kind(pool, a) != 0 and nc_type_kind(pool, a) == nc_type_kind(pool, b):
+        let ca = nc_type_children(pool, a)
+        let cb = nc_type_children(pool, b)
+        if count(ca) != count(cb):
+            return false
+        end
+        return nc_type_equal_children(pool, ca, cb, 0, count(ca))
+    end
+    return false
+end
+
+func nc_type_tuple_matches_loop(pool, children, existing, i, n):
+    if i >= n:
+        return true
+    end
+    if not nc_type_equal(pool, get(children, i), get(existing, i)):
+        return false
+    end
+    return nc_type_tuple_matches_loop(pool, children, existing, i + 1, n)
+end
+
+func nc_type_struct_matches(pool, kind, children, type_id):
+    if nc_type_kind(pool, type_id) != kind:
+        return false
+    end
+    let existing = nc_type_children(pool, type_id)
+    if count(children) != count(existing):
+        return false
+    end
+    return nc_type_tuple_matches_loop(pool, children, existing, 0, count(children))
+end
+
+func nc_type_intern_struct_loop(pool, kind, children, i, n):
+    if i >= n:
+        let id = count(pool) + nc_type_struct_base()
+        do add(pool, (kind, children))
+        return id
+    end
+    let tid = i + nc_type_struct_base()
+    if nc_type_struct_matches(pool, kind, children, tid):
+        return tid
+    end
+    return nc_type_intern_struct_loop(pool, kind, children, i + 1, n)
+end
+
+func nc_type_intern_tuple(pool, children):
+    return nc_type_intern_struct_loop(pool, 1, children, 0, count(pool))
+end
+
+func nc_type_stdin_result(pool):
+    -- Intern lazily so programs without checked input retain their type IDs.
+    let kids = new_array(int)
+    do add(kids, nc_type_int())
+    do add(kids, nc_type_string())
+    return nc_type_intern_tuple(pool, kids)
+end
+
+func nc_type_intern_array(pool, elem):
+    let kids = new_array(int)
+    do add(kids, elem)
+    return nc_type_intern_struct_loop(pool, 2, kids, 0, count(pool))
+end
+
+func nc_type_width_tuple(pool, kids, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    return nc_type_width_tuple(pool, kids, i + 1, n, acc + nc_type_width(pool, get(kids, i)))
+end
+
+func nc_type_width(pool, t):
+    if t == nc_type_unknown():
+        return 0
+    end
+    if t == nc_type_int() or t == nc_type_bool():
+        return 1
+    end
+    if t == nc_type_string():
+        return 2
+    end
+    if t == nc_type_buffer():
+        return 1
+    end
+    if nc_type_is_array(pool, t):
+        return 1
+    end
+    let kids = nc_type_tuple_children(pool, t)
+    return nc_type_width_tuple(pool, kids, 0, count(kids), 0)
+end
+
+func nc_type_has_unknown_tuple(pool, kids, i, n):
+    if i >= n:
+        return false
+    end
+    if nc_type_has_unknown(pool, get(kids, i)):
+        return true
+    end
+    return nc_type_has_unknown_tuple(pool, kids, i + 1, n)
+end
+
+func nc_type_has_unknown(pool, t):
+    if t == nc_type_unknown():
+        return true
+    end
+    if nc_type_kind(pool, t) != 0:
+        let kids = nc_type_children(pool, t)
+        return nc_type_has_unknown_tuple(pool, kids, 0, count(kids))
+    end
+    return false
+end
+
+func nc_type_vector_has_unknown(pool, vec, i, n):
+    if i >= n:
+        return false
+    end
+    if nc_type_has_unknown(pool, get(vec, i)):
+        return true
+    end
+    return nc_type_vector_has_unknown(pool, vec, i + 1, n)
+end
+
+func nc_type_vector_equal_loop(pool, a, b, i, n):
+    if i >= n:
+        return true
+    end
+    if not nc_type_equal(pool, get(a, i), get(b, i)):
+        return false
+    end
+    return nc_type_vector_equal_loop(pool, a, b, i + 1, n)
+end
+
+func nc_type_vector_equal(pool, a, b):
+    if count(a) != count(b):
+        return false
+    end
+    return nc_type_vector_equal_loop(pool, a, b, 0, count(a))
+end
+
+func nc_type_embeds_any_child(pool, a, kids, i, n):
+    if i >= n:
+        return false
+    end
+    if nc_type_embeds(pool, a, get(kids, i)):
+        return true
+    end
+    return nc_type_embeds_any_child(pool, a, kids, i + 1, n)
+end
+
+func nc_type_embeds_tuple_positions(pool, a, b, i, n):
+    if i >= n:
+        return true
+    end
+    if not nc_type_embeds(pool, get(a, i), get(b, i)):
+        return false
+    end
+    return nc_type_embeds_tuple_positions(pool, a, b, i + 1, n)
+end
+
+func nc_type_embeds(pool, a, b):
+    if nc_type_equal(pool, a, b):
+        return true
+    end
+    if nc_type_is_tuple(pool, b):
+        let bkids = nc_type_tuple_children(pool, b)
+        if nc_type_embeds_any_child(pool, a, bkids, 0, count(bkids)):
+            return true
+        end
+    end
+    if nc_type_is_array(pool, b):
+        if nc_type_embeds(pool, a, nc_type_array_elem(pool, b)):
+            return true
+        end
+    end
+    if nc_type_is_tuple(pool, a) and nc_type_is_tuple(pool, b):
+        let akids = nc_type_tuple_children(pool, a)
+        let bkids2 = nc_type_tuple_children(pool, b)
+        if count(akids) == count(bkids2):
+            return nc_type_embeds_tuple_positions(pool, akids, bkids2, 0, count(akids))
+        end
+    end
+    if nc_type_is_array(pool, a) and nc_type_is_array(pool, b):
+        return nc_type_embeds(pool, nc_type_array_elem(pool, a), nc_type_array_elem(pool, b))
+    end
+    return false
+end
+
+func nc_poly_vector_embeds_loop(pool, old_args, new_args, i, n, strict):
+    if i >= n:
+        return strict
+    end
+    if not nc_type_embeds(pool, get(old_args, i), get(new_args, i)):
+        return false
+    end
+    if not nc_type_equal(pool, get(old_args, i), get(new_args, i)):
+        strict = true
+    end
+    return nc_poly_vector_embeds_loop(pool, old_args, new_args, i + 1, n, strict)
+end
+
+func nc_poly_vector_grows(pool, old_args, new_args):
+    if count(old_args) != count(new_args):
+        return false
+    end
+    return nc_poly_vector_embeds_loop(pool, old_args, new_args, 0, count(old_args), false)
+end
+
+func nc_type_merge_possible_children(pool, a, b, i, n):
+    if i >= n:
+        return true
+    end
+    if not nc_type_merge_possible(pool, get(a, i), get(b, i)):
+        return false
+    end
+    return nc_type_merge_possible_children(pool, a, b, i + 1, n)
+end
+
+func nc_type_merge_possible(pool, old, want):
+    if old == nc_type_unknown() or want == nc_type_unknown():
+        return true
+    end
+    if nc_type_equal(pool, old, want):
+        return true
+    end
+    if nc_type_is_array(pool, old) and nc_type_is_array(pool, want):
+        return nc_type_merge_possible(pool, nc_type_array_elem(pool, old), nc_type_array_elem(pool, want))
+    end
+    if nc_type_is_tuple(pool, old) and nc_type_is_tuple(pool, want):
+        let oa = nc_type_tuple_children(pool, old)
+        let wa = nc_type_tuple_children(pool, want)
+        if count(oa) != count(wa):
+            return false
+        end
+        return nc_type_merge_possible_children(pool, oa, wa, 0, count(oa))
+    end
+    return false
+end
+
+func nc_type_has_array_unknown(pool, t):
+    if nc_type_is_array(pool, t):
+        if nc_type_has_unknown(pool, nc_type_array_elem(pool, t)):
+            return true
+        end
+    end
+    if nc_type_is_tuple(pool, t):
+        return nc_type_has_array_unknown_children(pool, nc_type_tuple_children(pool, t), 0, count(nc_type_tuple_children(pool, t)))
+    end
+    return false
+end
+
+func nc_type_has_array_unknown_children(pool, kids, i, n):
+    if i >= n:
+        return false
+    end
+    if nc_type_has_array_unknown(pool, get(kids, i)):
+        return true
+    end
+    return nc_type_has_array_unknown_children(pool, kids, i + 1, n)
+end
+
+func nc_type_merge_children(pool, a, b, i, n, out, changed, line):
+    if i >= n:
+        return (0, out, changed)
+    end
+    let m = nc_type_merge(pool, get(a, i), get(b, i), line)
+    if m.0 != 0:
+        return (m.0, out, changed)
+    end
+    do add(out, m.1)
+    return nc_type_merge_children(pool, a, b, i + 1, n, out, nc_or_changed(changed, m.2), line)
+end
+
+func nc_type_merge(pool, old, want, line):
+    if want == nc_type_unknown():
+        return (0, old, 0)
+    end
+    if old == nc_type_unknown():
+        return (0, want, 1)
+    end
+    if nc_type_equal(pool, old, want):
+        return (0, old, 0)
+    end
+    if nc_type_is_array(pool, old) and nc_type_is_array(pool, want):
+        let merged_elem = nc_type_merge(pool, nc_type_array_elem(pool, old), nc_type_array_elem(pool, want), line)
+        if merged_elem.0 != 0:
+            return (nc_fail(436, line, ""), old, 0)
+        end
+        let aid = nc_type_intern_array(pool, merged_elem.1)
+        if nc_type_equal(pool, aid, old):
+            return (0, old, 0)
+        end
+        return (0, aid, 1)
+    end
+    if nc_type_is_tuple(pool, old) and nc_type_is_tuple(pool, want):
+        let oa = nc_type_tuple_children(pool, old)
+        let wa = nc_type_tuple_children(pool, want)
+        if count(oa) != count(wa):
+            return (nc_fail(430, line, ""), old, 0)
+        end
+        let merged = nc_type_merge_children(pool, oa, wa, 0, count(oa), new_array(int), 0, line)
+        if merged.0 != 0:
+            return (merged.0, old, 0)
+        end
+        let tid = nc_type_intern_tuple(pool, merged.1)
+        if nc_type_equal(pool, tid, old):
+            return (0, old, 0)
+        end
+        return (0, tid, 1)
+    end
+    return (nc_fail(430, line, ""), old, 0)
+end
+
+func nc_type_is_int_bool(t):
+    return t == nc_type_int() or t == nc_type_bool()
+end
+
+func nc_type_from_type_expr_children(pool, nodes, kids, i, n, out, line):
+    if i >= n:
+        return (0, nc_type_intern_tuple(pool, out))
+    end
+    let r = nc_type_from_type_expr(pool, nodes, get(kids, i))
+    if r.0 != 0:
+        return r
+    end
+    do add(out, r.1)
+    return nc_type_from_type_expr_children(pool, nodes, kids, i + 1, n, out, line)
+end
+
+func nc_type_from_type_expr(pool, nodes, type_idx):
+    let node = get(nodes, type_idx)
+    if equal(node.0, "type"):
+        let name = get(node.1, 0)
+        if equal(name, "int"):
+            return (0, nc_type_int())
+        end
+        if equal(name, "bool"):
+            return (0, nc_type_bool())
+        end
+        if equal(name, "string"):
+            return (0, nc_type_string())
+        end
+        if equal(name, "buffer"):
+            return (0, nc_type_buffer())
+        end
+        return (nc_fail(434, node.3, ""), 0)
+    end
+    if equal(node.0, "type-array"):
+        if count(node.2) != 1:
+            return (nc_fail(434, node.3, ""), 0)
+        end
+        let elem = nc_type_from_type_expr(pool, nodes, get(node.2, 0))
+        if elem.0 != 0:
+            return elem
+        end
+        return (0, nc_type_intern_array(pool, elem.1))
+    end
+    if equal(node.0, "type-tuple"):
+        if count(node.2) < 2:
+            return (nc_fail(434, node.3, ""), 0)
+        end
+        return nc_type_from_type_expr_children(pool, nodes, node.2, 0, count(node.2), new_array(int), node.3)
+    end
+    return (nc_fail(434, node.3, ""), 0)
+end
+
+func nc_assignment_type_ok(pool, old, got):
+    if old == nc_type_unknown() or got == nc_type_unknown():
+        return true
+    end
+    if nc_type_equal(pool, old, got):
+        return true
+    end
+    return nc_type_is_int_bool(old) and nc_type_is_int_bool(got)
+end
+
+func nc_is_clogger_call(node):
+    if not equal(node.0, "call"):
+        return false
+    end
+    if not equal(get(node.1, 0), "clogger"):
+        return false
+    end
+    return count(node.2) == 0
+end
+
+func nc_count_input_expr(nodes, idx, input_name):
+    let node = get(nodes, idx)
+    let tag = node.0
+    let kids = node.2
+    if equal(tag, "call"):
+        let name = get(node.1, 0)
+        if equal(name, input_name):
+            return 1
+        end
+    end
+    return nc_count_input_kids(nodes, kids, 0, count(kids), input_name)
+end
+
+func nc_count_input_kids(nodes, kids, i, n, input_name):
+    if i >= n:
+        return 0
+    end
+    return nc_count_input_expr(nodes, get(kids, i), input_name) + nc_count_input_kids(nodes, kids, i + 1, n, input_name)
+end
+
+func nc_count_input_body(nodes, stmts, i, n, input_name):
+    if i >= n:
+        return 0
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    let kids = stmt.2
+    let here = 0
+    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return"):
+        here = nc_count_input_expr(nodes, get(kids, 0), input_name)
+    elif equal(tag, "if"):
+        here = nc_count_input_if_arms(nodes, kids, 0, count(kids), input_name)
+    elif equal(tag, "do"):
+        here = nc_count_input_expr(nodes, get(kids, 0), input_name)
+    end
+    return here + nc_count_input_body(nodes, stmts, i + 1, n, input_name)
+end
+
+func nc_count_input_if_arms(nodes, kids, i, n, input_name):
+    if i >= n:
+        return 0
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    let here = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        here = nc_count_input_expr(nodes, get(arm.2, 0), input_name)
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    return here + nc_count_input_body(nodes, body.2, 0, count(body.2), input_name) + nc_count_input_if_arms(nodes, kids, i + 1, n, input_name)
+end
+
+func nc_check_input_scope(nodes, fn_node):
+    let body = get(nodes, get(fn_node.2, 1))
+    let legacy = nc_count_input_body(nodes, body.2, 0, count(body.2), "clogger")
+    let checked = nc_count_input_body(nodes, body.2, 0, count(body.2), "stdin_read")
+    let payload = ""
+    if checked > 0:
+        payload = "stdin_read"
+    end
+    if equal(get(fn_node.1, 0), "main"):
+        if legacy + checked > 1:
+            return nc_fail(411, fn_node.3, payload)
+        end
+    elif checked > 0:
+        return nc_fail(404, fn_node.3, "stdin_read")
+    elif legacy > 0:
+        return nc_fail(404, fn_node.3, "clogger")
+    end
+    return 0
+end
+
+func nc_find_handle_loop(nodes, stmts, i, n, found_name, found_count):
+    if i >= n:
+        return (found_name, found_count)
+    end
+    let stmt = get(nodes, get(stmts, i))
+    if equal(stmt.0, "let"):
+        let rhs = get(nodes, get(stmt.2, 0))
+        if nc_is_clogger_call(rhs):
+            return nc_find_handle_loop(nodes, stmts, i + 1, n, get(stmt.1, 0), found_count + 1)
+        end
+    end
+    return nc_find_handle_loop(nodes, stmts, i + 1, n, found_name, found_count)
+end
+
+func nc_class_env_new():
+    return (new_array(string), new_array(int))
+end
+
+func nc_class_env_add(env, name, klass):
+    do add(env.0, name)
+    do add(env.1, klass)
+    return env
+end
+
+func nc_class_env_clone_loop(env, i, n, names, classes):
+    if i >= n:
+        return (names, classes)
+    end
+    do add(names, get(env.0, i))
+    do add(classes, get(env.1, i))
+    return nc_class_env_clone_loop(env, i + 1, n, names, classes)
+end
+
+func nc_class_env_clone(env):
+    return nc_class_env_clone_loop(env, 0, count(env.0), new_array(string), new_array(int))
+end
+
+func nc_class_env_prefix_loop(env, i, keep, names, classes):
+    if i >= keep:
+        return (names, classes)
+    end
+    do add(names, get(env.0, i))
+    do add(classes, get(env.1, i))
+    return nc_class_env_prefix_loop(env, i + 1, keep, names, classes)
+end
+
+func nc_class_env_prefix(env, keep):
+    return nc_class_env_prefix_loop(env, 0, keep, new_array(string), new_array(int))
+end
+
+func nc_class_env_lookup_info_loop(names, classes, name, n):
+    if n == 0:
+        return (0, 0, 0)
+    end
+    let k = n - 1
+    if equal(get(names, k), name):
+        return (1, k, get(classes, k))
+    end
+    return nc_class_env_lookup_info_loop(names, classes, name, k)
+end
+
+func nc_class_env_lookup_info(env, name):
+    return nc_class_env_lookup_info_loop(env.0, env.1, name, count(env.0))
+end
+
+func nc_int_array_set_loop(src, i, n, target, value, out):
+    if i >= n:
+        return out
+    end
+    if i == target:
+        do add(out, value)
+    else:
+        do add(out, get(src, i))
+    end
+    return nc_int_array_set_loop(src, i + 1, n, target, value, out)
+end
+
+func nc_int_array_set(src, target, value):
+    return nc_int_array_set_loop(src, 0, count(src), target, value, new_array(int))
+end
+
+func nc_array_int_set_loop(src, i, n, target, value, out):
+    if i >= n:
+        return out
+    end
+    if i == target:
+        do add(out, value)
+    else:
+        do add(out, get(src, i))
+    end
+    return nc_array_int_set_loop(src, i + 1, n, target, value, out)
+end
+
+func nc_array_int_set(src, target, value):
+    return nc_array_int_set_loop(src, 0, count(src), target, value, new_array(array(int)))
+end
+
+func nc_class_env_set_idx(env, idx, klass):
+    return (env.0, nc_int_array_set(env.1, idx, klass))
+end
+
+func nc_make_unknowns_loop(i, n, out):
+    if i >= n:
+        return out
+    end
+    do add(out, 0)
+    return nc_make_unknowns_loop(i + 1, n, out)
+end
+
+func nc_make_unknowns(n):
+    return nc_make_unknowns_loop(0, n, new_array(int))
+end
+
+func nc_sig_init_loop(func_kids, i, n, nodes, params, returns):
+    if i >= n:
+        return (params, returns)
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let pn = get(nodes, get(fn.2, 0))
+    do add(params, nc_make_unknowns(count(pn.1)))
+    do add(returns, 0)
+    return nc_sig_init_loop(func_kids, i + 1, n, nodes, params, returns)
+end
+
+func nc_sig_init(nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    return nc_sig_init_loop(prog.2, 0, count(prog.2), nodes, new_array(array(int)), new_array(int))
+end
+
+func nc_sig_get_param(sig, fn_idx, param_idx):
+    return get(get(sig.0, fn_idx), param_idx)
+end
+
+func nc_sig_get_ret(sig, fn_idx):
+    return get(sig.1, fn_idx)
+end
+
+func nc_sig_set_param(sig, fn_idx, param_idx, klass):
+    let parr = get(sig.0, fn_idx)
+    let new_parr = nc_int_array_set(parr, param_idx, klass)
+    return (nc_array_int_set(sig.0, fn_idx, new_parr), sig.1)
+end
+
+func nc_sig_set_ret(sig, fn_idx, klass):
+    return (sig.0, nc_int_array_set(sig.1, fn_idx, klass))
+end
+
+func nc_poly_max_instances():
+    return 4096
+end
+
+func nc_poly_lookup_instance_loop(pool, instances, base_fn_idx, params, i, n):
+    if i >= n:
+        return 0 - 1
+    end
+    let inst = get(instances, i)
+    if inst.0 == base_fn_idx:
+        if nc_type_vector_equal(pool, inst.1, params):
+            return i
+        end
+    end
+    return nc_poly_lookup_instance_loop(pool, instances, base_fn_idx, params, i + 1, n)
+end
+
+func nc_poly_lookup_instance(pool, instances, base_fn_idx, params):
+    return nc_poly_lookup_instance_loop(pool, instances, base_fn_idx, params, 0, count(instances))
+end
+
+func nc_poly_guard_parent_chain(pool, instances, parent_idx, base_fn_idx, params, line):
+    if parent_idx == 0 - 1:
+        return 0
+    end
+    let parent = get(instances, parent_idx)
+    if parent.0 == base_fn_idx:
+        if nc_poly_vector_grows(pool, parent.1, params):
+            return nc_fail(441, line, "")
+        end
+    end
+    return nc_poly_guard_parent_chain(pool, instances, parent.5, base_fn_idx, params, line)
+end
+
+func nc_poly_make_instance(base_fn_idx, params, ret, depth, lowered_idx, parent_idx):
+    return (base_fn_idx, params, ret, depth, lowered_idx, parent_idx)
+end
+
+func nc_poly_get_or_create(pool, poly, base_fn_idx, params, parent_idx, sig, line):
+    let instances = poly.0
+    let existing = nc_poly_lookup_instance(pool, instances, base_fn_idx, params)
+    if existing != 0 - 1:
+        return (0, existing, sig, 0)
+    end
+    if count(instances) >= nc_poly_max_instances():
+        return (nc_fail(441, line, ""), 0, sig, 0)
+    end
+    let guard = nc_poly_guard_parent_chain(pool, instances, parent_idx, base_fn_idx, params, line)
+    if guard != 0:
+        return (guard, 0, sig, 0)
+    end
+    let depth = 0
+    if parent_idx != 0 - 1:
+        depth = get(instances, parent_idx).3 + 1
+    end
+    let lowered = count(instances)
+    do add(instances, nc_poly_make_instance(base_fn_idx, params, nc_type_unknown(), depth, lowered, parent_idx))
+    do add(sig.0, params)
+    do add(sig.1, nc_type_unknown())
+    return (0, lowered, sig, 1)
+end
+
+func nc_poly_call_target_find_loop(targets, caller_inst_idx, call_node_idx, i, n):
+    if i >= n:
+        return 0 - 1
+    end
+    let target = get(targets, i)
+    if target.0 == caller_inst_idx and target.1 == call_node_idx:
+        return i
+    end
+    return nc_poly_call_target_find_loop(targets, caller_inst_idx, call_node_idx, i + 1, n)
+end
+
+func nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx):
+    return nc_poly_call_target_find_loop(targets, caller_inst_idx, call_node_idx, 0, count(targets))
+end
+
+func nc_poly_record_call_target(poly, caller_inst_idx, call_node_idx, callee_inst_idx):
+    let targets = poly.1
+    let existing = nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx)
+    if existing == 0 - 1:
+        do add(targets, (caller_inst_idx, call_node_idx, callee_inst_idx))
+        return 0
+    end
+    let old = get(targets, existing)
+    if old.2 != callee_inst_idx:
+        return nc_fail(430, 0, "")
+    end
+    return 0
+end
+
+func nc_poly_lowered_call_target(poly, caller_inst_idx, call_node_idx):
+    let targets = poly.1
+    let existing = nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx)
+    if existing == 0 - 1:
+        return fault("missing polymorphic call target")
+    end
+    return get(targets, existing).2
+end
+
+func nc_poly_seed_main(nodes, prog_idx):
+    let main_lookup = nc_func_lookup(nodes, prog_idx, "main")
+    let instances = new_array((int, array(int), int, int, int, int))
+    let call_targets = new_array((int, int, int))
+    let params = new_array(array(int))
+    let returns = new_array(int)
+    let empty = new_array(int)
+    do add(instances, nc_poly_make_instance(main_lookup.1, empty, nc_type_unknown(), 0, 0, 0 - 1))
+    do add(params, empty)
+    do add(returns, nc_type_unknown())
+    return ((params, returns), (instances, call_targets))
+end
+
+func nc_poly_current_base(funcs, fn_idx):
+    return get(funcs.0, fn_idx).0
+end
+
+func nc_or_changed(a, b):
+    if a != 0 or b != 0:
+        return 1
+    end
+    return 0
+end
+
+func nc_func_lookup_loop(func_kids, i, n, name, nodes):
+    if i >= n:
+        return (0, 0, 0, 0)
+    end
+    let fn = get(nodes, get(func_kids, i))
+    if equal(get(fn.1, 0), name):
+        let pn = get(nodes, get(fn.2, 0))
+        return (1, i, count(pn.1), fn.3)
+    end
+    return nc_func_lookup_loop(func_kids, i + 1, n, name, nodes)
+end
+
+func nc_func_lookup(nodes, prog_idx, name):
+    let prog = get(nodes, prog_idx)
+    return nc_func_lookup_loop(prog.2, 0, count(prog.2), name, nodes)
+end
+
+func nc_table_check_loop(func_kids, i, n, seen, nodes, main_count, main_params, main_line):
+    if i >= n:
+        if main_count != 1:
+            return nc_fail(429, 0, "main")
+        end
+        if main_params != 0:
+            return nc_fail(429, main_line, "main")
+        end
+        return 0
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let name = get(fn.1, 0)
+    if err_is_builtin_name(name):
+        return nc_fail(429, fn.3, name)
+    end
+    if err_name_seen(seen, name):
+        return nc_fail(429, fn.3, name)
+    end
+    do add(seen, name)
+    let pn = get(nodes, get(fn.2, 0))
+    if equal(name, "main"):
+        main_count = main_count + 1
+        main_params = count(pn.1)
+        main_line = fn.3
+    end
+    return nc_table_check_loop(func_kids, i + 1, n, seen, nodes, main_count, main_params, main_line)
+end
+
+func nc_table_check(nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    return nc_table_check_loop(prog.2, 0, count(prog.2), new_array(string), nodes, 0, 0, 0)
+end
+
+func nc_expr_calls_name(nodes, idx, name):
+    let node = get(nodes, idx)
+    if equal(node.0, "call"):
+        if equal(get(node.1, 0), name):
+            return true
+        end
+    end
+    return nc_kids_call_name(nodes, node.2, 0, count(node.2), name)
+end
+
+func nc_kids_call_name(nodes, kids, i, n, name):
+    if i >= n:
+        return false
+    end
+    if nc_expr_calls_name(nodes, get(kids, i), name):
+        return true
+    end
+    return nc_kids_call_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_calls_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return false
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
+        if nc_expr_calls_name(nodes, get(stmt.2, 0), name):
+            return true
+        end
+    elif equal(tag, "if"):
+        if nc_if_calls_name(nodes, stmt.2, 0, count(stmt.2), name):
+            return true
+        end
+    end
+    return nc_body_calls_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_calls_name(nodes, kids, i, n, name):
+    if i >= n:
+        return false
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        if nc_expr_calls_name(nodes, get(arm.2, 0), name):
+            return true
+        end
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    if nc_body_calls_name(nodes, body.2, 0, count(body.2), name):
+        return true
+    end
+    return nc_if_calls_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_func_called_somewhere_loop(func_kids, i, n, nodes, name):
+    if i >= n:
+        return false
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let body = get(nodes, get(fn.2, 1))
+    if nc_body_calls_name(nodes, body.2, 0, count(body.2), name):
+        return true
+    end
+    return nc_func_called_somewhere_loop(func_kids, i + 1, n, nodes, name)
+end
+
+func nc_unreachable_check_loop(func_kids, i, n, nodes):
+    if i >= n:
+        return 0
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let name = get(fn.1, 0)
+    if not equal(name, "main"):
+        if not nc_func_called_somewhere_loop(func_kids, 0, n, nodes, name):
+            return nc_fail(424, fn.3, "")
+        end
+    end
+    return nc_unreachable_check_loop(func_kids, i + 1, n, nodes)
+end
+
+func nc_unreachable_check(nodes, prog_idx):
+    let prog = get(nodes, prog_idx)
+    return nc_unreachable_check_loop(prog.2, 0, count(prog.2), nodes)
+end
+
+func nc_expr_uses_name(nodes, idx, name):
+    let node = get(nodes, idx)
+    if equal(node.0, "name") and equal(get(node.1, 0), name):
+        return true
+    end
+    return nc_kids_uses_name(nodes, node.2, 0, count(node.2), name)
+end
+
+func nc_kids_uses_name(nodes, kids, i, n, name):
+    if i >= n:
+        return false
+    end
+    if nc_expr_uses_name(nodes, get(kids, i), name):
+        return true
+    end
+    return nc_kids_uses_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_uses_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return false
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
+        if nc_expr_uses_name(nodes, get(stmt.2, 0), name):
+            return true
+        end
+    elif equal(tag, "if"):
+        if nc_if_uses_name(nodes, stmt.2, 0, count(stmt.2), name):
+            return true
+        end
+    end
+    return nc_body_uses_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_uses_name(nodes, kids, i, n, name):
+    if i >= n:
+        return false
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        if nc_expr_uses_name(nodes, get(arm.2, 0), name):
+            return true
+        end
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    if nc_body_uses_name(nodes, body.2, 0, count(body.2), name):
+        return true
+    end
+    return nc_if_uses_name(nodes, kids, i + 1, n, name)
+end
+
+-- zelph: never-returning-function (type-bottom) recognition.
+func nc_expr_count_name(nodes, idx, name):
+    let node = get(nodes, idx)
+    if equal(node.0, "name") and equal(get(node.1, 0), name):
+        return 1
+    end
+    return nc_kids_count_name(nodes, node.2, 0, count(node.2), name)
+end
+
+func nc_kids_count_name(nodes, kids, i, n, name):
+    if i >= n:
+        return 0
+    end
+    return nc_expr_count_name(nodes, get(kids, i), name) + nc_kids_count_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_count_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return 0
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    let here = 0
+    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
+        here = nc_expr_count_name(nodes, get(stmt.2, 0), name)
+    elif equal(tag, "if"):
+        here = nc_if_count_name(nodes, stmt.2, 0, count(stmt.2), name)
+    end
+    return here + nc_body_count_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_count_name(nodes, kids, i, n, name):
+    if i >= n:
+        return 0
+    end
+    let arm = get(nodes, get(kids, i))
+    let here = 0
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        here = nc_expr_count_name(nodes, get(arm.2, 0), name)
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    return here + nc_body_count_name(nodes, body.2, 0, count(body.2), name) + nc_if_count_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_assigns_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return false
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    if equal(tag, "assign"):
+        if equal(get(stmt.1, 0), name):
+            return true
+        end
+    elif equal(tag, "if"):
+        if nc_if_assigns_name(nodes, stmt.2, 0, count(stmt.2), name):
+            return true
+        end
+    end
+    return nc_body_assigns_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_assigns_name(nodes, kids, i, n, name):
+    if i >= n:
+        return false
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    if nc_body_assigns_name(nodes, body.2, 0, count(body.2), name):
+        return true
+    end
+    return nc_if_assigns_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_body_let_target_count_name(nodes, stmts, i, n, name):
+    if i >= n:
+        return 0
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    let here = 0
+    if equal(tag, "let"):
+        if equal(get(stmt.1, 0), name):
+            here = 1
+        end
+    elif equal(tag, "if"):
+        here = nc_if_let_target_count_name(nodes, stmt.2, 0, count(stmt.2), name)
+    end
+    return here + nc_body_let_target_count_name(nodes, stmts, i + 1, n, name)
+end
+
+func nc_if_let_target_count_name(nodes, kids, i, n, name):
+    if i >= n:
+        return 0
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    return nc_body_let_target_count_name(nodes, body.2, 0, count(body.2), name) + nc_if_let_target_count_name(nodes, kids, i + 1, n, name)
+end
+
+func nc_top_let_is_new_array(nodes, stmts, i, n, name):
+    if i >= n:
+        return false
+    end
+    let stmt = get(nodes, get(stmts, i))
+    if equal(stmt.0, "let") and equal(get(stmt.1, 0), name):
+        let val = get(nodes, get(stmt.2, 0))
+        if equal(val.0, "call") and equal(get(val.1, 0), "new_array"):
+            return true
+        end
+        return false
+    end
+    return nc_top_let_is_new_array(nodes, stmts, i + 1, n, name)
+end
+
+func nc_return_is_trap(nodes, top_stmts, expr_idx):
+    let node = get(nodes, expr_idx)
+    if not equal(node.0, "call"):
+        return false
+    end
+    if not equal(get(node.1, 0), "get"):
+        return false
+    end
+    if count(node.2) != 2:
+        return false
+    end
+    let arr = get(nodes, get(node.2, 0))
+    if not equal(arr.0, "name"):
+        return false
+    end
+    let xname = get(arr.1, 0)
+    if not nc_top_let_is_new_array(nodes, top_stmts, 0, count(top_stmts), xname):
+        return false
+    end
+    if nc_body_let_target_count_name(nodes, top_stmts, 0, count(top_stmts), xname) != 1:
+        return false
+    end
+    if nc_body_count_name(nodes, top_stmts, 0, count(top_stmts), xname) != 1:
+        return false
+    end
+    if nc_body_assigns_name(nodes, top_stmts, 0, count(top_stmts), xname):
+        return false
+    end
+    return true
+end
+
+func nc_returns_all_trap(nodes, top_stmts, stmts, i, n):
+    if i >= n:
+        return (true, 0)
+    end
+    let stmt = get(nodes, get(stmts, i))
+    let tag = stmt.0
+    let here_ok = true
+    let here_cnt = 0
+    if equal(tag, "return"):
+        here_cnt = 1
+        here_ok = nc_return_is_trap(nodes, top_stmts, get(stmt.2, 0))
+    elif equal(tag, "if"):
+        let r = nc_if_returns_all_trap(nodes, top_stmts, stmt.2, 0, count(stmt.2))
+        here_ok = r.0
+        here_cnt = r.1
+    end
+    if not here_ok:
+        return (false, here_cnt)
+    end
+    let rest = nc_returns_all_trap(nodes, top_stmts, stmts, i + 1, n)
+    return (rest.0, here_cnt + rest.1)
+end
+
+func nc_if_returns_all_trap(nodes, top_stmts, kids, i, n):
+    if i >= n:
+        return (true, 0)
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    let r = nc_returns_all_trap(nodes, top_stmts, body.2, 0, count(body.2))
+    if not r.0:
+        return (false, r.1)
+    end
+    let rest = nc_if_returns_all_trap(nodes, top_stmts, kids, i + 1, n)
+    return (rest.0, r.1 + rest.1)
+end
+
+func nc_func_never_returns_node(nodes, fn):
+    let body = get(nodes, get(fn.2, 1))
+    let stmts = body.2
+    let r = nc_returns_all_trap(nodes, stmts, stmts, 0, count(stmts))
+    if r.1 == 0:
+        return false
+    end
+    return r.0
+end
+
+func nc_func_never_returns(nodes, prog_idx, fn_idx):
+    let prog = get(nodes, prog_idx)
+    return nc_func_never_returns_node(nodes, get(nodes, get(prog.2, fn_idx)))
+end
+
+func nc_sig_unify_param(pool, sig, fn_idx, param_idx, want, line):
+    let old = nc_sig_get_param(sig, fn_idx, param_idx)
+    let u = nc_type_merge(pool, old, want, line)
+    if u.0 != 0:
+        return (u.0, sig, 0)
+    end
+    if u.2 == 0:
+        return (0, sig, 0)
+    end
+    return (0, nc_sig_set_param(sig, fn_idx, param_idx, u.1), 1)
+end
+
+func nc_sig_unify_ret(pool, sig, fn_idx, want, line):
+    let old = nc_sig_get_ret(sig, fn_idx)
+    let u = nc_type_merge(pool, old, want, line)
+    if u.0 != 0:
+        return (u.0, sig, 0)
+    end
+    if u.2 == 0:
+        return (0, sig, 0)
+    end
+    return (0, nc_sig_set_ret(sig, fn_idx, u.1), 1)
+end
+
+func nc_seed_params_loop(params, i, n, sig, fn_idx, env):
+    if i >= n:
+        return env
+    end
+    env = nc_class_env_add(env, get(params, i), nc_sig_get_param(sig, fn_idx, i))
+    return nc_seed_params_loop(params, i + 1, n, sig, fn_idx, env)
+end
+
+func nc_func_env_from_params(nodes, fn_node, sig, fn_idx):
+    let pn = get(nodes, get(fn_node.2, 0))
+    return nc_seed_params_loop(pn.1, 0, count(pn.1), sig, fn_idx, nc_class_env_new())
+end
+
+func nc_constrain_name(pool, nodes, node, env, want, sig, fn_idx, n_params):
+    let name = get(node.1, 0)
+    let li = nc_class_env_lookup_info(env, name)
+    if li.0 == 0:
+        return (nc_fail(404, node.3, "undefined-name"), env, sig, 0)
+    end
+    let u = nc_type_merge(pool, li.2, want, node.3)
+    if u.0 != 0:
+        return (u.0, env, sig, 0)
+    end
+    if u.2 == 0:
+        return (0, env, sig, 0)
+    end
+    env = nc_class_env_set_idx(env, li.1, u.1)
+    let changed = 0
+    if li.1 < n_params:
+        let su = nc_sig_unify_param(pool, sig, fn_idx, li.1, u.1, node.3)
+        if su.0 != 0:
+            return (su.0, env, sig, changed)
+        end
+        sig = su.1
+        changed = su.2
+    end
+    return (0, env, sig, changed)
+end
+
+func nc_expect_concrete(pool, got, want, line):
+    if got == 0 or want == 0 or nc_type_equal(pool, got, want):
+        return 0
+    end
+    return nc_fail(430, line, "")
+end
+
+func nc_expect_array_elem(pool, got, want, line):
+    if got == 0 or want == 0 or nc_type_equal(pool, got, want):
+        return 0
+    end
+    if nc_type_has_unknown(pool, got) or nc_type_has_unknown(pool, want):
+        if not nc_type_merge_possible(pool, got, want):
+            return nc_fail(436, line, "")
+        end
+        let m = nc_type_merge(pool, got, want, line)
+        if m.0 == 0:
+            return 0
+        end
+        return m.0
+    end
+    return nc_fail(436, line, "")
+end
+
+func nc_constrain_string_value(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params, line):
+    let r = nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4)
+    end
+    if r.1 == nc_type_buffer():
+        return (nc_fail(438, line, ""), r.2, r.3, r.4)
+    end
+    if r.1 == nc_type_unknown():
+        return nc_constrain_expr(pool, nodes, prog_idx, idx, r.2, nc_type_string(), r.3, fn_idx, funcs, n_params)
+    end
+    let chk = nc_expect_concrete(pool, r.1, nc_type_string(), line)
+    if chk != 0:
+        return (chk, r.2, r.3, r.4)
+    end
+    return (0, r.2, r.3, r.4)
+end
+
+func nc_constrain_flogger_string_value(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params, line):
+    let r = nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4)
+    end
+    if r.1 == nc_type_unknown():
+        return nc_constrain_expr(pool, nodes, prog_idx, idx, r.2, nc_type_string(), r.3, fn_idx, funcs, n_params)
+    end
+    let chk = nc_expect_concrete(pool, r.1, nc_type_string(), line)
+    if chk != 0:
+        return (chk, r.2, r.3, r.4)
+    end
+    return (0, r.2, r.3, r.4)
+end
+
+func nc_constrain_buffer_value(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params, line):
+    let r = nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4)
+    end
+    if r.1 == nc_type_unknown():
+        return nc_constrain_expr(pool, nodes, prog_idx, idx, r.2, nc_type_buffer(), r.3, fn_idx, funcs, n_params)
+    end
+    if r.1 != nc_type_buffer():
+        return (nc_fail(437, line, ""), r.2, r.3, r.4)
+    end
+    return (0, r.2, r.3, r.4)
+end
+
+func nc_constrain_array_value(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params, want_elem, line):
+    let want = nc_type_intern_array(pool, want_elem)
+    let r = nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4)
+    end
+    if r.1 == nc_type_unknown():
+        return nc_constrain_expr(pool, nodes, prog_idx, idx, r.2, want, r.3, fn_idx, funcs, n_params)
+    end
+    if not nc_type_is_array(pool, r.1):
+        return (nc_fail(435, line, ""), r.2, r.3, r.4)
+    end
+    let merged = nc_type_merge(pool, r.1, want, line)
+    if merged.0 != 0:
+        return (merged.0, r.2, r.3, r.4)
+    end
+    if merged.2 == 0:
+        return (0, r.2, r.3, r.4)
+    end
+    return nc_constrain_expr(pool, nodes, prog_idx, idx, r.2, merged.1, r.3, fn_idx, funcs, n_params)
+end
+
+func nc_collect_call_arg_types(pool, nodes, prog_idx, kids, i, n, env, sig, fn_idx, funcs, n_params, args, changed):
+    if i >= n:
+        return (0, args, env, sig, changed)
+    end
+    let arg_idx = get(kids, i)
+    let ar = nc_infer_expr(pool, nodes, prog_idx, arg_idx, env, sig, fn_idx, funcs, n_params)
+    if ar.0 != 0:
+        return (ar.0, args, ar.2, ar.3, nc_or_changed(changed, ar.4))
+    end
+    do add(args, ar.1)
+    return nc_collect_call_arg_types(pool, nodes, prog_idx, kids, i + 1, n, ar.2, ar.3, fn_idx, funcs, n_params, args, nc_or_changed(changed, ar.4))
+end
+
+func nc_poly_constrain_user_call(pool, nodes, prog_idx, call_idx, env, want, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, call_idx)
+    let name = get(node.1, 0)
+    let callee = nc_func_lookup(nodes, prog_idx, name)
+    if callee.0 == 0:
+        return (nc_fail(419, node.3, name), env, sig, 0)
+    end
+    if equal(name, "main"):
+        return (nc_fail(421, node.3, ""), env, sig, 0)
+    end
+    if callee.2 != count(node.2):
+        return (nc_fail(420, node.3, name), env, sig, 0)
+    end
+    let ar = nc_collect_call_arg_types(pool, nodes, prog_idx, node.2, 0, count(node.2), env, sig, fn_idx, funcs, n_params, new_array(int), 0)
+    if ar.0 != 0:
+        return (ar.0, ar.2, ar.3, ar.4)
+    end
+    if nc_type_vector_has_unknown(pool, ar.1, 0, count(ar.1)):
+        return (0, ar.2, ar.3, ar.4)
+    end
+    let gi = nc_poly_get_or_create(pool, funcs, callee.1, ar.1, fn_idx, ar.3, node.3)
+    if gi.0 != 0:
+        return (gi.0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
+    end
+    let rec = nc_poly_record_call_target(funcs, fn_idx, call_idx, gi.1)
+    if rec != 0:
+        return (rec, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
+    end
+    let changed = nc_or_changed(ar.4, gi.3)
+    if nc_func_never_returns(nodes, prog_idx, callee.1):
+        return (0, ar.2, gi.2, changed)
+    end
+    let su = nc_sig_unify_ret(pool, gi.2, gi.1, want, node.3)
+    if su.0 != 0:
+        return (su.0, ar.2, gi.2, changed)
+    end
+    return (0, ar.2, su.1, nc_or_changed(changed, su.2))
+end
+
+func nc_poly_infer_user_call(pool, nodes, prog_idx, call_idx, env, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, call_idx)
+    let name = get(node.1, 0)
+    let callee = nc_func_lookup(nodes, prog_idx, name)
+    if callee.0 == 0:
+        return (nc_fail(419, node.3, name), 0, env, sig, 0)
+    end
+    if equal(name, "main"):
+        return (nc_fail(421, node.3, ""), 0, env, sig, 0)
+    end
+    if callee.2 != count(node.2):
+        return (nc_fail(420, node.3, name), 0, env, sig, 0)
+    end
+    let ar = nc_collect_call_arg_types(pool, nodes, prog_idx, node.2, 0, count(node.2), env, sig, fn_idx, funcs, n_params, new_array(int), 0)
+    if ar.0 != 0:
+        return (ar.0, 0, ar.2, ar.3, ar.4)
+    end
+    if nc_type_vector_has_unknown(pool, ar.1, 0, count(ar.1)):
+        return (0, nc_type_unknown(), ar.2, ar.3, ar.4)
+    end
+    let gi = nc_poly_get_or_create(pool, funcs, callee.1, ar.1, fn_idx, ar.3, node.3)
+    if gi.0 != 0:
+        return (gi.0, 0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
+    end
+    let rec = nc_poly_record_call_target(funcs, fn_idx, call_idx, gi.1)
+    if rec != 0:
+        return (rec, 0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
+    end
+    return (0, nc_sig_get_ret(gi.2, gi.1), ar.2, gi.2, nc_or_changed(ar.4, gi.3))
+end
+
+func nc_constrain_expr(pool, nodes, prog_idx, idx, env, want, sig, fn_idx, funcs, n_params):
+    if want == 0:
+        return (0, env, sig, 0)
+    end
+    let node = get(nodes, idx)
+    if equal(node.0, "name"):
+        return nc_constrain_name(pool, nodes, node, env, want, sig, fn_idx, n_params)
+    end
+    if equal(node.0, "call"):
+        let name = get(node.1, 0)
+        if not err_is_builtin_name(name):
+            return nc_poly_constrain_user_call(pool, nodes, prog_idx, idx, env, want, sig, fn_idx, funcs, n_params)
+        end
+        if equal(name, "get"):
+            if count(node.2) != err_value_builtin_arity(name):
+                return (nc_fail(420, node.3, name), env, sig, 0)
+            end
+            let ar = nc_constrain_array_value(pool, nodes, prog_idx, get(node.2, 0), env, sig, fn_idx, funcs, n_params, want, node.3)
+            if ar.0 != 0:
+                return ar
+            end
+            let kr = nc_constrain_expr(pool, nodes, prog_idx, get(node.2, 1), ar.1, nc_type_int(), ar.2, fn_idx, funcs, n_params)
+            return (kr.0, kr.1, kr.2, nc_or_changed(ar.3, kr.3))
+        end
+    end
+    let r = nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4)
+    end
+    let chk = nc_expect_concrete(pool, r.1, want, node.3)
+    if chk != 0:
+        return (chk, r.2, r.3, r.4)
+    end
+    return (0, r.2, r.3, r.4)
+end
+
+func nc_infer_call_args(pool, nodes, prog_idx, kids, i, n, callee_idx, env, sig, fn_idx, funcs, n_params, changed):
+    if i >= n:
+        return (0, env, sig, changed)
+    end
+    let arg_idx = get(kids, i)
+    let ar = nc_infer_expr(pool, nodes, prog_idx, arg_idx, env, sig, fn_idx, funcs, n_params)
+    if ar.0 != 0:
+        return (ar.0, ar.2, ar.3, nc_or_changed(changed, ar.4))
+    end
+    env = ar.2
+    sig = ar.3
+    changed = nc_or_changed(changed, ar.4)
+    let pcls = nc_sig_get_param(sig, callee_idx, i)
+    if ar.1 != 0:
+        let su = nc_sig_unify_param(pool, sig, callee_idx, i, ar.1, get(nodes, arg_idx).3)
+        if su.0 != 0:
+            return (su.0, env, sig, changed)
+        end
+        sig = su.1
+        changed = nc_or_changed(changed, su.2)
+    elif pcls != 0:
+        let cu = nc_constrain_expr(pool, nodes, prog_idx, arg_idx, env, pcls, sig, fn_idx, funcs, n_params)
+        if cu.0 != 0:
+            return (cu.0, cu.1, cu.2, changed)
+        end
+        env = cu.1
+        sig = cu.2
+        changed = nc_or_changed(changed, cu.3)
+    end
+    return nc_infer_call_args(pool, nodes, prog_idx, kids, i + 1, n, callee_idx, env, sig, fn_idx, funcs, n_params, changed)
+end
+
+func nc_tuple_type_from_exprs(pool, nodes, prog_idx, kids, i, n, env, sig, fn_idx, funcs, n_params, child_types, changed):
+    if i >= n:
+        return (0, nc_type_intern_tuple(pool, child_types), env, sig, changed)
+    end
+    let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, i), env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, 0, r.2, r.3, nc_or_changed(changed, r.4))
+    end
+    do add(child_types, r.1)
+    return nc_tuple_type_from_exprs(pool, nodes, prog_idx, kids, i + 1, n, r.2, r.3, fn_idx, funcs, n_params, child_types, nc_or_changed(changed, r.4))
+end
+
+func nc_tuple_child_start_loop(pool, kids, i, target, acc):
+    if i >= target:
+        return acc
+    end
+    return nc_tuple_child_start_loop(pool, kids, i + 1, target, acc + nc_type_width(pool, get(kids, i)))
+end
+
+-- Keep the arity metadata shared, but guard only the supported ordinary value
+-- calls here. Type constructors, void-as-value, unsupported calls and low-level
+-- target intrinsics have separate contracts; a default arity is not a whitelist.
+func nc_has_value_arity_guard(name):
+    if nc_is_hosted_memory_builtin(name):
+        return true
+    end
+    if equal(name, "boot_read"):
+        return true
+    end
+    if equal(name, "stderr_write") or equal(name, "stdin_read"):
+        return true
+    end
+    if equal(name, "clogger") or equal(name, "new_buffer"):
+        return true
+    end
+    if equal(name, "length") or equal(name, "freeze") or equal(name, "count"):
+        return true
+    end
+    return equal(name, "index") or equal(name, "equal") or equal(name, "get")
+end
+
+-- All five hosted calls return int. Buffer calls constrain their first argument
+-- to buffer; the syscall's seven arguments and the remaining byte arguments are
+-- ints. Keep this in normal inference so wrappers and polymorphic calls work.
+func nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, i, n, is_buffer, env, sig, fn_idx, funcs, n_params, line, changed):
+    if i >= n:
+        return (0, nc_type_int(), env, sig, changed)
+    end
+    let want = nc_type_int()
+    if is_buffer and i == 0:
+        want = nc_type_buffer()
+    end
+    let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, i), env, want, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, 0, r.1, r.2, nc_or_changed(changed, r.3))
+    end
+    return nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, i + 1, n, is_buffer, r.1, r.2, fn_idx, funcs, n_params, line, nc_or_changed(changed, r.3))
+end
+
+func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, idx)
+    let tag = node.0
+    let kids = node.2
+    if equal(tag, "int") or equal(tag, "char"):
+        return (0, nc_type_int(), env, sig, 0)
+    end
+    if equal(tag, "bool"):
+        return (0, nc_type_bool(), env, sig, 0)
+    end
+    if equal(tag, "str"):
+        return (0, nc_type_string(), env, sig, 0)
+    end
+    if equal(tag, "tuple"):
+        return nc_tuple_type_from_exprs(pool, nodes, prog_idx, kids, 0, count(kids), env, sig, fn_idx, funcs, n_params, new_array(int), 0)
+    end
+    if equal(tag, "dot"):
+        let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return r
+        end
+        if r.1 == nc_type_unknown():
+            return (0, nc_type_unknown(), r.2, r.3, r.4)
+        end
+        if not nc_type_is_tuple(pool, r.1):
+            return (nc_fail(431, node.3, ""), 0, r.2, r.3, r.4)
+        end
+        let children = nc_type_tuple_children(pool, r.1)
+        let elem = parse_decimal(get(node.1, 0))
+        if elem >= count(children):
+            return (nc_fail(431, node.3, ""), 0, r.2, r.3, r.4)
+        end
+        return (0, get(children, elem), r.2, r.3, r.4)
+    end
+    if equal(tag, "name"):
+        let name = get(node.1, 0)
+        let li = nc_class_env_lookup_info(env, name)
+        if li.0 == 0:
+            return (nc_fail(404, node.3, "undefined-name"), 0, env, sig, 0)
+        end
+        return (0, li.2, env, sig, 0)
+    end
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
+        -- Arithmetic and bitwise/shift binops are all int x int -> int: constrain
+        -- both operands to int and yield int. mul/div/mod join add/sub here
+        -- (ordinary arithmetic). A non-int operand hits the existing type-mismatch
+        -- fail code via nc_constrain_expr (no new fail code needed).
+        let l = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+        if l.0 != 0:
+            return (l.0, 0, l.1, l.2, l.3)
+        end
+        let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), l.1, nc_type_int(), l.2, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, nc_or_changed(l.3, r.3))
+        end
+        return (0, nc_type_int(), r.1, r.2, nc_or_changed(l.3, r.3))
+    end
+    if equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+        let l = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+        if l.0 != 0:
+            return (l.0, 0, l.1, l.2, l.3)
+        end
+        let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), l.1, nc_type_int(), l.2, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, nc_or_changed(l.3, r.3))
+        end
+        return (0, nc_type_bool(), r.1, r.2, nc_or_changed(l.3, r.3))
+    end
+    if equal(tag, "and") or equal(tag, "or"):
+        let l = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_bool(), sig, fn_idx, funcs, n_params)
+        if l.0 != 0:
+            return (l.0, 0, l.1, l.2, l.3)
+        end
+        let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), l.1, nc_type_bool(), l.2, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, nc_or_changed(l.3, r.3))
+        end
+        return (0, nc_type_bool(), r.1, r.2, nc_or_changed(l.3, r.3))
+    end
+    if equal(tag, "not"):
+        let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_bool(), sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, r.3)
+        end
+        return (0, nc_type_bool(), r.1, r.2, r.3)
+    end
+    if equal(tag, "bnot"):
+        -- `~` is int -> int (one's complement), the int-typed counterpart of the
+        -- bool-typed `not` above. Constraining the operand to int rejects `~true`
+        -- via the existing type-mismatch fail code.
+        let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, r.3)
+        end
+        return (0, nc_type_int(), r.1, r.2, r.3)
+    end
+    if equal(tag, "nc_class_mix"):
+        -- Poison node planted by the parser when bitwise/shift operators are
+        -- mixed with another operator class (or a different bitwise class)
+        -- without parentheses. Reject with the dedicated precedence fail code.
+        return (nc_fail(442, node.3, ""), 0, env, sig, 0)
+    end
+    if equal(tag, "call"):
+        let name = get(node.1, 0)
+        -- Check count before indexing or inferring arguments. Extra arguments
+        -- must not escape inference and reach lowering without call metadata.
+        if nc_has_value_arity_guard(name) and count(kids) != err_value_builtin_arity(name):
+            return (nc_fail(420, node.3, name), 0, env, sig, 0)
+        end
+        if nc_is_hosted_memory_builtin(name):
+            return nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, 0, count(kids), not equal(name, "linux_syscall6"), env, sig, fn_idx, funcs, n_params, node.3, 0)
+        end
+        if equal(name, "clogger"):
+            return (0, nc_type_string(), env, sig, 0)
+        end
+        if equal(name, "stdin_read"):
+            return (0, nc_type_stdin_result(pool), env, sig, 0)
+        end
+        if equal(name, "stderr_write"):
+            let sw = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
+            if sw.0 != 0:
+                return (sw.0, 0, sw.1, sw.2, sw.3)
+            end
+            return (0, nc_type_int(), sw.1, sw.2, sw.3)
+        end
+        if equal(name, "input_byte"):
+            return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "boot_read"):
+            return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "module_byte"):
+            return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "sys_read"):
+            return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "sys_write"):
+            let sw = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if sw.0 != 0:
+                return (sw.0, 0, sw.1, sw.2, sw.3)
+            end
+            return (0, nc_type_int(), sw.1, sw.2, sw.3)
+        end
+        if equal(name, "output_byte"):
+            -- riposte: output_byte(v) -- v int, returns v (int). The device write truncates
+            -- to v&0xff on the wire; the RETURNED value is the full argument (op 53 push rbx).
+            let ob = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if ob.0 != 0:
+                return (ob.0, 0, ob.1, ob.2, ob.3)
+            end
+            return (0, nc_type_int(), ob.1, ob.2, ob.3)
+        end
+        if equal(name, "yield"):
+            let yl = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if yl.0 != 0:
+                return (yl.0, 0, yl.1, yl.2, yl.3)
+            end
+            return (0, nc_type_int(), yl.1, yl.2, yl.3)
+        end
+        if equal(name, "bufbase"):
+            -- chiefturbo: bufbase() takes no args, returns the buffer base (int).
+            return (0, nc_type_int(), env, sig, 0)
+        end
+        if equal(name, "bufget"):
+            -- chiefturbo: bufget(base, k) -- both int, returns the loaded word (int).
+            let bg0 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if bg0.0 != 0:
+                return (bg0.0, 0, bg0.1, bg0.2, bg0.3)
+            end
+            let bg1 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), bg0.1, nc_type_int(), bg0.2, fn_idx, funcs, n_params)
+            if bg1.0 != 0:
+                return (bg1.0, 0, bg1.1, bg1.2, nc_or_changed(bg0.3, bg1.3))
+            end
+            return (0, nc_type_int(), bg1.1, bg1.2, nc_or_changed(bg0.3, bg1.3))
+        end
+        if equal(name, "bufset"):
+            -- chiefturbo: bufset(base, i, v) -- all int, returns the stored value v (int).
+            let bs0 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+            if bs0.0 != 0:
+                return (bs0.0, 0, bs0.1, bs0.2, bs0.3)
+            end
+            let bs1 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), bs0.1, nc_type_int(), bs0.2, fn_idx, funcs, n_params)
+            if bs1.0 != 0:
+                return (bs1.0, 0, bs1.1, bs1.2, nc_or_changed(bs0.3, bs1.3))
+            end
+            let bs2 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 2), bs1.1, nc_type_int(), bs1.2, fn_idx, funcs, n_params)
+            if bs2.0 != 0:
+                return (bs2.0, 0, bs2.1, bs2.2, nc_or_changed(nc_or_changed(bs0.3, bs1.3), bs2.3))
+            end
+            return (0, nc_type_int(), bs2.1, bs2.2, nc_or_changed(nc_or_changed(bs0.3, bs1.3), bs2.3))
+        end
+        if equal(name, "length"):
+            let r = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
+            if r.0 != 0:
+                return (r.0, 0, r.1, r.2, r.3)
+            end
+            return (0, nc_type_int(), r.1, r.2, r.3)
+        end
+        if equal(name, "index"):
+            let s = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
+            if s.0 != 0:
+                return (s.0, 0, s.1, s.2, s.3)
+            end
+            let k = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), s.1, nc_type_int(), s.2, fn_idx, funcs, n_params)
+            if k.0 != 0:
+                return (k.0, 0, k.1, k.2, nc_or_changed(s.3, k.3))
+            end
+            return (0, nc_type_int(), k.1, k.2, nc_or_changed(s.3, k.3))
+        end
+        if equal(name, "equal"):
+            let l = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
+            if l.0 != 0:
+                return (l.0, 0, l.1, l.2, l.3)
+            end
+            let r = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 1), l.1, l.2, fn_idx, funcs, n_params, node.3)
+            if r.0 != 0:
+                return (r.0, 0, r.1, r.2, nc_or_changed(l.3, r.3))
+            end
+            return (0, nc_type_bool(), r.1, r.2, nc_or_changed(l.3, r.3))
+        end
+        if equal(name, "slice"):
+            return (nc_fail(438, node.3, ""), 0, env, sig, 0)
+        end
+        if equal(name, "new_buffer"):
+            return (0, nc_type_buffer(), env, sig, 0)
+        end
+        if equal(name, "freeze"):
+            let b = nc_constrain_buffer_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
+            if b.0 != 0:
+                return (b.0, 0, b.1, b.2, b.3)
+            end
+            return (0, nc_type_string(), b.1, b.2, b.3)
+        end
+        if equal(name, "new_array"):
+            if count(kids) != 1:
+                return (nc_fail(434, node.3, ""), 0, env, sig, 0)
+            end
+            let elem = nc_type_from_type_expr(pool, nodes, get(kids, 0))
+            if elem.0 != 0:
+                return (elem.0, 0, env, sig, 0)
+            end
+            return (0, nc_type_intern_array(pool, elem.1), env, sig, 0)
+        end
+        if equal(name, "get"):
+            let a = nc_infer_expr(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params)
+            if a.0 != 0:
+                return a
+            end
+            let k = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), a.2, nc_type_int(), a.3, fn_idx, funcs, n_params)
+            if k.0 != 0:
+                return (k.0, 0, k.1, k.2, nc_or_changed(a.4, k.3))
+            end
+            if a.1 == nc_type_unknown():
+                let ar = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), k.1, nc_type_intern_array(pool, nc_type_unknown()), k.2, fn_idx, funcs, n_params)
+                if ar.0 != 0:
+                    return (ar.0, 0, ar.1, ar.2, nc_or_changed(nc_or_changed(a.4, k.3), ar.3))
+                end
+                return (0, nc_type_unknown(), ar.1, ar.2, nc_or_changed(nc_or_changed(a.4, k.3), ar.3))
+            end
+            if not nc_type_is_array(pool, a.1):
+                return (nc_fail(435, node.3, ""), 0, k.1, k.2, nc_or_changed(a.4, k.3))
+            end
+            return (0, nc_type_array_elem(pool, a.1), k.1, k.2, nc_or_changed(a.4, k.3))
+        end
+        if equal(name, "count"):
+            let a = nc_infer_expr(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params)
+            if a.0 != 0:
+                return a
+            end
+            if a.1 == nc_type_unknown():
+                let ar = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), a.2, nc_type_intern_array(pool, nc_type_unknown()), a.3, fn_idx, funcs, n_params)
+                if ar.0 != 0:
+                    return (ar.0, 0, ar.1, ar.2, nc_or_changed(a.4, ar.3))
+                end
+                return (0, nc_type_int(), ar.1, ar.2, nc_or_changed(a.4, ar.3))
+            end
+            if not nc_type_is_array(pool, a.1):
+                return (nc_fail(435, node.3, ""), 0, a.2, a.3, a.4)
+            end
+            return (0, nc_type_int(), a.2, a.3, a.4)
+        end
+        if err_is_void_builtin(name):
+            return (nc_fail(440, node.3, name), 0, env, sig, 0)
+        end
+        if err_is_builtin_name(name):
+            return (nc_fail(438, node.3, name), 0, env, sig, 0)
+        end
+        return nc_poly_infer_user_call(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
+    end
+    return (nc_fail(404, node.3, tag), 0, env, sig, 0)
+end
+
+func nc_rebind_env_type(pool, env, idx, old, got, line):
+    if old != nc_type_unknown() and got != nc_type_unknown():
+        if nc_type_has_unknown(pool, old) or nc_type_has_unknown(pool, got):
+            if not nc_type_merge_possible(pool, old, got):
+                if nc_type_is_array(pool, old) or nc_type_is_array(pool, got):
+                    return (nc_fail(436, line, ""), env)
+                end
+                return (nc_fail(430, line, ""), env)
+            end
+            let mp = nc_type_merge(pool, old, got, line)
+            if mp.0 != 0:
+                return (mp.0, env)
+            end
+            return (0, nc_class_env_set_idx(env, idx, mp.1))
+        end
+        if nc_type_width(pool, old) != nc_type_width(pool, got):
+            return (nc_fail(433, line, ""), env)
+        end
+        if nc_type_is_array(pool, old) or nc_type_is_array(pool, got):
+            if not nc_type_equal(pool, old, got):
+                return (nc_fail(436, line, ""), env)
+            end
+        end
+        if not nc_assignment_type_ok(pool, old, got):
+            return (nc_fail(430, line, ""), env)
+        end
+    end
+    if got == nc_type_unknown():
+        return (0, env)
+    end
+    return (0, nc_class_env_set_idx(env, idx, got))
+end
+
+func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, stmt_idx)
+    let tag = node.0
+    let kids = node.2
+    if equal(tag, "let"):
+        let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, r.2, r.3, r.4, 0)
+        end
+        env = nc_class_env_add(r.2, get(node.1, 0), r.1)
+        return (0, env, r.3, r.4, 0)
+    end
+    if equal(tag, "assign"):
+        let li = nc_class_env_lookup_info(env, get(node.1, 0))
+        if li.0 == 0:
+            return (nc_fail(404, node.3, "assign-undefined"), env, sig, 0, 0)
+        end
+        let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, r.2, r.3, r.4, 0)
+        end
+        let rb = nc_rebind_env_type(pool, r.2, li.1, li.2, r.1, node.3)
+        if rb.0 != 0:
+            return (rb.0, r.2, r.3, r.4, 0)
+        end
+        return (0, rb.1, r.3, r.4, 0)
+    end
+    if equal(tag, "return"):
+        let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, r.2, r.3, r.4, 1)
+        end
+        sig = r.3
+        let changed = r.4
+        if nc_func_never_returns(nodes, prog_idx, nc_poly_current_base(funcs, fn_idx)):
+            return (0, r.2, sig, changed, 1)
+        end
+        if r.1 != 0:
+            let su = nc_sig_unify_ret(pool, sig, fn_idx, r.1, node.3)
+            if su.0 != 0:
+                return (su.0, r.2, sig, changed, 1)
+            end
+            sig = su.1
+            changed = nc_or_changed(changed, su.2)
+        else:
+            let retc = nc_sig_get_ret(sig, fn_idx)
+            if retc != 0:
+                let cu = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), r.2, retc, sig, fn_idx, funcs, n_params)
+                if cu.0 != 0:
+                    return (cu.0, cu.1, cu.2, changed, 1)
+                end
+                sig = cu.2
+                changed = nc_or_changed(changed, cu.3)
+            end
+        end
+        return (0, r.2, sig, changed, 1)
+    end
+    if equal(tag, "do"):
+        let call_node = get(nodes, get(kids, 0))
+        if equal(call_node.0, "call"):
+            let name = get(call_node.1, 0)
+            let ckids = call_node.2
+            -- Supported void builtins share the same arity-first rule.
+            -- In particular, append/add must not silently discard extra args.
+            if err_is_void_builtin(name) and count(ckids) != err_void_builtin_arity(name):
+                return (nc_fail(420, call_node.3, name), env, sig, 0, 0)
+            end
+            if equal(name, "process_exit"):
+                let pe = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
+                -- No new noreturn inference: retain the existing syntactic
+                -- return requirement, including checking following statements.
+                return (pe.0, pe.1, pe.2, pe.3, 0)
+            end
+            if equal(name, "append"):
+                let b = nc_constrain_buffer_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
+                if b.0 != 0:
+                    return (b.0, b.1, b.2, b.3, 0)
+                end
+                let v = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 1), b.1, nc_type_int(), b.2, fn_idx, funcs, n_params)
+                return (v.0, v.1, v.2, nc_or_changed(b.3, v.3), 0)
+            end
+            if equal(name, "add"):
+                let a = nc_infer_expr(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params)
+                if a.0 != 0:
+                    return (a.0, a.2, a.3, a.4, 0)
+                end
+                let v = nc_infer_expr(pool, nodes, prog_idx, get(ckids, 1), a.2, a.3, fn_idx, funcs, n_params)
+                if v.0 != 0:
+                    return (v.0, v.2, v.3, nc_or_changed(a.4, v.4), 0)
+                end
+                let changed = nc_or_changed(a.4, v.4)
+                env = v.2
+                sig = v.3
+                if a.1 == nc_type_unknown():
+                    let elem = v.1
+                    if elem == nc_type_unknown():
+                        elem = nc_type_unknown()
+                    end
+                    let ar = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 0), env, nc_type_intern_array(pool, elem), sig, fn_idx, funcs, n_params)
+                    return (ar.0, ar.1, ar.2, nc_or_changed(changed, ar.3), 0)
+                end
+                if not nc_type_is_array(pool, a.1):
+                    return (nc_fail(435, call_node.3, ""), env, sig, changed, 0)
+                end
+                let elem_t = nc_type_array_elem(pool, a.1)
+                if v.1 == nc_type_unknown():
+                    let vc = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 1), env, elem_t, sig, fn_idx, funcs, n_params)
+                    return (vc.0, vc.1, vc.2, nc_or_changed(changed, vc.3), 0)
+                end
+                let ok = nc_expect_array_elem(pool, v.1, elem_t, call_node.3)
+                if ok != 0:
+                    return (ok, env, sig, changed, 0)
+                end
+                if nc_type_has_unknown(pool, elem_t) and v.1 != nc_type_unknown():
+                    let ar2 = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 0), env, nc_type_intern_array(pool, v.1), sig, fn_idx, funcs, n_params)
+                    return (ar2.0, ar2.1, ar2.2, nc_or_changed(changed, ar2.3), 0)
+                end
+                return (0, env, sig, changed, 0)
+            end
+            if equal(name, "flogger"):
+                let s = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
+                return (s.0, s.1, s.2, s.3, 0)
+            end
+            if equal(name, "fwriter"):
+                let sf = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
+                return (sf.0, sf.1, sf.2, sf.3, 0)
+            end
+            return (nc_fail(404, node.3, name), env, sig, 0, 0)
+        end
+        return (nc_fail(404, node.3, "do"), env, sig, 0, 0)
+    end
+    if equal(tag, "if"):
+        let r = nc_infer_if(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params)
+        return (r.0, r.1, r.2, r.3, 0)
+    end
+    return (nc_fail(404, node.3, tag), env, sig, 0, 0)
+end
+
+func nc_infer_body(pool, nodes, prog_idx, stmts, i, n, env, sig, fn_idx, funcs, n_params, changed):
+    if i >= n:
+        return (0, env, sig, changed)
+    end
+    let r = nc_infer_stmt(pool, nodes, prog_idx, get(stmts, i), env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.1, r.2, nc_or_changed(changed, r.3))
+    end
+    changed = nc_or_changed(changed, r.3)
+    if r.4 != 0:
+        return (0, r.1, r.2, changed)
+    end
+    return nc_infer_body(pool, nodes, prog_idx, stmts, i + 1, n, r.1, r.2, fn_idx, funcs, n_params, changed)
+end
+
+func nc_contrib_add(contribs, env):
+    do add(contribs, env)
+    return contribs
+end
+
+func nc_join_merge_class(pool, a, b):
+    if a == 0:
+        return (0, b)
+    end
+    if b == 0:
+        return (0, a)
+    end
+    let m = nc_type_merge(pool, a, b, 0)
+    return (m.0, m.1)
+end
+
+func nc_join_one_index(pool, contribs, idx, j, n, cur):
+    if j >= n:
+        return (0, cur)
+    end
+    let env = get(contribs, j)
+    let m = nc_join_merge_class(pool, cur, get(env.1, idx))
+    if m.0 != 0:
+        return m
+    end
+    return nc_join_one_index(pool, contribs, idx, j + 1, n, m.1)
+end
+
+func nc_join_build_loop(pool, entry_env, contribs, i, n, names, classes):
+    if i >= n:
+        return (0, (names, classes))
+    end
+    let klass = get(entry_env.1, i)
+    if count(contribs) > 0:
+        let m = nc_join_one_index(pool, contribs, i, 0, count(contribs), 0)
+        if m.0 != 0:
+            return (m.0, (names, classes))
+        end
+        klass = m.1
+    end
+    do add(names, get(entry_env.0, i))
+    do add(classes, klass)
+    return nc_join_build_loop(pool, entry_env, contribs, i + 1, n, names, classes)
+end
+
+func nc_join_env(pool, entry_env, contribs):
+    return nc_join_build_loop(pool, entry_env, contribs, 0, count(entry_env.0), new_array(string), new_array(int))
+end
+
+func nc_if_has_else(nodes, kids):
+    if count(kids) == 0:
+        return false
+    end
+    let last = get(nodes, get(kids, count(kids) - 1))
+    return equal(last.0, "else")
+end
+
+func nc_infer_if_arms(pool, nodes, prog_idx, kids, i, n, entry_env, sig, fn_idx, funcs, n_params, contribs, changed):
+    if i >= n:
+        return (0, contribs, sig, changed)
+    end
+    let arm = get(nodes, get(kids, i))
+    let body_idx = 0
+    let env_for_body = nc_class_env_clone(entry_env)
+    if equal(arm.0, "else"):
+        body_idx = get(arm.2, 0)
+    else:
+        let c = nc_constrain_expr(pool, nodes, prog_idx, get(arm.2, 0), entry_env, nc_type_bool(), sig, fn_idx, funcs, n_params)
+        if c.0 != 0:
+            return (c.0, contribs, c.2, nc_or_changed(changed, c.3))
+        end
+        sig = c.2
+        changed = nc_or_changed(changed, c.3)
+        body_idx = get(arm.2, 1)
+    end
+    let body = get(nodes, body_idx)
+    let br = nc_infer_body(pool, nodes, prog_idx, body.2, 0, count(body.2), env_for_body, sig, fn_idx, funcs, n_params, 0)
+    if br.0 != 0:
+        return (br.0, contribs, br.2, nc_or_changed(changed, br.3))
+    end
+    sig = br.2
+    changed = nc_or_changed(changed, br.3)
+    if not body_ends_return(body_idx, nodes):
+        contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, count(entry_env.0)))
+    end
+    return nc_infer_if_arms(pool, nodes, prog_idx, kids, i + 1, n, entry_env, sig, fn_idx, funcs, n_params, contribs, changed)
+end
+
+func nc_infer_if(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params):
+    let entry_env = nc_class_env_clone(env)
+    let contribs = new_array((array(string), array(int)))
+    let arms = nc_infer_if_arms(pool, nodes, prog_idx, kids, 0, count(kids), entry_env, sig, fn_idx, funcs, n_params, contribs, 0)
+    if arms.0 != 0:
+        return (arms.0, entry_env, arms.2, arms.3)
+    end
+    contribs = arms.1
+    if not nc_if_has_else(nodes, kids):
+        contribs = nc_contrib_add(contribs, nc_class_env_clone(entry_env))
+    end
+    let joined = nc_join_env(pool, entry_env, contribs)
+    if joined.0 != 0:
+        return (joined.0, entry_env, arms.2, arms.3)
+    end
+    return (0, joined.1, arms.2, arms.3)
+end
+
+func nc_infer_func(pool, nodes, prog_idx, func_kids, fn_idx, sig):
+    let fn_node = get(nodes, get(func_kids, fn_idx))
+    let name = get(fn_node.1, 0)
+    let params_node = get(nodes, get(fn_node.2, 0))
+    let body_node = get(nodes, get(fn_node.2, 1))
+    let input_scope = nc_check_input_scope(nodes, fn_node)
+    if input_scope != 0:
+        return (input_scope, sig, 0)
+    end
+    let env = nc_func_env_from_params(nodes, fn_node, sig, fn_idx)
+    let br = nc_infer_body(pool, nodes, prog_idx, body_node.2, 0, count(body_node.2), env, sig, fn_idx, func_kids, count(params_node.1), 0)
+    return (br.0, br.2, br.3)
+end
+
+func nc_infer_funcs_loop(pool, nodes, prog_idx, func_kids, i, n, sig, changed):
+    if i >= n:
+        return (0, sig, changed)
+    end
+    let r = nc_infer_func(pool, nodes, prog_idx, func_kids, i, sig)
+    if r.0 != 0:
+        return r
+    end
+    return nc_infer_funcs_loop(pool, nodes, prog_idx, func_kids, i + 1, n, r.1, nc_or_changed(changed, r.2))
+end
+
+func nc_poly_infer_instance(pool, nodes, prog_idx, funcs, inst_idx, sig):
+    let prog = get(nodes, prog_idx)
+    let inst = get(funcs.0, inst_idx)
+    let fn_node = get(nodes, get(prog.2, inst.0))
+    let name = get(fn_node.1, 0)
+    let params_node = get(nodes, get(fn_node.2, 0))
+    let body_node = get(nodes, get(fn_node.2, 1))
+    let input_scope = nc_check_input_scope(nodes, fn_node)
+    if input_scope != 0:
+        return (input_scope, sig, 0)
+    end
+    let env = nc_func_env_from_params(nodes, fn_node, sig, inst_idx)
+    let br = nc_infer_body(pool, nodes, prog_idx, body_node.2, 0, count(body_node.2), env, sig, inst_idx, funcs, count(params_node.1), 0)
+    return (br.0, br.2, br.3)
+end
+
+func nc_poly_infer_instances_loop(pool, nodes, prog_idx, funcs, i, sig, changed):
+    if i >= count(funcs.0):
+        return (0, sig, changed)
+    end
+    let r = nc_poly_infer_instance(pool, nodes, prog_idx, funcs, i, sig)
+    if r.0 != 0:
+        return r
+    end
+    return nc_poly_infer_instances_loop(pool, nodes, prog_idx, funcs, i + 1, r.1, nc_or_changed(changed, r.2))
+end
+
+func nc_poly_sig_solve_loop(pool, nodes, prog_idx, funcs, sig, remaining):
+    let r = nc_poly_infer_instances_loop(pool, nodes, prog_idx, funcs, 0, sig, 0)
+    if r.0 != 0:
+        return r
+    end
+    if r.2 == 0:
+        return r
+    end
+    if remaining <= 0:
+        return (nc_fail(424, 0, ""), r.1, 0)
+    end
+    return nc_poly_sig_solve_loop(pool, nodes, prog_idx, funcs, r.1, remaining - 1)
+end
+
+func nc_sig_var_count_params(func_kids, i, n, nodes, acc):
+    if i >= n:
+        return acc + n
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let pn = get(nodes, get(fn.2, 0))
+    return nc_sig_var_count_params(func_kids, i + 1, n, nodes, acc + count(pn.1))
+end
+
+func nc_sig_solve_loop(pool, nodes, prog_idx, func_kids, sig, remaining):
+    let r = nc_infer_funcs_loop(pool, nodes, prog_idx, func_kids, 0, count(func_kids), sig, 0)
+    if r.0 != 0:
+        return r
+    end
+    if r.2 == 0:
+        return r
+    end
+    if remaining <= 0:
+        return (nc_fail(424, 0, ""), r.1, 0)
+    end
+    return nc_sig_solve_loop(pool, nodes, prog_idx, func_kids, r.1, remaining - 1)
+end
+
+func nc_sig_check_params_loop(pool, sig, fn_idx, i, n):
+    if i >= n:
+        return 0
+    end
+    let t = nc_sig_get_param(sig, fn_idx, i)
+    if nc_type_has_array_unknown(pool, t):
+        return nc_fail(438, 0, "")
+    end
+    if nc_type_has_unknown(pool, t):
+        return nc_fail(424, 0, "")
+    end
+    return nc_sig_check_params_loop(pool, sig, fn_idx, i + 1, n)
+end
+
+func nc_check_used_wide_params_loop(pool, nodes, body_node, params, sig, fn_idx, i, n):
+    if i >= n:
+        return 0
+    end
+    let t = nc_sig_get_param(sig, fn_idx, i)
+    if nc_type_width(pool, t) > 1:
+        if not nc_body_uses_name(nodes, body_node.2, 0, count(body_node.2), get(params, i)):
+            return nc_fail(424, 0, "")
+        end
+    end
+    return nc_check_used_wide_params_loop(pool, nodes, body_node, params, sig, fn_idx, i + 1, n)
+end
+
+func nc_sig_check_concrete_loop(pool, func_kids, i, n, nodes, sig):
+    if i >= n:
+        return 0
+    end
+    let fn = get(nodes, get(func_kids, i))
+    let pn = get(nodes, get(fn.2, 0))
+    let body = get(nodes, get(fn.2, 1))
+    let pr = nc_sig_check_params_loop(pool, sig, i, 0, count(pn.1))
+    if pr != 0:
+        return pr
+    end
+    let nret = nc_func_never_returns_node(nodes, fn)
+    if not nret:
+        let used = nc_check_used_wide_params_loop(pool, nodes, body, pn.1, sig, i, 0, count(pn.1))
+        if used != 0:
+            return used
+        end
+    end
+    let ret = nc_sig_get_ret(sig, i)
+    if not nret:
+        if nc_type_has_array_unknown(pool, ret):
+            return nc_fail(438, fn.3, "")
+        end
+        if nc_type_has_unknown(pool, ret):
+            return nc_fail(424, fn.3, "")
+        end
+    end
+    if equal(get(fn.1, 0), "main"):
+        if ret != nc_type_int() and ret != nc_type_bool() and not nc_type_is_renderable_aggregate(pool, ret):
+            return nc_fail(432, fn.3, "")
+        end
+    end
+    return nc_sig_check_concrete_loop(pool, func_kids, i + 1, n, nodes, sig)
+end
+
+func nc_poly_sig_check_concrete_loop(pool, nodes, prog_idx, funcs, i, sig):
+    if i >= count(funcs.0):
+        return 0
+    end
+    let prog = get(nodes, prog_idx)
+    let inst = get(funcs.0, i)
+    let fn = get(nodes, get(prog.2, inst.0))
+    let pn = get(nodes, get(fn.2, 0))
+    let pr = nc_sig_check_params_loop(pool, sig, i, 0, count(pn.1))
+    if pr != 0:
+        return pr
+    end
+    let nret = nc_func_never_returns_node(nodes, fn)
+    let ret = nc_sig_get_ret(sig, i)
+    if not nret:
+        if nc_type_has_array_unknown(pool, ret):
+            return nc_fail(438, fn.3, "")
+        end
+        if nc_type_has_unknown(pool, ret):
+            return nc_fail(424, fn.3, "")
+        end
+    end
+    if i == 0 and equal(get(fn.1, 0), "main"):
+        if ret != nc_type_int() and ret != nc_type_bool() and not nc_type_is_renderable_aggregate(pool, ret):
+            return nc_fail(432, fn.3, "")
+        end
+    end
+    return nc_poly_sig_check_concrete_loop(pool, nodes, prog_idx, funcs, i + 1, sig)
+end
+
+-- Scan EVERY parsed node (the whole pool) for an `nc_class_mix` poison node and
+-- return its line, or 0 if none. Class-mix is a syntactic error the parser plants
+-- on any class-mixing expression (parse_bitwise/parse_bitwise_loop), so a single
+-- linear scan of the pool catches it in ANY function -- reachable from main or
+-- not -- matching the C reference, which rejects class-mix syntactically for all
+-- functions.
+func nc_class_mix_scan_loop(nodes, i, n):
+    if i >= n:
+        return 0
+    end
+    if equal(get(nodes, i).0, "nc_class_mix"):
+        return get(nodes, i).3
+    end
+    return nc_class_mix_scan_loop(nodes, i + 1, n)
+end
+
+func nc_class_mix_line(nodes):
+    return nc_class_mix_scan_loop(nodes, 0, count(nodes))
+end
+
+func nc_verify_ast(nodes, prog_idx, pool):
+    -- Reachability-independent class-mix rejection (matches C: a syntactic error in
+    -- ANY function, reachable or not). This runs FIRST -- before the function-table
+    -- check and the reachability-seeded poly verify (nc_poly_seed_main only seeds
+    -- `main` and its call graph). It must precede nc_table_check because a class-mix
+    -- makes the parser stop cleanly at end-of-input (plant_class_mix), which can
+    -- drop a trailing `main`; reporting the table error first would mask the real
+    -- ERR 442 (and diverge from C). A class-mix buried in dead code is no longer
+    -- silently accepted, and a class-mix in a called function -- which used to
+    -- crash the parser (`get: ... out of range`) -- now rejects cleanly here.
+    let mix_line = nc_class_mix_line(nodes)
+    if mix_line > 0:
+        let mix_instances = new_array((int, array(int), int, int, int, int))
+        let mix_targets = new_array((int, int, int))
+        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets))
+    end
+    let tbl = nc_table_check(nodes, prog_idx)
+    if tbl != 0:
+        let empty_instances = new_array((int, array(int), int, int, int, int))
+        let empty_targets = new_array((int, int, int))
+        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets))
+    end
+    let seeded = nc_poly_seed_main(nodes, prog_idx)
+    let solved = nc_poly_sig_solve_loop(pool, nodes, prog_idx, seeded.1, seeded.0, nc_poly_max_instances())
+    if solved.0 != 0:
+        return (solved.0, solved.1, seeded.1)
+    end
+    let concrete = nc_poly_sig_check_concrete_loop(pool, nodes, prog_idx, seeded.1, 0, solved.1)
+    if concrete != 0:
+        return (concrete, solved.1, seeded.1)
+    end
+    let replay = nc_poly_infer_instances_loop(pool, nodes, prog_idx, seeded.1, 0, solved.1, 0)
+    return (replay.0, replay.1, seeded.1)
+end
+

@@ -17,7 +17,7 @@ TRACKED := $(BUILD)/tracked.txt
 
 all: $(SCANNER)
 
-check: $(SCANNER)
+check: $(SCANNER) compiler-source-check
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
 	@bash bootstrap/tests/run_tests.sh --check-pinned
@@ -207,11 +207,44 @@ switchover-dry-run:
 closed-loop-memory-diet:
 	@bash bootstrap/tests/run_closed_loop_memory_diet.sh
 
+# One authoring location per stage; the tracked assembled artifact preserves
+# all established seed, byte-golden and historical test interfaces.
+COMPILER_SOURCES := stack/compiler/frontend_vm.herb \
+                    stack/compiler/types_and_inference.herb \
+                    stack/compiler/metadata.herb \
+                    stack/compiler/hosted_emitter.herb \
+                    stack/compiler/kernel_targets.herb \
+                    stack/compiler/driver.herb
+.PHONY: compiler-source compiler-source-check compiler-metadata
+compiler-source-check:
+	@set -eu; \
+	  combined=$$(mktemp /tmp/herbert-source-check.XXXXXXXX); \
+	  cat $(COMPILER_SOURCES) > "$$combined"; \
+	  if ! cmp -s "$$combined" stack/native_compile_fragment.herb; then \
+	    printf 'Compiler source composition differs; edit stage files and run make compiler-source. Candidate retained: %s\n' "$$combined" >&2; \
+	    exit 1; \
+	  fi; \
+	  rm -- "$$combined"; \
+	  printf 'PASS: compiler source composition is byte-exact\n'
+
+compiler-source:
+	@set -eu; \
+	  combined=$$(mktemp stack/.native-compile.XXXXXXXX); \
+	  cat $(COMPILER_SOURCES) > "$$combined"; \
+	  chmod 644 "$$combined"; \
+	  mv -- "$$combined" stack/native_compile_fragment.herb; \
+	  printf 'Assembled compiler source; qualify behavior and reseed after substantive changes.\n'
+
+compiler-metadata:
+	@python3 bootstrap/tests/check_compiler_metadata.py
+
+verify-local: compiler-metadata
+
 # reseed: re-mint the gen-1 seed C-FREE (the committed seed recompiles the backend
 # to its own fixpoint). Post-switchover this replaces the old C-mint reseed; run it
 # ONLY when stack/native_compile_fragment.herb legitimately changes (the michoi seed
 # gate goes RED). No C interpreter is involved.
-reseed:
+reseed: compiler-source-check
 	@bash bootstrap/tests/reseed_gen1.sh
 
 verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps

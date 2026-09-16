@@ -1,0 +1,282 @@
+func main():
+    let incoming = stdin_read()
+    if incoming.0 != 0:
+        let message = diagnostic_with_payload("compiler: stdin read failed (errno ", int_to_str(incoming.0), ")\n")
+        let reported = stderr_write(message)
+        do process_exit(1)
+    end
+    let source = incoming.1
+    if nc_is_ast_dump(source):
+        let ad = nc_emit_ast_dump_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_long64(source):
+        let l6 = nc_emit_multiboot32_long64_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_long(source):
+        let lm = nc_emit_multiboot32_long_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_bluefield(source):
+        let bf = nc_emit_multiboot32_bluefield_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_contigo(source):
+        let co = nc_emit_multiboot32_contigo_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_cloggard(source):
+        let cg = nc_emit_multiboot32_cloggard_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_rizzing(source):
+        let rz = nc_emit_multiboot32_rizzing_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tick(source):
+        let tk = nc_emit_multiboot32_tick_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_timer(source):
+        let tm = nc_emit_multiboot32_timer_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_demand(source):
+        let dm = nc_emit_multiboot32_demand_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_store(source):
+        let st = nc_emit_multiboot32_store_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_page(source):
+        let pg = nc_emit_multiboot32_page_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_idt(source):
+        let z = nc_emit_multiboot32_idt_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_trikon(source):
+        let tr = nc_emit_multiboot32_trikon_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_nokta(source):
+        let nk = nc_emit_multiboot32_nokta_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_sitopia(source):
+        let si = nc_emit_multiboot32_sitopia_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_geeking(source):
+        let gk = nc_emit_multiboot32_geeking_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_holler(source):
+        let hk = nc_emit_multiboot32_holler_program(source)
+        return 0
+    end
+    if nc_is_module_holler(source):
+        let hm = nc_emit_module_holler_program(source)
+        return 0
+    end
+    if nc_is_module_mmj(source):
+        let mj = nc_emit_module_mmj_program(source)
+        return 0
+    end
+    if nc_is_module_chiefturbo(source):
+        let ct = nc_emit_module_chiefturbo_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_mumbani(source):
+        let mbk = nc_emit_multiboot32_mumbani_program(source)
+        return 0
+    end
+    if nc_is_module_mumbani(source):
+        let mbm = nc_emit_module_mumbani_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tandem(source):
+        let tpk = nc_emit_multiboot32_tandem_program(source)
+        return 0
+    end
+    if nc_is_module_tandem(source):
+        let tpm = nc_emit_module_tandem_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tickover(source):
+        let tvk = nc_emit_multiboot32_tickover_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_rollcall(source):
+        let rck = nc_emit_multiboot32_rollcall_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tenement(source):
+        let tck = nc_emit_multiboot32_tenement_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_homestead(source):
+        let hsk = nc_emit_multiboot32_homestead_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_furlough(source):
+        let fsk = nc_emit_multiboot32_furlough_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tessera(source):
+        let tsk = nc_emit_multiboot32_tessera_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_cleave(source):
+        let clk = nc_emit_multiboot32_cleave_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_lethe(source):
+        let lhk = nc_emit_multiboot32_lethe_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_platter(source):
+        let plk = nc_emit_multiboot32_platter_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_durable(source):
+        let dbk = nc_emit_multiboot32_durable_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_cairn(source):
+        let crk = nc_emit_multiboot32_cairn_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_larder(source):
+        let lrk = nc_emit_multiboot32_larder_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_growheap(source):
+        let ghk = nc_emit_multiboot32_growheap_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_delete(source):
+        let dlk = nc_emit_multiboot32_delete_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_backfill(source):
+        let bfk = nc_emit_multiboot32_backfill_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tract(source):
+        let trk = nc_emit_multiboot32_tract_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_highwater(source):
+        let hwk = nc_emit_multiboot32_highwater_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_coalgate(source):
+        let cg = nc_emit_multiboot32_coalgate_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_ouroboros(source):
+        let ob = nc_emit_multiboot32_ouroboros_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_lodger(source):
+        let lg = nc_emit_multiboot32_lodger_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_input(source):
+        let mi = nc_emit_multiboot32_input_program(source)
+        return 0
+    end
+    if nc_is_multiboot32(source):
+        let mb_done = nc_emit_multiboot32_program(source)
+        return 0
+    end
+    -- Use the existing checked lexer on the hosted production path. The
+    -- historical emit-directive routes above retain their own contracts.
+    let lexed = err_lex_source(source)
+    if lexed.0 == err_err_tag():
+        let reported = stderr_write(serialize_diagnostic(lexed.1))
+        let newline = stderr_write("\n")
+        do process_exit(1)
+        return 0
+    end
+    let tokens = lexed.2
+    -- Validate the whole source before the unchecked AST builder consumes it.
+    -- Diagnostic priority is lexical, then structural, then native AST/type
+    -- checks; this does not promise the globally earliest source-position error.
+    -- This is an interim two-pass front end, not checked AST construction.
+    let structure = err_parse_program(tokens, lexed.3)
+    if structure.0 == err_err_tag():
+        let reported = stderr_write(serialize_diagnostic(structure.1))
+        let newline = stderr_write("\n")
+        do process_exit(1)
+        return 0
+    end
+    let nodes = pool_new()
+    let parsed = parse_program(tokens, 0, nodes)
+    let type_pool = nc_type_pool_new()
+    let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
+    if ast_result.0 != 0:
+        return 0
+    end
+    let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
+    let has_faultable = nc_prog_has_faultable(prog)
+    if has_faultable != 0:
+        let diag_strings = nc_append_fault_rodata(prog.1)
+    end
+    let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
+    if analyzed.0 != 0:
+        let fail_an = nc_fail(analyzed.0, 0, "")
+        return 0
+    end
+    let metas = analyzed.1
+    let main_ret = get(metas, prog.2).1
+    -- link11/link12: if main returns a renderable AGGREGATE (int/bool/string/tuple,
+    -- recursively; width 2..15), linearize it into a render plan carried through the
+    -- entry layout/emit. An empty plan = the single-word int/bool (kringle) path.
+    let main_rplan = nc_build_render_plan(type_pool, main_ret)
+    let pass1 = nc_pass1_program(prog, metas, analyzed.2, analyzed.3, has_faultable, main_rplan)
+    if pass1.0 != 0:
+        return 0
+    end
+    let funcs = prog.0
+    let layouts = pass1.1
+    let main_layout = get(layouts, prog.2)
+    let diag_base = 0
+    if has_faultable != 0:
+        diag_base = nc_fault_helper_start(analyzed.3, has_faultable, main_ret, main_rplan)
+    end
+    let cbuf = new_buffer()
+    let entry = nc_emit_entry_stub(cbuf, main_layout.0, analyzed.2, analyzed.3, has_faultable, main_ret, pass1.2, prog.1, main_rplan)
+    if entry.0 != 0:
+        return 0
+    end
+    let emitted = nc_emit_functions_loop(entry.1, funcs, metas, layouts, prog.1, pass1.2, diag_base, 0, count(funcs))
+    if emitted.0 != 0:
+        return 0
+    end
+    let frozen_code = freeze(emitted.1)
+    let code_len = length(frozen_code)
+    if code_len != pass1.2:
+        let fail = nc_fail(418, 0, "program-length")
+        return 0
+    end
+    let ro_len = nc_rodata_len(prog.1)
+    let img = nc_roundup_page(120 + code_len + ro_len)
+    let pad = img - 120 - code_len - ro_len
+    let align_hi = 0
+    if not nc_funcs_have_call(funcs):
+        align_hi = 129
+    end
+    let buf = new_buffer()
+    buf = nc_emit_ehdr(buf)
+    buf = nc_emit_phdr(buf, img, align_hi)
+    buf = append_str(buf, frozen_code)
+    buf = nc_emit_rodata(buf, prog.1)
+    buf = nc_emit_zeroes_loop(buf, pad)
+    do fwriter(freeze(buf))
+    return 0
+end

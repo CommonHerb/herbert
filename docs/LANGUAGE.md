@@ -328,7 +328,7 @@ It is an application of the existing compiler/seed pin above.
 
 ---
 
-*Cold-test tasks, expected outputs, and reference solutions live in the grader-only GATE.md — deliberately NOT in this pack — so a cold model is graded on synthesis, never recall.*
+*Cold-test tasks and reference answers live in a separate grader-only packet; they are deliberately absent from this guide. That packet is not needed to write or build Herbert programs.*
 
 
 ## Hosted byte storage and Linux interface — September 12

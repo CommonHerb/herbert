@@ -1,0 +1,103 @@
+# Working on the compiler
+
+The production compiler is Herbert source compiled by the committed Linux/x86-64
+seed. The source is maintained as ordered stage files under `stack/compiler/`;
+`stack/native_compile_fragment.herb` is the tracked assembled artifact consumed
+by existing self-hosting, native, kernel and historical gates. This is explicit
+source composition, not a module system or a new bootstrap path.
+
+| Source unit | Responsibility |
+| --- | --- |
+| `frontend_vm.herb` | Shared lexer/parser, diagnostic support, VM and AST/bytecode machinery |
+| `types_and_inference.herb` | Native diagnostics, types, signatures and inference |
+| `metadata.herb` | Bytecode validation, typed stack analysis and per-instruction metadata |
+| `hosted_emitter.herb` | Hosted instruction layout, native runtime and ELF emission |
+| `kernel_targets.herb` | Preserved kernel targets, including frozen historical byte fixtures and source-authored long64 paths |
+| `driver.herb` | Input checks and top-level target dispatch |
+
+The order is declared once by `COMPILER_SOURCES` in the Makefile. Concatenation
+adds no separators, banners or rewritten newlines. The initial split reproduces
+the prior complete source exactly. This matters: compiler source locations can
+be embedded in emitted diagnostic paths, so even moving unchanged code can
+change a seed. Stage files need not compile independently and share function
+names through the assembled program. Some stages remain large; this establishes
+maintainable boundaries without claiming that the whole compiler is modular.
+
+## Editing and qualification
+
+Edit the appropriate stage file, then run `make compiler-source` to refresh the
+assembled source. `make compiler-source-check` rejects any mismatch; `make check`
+includes it. Checks never silently regenerate the artifact and hide a stale or
+manually edited copy. The seed remains independently pinned by its checksum.
+
+For a real compiler change, follow `VERIFYING.md`: qualify behavior and faults,
+run `make reseed`, prove the self-hosting fixpoint and execute applicable hosted
+and target gates. Include `make compiler-metadata` when changing metadata or its
+consumers. Expected output changes require independently justified expectations;
+do not regenerate frozen C-derived goldens from the seed as a new oracle.
+Mutation harnesses may deliberately alter a disposable assembled compiler;
+that is a test artifact, not a second authoring location.
+
+## Metadata stage contract
+
+`nc_analyze_program(pool, prog, sig)` consumes emitted bytecode and resolved type
+signatures. `prog.0` holds functions, `prog.1` strings and `prog.2` the main
+index. Each function carries bytecode in field 4, NEW_ARRAY type metadata in
+field 5 and source-line metadata in field 6; both metadata arrays must match
+the instruction count, and the code must end in RET. It returns `(error, metas, has_input, has_heap)`; on nonzero error,
+the partial metadata is not valid emission input. Each successful function has
+one metadata record, produced by `nc_build_one_meta`. Layout is in flattened
+machine words, not source parameter counts. Types, bytecode opcode numbers and
+function layouts are supplied by the preceding stages; the following hosted
+emitter consumes the result.
+
+The metadata walk advances through instruction positions in order. Each
+successful instruction contributes exactly one entry to each of `tuple_meta`,
+`call_meta` and `heap_meta`, including a default entry when that
+opcode does not use that stream. Consumers index by instruction position.
+A call or tuple operation must never shift later entries. Never rebuild an
+instruction-count array merely to change one entry: the runtime's bump allocator
+keeps every discarded copy for the compiler process's lifetime.
+
+The live `nc_fail` emits a diagnostic and exits the process with status 1.
+Nominal nonzero-status paths must likewise stop before appending or consuming
+failed metadata; partial arrays have no successful-layout contract. Do not
+backfill them or emit an image after an error. Changes to tuple,
+call or heap layouts need nontrivial controls in those categories, exact compiler
+status/stream checks, emitted-byte comparisons where bytes should stay fixed,
+and realistic resource measurements. A successful scalar example alone does
+not qualify these interfaces.
+
+The fields of a successful function metadata record are:
+
+| Index | Meaning |
+| ---: | --- |
+| 0–2 | Flattened parameter words, return type, return words |
+| 3–5 | Local bases, local widths, total local words |
+| 6–8 | Hidden return-pointer slot, call-result scratch base, maximum result scratch words |
+| 9 | Legacy empty stack array (not a per-instruction snapshot stream) |
+| 10 | Per-instruction tuple metadata |
+| 11 | Per-instruction call metadata |
+| 12 | Maximum operand-stack words |
+| 13 | Input kind: 0 none, 1 clogger, 2 stdin_read |
+| 14 | Per-instruction heap metadata |
+| 15 | Heap-use flag |
+
+Dense stream indices are bytecode instruction positions, never source-token or
+machine-code byte offsets. Tuple entries are `(wholeTupleWords, selectedStartWord,
+selectedWords)` with an all-ones default. Call entries are `(argWords, retWords,
+kind)`, where kind 0/1 means scalar/hidden-return-pointer call and 2/3 the respective
+tail-call forms; their default is zero. Heap entries are `(kind, elemWords,
+elemType)`, with kinds 1 array creation, 2 get, 3 add and 4 buffer creation;
+buffer creation is `(4,0,0)` and the default is zero. There is no later patching.
+The construction is linear in instruction count; this does not claim whole-
+compiler linear complexity or control-flow fixed-point verification.
+
+## Comprehensibility evidence
+
+A source map is not proof that another maintainer can repair the stage. Cold
+maintenance exercises pin guide/source/seed hashes, withhold the defect and
+expected answer, and execute the returned repair against held tests. The
+September 15 quality audit records that bounded exercise separately from model
+review. A successful narrow task does not establish comprehension of the whole
+compiler, kernel or stack.
