@@ -157,10 +157,9 @@ native_listing() {
     # the seed STILL produces the ELF, proving "C-free" means no external C toolchain in the
     # emission path, not merely "the C interpreter was not used" (folds a cross-model Codex
     # impl-review point). The gen-1 emitter writes ./a.out WITHOUT the execute bit, so
-    # chmod +x before running. The seed exits 0 even on a subset-reject (prints the error on
-    # stdout, omits a.out) -- so "a.out exists + ELF magic" is the success signal, not the
-    # exit code (the established native-gate convention).
-    ( cd "$wd" && env PATH=/nonexistent "$GEN1" <"$src" >compile.log 2>compile.err )
+    # chmod +x before running. Require the compiler's exact success envelope first;
+    # an image left behind by a failed compiler invocation cannot qualify this gate.
+    native_codegen_compile_success "$GEN1" "$src" "$wd" /nonexistent || return 1
     [[ -f "$wd/a.out" ]] || { echo "    (gen-1 compile produced no ELF: $(head -1 "$wd/compile.log" 2>/dev/null))"; return 1; }
     [[ "$(head -c4 "$wd/a.out" | xxd -p)" == "7f454c46" ]] || { echo "    (a.out is not an ELF)"; return 1; }
     chmod +x "$wd/a.out" || return 1

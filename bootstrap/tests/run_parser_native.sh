@@ -92,8 +92,7 @@ GEN1="$NATIVE_CODEGEN_COMPILER"
 # running (a missing chmod looks exactly like a C-vs-native divergence -- it is not).
 native_line1() {
     local src="$1" out="$2" wd; wd="$(mktemp -d "$tmp/run.XXXX")"
-    ( cd "$wd" && "$GEN1" <"$src" >compile.log 2>compile.err ); local compile_rc=$?
-    [[ "$compile_rc" -eq 0 ]] || { echo "    (gen-1 compiler exited nonzero: rc=$compile_rc)"; return 1; }
+    native_codegen_compile_success "$GEN1" "$src" "$wd" || return 1
     [[ -f "$wd/a.out" ]] || { echo "    (gen-1 compile produced no ELF: $(head -1 "$wd/compile.log" 2>/dev/null))"; return 1; }
     # Require a genuine ELF, not just any executable named a.out: the native path
     # must really be a gen-1-emitted ELF, not a wrapper/shim that echoes the oracle.

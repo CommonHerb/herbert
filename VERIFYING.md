@@ -16,14 +16,21 @@ make verify-local
 Runs:
 
 - `make check`: confirms tracked non-`.herb` files exactly match `BOOTSTRAP-ALLOWLIST` (the from-scratch boundary scanner `tools/scan.c` — kept governance meta-tooling, not the retired interpreter).
-- `make verification-helpers`: checks exact native transcripts, emulator selection, raw capture retention, and complete CI matrix coverage.
+- `make verification-helpers`: checks exact compiler success and native runtime transcripts, rejects failing/noisy compilers even when they emit valid images, and checks emulator selection, honest kernel summaries, raw capture retention and complete CI matrix coverage.
 - `make test-timeout`: checks the repo-local portable `timeout` shim.
-- `make test`: the full non-emulator harness (see below).
-- `make evaluator-native` / `vm-native` / `parser-native` / `lexer-native` / `klondike-native` / `emitter-native`: the six metacircular fragments compiled to ELF by the committed gen-1 seed and run with **no C**, each diffed against its independently-authored oracle, plus a RED-first mutation proof.
+- `make test`: the full non-emulator harness (see below). This already includes
+  all six fragment/mutation pairs (`evaluator-native`, `vm-native`, `parser-native`,
+  `lexer-native`, `klondike-native`, `emitter-native`) and `switchover-cfree`.
+  Each fragment is compiled to ELF by the committed gen-1 seed, runs with **no C**,
+  and is compared to its independently authored oracle; the mutations must compile
+  and run before producing a wrong runtime value. These fragment checks, plus the aggregate-render and error-vocabulary gates, require compiler success status
+  0, exactly `0\n` stdout and empty stderr before any image is inspected.
+  The standalone targets remain available for diagnosis; `verify-local` does not
+  dispatch those same targets a second time. The C-free proof retains both its
+  absent-interpreter and counting-tombstone phases, with the toolchain excluded.
 - `make error-vocab-native`: the C-free re-gating of klondike.herb's located **front-end error vocabulary** (ERR 101–316) — the gen-1 seed compiles klondike (a 1-line `main` adapter; `klondike.herb` byte-identical) and feeds it the 54 malformed `error_probes` fixtures; each must emit the hand-authored manifest's ERR code (independent anchor) **and** the committed golden diagnostic (regression pin), with gate-time metamorphic checks (line-shift + payload-rename at five extraction sites) proving the diagnostic tracks the input, plus a RED-first mutation proof. Restores the assurance `castoff` spent when it deleted the C-driven `error_probes` differential (`klaxon`, sovereignty link 19). Distinct from the native-codegen seed's own subset vocabulary (ERR 4xx/5xx), which the native-codegen reject battery gates.
 - `make lexer-copy-sync`: checks that accepted-token lexer copies in the stdin/parser/evaluator/emitter and Suke fragments stay synchronized with `stack/lexer_fragment.herb` (the line-aware token contract).
 - `make native-codegen-diagnostics`: checks the local helper used to enrich kernel QEMU mismatch logs.
-- `make switchover-cfree`: proves the C-free production surface stands with the C interpreter PHYSICALLY ABSENT, then proves it bites RED-first.
 - `make switchover-dry-run`: checks that the existing C-free mutation proofs still detect faults with the retired C toolchain absent.
 - `make compiler-cli-contract`: checks atomic output publication, including syscall fault injection and the emitted writer's instruction layout (tools described below).
 - `make wordcount`: compiles the maintained word counter with the committed seed and checks its output, input failures, and sustained input processing.
@@ -44,6 +51,10 @@ Runs:
   the hosted CI workflow uploads retained application evidence even on failure.
 
 This is the full hosted aggregate. It does not run the emulator-heavy kernel suite.
+Hosted CI selects `ubuntu-26.04`, matching the kernel job's explicit image, and
+logs the actual OS, architecture and installed test-tool versions before grading.
+The image label is not a lock on every package; the recorded versions identify
+that run's environment. No unvalidated package-version pins are implied.
 
 ## Full Non-Emulator Suite
 
@@ -108,7 +119,15 @@ The heavy kernel/module proof chain lives in `.github/workflows/kernel-codegen-l
 
 That workflow installs QEMU, Bochs, GRUB, Xvfb, and disk tooling on Linux, then runs the later native-codegen kernel/module links and mutation gates with `KERNEL_CODEGEN_REQUIRE_EMU=1`.
 
-Local runs can silently shrink if emulator prerequisites are absent. Treat the workflow as the authoritative gate for those links.
+Bare per-link scripts may skip absent emulators. `make kernel-verify` requires
+QEMU-TCG and Bochs through the policy `KERNEL_CODEGEN_REQUIRE_EMU=1` that each
+individual gate enforces. The driver checks every requested
+canonical gate and mutation proof, and fails if a required script is missing.
+For declared KVM member links, a present but inaccessible `/dev/kvm` fails the
+preflight. Device availability alone does not prove a KVM boot. Its GREEN summary
+reports passed gate/proof counts and explicitly makes no aggregate per-substrate
+execution claim; inspect actual per-gate captures for that evidence. CI remains
+the separately pinned dual-emulator lane, without a KVM claim.
 
 For the pinned local QEMU, set `QEMU_PREFIX=/opt/qemu-10.2.1` before a
 standalone gate or `make kernel-verify`. The prefix must be absolute and contain

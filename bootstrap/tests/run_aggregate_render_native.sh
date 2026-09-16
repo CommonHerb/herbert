@@ -69,7 +69,7 @@ GEN1="$NATIVE_CODEGEN_COMPILER"
 # transcript: a genuine ELF whose stdout is EXACTLY the one rendered line.
 native_render() {
     local src="$1" out="$2" wd; wd="$(mktemp -d "$tmp/run.XXXX")"
-    ( cd "$wd" && "$GEN1" <"$src" >compile.log 2>compile.err )
+    native_codegen_compile_success "$GEN1" "$src" "$wd" || return 1
     [[ -f "$wd/a.out" ]] || { echo "    (gen-1 compile produced no ELF: $(head -1 "$wd/compile.log" 2>/dev/null))"; return 1; }
     [[ "$(head -c4 "$wd/a.out" | xxd -p)" == "7f454c46" ]] || { echo "    (a.out is not an ELF)"; return 1; }
     chmod +x "$wd/a.out" || return 1

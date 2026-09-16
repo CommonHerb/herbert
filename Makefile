@@ -176,10 +176,10 @@ native-codegen-diagnostics:
 
 # kernel-verify: the LOCAL kernel-arc boot gate. Runs every kernel-codegen link gate
 # (link17..67) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
-# (a missing QEMU/Bochs is a HARD failure, never a silent skip), and REQUIRES the KVM
-# real-silicon leg when /dev/kvm is present -- the A11 tier-1 anchor CI cannot cover
-# (GitHub runners have no /dev/kvm). Run this before any kernel-arc push. See the driver
-# header for the local/CI substrate split.
+# (individual gates enforce emulator availability). For KVM member
+# links it checks device access when present; individual gates own execution.
+# Its aggregate summary records gate status, not per-substrate boot receipts.
+# Run this before kernel-arc pushes; see VERIFYING.md for the local/CI split.
 kernel-verify:
 	@bash bootstrap/tests/kernel_verify.sh
 
@@ -247,7 +247,10 @@ verify-local: compiler-metadata
 reseed: compiler-source-check
 	@bash bootstrap/tests/reseed_gen1.sh
 
-verify-local: check verification-helpers test-timeout test evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-cfree switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps
+# make test already dispatches the six fragment/mutation pairs and both
+# switchover-cfree scripts. Preserve their standalone targets above for diagnosis;
+# the C-free proof's absent/tombstone phases still run as distinct environments.
+verify-local: check verification-helpers test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

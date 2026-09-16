@@ -125,7 +125,7 @@ PY
 # The gen-1 emitter writes ./a.out without the execute bit, so chmod +x before
 # running (a missing chmod looks exactly like a C-vs-native divergence -- it is not).
 bwd="$(mktemp -d "$tmp/build.XXXX")"
-( cd "$bwd" && "$GEN1" <"$adapter" >compile.log 2>compile.err )
+native_codegen_compile_success "$GEN1" "$adapter" "$bwd" || fail "gen-1 compiler invocation failed"
 [[ -f "$bwd/a.out" ]] || fail "gen-1 did not compile adapted klondike: $(head -1 "$bwd/compile.log" 2>/dev/null)"
 # Require a genuine ELF, not just any a.out: the native path must really be a
 # gen-1-emitted ELF, not a wrapper/shim that echoes the oracle.

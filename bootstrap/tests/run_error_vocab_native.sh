@@ -116,7 +116,7 @@ PY
 # The gen-1 emitter writes ./a.out without the execute bit; chmod +x before running (a
 # missing chmod looks exactly like a divergence -- it is not).
 bwd="$(mktemp -d "$tmp/build.XXXX")"
-( cd "$bwd" && "$GEN1" <"$adapter" >compile.log 2>compile.err )
+native_codegen_compile_success "$GEN1" "$adapter" "$bwd" || fail "gen-1 did not compile adapted klondike cleanly"
 [[ -f "$bwd/a.out" ]] || fail "gen-1 did not compile adapted klondike: $(head -1 "$bwd/compile.err" 2>/dev/null)"
 [[ "$(head -c4 "$bwd/a.out" | xxd -p)" == "7f454c46" ]] || fail "gen-1 output is not an ELF (klondike did not compile to native code)"
 chmod +x "$bwd/a.out" || fail "could not chmod the native ELF"

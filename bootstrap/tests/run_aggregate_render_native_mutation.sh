@@ -77,7 +77,7 @@ scorrect='("\n", 99)'
 # probe; copies the emitted image to out_image (empty file if it did not emit).
 emit_with() {
     local compiler="$1" pr="$2" out="$3" wd; wd="$(mktemp -d "$tmp/e.XXXX")"
-    ( cd "$wd" && "$compiler" <"$pr" >/dev/null 2>/dev/null )
+    native_codegen_compile_success "$compiler" "$pr" "$wd" || { : >"$out"; return 2; }
     if [[ -f "$wd/a.out" ]]; then cp "$wd/a.out" "$out"; chmod +x "$out"; else : >"$out"; fi
 }
 
@@ -94,7 +94,7 @@ render_of() {
 # backend into a native gen-1' compiler ELF. Echoes "" if it did not compile.
 seed_compile() {
     local src="$1" out="$2" wd; wd="$(mktemp -d "$tmp/sc.XXXX")"
-    ( cd "$wd" && "$SEED" <"$src" >/dev/null 2>/dev/null )
+    native_codegen_compile_success "$SEED" "$src" "$wd" || return 2
     if [[ -f "$wd/a.out" ]]; then cp "$wd/a.out" "$out"; chmod +x "$out"; echo "$out"; else echo ""; fi
 }
 
@@ -156,7 +156,7 @@ bite() {
     # these mutations are length-preserving -- the mutated compiler MUST still emit a
     # (wrong) image; a NO-image / empty render is a broken compile, NOT a valid
     # divergence, and must FAIL rather than vacuously count as "diverged".
-    [[ -s "$nimg" ]] || fail "$name: mutated compiler emitted NO image -- a broken compile, not a wrong render (a length-preserving mutation must still emit)"
+    [[ -s "$nimg" ]] || fail "$name: mutated compiler produced no qualified image -- compilation contract or image failure, not a wrong render"
     local got; got="$(render_of "$nimg")"
     [[ -n "$got" ]] || fail "$name: mutated image produced an EMPTY render -- not a valid divergence"
     if [[ "$got" == "$want" ]]; then

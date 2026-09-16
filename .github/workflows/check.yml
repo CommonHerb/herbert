@@ -6,9 +6,31 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Match the explicit kernel workflow image; package versions below are
+    # observed in each run, not guessed or claimed as locked dependencies.
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
+      - name: install independent test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential python3 xxd xvfb libx11-6 libxtst6 gdb strace binutils
+      - name: record actual hosted test environment
+        run: |
+          set -euo pipefail
+          uname -a
+          cat /etc/os-release
+          dpkg-query -W -f='${Package}=${Version}\n' \
+            bash coreutils build-essential make gcc libc6 python3 xxd \
+            xvfb libx11-6 libxtst6 gdb strace binutils
+          python3 --version
+          cc --version
+          make --version
+          gdb --version
+          strace --version
+          as --version
+          ld --version
       - name: make check
         run: make check
       - name: verification helpers
@@ -21,12 +43,8 @@ jobs:
         run: make wordcount
       - name: Hosted reusable memory and Linux calls
         run: make hosted-memory-io
-      - name: install independent desktop test tools
-        run: sudo apt-get update && sudo apt-get install -y xvfb libx11-6 libxtst6
       - name: Herbert interactive desktop and sustained memory
         run: make check-desktop
-      - name: install compiler fault-test tools
-        run: sudo apt-get update && sudo apt-get install -y gdb strace binutils
       - name: Herbert reusable map, text and atomic-file support
         run: make check-app-support
       - name: Herbert maze and notes interaction and sustained memory

@@ -40,6 +40,139 @@ class Helpers(unittest.TestCase):
                                   TESTS/'native_codegen_oracle.sh', p/'out', p/'err', p/'line')
                     self.assertEqual(result.returncode == 0, valid, result.stderr)
 
+    def test_compiler_success_bytes(self):
+        # Exercise the byte contract independently of artifact/runtime checks.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            (p/'source.herb').write_text('source for the invocation fixture\n')
+            compiler = p/'compiler'
+            compiler.write_text('#!/bin/sh\n/bin/cat "$FIXTURE_STDOUT"\n'
+                                '/bin/cat "$FIXTURE_STDERR" >&2\nexit "$FIXTURE_STATUS"\n')
+            compiler.chmod(0o755)
+            cases = [(0, b'0\n', b'', True), (7, b'0\n', b'', False),
+                     (0, b'0', b'', False), (0, b'0\n\n', b'', False),
+                     (0, b'0\n\x00', b'', False), (0, b'0\r\n', b'', False),
+                     (0, b'', b'', False), (0, b'0\n', b'warning\n', False),
+                     (0, b'0\n', b'\x00', False)]
+            for status, out, err, valid in cases:
+                with self.subTest(status=status, stdout=out, stderr=err):
+                    (p/'out').write_bytes(out); (p/'err').write_bytes(err)
+                    env = dict(os.environ, FIXTURE_STATUS=str(status),
+                               FIXTURE_STDOUT=str(p/'out'), FIXTURE_STDERR=str(p/'err'))
+                    result = bash('source "$1" || exit 1; native_codegen_compile_success "$2" "$3" "$4" /nonexistent',
+                                  TESTS/'native_codegen_oracle.sh', compiler, p/'source.herb', p, env=env)
+                    self.assertEqual(result.returncode == 0, valid, result.stderr)
+                    self.assertEqual((p/'compile.status').read_text(), f'{status}\n')
+
+    def test_compiler_path_scope(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d); (p/'source.herb').write_bytes(b'')
+            compiler = p/'compiler'
+            compiler.write_text('#!/bin/sh\ncat < /dev/null || exit 7\nprintf "0\\n"\n')
+            compiler.chmod(0o755)
+            code = 'source "$1" || exit 1; native_codegen_compile_success "$2" "$3" "$4"'
+            normal = bash(code, TESTS/'native_codegen_oracle.sh', compiler, p/'source.herb', p)
+            self.assertEqual(normal.returncode, 0, normal.stderr)
+            scrubbed = bash(code+' /nonexistent', TESTS/'native_codegen_oracle.sh', compiler, p/'source.herb', p)
+            self.assertNotEqual(scrubbed.returncode, 0)
+            self.assertEqual((p/'compile.status').read_text(), '7\n')
+            self.assertIn(b'compiler success contract failed: status=7', scrubbed.stderr)
+
+    def test_real_fragment_gates_reject_compiler_failures(self):
+        # The real seed emits a valid ELF BEFORE the wrapper corrupts only the
+        # invocation envelope. This reproduces artifact-exists false greens;
+        # no helper or runtime oracle is replaced. /bin/sh + absolute seed keep
+        # the emitter gate's PATH=/nonexistent compile condition intact.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            seed = p/'seed'; seed.write_bytes((ROOT/'bootstrap/seed/gen1.seed').read_bytes())
+            seed.chmod(0o755)
+            wrapper = p/'compiler'
+            wrapper.write_text('''#!/bin/sh
+"$FRAGMENT_TEST_SEED"
+rc=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+[ -s a.out ] || exit 93
+printf 'seed_status=0 artifact=present\n' >> "$FRAGMENT_TEST_RECEIPT"
+case "$FRAGMENT_TEST_CORRUPTION" in
+    clean) exit 0 ;;
+    status) exit 7 ;;
+    stdout) printf 'unexpected compiler stdout\n' ;;
+    stderr) printf 'unexpected compiler stderr\n' >&2 ;;
+    *) exit 94 ;;
+esac
+''')
+            wrapper.chmod(0o755)
+            controls = rejected = 0
+            for kind in ('evaluator', 'vm', 'parser', 'lexer', 'klondike', 'emitter', 'aggregate_render', 'error_vocab'):
+                for suffix in ('', '_mutation'):
+                    gate = TESTS/f'run_{kind}_native{suffix}.sh'
+                    for corruption in ('clean', 'status', 'stdout', 'stderr'):
+                        with self.subTest(gate=gate.name, corruption=corruption):
+                            receipt = p/f'{kind}{suffix}-{corruption}.receipt'
+                            env = dict(os.environ, NATIVE_CODEGEN_COMPILER=str(wrapper),
+                                       FRAGMENT_TEST_SEED=str(seed), FRAGMENT_TEST_RECEIPT=str(receipt),
+                                       FRAGMENT_TEST_CORRUPTION=corruption,
+                                       **{f'{kind.upper()}_NATIVE_NO_C': '1'})
+                            result = subprocess.run(['bash', str(gate)], env=env,
+                                                    capture_output=True, timeout=240)
+                            self.assertTrue(receipt.is_file(), (gate.name, result.stdout, result.stderr))
+                            self.assertIn('seed_status=0 artifact=present\n', receipt.read_text())
+                            if corruption == 'clean':
+                                self.assertEqual(result.returncode, 0, (gate.name, result.stdout, result.stderr))
+                                controls += 1
+                            else:
+                                self.assertNotEqual(result.returncode, 0, (gate.name, corruption, result.stdout))
+                                if gate.name == 'run_error_vocab_native_mutation.sh':
+                                    self.assertIn(b'CONTROL went RED', result.stdout)
+                                else:
+                                    self.assertIn(b'compiler success contract failed:', result.stderr)
+                                rejected += 1
+            print(f'native compile contract: {controls} controls green; {rejected} malformed invocations rejected')
+
+    def test_kernel_summary_reports_gate_status_only(self):
+        # Deliberately inert fixtures establish exactly what the aggregate
+        # knows: successful scripts do not demonstrate any substrate boot.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); tests = root/'bootstrap/tests'; tests.mkdir(parents=True)
+            for name in ('kernel_verify.sh', 'qemu_prefix.sh', 'kernel_evidence.sh'):
+                (tests/name).write_bytes((TESTS/name).read_bytes())
+            bindir = root/'bin'; bindir.mkdir()
+            qemu = bindir/'qemu-system-x86_64'
+            qemu.write_text('#!/bin/sh\nexit 91\n'); qemu.chmod(0o755)
+            gate = tests/'run_native_codegen_link40.sh'
+            mutation = tests/'run_native_codegen_link40_mutation.sh'
+            gate.write_text('[ "$KERNEL_CODEGEN_REQUIRE_EMU" = 1 ] || exit 92\nexit 0\n')
+            mutation.write_text('[ "$KERNEL_CODEGEN_MUTATION" = 1 ] || exit 93\nexit 0\n')
+            env = dict(os.environ, PATH=str(bindir)+os.pathsep+os.environ['PATH'],
+                       KERNEL_VERIFY_LO='40', KERNEL_VERIFY_HI='40')
+            env.pop('QEMU_PREFIX', None)
+            result = subprocess.run(['bash', str(tests/'kernel_verify.sh')], env=env,
+                                    capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b'GREEN (1 gates + 1 mutation proofs passed;', result.stdout)
+            self.assertIn(b'no aggregate per-substrate execution receipts, including KVM.', result.stdout)
+            self.assertNotIn(b'+ KVM', result.stdout)
+            # A KVM member still enforces device access separately from the
+            # always-run summary assertions above, even on inaccessible hosts.
+            for name in ('run_native_codegen_link39.sh', 'run_native_codegen_link39_mutation.sh'):
+                (tests/name).write_text('exit 0\n')
+            member = subprocess.run(['bash', str(tests/'kernel_verify.sh')],
+                                    env=dict(env, KERNEL_VERIFY_LO='39', KERNEL_VERIFY_HI='39'),
+                                    capture_output=True, timeout=10)
+            if Path('/dev/kvm').exists() and not os.access('/dev/kvm', os.R_OK | os.W_OK):
+                self.assertNotEqual(member.returncode, 0)
+                self.assertIn(b'/dev/kvm exists but is not usable', member.stderr)
+            else:
+                self.assertEqual(member.returncode, 0, member.stderr)
+                self.assertIn(b'no aggregate per-substrate execution receipts, including KVM.', member.stdout)
+                self.assertNotIn(b'+ KVM', member.stdout)
+            gate.write_text('exit 7\n')
+            result = subprocess.run(['bash', str(tests/'kernel_verify.sh')], env=env,
+                                    capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(b'kernel-verify: GREEN', result.stdout)
+
     def test_prefix_selection(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d); bindir = p/'pinned/bin'; bindir.mkdir(parents=True)

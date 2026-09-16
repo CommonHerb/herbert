@@ -43,8 +43,7 @@ GEN1="$NATIVE_CODEGEN_COMPILER"
 native_line1() {
     local src="$1" out="$2" wd; wd="$(mktemp -d "$tmp/run.XXXX")"
     : >"$out"                                 # always exists, so a fault -> clean empty diff
-    ( cd "$wd" && "$GEN1" <"$src" >compile.log 2>compile.err ); local compile_rc=$?
-    [[ "$compile_rc" -eq 0 ]] || { echo "    (gen-1 compiler exited nonzero: rc=$compile_rc)"; return 2; }
+    native_codegen_compile_success "$GEN1" "$src" "$wd" || return 2
     [[ -f "$wd/a.out" ]] || { echo "    (gen-1 compile produced no ELF: $(head -1 "$wd/compile.log" 2>/dev/null))"; return 2; }
     [[ "$(head -c4 "$wd/a.out" | xxd -p)" == "7f454c46" ]] || { echo "    (a.out is not an ELF)"; return 2; }
     chmod +x "$wd/a.out" || return 1

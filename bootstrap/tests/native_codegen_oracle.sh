@@ -470,6 +470,28 @@ oracle_expect_file() {
     return $rc
 }
 
+# Successful compiler invocation is status 0, exactly "0\n" on stdout and
+# empty stderr. Qualify that before inspecting or executing any generated image.
+# The caller supplies a fresh absolute work directory and still checks ELF magic
+# and its own runtime oracle. An optional PATH applies only to the compiler, so
+# the emitter's external-toolchain exclusion survives this shared helper.
+native_codegen_compile_success() {
+    local compiler="$1" source="$2" directory="$3" compile_path="${4-$PATH}" rc
+    if ( cd "$directory" && PATH="$compile_path" "$compiler" <"$source" >compile.log 2>compile.err ); then
+        rc=0
+    else
+        rc=$?
+    fi
+    printf '%s\n' "$rc" >"$directory/compile.status" || return 1
+    if [[ "$rc" -ne 0 ]] || ! cmp -s "$directory/compile.log" <(printf '0\n') ||
+       [[ ! -f "$directory/compile.err" || -s "$directory/compile.err" ]]; then
+        echo "    (compiler success contract failed: status=$rc; expected status 0, stdout 0+LF, empty stderr)" >&2
+        [[ ! -s "$directory/compile.err" ]] || head -n 1 "$directory/compile.err" >&2
+        return 1
+    fi
+    return 0
+}
+
 # The metacircular adapters print one result line, then exactly "0\n".
 # Keep bytes in files: command substitution strips final newlines and ignores NUL.
 native_codegen_transcript_line1() {
