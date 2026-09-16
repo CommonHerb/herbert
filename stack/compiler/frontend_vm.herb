@@ -4490,4 +4490,3 @@ end
 -- MAIN -- compile the embedded pipeline probe, adapt it, execute it in
 -- the Herbert VM, and return the VM serialization as a string.
 -- ====================================================================
-

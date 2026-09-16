@@ -1,3 +1,4 @@
+
 func nc_code_has_faultable_loop(code, i, n):
     if i >= n:
         return 0
@@ -4465,4 +4466,3 @@ func nc_append_fault_rodata(strings):
     do add(strings, "\n")
     return strings
 end
-

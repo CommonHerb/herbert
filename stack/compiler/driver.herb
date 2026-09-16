@@ -1,3 +1,4 @@
+
 func main():
     let incoming = stdin_read()
     if incoming.0 != 0:

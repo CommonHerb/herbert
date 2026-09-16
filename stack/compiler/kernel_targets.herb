@@ -1,3 +1,4 @@
+
 -- ====================================================================
 -- L1 (first kernel-arc link): freestanding 32-bit Multiboot1 emit mode.
 -- A SECOND back-end target, selected by an anchored first-line directive
@@ -10097,4 +10098,3 @@ func nc_emit_multiboot32_long64_program(source):
     do fwriter(freeze(img))
     return 0
 end
-

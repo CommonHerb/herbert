@@ -1,3 +1,4 @@
+
 -- ====================================================================
 -- BYTECODE VERIFY, LAYOUT, AND EMISSION
 -- ====================================================================
@@ -792,4 +793,3 @@ end
 func nc_analyze_program(pool, prog, sig):
     return nc_analyze_program_loop(pool, prog, sig, 0, count(prog.0), new_array((int, int, int, array(int), array(int), int, int, int, int, array(array(int)), array((int, int, int)), array((int, int, int)), int, int, array((int, int, int)), int)), 0, 0)
 end
-
