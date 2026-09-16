@@ -290,7 +290,7 @@ def build_code(kstack, kend, mut=None):
     a.lbl('idt'); a.defer(0x31*8, idt_bytes)
     def tss_bytes(L):
         t=bytearray(104)
-        esp0 = 0xF0000000 if mut=='tssesp0' else kstack   # M-tssesp0: unmapped esp0 -> frame push triple-faults
+        esp0 = 0xF0000000 if mut=='tssesp0' else kstack   # M-tssesp0: esp0 outside 64M test RAM -> invalid exit/#GP frame
         t[4:8]=le32(esp0); t[8:12]=le32(KDATA)
         t[0x66:0x68]=le16(0x10 if mut=='iomap' else 0x68)   # M-iomap: IOPB inside limit -> grants CPL3 I/O
         return bytes(t)

@@ -19,6 +19,99 @@ def bash(code, *args, env=None, timeout=90):
 
 
 class Helpers(unittest.TestCase):
+    def test_link34_failure_evidence_and_grader_errors(self):
+        # Exercise the real shell gate and evidence cleanup with inert protocol
+        # fixtures. This tests harness verdicts/retention, not guest execution.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d); tests = p/'tests'; tests.mkdir()
+            for name in ('run_native_codegen_link34_mutation.sh', 'qemu_prefix.sh',
+                         'kernel_evidence.sh', 'kernel_evidence.py'):
+                (tests/name).write_bytes((TESTS/name).read_bytes())
+            (tests/'trikon_ref.py').write_text('''import os, sys
+from pathlib import Path
+cmd = sys.argv[1]
+if cmd in ('module', 'mutate'):
+    Path(sys.argv[3]).write_text(sys.argv[2])
+elif cmd == 'cleanelf':
+    Path(sys.argv[2]).write_text('clean')
+elif cmd == 'kend':
+    print('123')
+elif cmd == 'grade':
+    if 'tssesp0' in sys.argv[2]:
+        if os.environ['LINK34_TEST_MODE'] == 'grader-silent':
+            sys.exit(1)
+        if os.environ['LINK34_TEST_MODE'] == 'grader-status':
+            print('RED')
+            sys.exit(7)
+    raw = Path(sys.argv[2]).read_text()
+    print('GREEN' if raw == 'clean' else 'RED')
+    sys.exit(0 if raw == 'clean' else 1)
+''')
+            bindir = p/'pinned/bin'; bindir.mkdir(parents=True)
+            qemu = bindir/'qemu-system-x86_64'
+            qemu.write_text('''#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+a = sys.argv[1:]
+kernel = Path(a[a.index('-kernel') + 1])
+out = Path(a[a.index('-debugcon') + 1].removeprefix('file:'))
+mode = os.environ['LINK34_TEST_MODE']
+if mode == 'grader-error' and kernel.stem == 'tssesp0':
+    sys.exit(0)  # missing raw file makes the real Python grade process raise
+out.write_text(kernel.read_text())
+if mode == 'emulator-error' and kernel.stem == 'clean':
+    print('injected emulator error first line', file=sys.stderr)
+    print('injected emulator error second line', file=sys.stderr)
+if mode == 'parser-error' and kernel.stem == 'tssesp0':
+    Path(os.environ['KERNEL_PARSE_ERROR_FILE']).write_text('injected parser failure\\n')
+sys.exit(215)  # legitimate guest exit codes above 124 are not harness verdicts
+''')
+            qemu.chmod(0o755)
+            for mode, retain in [('clean', True), ('grader-error', True),
+                                 ('emulator-error', True), ('grader-error', False),
+                                 ('grader-silent', True), ('grader-status', True),
+                                 ('parser-error', True), ('parser-error', False), ('clean', False)]:
+                with self.subTest(mode=mode, retain=retain):
+                    run = p/f'{mode}-{retain}'; run.mkdir(); tmp = run/'tmp'; tmp.mkdir()
+                    env = dict(os.environ, QEMU_PREFIX=str(bindir.parent), TMPDIR=str(tmp),
+                               LINK34_TEST_MODE=mode, KERNEL_CODEGEN_REQUIRE_EMU='1')
+                    env.pop('KERNEL_EVIDENCE_DIR', None)
+                    if retain:
+                        env['KERNEL_EVIDENCE_DIR'] = str(run/'evidence')
+                    r = subprocess.run(['bash', str(tests/'run_native_codegen_link34_mutation.sh')],
+                                       env=env, capture_output=True, timeout=30)
+                    self.assertEqual(r.returncode, 0 if mode == 'clean' else 1,
+                                     (r.stdout, r.stderr))
+                    if retain:
+                        captures = list((run/'evidence').glob('capture-*'))
+                        self.assertEqual(len(captures), 1)
+                        capture = captures[0]
+                        self.assertFalse(list(tmp.iterdir()))
+                    elif mode == 'clean':
+                        self.assertFalse(list(tmp.iterdir()))
+                        continue
+                    else:
+                        captures = list(tmp.iterdir()); self.assertEqual(len(captures), 1)
+                        capture = captures[0]
+                        self.assertIn(f'failed work retained at {capture}'.encode(), r.stderr)
+                        self.assertTrue((capture/'tssesp0.elf').is_file())
+                    self.assertEqual(len(list(capture.glob('*.e9.bin.status'))), 13)
+                    self.assertTrue((capture/'hardcodeaddr.elf-benign.e9.bin').is_file())
+                    if mode.startswith('grader-'):
+                        self.assertIn(b'grader diagnostics for tssesp0.elf-benign', r.stderr)
+                        self.assertIn('tssesp0.elf-benign (grader)',
+                                      (capture/'harness-failures.txt').read_text())
+                    if mode == 'grader-error':
+                        self.assertIn('FileNotFoundError',
+                                      (capture/'tssesp0.elf-benign.e9.bin.grade.qerr').read_text())
+                    if mode == 'emulator-error':
+                        self.assertIn(b'injected emulator error second line', r.stderr)
+                        self.assertIn('grader_status=0',
+                                      (capture/'clean.elf-benign.e9.bin.status').read_text())
+                    if mode == 'parser-error':
+                        self.assertIn(b'PARSER-ERROR:', r.stderr)
+                        self.assertNotIn(b'PASS:', r.stdout)
+
     def test_transcript_bytes(self):
         # Include embedded/trailing NUL, CRLF, missing LF, extra unterminated line,
         # extra blank lines, and correct output accompanied by stderr.
