@@ -48,7 +48,8 @@ gate goes **RED**. That RED means *re-seed*, not *regression*:
 make reseed          # re-mints gen-1 C-FREE: the committed seed recompiles the
                      # backend to its own fixpoint, checks it self-reproduces,
                      # rewrites gen1.seed + .sha256 (no C interpreter involved)
-git add bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+git add stack/compiler/*.herb stack/native_compile_fragment.herb \
+        bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 make check && make test
 ```
 

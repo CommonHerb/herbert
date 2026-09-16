@@ -53,5 +53,5 @@ cleanup runs.
 and library rejections, path/overwrite protection, malformed compiler envelopes
 and a failed publication command. It runs in `make verify-local` and hosted CI;
 its `/tmp/herbert-program-build-*` evidence is uploaded even if the check fails.
-Make, Bash, coreutils, awk and Git are development tooling. The resulting program
+Make, Bash, coreutils, diffutils, awk and Git are development tooling. The resulting program
 has no added foreign compiler, language runtime or build-tool dependency.
