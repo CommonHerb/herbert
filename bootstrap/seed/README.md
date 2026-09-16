@@ -8,7 +8,7 @@ running this seed, **not** by running the retired C bootstrap interpreter. Since
 the remaining tracked C source is `tools/scan.c`, a governance scanner used by
 `make check`, not a Herbert execution path.
 
-## Why a committed binary is sound here
+## What seed reproduction establishes
 
 The emitter is a **pure, deterministic function of the backend source** — no
 timestamp, PID, cwd, hostname, or randomness (verified). So the seed is
@@ -18,9 +18,10 @@ readable source and compare them. This establishes consistency and determinism;
 the seed remains a trusted executable input to that process. Reproducing it is
 not an independent derivation of its original provenance.
 
-**Honest limit (trusting-trust):** these bytes were minted by the C interpreter
-*once*, at seed-creation time. The seed removes C from all *future* mints, but it
-does not by itself prove the bytes carry no C-introduced flaw. A fully
+**Honest limit (trusting-trust):** the seed lineage began with a compiler minted
+by the C interpreter. Later revisions are minted by earlier Herbert seeds. This
+chain removes C from current mints but does not independently rule out a flaw
+inherited from that original bootstrap. A fully
 human-auditable *textual* seed (hex/asm that reproducibly materializes the same
 bytes) is the deferred Oberon-ideal hardening.
 
@@ -36,6 +37,8 @@ bytes) is the deferred Oberon-ideal hardening.
 
 ## Re-seeding (when the backend legitimately changes)
 
+Edit the [compiler source stages](../../docs/COMPILER.md) and run
+`make compiler-source` to refresh the checked assembled artifact first.
 Any change to `stack/native_compile_fragment.herb` that shifts gen-1's bytes —
 including a **comment edit that changes the net line count**, because the
 compiler embeds source line numbers — makes this seed stale and the michoi seed

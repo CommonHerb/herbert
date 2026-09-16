@@ -4,7 +4,11 @@ These are Herbert source units, with no `main`. The Makefile concatenates the
 selected units before their application, then the Herbert seed compiles the
 result. This is explicit source composition, not a new import/module system or
 another language. Names use prefixes because the current function namespace is
-flat. Diagnostic lines refer to the combined source kept in the build directory.
+flat. The fixed `make first-steps`, `make maze` and `make notes` targets report
+locations in the combined source kept in their build directories. The developer
+[`make program` workflow](../docs/BUILDING.md) maps checked compiler rejections
+back to original files and lines. Runtime bounds faults still refer to combined
+source; the retained source map identifies its original units.
 
 - `linux.herb`: fixed byte buffers and endian fields; bounded file/environment
   reading; startup command-line arguments; unsigned decimal formatting; hostname; monotonic clock; polling; complete socket transfers with

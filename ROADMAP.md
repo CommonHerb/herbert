@@ -33,10 +33,12 @@ verifiable on demand.
 ## What progress should address next
 
 Use concrete programs to improve the language and reusable application support.
-The first desktop checkpoint, Maze and Notes are implemented. The current quality
-pass targets measured compiler allocation, exact failure checks, clear source
-boundaries and a more useful Notes workflow. Work is complete only when its actual
-checks and independent review are recorded; a roadmap entry is not evidence.
+First steps, Maze and Notes are implemented. Compiler metadata now uses dense
+streams instead of whole-array copying; source stages have checked composition.
+Native gates check the compiler's success envelope. Notes has bounded history,
+search and explicit session recovery. The public guide and `make program` provide
+a supported starting point. Qualification commands and their limits live in
+`VERIFYING.md`; a roadmap entry is not evidence that a check ran.
 
 Use the existing applications to force the next language/runtime improvement.
 Keep the kernel work and its proofs available without resuming new OS features.

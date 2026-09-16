@@ -19,7 +19,7 @@ make maze notes
 
 The maze reads an editable text map, checks walls, counts collected dots and
 supports completion and restart. Notes opens, edits and saves a bounded ASCII
-text file. These are small usable applications, not a general game engine or a
+text file, with undo/redo, wrapped search and private session recovery copies. These are small usable applications, not a general game engine or a
 full word processor. The [support guide](lib/README.md) explains the reusable
 Herbert code and the actual host boundary: Linux and X11/XWayland supply system,
 display and device services; no foreign runtime or graphics library is linked
@@ -27,7 +27,16 @@ into the applications.
 
 Start with [the language guide](docs/LANGUAGE.md) for grammar, types, primitives,
 worked examples and the current limits. [The word counter](examples/wordcount.md)
-is a useful first program. Current capabilities are established by source and
+is a useful first program. Build your own with:
+
+```sh
+make program SOURCE=my-program.herb
+./build/program
+```
+
+The [build guide](docs/BUILDING.md) covers support libraries, named outputs and
+source-file diagnostics. [Compiler maintenance](docs/COMPILER.md) describes the
+checked source stages. Current capabilities are established by source and
 executable checks.
 
 The [streaming long64 counter](examples/wordcount_long64.md) performs the same

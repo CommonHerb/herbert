@@ -146,6 +146,17 @@ end
 
 ## 5. THE COMPILE + RUN COMMAND
 
+For everyday development from the product checkout:
+
+```sh
+make program SOURCE=my-program.herb
+./build/program
+```
+
+The [build guide](BUILDING.md) covers library composition, output paths and
+source-file diagnostics. This target invokes the committed native seed and
+preserves prior output on failure. The direct compiler interface follows.
+
 The seed reads source on **stdin** (a filename argument is IGNORED — passing a filename with empty stdin gives ERR 429), writes the ELF to **`./a.out` in the cwd**, and prints just `0` to stdout on success. **`a.out` is created with mode 0644 subject to umask (for example 0600 under umask 077), without execute permission; use `chmod +x` before running it.** Never modify the committed seed; always work on a copy.
 
 ```sh
