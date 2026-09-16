@@ -18,7 +18,12 @@ flat. Diagnostic lines refer to the combined source kept in the build directory.
 - `grid_map.herb`: bounded rectangular ASCII tile maps with enclosure, unique
   spawn and reachable collectible checks. Used by the maze.
 - `text_buffer.herb`: a fixed-capacity editable ASCII buffer, byte cursor,
-  insertion/deletion, line navigation and four-column tabs. Used by Notes.
+  insertion/deletion, line navigation, four-column tabs, a fixed 256-edit
+  undo/redo log, and wrapped literal search. Used by Notes.
+- `session_recovery.herb`: descriptor-relative private Notes session directories
+  and reusable atomic plain-text checkpoints. Copies persist until explicit user
+  cleanup; reopening never adopts the original document. Closing a recovery
+  context is terminal; create a new context for a new session. See the Notes guide.
 - `file_io.herb`: open a bounded regular file and save through an exclusive
   temporary file and atomic rename in its opened directory. Detected external
   changes are refused; post-publication sync or verification failure is reported distinctly.

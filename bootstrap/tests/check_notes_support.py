@@ -14,7 +14,7 @@ seed_sha = hashlib.sha256(seed).hexdigest()
 assert seed_sha == (root / 'bootstrap/seed/gen1.seed.sha256').read_text().split()[0], 'committed seed checksum mismatch'
 work = a.evidence or Path(tempfile.mkdtemp(prefix='herbert-notes-support-'))
 work.mkdir(exist_ok=True, parents=True)
-libs = ['lib/linux.herb', 'lib/file_io.herb', 'lib/text_buffer.herb']
+libs = ['lib/linux.herb', 'lib/file_io.herb', 'lib/text_buffer.herb', 'lib/session_recovery.herb']
 prelude = '\n'.join(((root / x).read_text() for x in libs)) + '\n'
 checks = []
 print(f'notes support evidence: {work}', flush=True)
@@ -381,6 +381,267 @@ end
 r = subprocess.run([str(bounds)], capture_output=True, timeout=10)
 expected = b'(0, 0, ' + u(-84) + b', ' + u(-27) + b', 0, 0, 3, 65, 66, 67)\n'
 result('capacity-invalid-load-and-endpoints', r.stdout == expected, output=r.stdout.decode())
+
+# Exercise every intermediate history state against an independent snapshot model.
+history = compile('history-model', r"""func history_run(t, commands, at, header):
+ if at >= length(commands): return 0 end
+ let op = index(commands, at)
+ let value = (index(commands, at + 1) - 48) * 100 + (index(commands, at + 2) - 48) * 10 + index(commands, at + 3) - 48
+ let changed = 0
+ if op == 105: changed = text_insert(t, value)
+ elif op == 100: changed = text_delete(t)
+ elif op == 98: changed = text_backspace(t)
+ elif op == 115: changed = text_seek(t, value)
+ elif op == 117: changed = text_undo(t)
+ elif op == 114: changed = text_redo(t)
+ end
+ let a = linux_put64(header, 0, text_length(t))
+ let b = linux_put64(header, 8, text_cursor(t))
+ let h = file_write_bytes(1, header, 0, 16)
+ let body = file_write_bytes(1, t.0, 0, text_length(t))
+ return history_run(t, commands, at + 5, header)
+end
+func main():
+ let t = text_buffer(128)
+ let commands = stdin_read()
+ let header = linux_buffer(16)
+ let run = history_run(t, commands.1, 0, header)
+ do process_exit(0)
+ return 0
+end
+""")
+rng = random.Random(73109)
+operations = [('i', 65)] * 130 + [('u', 0)] * 3 + [('r', 0)] * 4 + [('b', 0)] * 130
+operations += [('i', 65), ('b', 0)] * 300 + [('u', 0)] * 270 + [('r', 0)] * 270
+operations += [(rng.choice('iidbsuur'), rng.choice([9,10,32,65,90,97,126,129])) for _ in range(2200)]
+model, cursor, entries, applied = bytearray(), 0, [], 0
+expected = bytearray()
+for op, value in operations:
+    before = (bytes(model), cursor)
+    changed = False
+    if op == 'i' and len(model) < 128 and (value in (9,10) or 32 <= value <= 126):
+        model[cursor:cursor] = bytes([value]); cursor += 1; changed = True
+    elif op == 'd' and cursor < len(model):
+        del model[cursor]; changed = True
+    elif op == 'b' and cursor:
+        cursor -= 1; del model[cursor]; changed = True
+    elif op == 's':
+        cursor = min(value, len(model))
+    elif op == 'u' and applied:
+        applied -= 1
+        content, cursor = entries[applied][0]
+        model = bytearray(content)
+    elif op == 'r' and applied < len(entries):
+        content, cursor = entries[applied][1]
+        model = bytearray(content); applied += 1
+    if changed:
+        entries = entries[:applied] + [(before, (bytes(model), cursor))]
+        entries = entries[-256:]; applied = len(entries)
+    expected += struct.pack('<QQ', len(model), cursor) + model
+commands = ''.join(f'{op}{value:03d}\n' for op,value in operations).encode()
+r = subprocess.run([str(history)], input=commands, capture_output=True, timeout=10)
+(work/'history-model/commands').write_bytes(commands)
+(work/'history-model/actual.bin').write_bytes(r.stdout)
+(work/'history-model/expected.bin').write_bytes(expected)
+result('undo-redo-independent-model-every-intermediate-state', r.returncode == 0 and not r.stderr and r.stdout == expected, operations=len(operations))
+
+# Search oracle enumerates positions directly, including empty/oversized query,
+# wrap, overlap, case sensitivity, absent matches and starts past the last match.
+search_text = 'ababa ABABA xy ababa'
+search_cases = [(q, start, backward) for q in ['', 'a', 'aba', 'ABA', 'z', search_text+'!']
+                for start in [0,1,4,18,99] for backward in [False,True]]
+lines = ['func emit_find(t, query, count, start, backward, out):',
+         ' let saved = linux_put64(out, 0, text_find(t, query, count, start, backward))',
+         ' return file_write_bytes(1, out, 0, 8)', 'end', 'func main():',
+         ' let t = text_buffer(64)', f' let bytes = linux_cstring("{search_text}")',
+         f' let loaded = text_load(t, bytes, {len(search_text)})', ' let out = linux_buffer(8)']
+expected = bytearray()
+for i,(query,start,backward) in enumerate(search_cases):
+    lines += [f' let q{i} = linux_cstring("{query}")',
+              f' let r{i} = emit_find(t, q{i}, {len(query)}, {start}, {str(backward).lower()}, out)']
+    candidates = len(search_text)-len(query)+1
+    found = -1
+    if query and candidates > 0:
+        pos = start if start < candidates else candidates-1 if backward else 0
+        for step in range(candidates):
+            p = (pos + (-step if backward else step)) % candidates
+            if search_text.startswith(query,p): found=p;break
+    expected += struct.pack('<Q', found % (1<<64))
+lines += [' do process_exit(0)', ' return 0', 'end']
+exe = compile('search-model','\n'.join(lines))
+r = subprocess.run([str(exe)],capture_output=True,timeout=10)
+(work/'search-model/actual.bin').write_bytes(r.stdout)
+(work/'search-model/expected.bin').write_bytes(expected)
+result('literal-search-60-independent-forward-backward-cases', r.returncode == 0 and not r.stderr and r.stdout == expected, cases=len(search_cases))
+
+reset = compile('history-load-reset', r"""func main():
+ let t = text_buffer(8)
+ let inserted = text_insert(t, 65)
+ let undo = text_undo(t)
+ let bytes = linux_cstring("loaded")
+ let loaded = text_load(t, bytes, 6)
+ return (loaded, text_undo(t), text_redo(t), text_length(t), text_cursor(t))
+end
+""")
+r = subprocess.run([str(reset)],capture_output=True,timeout=10)
+result('load-clears-undo-and-redo-history',r.returncode==0 and not r.stderr and r.stdout==b'(0, 0, 0, 6, 0)\n')
+
+checkpoint = compile('session-recovery', r"""func main():
+ let args = linux_arguments()
+ let original = file_open(linux_argument(args, 1), 65536)
+ let recovery = recovery_new(65536)
+ let firstbytes = linux_cstring("first checkpoint\n")
+ let nextbytes = linux_cstring("second checkpoint\n")
+ let first = recovery_save(recovery, original, firstbytes, 17)
+ let ready = stderr_write("READY\n")
+ let wait = stdin_read()
+ let second = recovery_save(recovery, original, nextbytes, 18)
+ let closed = recovery_close(recovery)
+ let closedfile = file_close(original)
+ return (first, second)
+end
+""")
+
+def checkpoint_case(label, fault=None, first=0, second=0, mask=0):
+    d = work/('case-session-'+label); d.mkdir()
+    target=d/'document.txt'; target.write_bytes(old)
+    command=[str(checkpoint),str(target)]
+    if fault: command=['strace','--kill-on-exit','-o',str(d/'strace.log'),'-e','inject='+fault]+command
+    proc=subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          start_new_session=True, umask=mask)
+    ready(proc)
+    dirs=list(d.glob('.herbert-notes-*'))
+    snapshots=[directory/'recovery.txt' for directory in dirs]
+    before={path:path.read_bytes() for path in snapshots if path.exists()} if first in (0,1) else {}
+    out,err=finish(proc,b'\n')
+    (d/'stdout').write_bytes(out);(d/'stderr').write_bytes(err)
+    assert proc.returncode==0 and not err and out == b'('+u(first)+b', '+u(second)+b')\n', (label,out,err)
+    assert target.read_bytes()==old
+    assert len(list(d.glob('.herbert-notes-*'))) <= 1, 'retry created multiple session directories'
+    if first==0 and second not in (0,1):
+        assert all(path.read_bytes()==body for path,body in before.items()), label
+    if second in (0,1):
+        snapshots=list(d.glob('.herbert-notes-*/recovery.txt'))
+        assert len(snapshots)==1 and snapshots[0].read_bytes()==b'second checkpoint\n'
+        assert stat.S_IMODE(snapshots[0].stat().st_mode)==0o600
+        assert stat.S_IMODE(snapshots[0].parent.stat().st_mode)==0o700
+    directories=list(d.glob('.herbert-notes-*'))
+    modes=[stat.S_IMODE(directory.stat().st_mode) for directory in directories]
+    if mask:assert modes==[0o700 & ~mask], (label,modes)
+    result('session-'+label,True,output=out.decode(),created_directory_modes=[oct(mode) for mode in modes])
+    # These are this harness's empty refused directories. Record their tested
+    # modes above, then make retained evidence traversable for later inspection.
+    for directory,mode in zip(directories,modes):
+        if mode!=0o700:directory.chmod(0o700)
+
+checkpoint_case('private-reusable-copy')
+# First checkpoint: file fsync #1, session directory #2, original directory #3.
+checkpoint_case('write-failure-retains-prior', 'write:error=ENOSPC:when=3',second=-28)
+checkpoint_case('file-sync-failure-retains-prior','fsync:error=EIO:when=4',second=-5)
+checkpoint_case('rename-failure-retains-prior','renameat:error=EIO:when=1',second=-5)
+checkpoint_case('directory-sync-warning','fsync:error=EIO:when=5',second=1)
+checkpoint_case('parent-sync-warning-retry','fsync:error=EIO:when=3',first=1)
+checkpoint_case('startup-create-refusal-retry','mkdirat:error=EACCES:when=1',first=-13)
+checkpoint_case('open-after-mkdir-failure-bounded','openat:error=EMFILE:when=2+',first=-24,second=-24)
+checkpoint_case('stat-after-mkdir-failure-bounded','fstat:error=EIO:when=3+',first=-5,second=-5)
+checkpoint_case('restrictive-umask-refusal-bounded',first=-13,second=-13,mask=0o100)
+
+# Same-user external edits must fail closed without changing that version.
+d=work/'case-session-external';d.mkdir();target=d/'document';target.write_bytes(old)
+proc=subprocess.Popen([str(checkpoint),str(target)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+ready(proc);snapshot=next(d.glob('.herbert-notes-*/recovery.txt'));snapshot.write_bytes(b'external')
+out,err=finish(proc,b'\n')
+result('session-external-change-refused',proc.returncode==0 and not err and out==b'(0, '+u(-116)+b')\n' and snapshot.read_bytes()==b'external' and target.read_bytes()==old)
+# Holding both parent and session descriptors survives an unrelated pathname move.
+d=work/'case-session-parent-move';d.mkdir();parent=d/'parent';parent.mkdir();target=parent/'document';target.write_bytes(old)
+proc=subprocess.Popen([str(checkpoint),str(target)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+ready(proc);moved=d/'moved';parent.rename(moved);parent.mkdir();(parent/'document').write_bytes(b'unrelated')
+out,err=finish(proc,b'\n')
+result('session-descriptor-relative-after-parent-move',proc.returncode==0 and not err and out==b'(0, 0)\n' and next(moved.glob('.herbert-notes-*/recovery.txt')).read_bytes()==b'second checkpoint\n' and (parent/'document').read_bytes()==b'unrelated')
+
+# Exclusive session names skip existing directories and symlinks without touch.
+collision = compile('session-collision', r"""func main():
+ let args = linux_arguments()
+ let original = file_open(linux_argument(args, 1), 65536)
+ let recovery = recovery_new(65536)
+ let bytes = linux_cstring("checkpoint")
+ let ready = stderr_write("READY\n")
+ let wait = stdin_read()
+ let saved = recovery_save(recovery, original, bytes, 10)
+ let closed = recovery_close(recovery)
+ let closedfile = file_close(original)
+ return saved
+end
+""")
+for count in (1,32):
+ d=work/f'case-session-collisions-{count}';d.mkdir();target=d/'document';target.write_bytes(old)
+ outside=d/'outside';outside.mkdir();(outside/'recovery.txt').write_bytes(b'untouched')
+ proc=subprocess.Popen([str(collision),str(target)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+ ready(proc)
+ for serial in range(1,count+1):(d/f'.herbert-notes-{proc.pid}-{serial}').symlink_to(outside.name)
+ out,err=finish(proc,b'\n')
+ expected=0 if count==1 else -17
+ assert proc.returncode==0 and not err and out==u(expected)+b'\n'
+ assert (outside/'recovery.txt').read_bytes()==b'untouched' and target.read_bytes()==old
+ if count==1:assert (d/f'.herbert-notes-{proc.pid}-2/recovery.txt').read_bytes()==b'checkpoint'
+ result(f'session-exclusive-collision-bound-{count}',True)
+
+# A replacement session symlink is refused; the referent remains unchanged.
+d=work/'case-session-symlink';d.mkdir();target=d/'document';target.write_bytes(old)
+proc=subprocess.Popen([str(checkpoint),str(target)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+ready(proc);snapshot=next(d.glob('.herbert-notes-*/recovery.txt'));prior=snapshot.read_bytes()
+snapshot.rename(snapshot.with_name('first-preserved.txt'));outside=d/'outside';outside.write_bytes(b'untouched');snapshot.symlink_to(outside)
+out,err=finish(proc,b'\n')
+result('session-symlink-replacement-refused',proc.returncode==0 and not err and out==b'(0, '+u(-40)+b')\n' and outside.read_bytes()==b'untouched' and snapshot.with_name('first-preserved.txt').read_bytes()==prior)
+
+# Warm and sample the actual history/search/checkpoint path at full document size.
+recovery_reuse = compile('session-reuse', r"""func run(original, recovery, text, query, poll, left, sampling):
+ if left == 0: return 0 end
+ let start = text_seek(text, 0)
+ let deleted = text_delete(text)
+ let undo = text_undo(text)
+ let redo = text_redo(text)
+ let undo2 = text_undo(text)
+ let found = text_find(text, query, 1, 0, false)
+ if found != 0: return linux_die("search failed\n") end
+ let saved = recovery_save(recovery, original, text.0, text_length(text))
+ if saved != 0: return linux_die("checkpoint failed\n") end
+ if sampling: let wait = linux_poll(0 - 1, poll, 0, 2) end
+ return run(original, recovery, text, query, poll, left - 1, sampling)
+end
+func main():
+ let args = linux_arguments()
+ let original = file_open(linux_argument(args, 1), 65536)
+ let recovery = recovery_new(65536)
+ let text = text_buffer(65536)
+ let loaded = text_load(text, original.1, file_count(original))
+ let query = linux_cstring("A")
+ let poll = linux_buffer(8)
+ let warm = run(original, recovery, text, query, poll, 300, false)
+ let ready = stderr_write("READY\n")
+ let sampled = run(original, recovery, text, query, poll, 2000, true)
+ let closed = recovery_close(recovery)
+ let closedfile = file_close(original)
+ return 0
+end
+""")
+d=work/'case-session-reuse';d.mkdir();target=d/'document';target.write_bytes(b'A'*65536)
+proc=subprocess.Popen([str(recovery_reuse),str(target)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+ready(proc);samples=[];started=time.monotonic()
+while proc.poll() is None:
+ if time.monotonic()-started>60:stop_owned(proc);raise AssertionError('session endurance exceeded 60 seconds')
+ try:
+  fields={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in Path(f'/proc/{proc.pid}/status').read_text().splitlines() if ':' in line}
+  rollup={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in Path(f'/proc/{proc.pid}/smaps_rollup').read_text().splitlines() if ':' in line}
+  if 'Rss' in rollup and 'VmSize' in fields:samples.append(dict(seconds=round(time.monotonic()-started,3),rss_kib=int(rollup['Rss'].split()[0]),vmsize_kib=int(fields['VmSize'].split()[0])))
+ except (FileNotFoundError,ProcessLookupError):pass
+ time.sleep(.1)
+out,err=finish(proc);(d/'memory.json').write_text(json.dumps(samples,indent=2)+'\n')
+snapshot=next(d.glob('.herbert-notes-*/recovery.txt'))
+assert proc.returncode==0 and not err and out==b'0\n' and snapshot.read_bytes()==b'A'*65536 and target.read_bytes()==b'A'*65536
+rss=[s['rss_kib'] for s in samples];vm=[s['vmsize_kib'] for s in samples]
+result('session-2000-full-capacity-checkpoints-undo-redo-search-bounded-memory',len(samples)>=20 and max(rss)-min(rss)<=64 and max(vm)==min(vm),seconds=round(time.monotonic()-started,3),samples=len(samples),rss_min_kib=min(rss),rss_max_kib=max(rss),vmsize_kib=vm[0])
+
 # Sample steady-state memory after warmup across 4,000 real save transactions.
 reuse = compile('reuse', r"""func cycle(f, t, poll, left, sampling):
  if left == 0: return 0 end

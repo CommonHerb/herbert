@@ -61,7 +61,7 @@ wordcount:
 DESKTOP_LIBS := lib/linux.herb lib/x11.herb lib/pixel_text.herb
 first-steps_SOURCES := $(DESKTOP_LIBS) examples/first_steps.herb
 maze_SOURCES := $(DESKTOP_LIBS) lib/grid_map.herb examples/maze.herb
-notes_SOURCES := $(DESKTOP_LIBS) lib/file_io.herb lib/text_buffer.herb examples/notes.herb
+notes_SOURCES := $(DESKTOP_LIBS) lib/file_io.herb lib/text_buffer.herb lib/session_recovery.herb examples/notes.herb
 .PHONY: first-steps maze notes hosted-apps hosted-memory-io check-desktop check-hosted-apps
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze

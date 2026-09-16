@@ -1,9 +1,11 @@
 -- Fixed-capacity ASCII text editing. All storage is allocated at construction;
 -- editing, navigation and inspection reuse it. LF ends lines; TAB is four
 -- visual columns to the next tab stop. Cursor positions are byte boundaries.
--- Tuple: (bytes, state). State u64: length, cursor, desired vertical column.
+-- Tuple: (bytes, state, undo records). State u64: length, cursor, desired
+-- vertical column, oldest record, retained count, applied count. History holds
+-- 256 single-byte edits, including cursor-before; oldest edits fall off the ring.
 func text_buffer(capacity):
-    let t = (linux_buffer(capacity), linux_buffer(24))
+    let t = (linux_buffer(capacity), linux_buffer(48), linux_buffer(8192))
     let goal = linux_put64(t.1, 16, 0 - 1)
     return t
 end
@@ -30,6 +32,9 @@ func text_load(t, bytes, count):
     let size = linux_put64(t.1, 0, count)
     let cursor = linux_put64(t.1, 8, 0)
     let goal = linux_put64(t.1, 16, 0 - 1)
+    let base = linux_put64(t.1, 24, 0)
+    let count = linux_put64(t.1, 32, 0)
+    let applied = linux_put64(t.1, 40, 0)
     return 0
 end
 
@@ -46,7 +51,7 @@ func text_shift_right(bytes, last, stop):
 end
 
 -- Returns 1 when changed, 0 at capacity or for an unsupported byte.
-func text_insert(t, ch):
+func text_insert_raw(t, ch):
     let size = text_length(t)
     if size == buffer_length(t.0) or not text_ascii(ch): return 0 end
     let p = text_cursor(t)
@@ -57,7 +62,7 @@ func text_insert(t, ch):
     return 1
 end
 
-func text_delete(t):
+func text_delete_raw(t):
     let p = text_cursor(t)
     let size = text_length(t)
     if p >= size: return 0 end
@@ -70,8 +75,10 @@ end
 func text_backspace(t):
     let p = text_cursor(t)
     if p == 0: return 0 end
+    let ch = buffer_get(t.0, p - 1)
     let moved = text_seek(t, p - 1)
-    return text_delete(t)
+    let changed = text_delete_raw(t)
+    return text_record(t, 2, p - 1, ch, p)
 end
 
 func text_line_start(t, p):
@@ -144,4 +151,92 @@ func text_vertical(t, downward, steps):
     end
     let moved = linux_put64(t.1, 8, text_column_position(t, target, goal, 0))
     return text_vertical(t, downward, steps - 1)
+end
+
+-- History is an edit log rather than full-document snapshots. Navigation and
+-- rejected edits do not consume entries. Editing after undo drops the redo tail.
+func text_history_at(t, i): return ((linux_u64(t.1, 24) + i) % 256) * 32 end
+func text_record(t, kind, pos, ch, before):
+    let used = linux_u64(t.1, 40)
+    if used == 256:
+        let oldest = linux_put64(t.1, 24, (linux_u64(t.1, 24) + 1) % 256)
+        used = 255
+    end
+    let at = text_history_at(t, used)
+    let a = linux_put64(t.2, at, kind)
+    let b = linux_put64(t.2, at + 8, pos)
+    let c = linux_put64(t.2, at + 16, ch)
+    let d = linux_put64(t.2, at + 24, before)
+    let count = linux_put64(t.1, 32, used + 1)
+    let applied = linux_put64(t.1, 40, used + 1)
+    return 1
+end
+
+func text_insert(t, ch):
+    let before = text_cursor(t)
+    if text_insert_raw(t, ch) == 0: return 0 end
+    return text_record(t, 1, before, ch, before)
+end
+
+func text_delete(t):
+    let before = text_cursor(t)
+    if before >= text_length(t): return 0 end
+    let ch = buffer_get(t.0, before)
+    let changed = text_delete_raw(t)
+    return text_record(t, 2, before, ch, before)
+end
+
+func text_undo(t):
+    let applied = linux_u64(t.1, 40)
+    if applied == 0: return 0 end
+    let at = text_history_at(t, applied - 1)
+    let moved = text_seek(t, linux_u64(t.2, at + 8))
+    if linux_u64(t.2, at) == 1:
+        let changed = text_delete_raw(t)
+    else:
+        let changed = text_insert_raw(t, linux_u64(t.2, at + 16))
+    end
+    let cursor = text_seek(t, linux_u64(t.2, at + 24))
+    let stored = linux_put64(t.1, 40, applied - 1)
+    return 1
+end
+
+func text_redo(t):
+    let applied = linux_u64(t.1, 40)
+    if applied == linux_u64(t.1, 32): return 0 end
+    let at = text_history_at(t, applied)
+    let moved = text_seek(t, linux_u64(t.2, at + 8))
+    if linux_u64(t.2, at) == 1:
+        let changed = text_insert_raw(t, linux_u64(t.2, at + 16))
+    else:
+        let changed = text_delete_raw(t)
+    end
+    let stored = linux_put64(t.1, 40, applied + 1)
+    return 1
+end
+
+-- Case-sensitive literal byte search. Caller chooses inclusive starting byte;
+-- scan once with wrap, including overlapping matches; -1 means not found.
+func text_match(t, query, count, pos, i):
+    if i == count: return true end
+    if buffer_get(t.0, pos + i) != buffer_get(query, i): return false end
+    return text_match(t, query, count, pos, i + 1)
+end
+
+func text_find_loop(t, query, count, pos, backward, candidates, remaining):
+    if remaining == 0: return 0 - 1 end
+    if text_match(t, query, count, pos, 0): return pos end
+    let next = (pos + 1) % candidates
+    if backward: next = (pos + candidates - 1) % candidates end
+    return text_find_loop(t, query, count, next, backward, candidates, remaining - 1)
+end
+
+func text_find(t, query, count, start, backward):
+    if count == 0 or count > text_length(t) or count > buffer_length(query): return 0 - 1 end
+    let candidates = text_length(t) - count + 1
+    if start >= candidates:
+        start = 0
+        if backward: start = candidates - 1 end
+    end
+    return text_find_loop(t, query, count, start, backward, candidates, candidates)
 end

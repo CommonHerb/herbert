@@ -7,6 +7,7 @@ Evidence (including failed frames, input history and memory samples) is retained
 """
 import argparse
 import contextlib
+import ctypes as C
 import hashlib
 import json
 import os
@@ -294,6 +295,8 @@ def notes_checks(args, x, display, evidence, passed):
         saved_first_row = region(app.frame('saved-before-close'),30,102,838,14)
         x.delete(app.window)
         app.finish()
+        retained=list(evidence.glob(f'.herbert-notes-{app.p.pid}-*/recovery.txt'))
+        assert len(retained)==1 and retained[0].read_bytes()==expected.encode(), 'clean close removed recovery'
         passed('notes-typing-shift-punctuation-navigation-save-burst-focus-dirtyclose')
     with application(args.notes, path, b'Herbert - Notes', (900,600), x, display, evidence, 'notes-reopen') as app:
         assert region(app.frame('reopened'),30,102,838,14) == saved_first_row, 'reopened glyphs differ from saved text'
@@ -308,7 +311,9 @@ def notes_checks(args, x, display, evidence, passed):
         app.tap('y')
         app.finish()
         assert path.read_bytes()==expected.encode()
-        passed('notes-reopen-explicit-discard')
+        retained=list(evidence.glob(f'.herbert-notes-{app.p.pid}-*/recovery.txt'))
+        assert len(retained)==1 and retained[0].read_bytes()==b'discard'+expected.encode(), 'explicit discard removed recovery'
+        passed('notes-reopen-explicit-discard-recovery-retained')
 
     fastclose = evidence / 'fast-close.txt'
     with application(args.notes, fastclose, b'Herbert - Notes', (900,600), x, display, evidence, 'notes-fast-close') as app:
@@ -401,6 +406,11 @@ def notes_checks(args, x, display, evidence, passed):
             app.type('test')
             app.tap('s', 'Control_L')
             wait_for(lambda: dense.read_text()==initial+'test', 'sustained insertion saved exact bytes')
+            app.tap('z','Control_L');app.tap('s','Control_L')
+            wait_for(lambda:dense.read_text()==initial+'tes','sustained undo saved exact bytes')
+            app.tap('y','Control_L');app.tap('s','Control_L')
+            wait_for(lambda:dense.read_text()==initial+'test','sustained redo saved exact bytes')
+            app.tap('f','Control_L');app.type('test');app.tap('F3');app.tap('Escape');app.tap('End','Control_L')
             app.tap('BackSpace'); app.tap('BackSpace'); app.tap('BackSpace'); app.tap('BackSpace')
             app.tap('s', 'Control_L')
             wait_for(lambda: dense.read_text()==initial, 'sustained deletion saved exact bytes')
@@ -421,15 +431,170 @@ def notes_checks(args, x, display, evidence, passed):
         passed('notes-sustained-edit-save-scroll-dense-render-memory', cycles=cycles, samples=samples)
 
 
+def notes_editing_checks(args, x, display, evidence, passed):
+    d=evidence/'editing-features';d.mkdir()
+    target=d/'notes.txt';target.write_text('alpha beta alpha beta')
+    with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,'history-find') as app:
+        app.tap('F3');app.tap('Escape')
+        assert app.p.poll() is None,'F3 without a query did not open search'
+        def saved(wanted):
+            app.tap('s','Control_L')
+            wait_for(lambda:target.read_bytes()==wanted,'history/search exact saved bytes')
+        app.type('XYZ')
+        app.tap('z','Control_L');saved(b'XYalpha beta alpha beta')
+        app.tap('z','Control_L');app.tap('y','Control_L');saved(b'XYalpha beta alpha beta')
+        app.key('Control_L',True);app.tap('z','Shift_L');app.key('Control_L',False)
+        saved(b'XYZalpha beta alpha beta')
+        app.tap('z','Control_L');app.type('Q');app.tap('y','Control_L')
+        saved(b'XYQalpha beta alpha beta')
+        # Search finds without changing document bytes. Insertion after leaving
+        # search independently reveals the exact cursor target, including wrap.
+        app.tap('Home','Control_L');app.tap('f','Control_L');app.type('alpha')
+        app.frame('find-first')
+        app.tap('Return');app.tap('Escape');app.type('!')
+        saved(b'XYQalpha beta !alpha beta')
+        app.tap('F3');app.type('?')
+        saved(b'XYQ?alpha beta !alpha beta')
+        app.tap('F3','Shift_L');app.type('#')
+        saved(b'XYQ?alpha beta !#alpha beta')
+        app.tap('f','Control_L');app.tap('Return')
+        empty=app.frame('find-empty')
+        assert (16173151).to_bytes(3,'big') not in region(empty,28,560,810,7)
+        app.type('NO MATCH')
+        missing=app.frame('find-no-match')
+        assert (16173151).to_bytes(3,'big') in region(missing,28,560,810,7)
+        app.tap('f','Control_L');app.type('alpha');app.tap('Escape')
+        saved(b'XYQ?alpha beta !#alpha beta')
+        app.tap('f','Control_L');app.tap('q','Control_L');app.finish()
+        passed('notes-undo-redo-divergence-find-next-previous-wrap')
+
+    d=evidence/'queued-discard-recovery';d.mkdir();target=d/'original.txt';target.write_text('base')
+    with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,'queued-discard') as app:
+        app.stop();app.type('latest ',pause=0);app.tap('q','Control_L',pause=0);app.tap('y',pause=0)
+        app.p.send_signal(signal.SIGCONT);app.finish()
+        snapshot=next(d.glob('.herbert-notes-*/recovery.txt'))
+        assert snapshot.read_bytes()==b'latest base' and target.read_bytes()==b'base'
+        passed('notes-queued-edit-quit-discard-checkpoints-before-exit')
+
+    # Both absent recovery and an older successful copy must show the explicit
+    # incomplete-current-recovery prompt. Compare the actual pixels against a
+    # successful recovery prompt and against each other, never just amber ink.
+    close_prompts=[]
+    for label,fault,first,latest in [('complete',None,'x','x'),
+                                   ('absent','mkdirat:error=EACCES:when=1+','x','x'),
+                                   ('older','fsync:error=EIO:when=4+','x','xy')]:
+        d=evidence/('discard-'+label);d.mkdir();target=d/'original.txt';target.write_text('base')
+        image=args.notes
+        if fault:
+            image=d/'launch'
+            image.write_text('#!/bin/sh\nexec strace --kill-on-exit -o '+shlex.quote(str(d/'strace.log'))+' -e inject='+fault+' '+shlex.quote(str(args.notes.resolve()))+' "$@"\n');image.chmod(0o700)
+        with application(image,target,b'Herbert - Notes',(900,600),x,display,d,label) as app:
+            app.type(first)
+            if label=='older':
+                wait_for(lambda:any(p.read_bytes()==b'xbase' for p in d.glob('.herbert-notes-*/recovery.txt')),'older copy exists before fault')
+                app.type('y')
+            if fault:
+                wait_for(lambda:(16173151).to_bytes(3,'big') in region(app.frame(),28,85,830,7),'recovery incomplete before discard')
+            app.tap('q','Control_L')
+            wait_for(lambda:(16173151).to_bytes(3,'big') in region(app.frame(),28,560,810,7),'close prompt actually rendered')
+            frame=app.frame('close-prompt')
+            assert (16173151).to_bytes(3,'big') in region(frame,28,560,810,7)
+            close_prompts.append(region(frame,28,560,810,7))
+            # Mod4/Super is not an unmodified affirmative response.
+            app.tap('y','Super_L');assert app.p.poll() is None,'modified Y discarded edits'
+            app.tap('y');app.finish()
+            assert target.read_bytes()==b'base'
+            copies=list(d.glob('.herbert-notes-*/recovery.txt'))
+            if label=='absent':assert not copies
+            else:assert len(copies)==1 and copies[0].read_bytes()==b'xbase'
+    assert close_prompts[0]!=close_prompts[1] and close_prompts[1]==close_prompts[2]
+    passed('notes-discard-distinguishes-complete-absent-and-stale-recovery')
+
+    # A completed, visible input batch has already been checkpointed before
+    # drawing. Abrupt process death and loss of the X connection retain it.
+    x.x.XKillClient.argtypes=[C.c_void_p,C.c_ulong]
+    x.x.XKillClient.restype=C.c_int
+    for failure in ['process-kill','display-loss']:
+        d=evidence/('recovery-'+failure);d.mkdir();target=d/'original.txt'
+        target.write_bytes(b'original text')
+        with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,failure) as app:
+            initial=app.frame()
+            app.type('unsaved ')
+            wait_for(lambda:len(list(d.glob('.herbert-notes-*/recovery.txt')))==1,'first recovery copy')
+            snapshot=next(d.glob('.herbert-notes-*/recovery.txt'))
+            wait_for(lambda:snapshot.read_bytes()==b'unsaved original text','complete recovery checkpoint')
+            wait_for(lambda:region(app.frame(),28,85,830,7)!=region(initial,28,85,830,7),'recovery path acknowledged on screen')
+            app.frame('checkpoint-visible')
+            assert snapshot.stat().st_mode&0o777==0o600 and snapshot.parent.stat().st_mode&0o777==0o700
+            if failure=='process-kill':
+                app.p.kill();assert app.p.wait(timeout=5)==-signal.SIGKILL
+            else:
+                x.x.XKillClient(x.display,app.window);x.x.XSync(x.display,False)
+                assert app.p.wait(timeout=5)!=0
+            assert snapshot.read_bytes()==b'unsaved original text' and target.read_bytes()==b'original text'
+        # External original edits between failure and reopening are never adopted
+        # or overwritten; recovered bytes are a separate ordinary document.
+        target.write_bytes(b'external original')
+        with application(args.notes,snapshot,b'Herbert - Notes',(900,600),x,display,d,'reopened-copy') as app:
+            app.tap('End','Control_L');app.type(' recovered');app.tap('s','Control_L')
+            wait_for(lambda:snapshot.read_bytes()==b'unsaved original text recovered','reopened checkpoint editable')
+            assert target.read_bytes()==b'external original'
+            app.tap('Escape');app.finish()
+        passed('notes-recovery-'+failure+'-reopen-separate-original-preserved')
+
+    # A recovery failure is visible independently of save status; a new edit
+    # retries. Inject a bounded delay to observe responsiveness after slow fsync.
+    for label,fault in [('create-failure','mkdirat:error=EACCES:when=1'),
+                        ('sync-failure','fsync:error=EIO:when=1'),
+                        ('slow-sync','fsync:delay_enter=200ms:when=1')]:
+        d=evidence/('recovery-'+label);d.mkdir();target=d/'document.txt';target.write_text('base')
+        launcher=d/'launch'
+        launcher.write_text('#!/bin/sh\nexec strace --kill-on-exit -o '+shlex.quote(str(d/'strace.log'))+' -e inject='+fault+' '+shlex.quote(str(args.notes.resolve()))+' "$@"\n');launcher.chmod(0o700)
+        with application(launcher,target,b'Herbert - Notes',(900,600),x,display,d,label) as app:
+            started=time.monotonic();app.type('x')
+            if label!='slow-sync':
+                wait_for(lambda:(16173151).to_bytes(3,'big') in region(app.frame(),28,85,830,7),'visible recovery warning')
+                app.frame('recovery-warning')
+                if label=='sync-failure':app.tap('s','Control_L')
+                else:app.type('y')
+            wanted=b'xybase' if label=='create-failure' else b'xbase'
+            wait_for(lambda:any(p.read_bytes()==wanted for p in d.glob('.herbert-notes-*/recovery.txt')),'checkpoint succeeds after fault')
+            wait_for(lambda:(16173151).to_bytes(3,'big') not in region(app.frame(),28,85,830,7),'recovery warning clears after retry')
+            elapsed=time.monotonic()-started
+            if label=='slow-sync':assert .18<=elapsed<5,elapsed
+            assert target.read_bytes()==(b'xbase' if label=='sync-failure' else b'base')
+            app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==wanted,'normal save remains usable')
+            app.tap('Escape');app.finish()
+        passed('notes-recovery-'+label,seconds=round(elapsed,3))
+
+    d=evidence/'idle-expose';d.mkdir();target=d/'notes.txt';target.write_text('Expose retains this text.')
+    launcher=d/'launch';trace=d/'strace.log'
+    launcher.write_text('#!/bin/sh\nexec strace --kill-on-exit -o '+shlex.quote(str(trace))+' -e trace=poll,sendto '+shlex.quote(str(args.notes.resolve()))+' "$@"\n');launcher.chmod(0o700)
+    with application(launcher,target,b'Herbert - Notes',(900,600),x,display,d,'idle') as app:
+        time.sleep(.6);before=trace.read_text().count('sendto(')
+        time.sleep(2);sent=trace.read_text().count('sendto(')-before
+        assert 2<=sent<=12,('idle sends',sent)
+        reference=region(app.frame(),30,102,838,14)
+        x.x.XClearArea.argtypes=[C.c_void_p,C.c_ulong,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_int]
+        x.x.XClearArea.restype=C.c_int
+        x.x.XClearArea(x.display,app.window,24,96,852,428,True);x.x.XSync(x.display,False)
+        wait_for(lambda:region(app.frame(),30,102,838,14)==reference,'Expose restores retained text')
+        app.tap('Escape');app.finish()
+    passed('notes-idle-blink-only-present-and-expose',sends_in_two_seconds=sent)
+
+
 def notes_fault_checks(args, x, display, evidence, passed):
     # A shell/strace launcher exists only in this test's scratch directory.
+    # Deny session-directory creation here so recovery fsyncs cannot consume
+    # the original-document fault injection; recovery faults have their own tests.
     # --kill-on-exit prevents an orphaned tracee if test cleanup stops the tracer.
     image = args.notes.resolve()
     gold = (16173151).to_bytes(3, 'big')
+    close_prompts={}
     for label,typing in [('edited-document','draft '),('clean-document','')]:
         d=evidence/('save-fault-'+label);d.mkdir();target=d/'notes.txt';target.write_text('base\n')
         launcher=d/'notes-under-fsync-fault'
-        launcher.write_text('#!/bin/sh\nexec strace --kill-on-exit -y -o '+shlex.quote(str(d/'strace.log'))+' -e inject=fsync:error=EIO:when=2 '+shlex.quote(str(image))+' "$@"\n');launcher.chmod(0o700)
+        launcher.write_text('#!/bin/sh\nexec strace --kill-on-exit -y -o '+shlex.quote(str(d/'strace.log'))+' -e inject=mkdirat:error=EACCES:when=1+ -e inject=fsync:error=EIO:when=2 '+shlex.quote(str(image))+' "$@"\n');launcher.chmod(0o700)
         with application(launcher,target,b'Herbert - Notes',(900,600),x,display,d,label) as app:
             clean=app.frame('initial-clean')
             saved_label=region(clean,806,542,42,7)
@@ -447,6 +612,7 @@ def notes_fault_checks(args, x, display, evidence, passed):
             x.delete(app.window)
             wait_for(lambda:region(app.frame(),28,560,810,7)!=region(warning,28,560,810,7),'dirty-close confirmation prompt')
             prompt=app.frame('dirty-close-prompt')
+            close_prompts[label]=region(prompt,28,560,810,7)
             assert app.p.poll() is None and target.read_bytes()==expected
             app.tap('Escape')
             app.tap('s','Control_L')
@@ -459,6 +625,7 @@ def notes_fault_checks(args, x, display, evidence, passed):
         injected=[line for line in log.splitlines() if 'fsync(' in line and 'INJECTED' in line]
         assert len(injected)==1 and str(d) in injected[0] and 'EIO' in injected[0],injected
         passed('notes-directory-sync-fault-'+label, expected_file_bytes=expected.decode(), injected_directory_fsync=injected[0])
+    assert close_prompts['edited-document']!=close_prompts['clean-document'],'save-only warning incorrectly claims unsaved edits or recovery'
 
 def static_elf(path):
     data = path.read_bytes()
@@ -509,6 +676,7 @@ def main():
                 if args.only != 'maze':
                     notes_checks(args,x,display,evidence,passed)
                     notes_fault_checks(args,x,display,evidence,passed)
+                    notes_editing_checks(args,x,display,evidence,passed)
             finally:
                 x.close()
     except BaseException as error:

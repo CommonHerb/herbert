@@ -8,6 +8,7 @@
 -- Metadata offsets100/104/108 are queue enabled/read-index/count; 256 entries.
 -- Offset96 requests a map refresh;112 stores pending reply sequence plus one
 -- (zero means none, so wrapped X11 sequence0 is still representable).
+-- Offset116 records an Expose pending presentation (acknowledged explicitly).
 -- All steady-state operations reuse these buffers. Raw pointers stay inside
 -- Linux calls; no buffer is appended to after its address is borrowed.
 
@@ -238,6 +239,9 @@ func x11_dispatch(c):
                 let queued = x11_queue_key(c, code, linux_u16(r, 28), linux_u32(r, 4))
             end
         end
+    end
+    if kind == 12 and linux_u32(r, 4) == linux_u32(c.0, 36):
+        let expose = linux_put32(c.0, 116, 1)
     end
     if kind == 9 and linux_u32(r, 4) == linux_u32(c.0, 36):
         let focused = linux_put32(c.0, 80, 1)
@@ -539,3 +543,6 @@ end
 -- An application with unsaved data may acknowledge a WM_DELETE request and
 -- present a confirmation. A destroyed/disconnected window still cannot recover.
 func x11_ack_close(c): return linux_put32(c.0, 84, 0) end
+
+func x11_exposed(c): return linux_u32(c.0, 116) != 0 end
+func x11_ack_expose(c): return linux_put32(c.0, 116, 0) end
