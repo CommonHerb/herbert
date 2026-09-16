@@ -9,7 +9,7 @@ without a foreign compiler or runtime.
 The Linux examples now include [a maze game](examples/maze.md) and
 [a plain-text notes editor](examples/notes.md). The original
 [First steps](examples/first_steps.md) window remains available as a small baseline;
-Ben completed its manual trial and authorized this expansion on September 13.
+Gulpin completed its manual trial and authorized this expansion on September 13.
 
 ```sh
 make maze notes
@@ -25,7 +25,10 @@ Herbert code and the actual host boundary: Linux and X11/XWayland supply system,
 display and device services; no foreign runtime or graphics library is linked
 into the applications.
 
-Start with [the word counter](examples/wordcount.md) to compile a useful program and process real input. Current capabilities and limitations are established by the source and executable checks.
+Start with [the language guide](docs/LANGUAGE.md) for grammar, types, primitives,
+worked examples and the current limits. [The word counter](examples/wordcount.md)
+is a useful first program. Current capabilities are established by source and
+executable checks.
 
 The [streaming long64 counter](examples/wordcount_long64.md) performs the same
 calculation on Herbert's own runtime, with a host adapter carrying input bytes
@@ -62,8 +65,8 @@ Start with `VERIFYING.md` before changing behavior.
 
 Use `ROADMAP.md` as the living map for what is proven, aspirational, unknown,
 and next.
-Use `BOOTSTRAP-RESPONSIBILITIES.md` to choose the next host-bootstrap
-replacement proof.
+`BOOTSTRAP-RESPONSIBILITIES.md` is a historical map of the completed C-bootstrap
+retirement, not a queue of next development tasks.
 
 ## Hosted process I/O
 

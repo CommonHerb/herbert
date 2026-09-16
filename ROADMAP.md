@@ -1,7 +1,7 @@
 # Herbert roadmap
 
 Herbert's active direction is a useful self-hosting language for ordinary Linux
-programs (Ben's September 12 priority change). New OS feature development is
+programs (Gulpin's September 12 priority change). New OS feature development is
 paused, with existing work, history and evidence preserved. An independent OS
 remains a possible later destination. Each piece must remain understandable and
 verifiable on demand.
@@ -33,10 +33,15 @@ verifiable on demand.
 ## What progress should address next
 
 Use concrete programs to improve the language and reusable application support.
-The first checkpoint is a normal Linux window with a keyboard-controlled
-character, ongoing updates and clean shutdown. Ben reported a successful manual
-trial on September 13 and authorized a maze, reusable support and notes editor. Do not start a general engine or another language.
-The family-language idea remains open when actual usage gives it a purpose.
+The first desktop checkpoint, Maze and Notes are implemented. The current quality
+pass targets measured compiler allocation, exact failure checks, clear source
+boundaries and a more useful Notes workflow. Work is complete only when its actual
+checks and independent review are recorded; a roadmap entry is not evidence.
+
+Use the existing applications to force the next language/runtime improvement.
+Keep the kernel work and its proofs available without resuming new OS features.
+Do not start a general engine or another language. Family languages remain an
+option when actual usage gives them a purpose.
 
 Own the language, compiler, runtime support and applications. Existing Linux,
 desktop/display services and drivers are accepted dependencies; no foreign

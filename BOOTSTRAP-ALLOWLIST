@@ -510,3 +510,6 @@ bootstrap/tests/check_debugcon_frames.py
 bootstrap/tests/DEBUGCON-FRAMES.md
 bootstrap/tests/fixtures/cairn-bochs-ci-seed.e9
 bootstrap/tests/fixtures/rollcall-bochs-2.8.e9
+
+# Public language guide, canonical source for the parent pack.
+docs/LANGUAGE.md

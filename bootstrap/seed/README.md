@@ -13,9 +13,10 @@ the remaining tracked C source is `tools/scan.c`, a governance scanner used by
 The emitter is a **pure, deterministic function of the backend source** — no
 timestamp, PID, cwd, hostname, or randomness (verified). So the seed is
 **byte-reproducible**: running the seed on the backend reproduces the seed
-exactly (this is the `link10` self-hosting fixpoint, now C-free). The seed is
-therefore not an opaque trust anchor you must take on faith — it is a *cache* of
-an artifact anyone can regenerate from readable source and `cmp`.
+exactly (this is the `link10` self-hosting fixpoint, now C-free). Given the existing seed, anyone can reproduce its bytes from the corresponding
+readable source and compare them. This establishes consistency and determinism;
+the seed remains a trusted executable input to that process. Reproducing it is
+not an independent derivation of its original provenance.
 
 **Honest limit (trusting-trust):** these bytes were minted by the C interpreter
 *once*, at seed-creation time. The seed removes C from all *future* mints, but it
