@@ -61,6 +61,10 @@ jobs:
             /tmp/herbert-x11-text-check-*/
             /tmp/herbert-desktop-check-*/
             /tmp/herbert-grid-map-*/
+            /tmp/herbert-conformance.*/
+            /tmp/herbert-stdin-contract.*/
+            /tmp/herbert-cli-contract.*/
+            /tmp/herbert-hosted-memory-*/
           if-no-files-found: ignore
           retention-days: 14
           include-hidden-files: true

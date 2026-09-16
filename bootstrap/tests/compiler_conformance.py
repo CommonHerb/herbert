@@ -182,6 +182,7 @@ def main() -> int:
     parser.add_argument("--keep-work", action="store_true", help="retain copied compiler, source, status, streams and ELF artifacts")
     args = parser.parse_args()
     work = None
+    success = False
     try:
         cases = read_corpus()
         accepted = sum(case["profile"] == "run" for case in cases)
@@ -200,13 +201,14 @@ def main() -> int:
                 failed += 1
                 print(f"FAIL: {case['id']}: {error}", flush=True)
         print(f"compiler-conformance: {len(cases) - failed}/{len(cases)} passed; {failed} failed", flush=True)
-        return 1 if failed else 0
+        success = failed == 0
+        return 0 if success else 1
     except (OSError, ValueError) as error:
         print(f"FAIL: compiler-conformance setup: {error}", file=sys.stderr)
         return 1
     finally:
         if work is not None:
-            if args.keep_work:
+            if args.keep_work or not success:
                 print(f"compiler-conformance artifacts: {work}", flush=True)
             else:
                 shutil.rmtree(work)
