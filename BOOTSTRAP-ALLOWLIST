@@ -59,6 +59,8 @@ bootstrap/tests/check_lexer_copy_sync.py
 # Hosted conformance harness + hand-authored data: deliberate test-tool boundary.
 bootstrap/tests/compiler_conformance.py
 bootstrap/tests/fixtures/compiler_conformance.json
+# Bounded compiler CALL/tuple/heap scaling regression; Python/GNU time test tools.
+bootstrap/tests/check_compiler_metadata.py
 # Checked stdin real-descriptor gate + frozen data: deliberate test-tool boundary.
 bootstrap/tests/stdin_contract.py
 bootstrap/tests/fixtures/stdin_contract.json

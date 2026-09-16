@@ -7321,18 +7321,6 @@ func nc_make_ints(n, value):
     return nc_make_ints_loop(0, n, value, new_array(int))
 end
 
-func nc_make_tuple3s_loop(i, n, value, out):
-    if i >= n:
-        return out
-    end
-    do add(out, value)
-    return nc_make_tuple3s_loop(i + 1, n, value, out)
-end
-
-func nc_make_tuple3s(n, value):
-    return nc_make_tuple3s_loop(0, n, value, new_array((int, int, int)))
-end
-
 func nc_make_stacks_loop(i, n, out):
     if i >= n:
         return out
@@ -7343,22 +7331,6 @@ end
 
 func nc_make_stacks(n):
     return nc_make_stacks_loop(0, n, new_array(array(int)))
-end
-
-func nc_tuple3_array_set_loop(src, i, n, target, value, out):
-    if i >= n:
-        return out
-    end
-    if i == target:
-        do add(out, value)
-    else:
-        do add(out, get(src, i))
-    end
-    return nc_tuple3_array_set_loop(src, i + 1, n, target, value, out)
-end
-
-func nc_tuple3_array_set(src, target, value):
-    return nc_tuple3_array_set_loop(src, 0, count(src), target, value, new_array((int, int, int)))
 end
 
 func nc_stack_prefix_loop(stack, i, n, out):
@@ -7528,6 +7500,13 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     if i >= n:
         return (0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
     end
+    -- The pass visits each instruction once, in increasing index order. Build
+    -- dense metadata streams alongside it; copying an n-entry array for each
+    -- CALL/projection/heap operation made both work and arena use quadratic.
+    -- Errors return partial streams, which nc_analyze_program_loop discards.
+    let tuple_entry = (0 - 1, 0 - 1, 0 - 1)
+    let call_entry = (0, 0, 0)
+    let heap_entry = (0, 0, 0)
     let instr = get(code, i)
     let op = instr.0
     let na_type = get(new_array_meta, i)
@@ -7634,7 +7613,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         let tw = nc_type_width(pool, p.2)
         let es = nc_tuple_child_start_loop(pool, kids, 0, instr.1, 0)
         let ew = nc_type_width(pool, elem_t)
-        tuple_meta = nc_tuple3_array_set(tuple_meta, i, (tw, es, ew))
+        tuple_entry = (tw, es, ew)
         stack = nc_stack_push(p.1, elem_t)
     elif op == 16:
         stack = stack
@@ -7689,7 +7668,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
                 end
             end
         end
-        call_meta = nc_tuple3_array_set(call_meta, i, (aw, rw, kind))
+        call_entry = (aw, rw, kind)
         if kind == 1 and rw > max_sret:
             max_sret = rw
         end
@@ -7734,7 +7713,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     elif op == 24:
         return (nc_fail(438, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
     elif op == 26:
-        heap_meta = nc_tuple3_array_set(heap_meta, i, (4, 0, 0))
+        heap_entry = (4, 0, 0)
         stack = nc_stack_push(stack, nc_type_buffer())
     elif op == 27:
         let p = nc_meta_pop_expect(pool, stack, nc_type_buffer(), 0)
@@ -7751,7 +7730,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         if elem_w <= 0:
             return (nc_fail(438, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        heap_meta = nc_tuple3_array_set(heap_meta, i, (1, elem_w, elem_t))
+        heap_entry = (1, elem_w, elem_t)
         stack = nc_stack_push(stack, na_type)
     elif op == 29:
         let idx = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
@@ -7767,7 +7746,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         end
         let elem_t = nc_type_array_elem(pool, arr.2)
         let elem_w = nc_type_width(pool, elem_t)
-        heap_meta = nc_tuple3_array_set(heap_meta, i, (2, elem_w, elem_t))
+        heap_entry = (2, elem_w, elem_t)
         stack = nc_stack_push(arr.1, elem_t)
     elif op == 30:
         let arr = nc_stack_pop(stack, 0)
@@ -7806,7 +7785,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         if ok != 0:
             return (ok, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        heap_meta = nc_tuple3_array_set(heap_meta, i, (3, elem_w, elem_t))
+        heap_entry = (3, elem_w, elem_t)
         stack = arr.1
     elif op == 33:
         if fn_idx != main_idx:
@@ -7876,6 +7855,9 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         return (nc_fail(408, 0, nc_opcode_name_for_diag(op)), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
     end
     max_stack = nc_max_i(max_stack, nc_stack_word_depth(pool, stack))
+    do add(tuple_meta, tuple_entry)
+    do add(call_meta, call_entry)
+    do add(heap_meta, heap_entry)
     return nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, code, new_array_meta, i + 1, n, stack, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
 end
 
@@ -7901,7 +7883,7 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     let fn = get(funcs, fn_idx)
     let code = fn.4
     let n = count(code)
-    let heap_meta0 = nc_make_tuple3s(n, (0, 0, 0))
+    let heap_meta0 = new_array((int, int, int))
     if n == 0 or get(code, n - 1).0 != 21:
         return (nc_fail(416, 0, ""), (0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, new_array(array(int)), new_array((int, int, int)), new_array((int, int, int)), 0, 0, heap_meta0, 0))
     end
@@ -7913,8 +7895,8 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     end
     let local_types = nc_init_local_types(fn, sig, fn_idx)
     let stacks = nc_make_stacks(0)
-    let tuple_meta = nc_make_tuple3s(n, (0 - 1, 0 - 1, 0 - 1))
-    let call_meta = nc_make_tuple3s(n, (0, 0, 0))
+    let tuple_meta = new_array((int, int, int))
+    let call_meta = new_array((int, int, int))
     let p = nc_meta_process_loop(pool, funcs, sig, fn_idx, prog.2, count(prog.1), code, fn.5, 0, n, new_array(int), local_types, stacks, tuple_meta, call_meta, 0, 0, 0, heap_meta0, 0)
     if p.0 != 0:
         return (p.0, (0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, stacks, tuple_meta, call_meta, 0, 0, p.8, p.9))
