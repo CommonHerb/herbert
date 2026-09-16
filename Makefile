@@ -55,6 +55,109 @@ compiler-cli-contract:
 wordcount:
 	@python3 bootstrap/tests/check_wordcount.py
 
+# Developer builds use the same committed compiler; support units are ordered
+# source concatenation, not an external linker. Values travel via environment
+# variables so source/output paths with spaces never become shell syntax.
+.PHONY: program program-contract
+program: SHELL := /bin/bash
+# Do not recursively expand user filenames as Make expressions, including via
+# Make's automatic export of command-line variables.
+unexport SOURCE SUPPORT OUTPUT
+program: export PROGRAM_SOURCE = $(value SOURCE)
+program: export PROGRAM_SUPPORT = $(value SUPPORT)
+program: export PROGRAM_OUTPUT = $(if $(value OUTPUT),$(value OUTPUT),build/program)
+program:
+	@set -euo pipefail; set -f; \
+	  die() { printf 'program: %s\n' "$$*" >&2; exit 1; }; \
+	  canonical_path() { \
+	    local path; path=$$(realpath "$$@" && printf '.') || return; path=$${path%$$'\n.'}; \
+	    [[ "$$path" != *$$'\t'* && "$$path" != *$$'\n'* ]] || die 'paths containing tabs/newlines are unsupported'; \
+	    printf '%s' "$$path"; \
+	  }; \
+	  root=$$(canonical_path -e .); \
+	  for path in "$$PROGRAM_SOURCE" "$$PROGRAM_OUTPUT" "$$root"; do \
+	    [[ "$$path" != *$$'\t'* && "$$path" != *$$'\n'* ]] || die 'paths containing tabs/newlines are unsupported'; \
+	  done; \
+	  [[ -n "$$PROGRAM_SOURCE" ]] || die 'use make program SOURCE=path [SUPPORT="linux ..."] [OUTPUT=build/program]'; \
+	  [[ -f "$$PROGRAM_SOURCE" && -r "$$PROGRAM_SOURCE" ]] || die "source is not a readable file: $$PROGRAM_SOURCE"; \
+	  source=$$(canonical_path -e -- "$$PROGRAM_SOURCE"); \
+	  [[ ! -L "$$PROGRAM_OUTPUT" && ! -d "$$PROGRAM_OUTPUT" ]] || die 'output must not be a symlink or directory'; \
+	  output=$$(canonical_path -m -- "$$PROGRAM_OUTPUT"); \
+	  [[ "$$output" != "$$source" && ! "$$output" -ef "$$source" ]] || die 'output would replace the source'; \
+	  git_dir=$$(git rev-parse --absolute-git-dir && printf '.'); git_dir=$${git_dir%$$'\n.'}; \
+	  git_dir=$$(canonical_path -e -- "$$git_dir"); \
+	  common_dir=$$(git rev-parse --git-common-dir && printf '.'); common_dir=$${common_dir%$$'\n.'}; \
+	  common_dir=$$(canonical_path -e -- "$$common_dir"); \
+	  for protected in "$$root/.git" "$$git_dir" "$$common_dir"; do \
+	    [[ "$$output" != "$$protected" && "$$output" != "$$protected/"* ]] || die 'output would replace repository metadata'; \
+	  done; \
+	  [[ ! "$$output" -ef "$$root/bootstrap/seed/gen1.seed" ]] || die 'output would replace the seed'; \
+	  if [[ "$$output" == "$$root/"* ]]; then \
+	    relative=$${output#"$$root/"}; \
+	    if git --literal-pathspecs ls-files --error-unmatch -- "$$relative" >/dev/null 2>&1; then die 'output would replace a tracked project file'; \
+	    else status=$$?; [[ "$$status" -eq 1 ]] || die 'cannot establish tracked-file protection'; fi; \
+	  fi; \
+	  units=(); \
+	  for alias in $$PROGRAM_SUPPORT; do \
+	    [[ "$$alias" =~ ^[a-zA-Z0-9_]+$$ && -f "$$root/lib/$$alias.herb" ]] || die "unknown support alias: $$alias"; \
+	    units+=("$$root/lib/$$alias.herb"); \
+	  done; \
+	  units+=("$$source"); \
+	  for unit in "$${units[@]}"; do \
+	    [[ "$$unit" != *$$'\t'* && "$$unit" != *$$'\n'* ]] || die 'source paths containing tabs/newlines are unsupported'; \
+	    [[ "$$output" != "$$unit" && ! "$$output" -ef "$$unit" ]] || die 'output would replace an input source'; \
+	  done; \
+	  mkdir -p -- "$$(dirname -- "$$output")"; \
+	  work=$$(mktemp -d "$$(dirname -- "$$output")/.herbert-build.XXXXXXXX"); \
+	  trap 'status=$$?; printf "program build evidence: %s\n" "$$work" >&2; exit "$$status"' EXIT; \
+	  cp -- bootstrap/seed/gen1.seed "$$work/compiler"; \
+	  want=$$(awk '{print $$1}' bootstrap/seed/gen1.seed.sha256); \
+	  got=$$(sha256sum "$$work/compiler" | awk '{print $$1}'); \
+	  [[ "$$got" == "$$want" ]] || die 'committed seed checksum mismatch'; \
+	  printf '%s\n' "$$got" > "$$work/compiler.sha256"; \
+	  chmod u+x "$$work/compiler"; \
+	  : > "$$work/source.herb"; : > "$$work/source-map.tsv"; first=1; index=0; \
+	  for unit in "$${units[@]}"; do \
+	    cp -- "$$unit" "$$work/input.$$index.herb"; \
+	    lines=$$(wc -l < "$$work/input.$$index.herb"); eof=$$((lines + 1)); \
+	    cat -- "$$work/input.$$index.herb" >> "$$work/source.herb"; \
+	    if [[ "$$(tail -c1 "$$work/input.$$index.herb" | od -An -tx1 | tr -d ' \n')" != 0a ]]; then \
+	      printf '\n' >> "$$work/source.herb"; lines=$$((lines + 1)); \
+	    fi; \
+	    last=$$((first + lines - 1)); \
+	    printf '%s\t%s\t1\t%s\n' "$$first" "$$last" "$$unit" >> "$$work/source-map.tsv"; \
+	    first=$$((last + 1)); index=$$((index + 1)); \
+	  done; \
+	  printf '%s\t%s\t%s\t%s\n' "$$first" "$$first" "$$eof" "$$source" >> "$$work/source-map.tsv"; \
+	  if (cd "$$work" && ./compiler < source.herb > compiler.stdout 2> compiler.stderr); then status=0; else status=$$?; fi; \
+	  printf '%s\n' "$$status" > "$$work/compiler.status"; \
+	  if [[ "$$status" -ne 0 ]]; then \
+	    pattern='^line ([0-9]+):(.*)$$'; \
+	    while IFS= read -r diagnostic || [[ -n "$$diagnostic" ]]; do \
+	      mapped=0; \
+	      if [[ "$$diagnostic" =~ $$pattern ]]; then \
+	        number=$$((10#$${BASH_REMATCH[1]})); message=$${BASH_REMATCH[2]}; \
+	        while IFS=$$'\t' read -r first last original_first unit; do \
+	          if (( number >= first && number <= last )); then \
+	            printf '%s:%s:%s\n' "$$unit" "$$((number - first + original_first))" "$$message" >&2; mapped=1; break; \
+	          fi; \
+	        done < "$$work/source-map.tsv"; \
+	      fi; \
+	      [[ "$$mapped" -eq 1 ]] || printf '%s\n' "$$diagnostic" >&2; \
+	    done < "$$work/compiler.stderr"; \
+	    die "compiler exited with status $$status"; \
+	  fi; \
+	  printf '0\n' > "$$work/expected.stdout"; \
+	  cmp -s "$$work/expected.stdout" "$$work/compiler.stdout" && [[ ! -s "$$work/compiler.stderr" ]] || die 'compiler success must have stdout 0+LF and empty stderr'; \
+	  [[ -f "$$work/a.out" && "$$(head -c4 "$$work/a.out" | od -An -tx1 | tr -d ' \n')" == 7f454c46 ]] || die 'compiler did not publish an ELF image'; \
+	  sha256sum "$$work/a.out" > "$$work/image.sha256"; \
+	  cp -- "$$work/a.out" "$$work/publish"; chmod u+x "$$work/publish"; \
+	  mv -T -- "$$work/publish" "$$output"; \
+	  printf 'Built %s\n' "$$output"
+
+program-contract:
+	@python3 bootstrap/tests/check_program_build.py
+
 # Native Linux desktop checkpoint. These .herb library units are concatenated
 # as source, then compiled ONLY by the committed Herbert seed. No host compiler,
 # graphics library, runtime, or launcher is linked into the resulting executable.
@@ -279,7 +382,7 @@ reseed: compiler-source-check
 # make test already dispatches the six fragment/mutation pairs and both
 # switchover-cfree scripts. Preserve their standalone targets above for diagnosis;
 # the C-free proof's absent/tombstone phases still run as distinct environments.
-verify-local: compiler-metadata check verification-helpers test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps
+verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

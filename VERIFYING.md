@@ -17,6 +17,7 @@ Runs:
 
 - `make check`: confirms tracked non-`.herb` files exactly match `BOOTSTRAP-ALLOWLIST` (the from-scratch boundary scanner `tools/scan.c` — kept governance meta-tooling, not the retired interpreter).
 - `make verification-helpers`: checks exact compiler success and native runtime transcripts, rejects failing/noisy compilers even when they emit valid images, and checks emulator selection, honest kernel summaries, raw capture retention and complete CI matrix coverage.
+- `make program-contract`: checks the [developer build command](docs/BUILDING.md), source locations, retained evidence, output protection and atomic publication with real compiler artifacts and controlled failures.
 - `make test-timeout`: checks the repo-local portable `timeout` shim.
 - `make test`: the full non-emulator harness (see below). This already includes
   all six fragment/mutation pairs (`evaluator-native`, `vm-native`, `parser-native`,

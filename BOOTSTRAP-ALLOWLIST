@@ -504,6 +504,7 @@ bootstrap/tests/check_boot_input.py
 # Shared verification machinery (test-only; no compiler/runtime dependency).
 bootstrap/tests/qemu_prefix.sh
 bootstrap/tests/check_verification_helpers.py
+bootstrap/tests/check_program_build.py
 bootstrap/tests/kernel_evidence.py
 bootstrap/tests/kernel_evidence.sh
 bootstrap/tests/kernel_ci_group.sh
@@ -518,3 +519,6 @@ docs/LANGUAGE.md
 
 # Compiler source composition and stage contracts (documentation).
 docs/COMPILER.md
+
+# Developer source-build guide.
+docs/BUILDING.md

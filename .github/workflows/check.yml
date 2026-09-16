@@ -36,6 +36,8 @@ jobs:
         run: make check
       - name: verification helpers
         run: make verification-helpers
+      - name: developer program build contract
+        run: make program-contract
       - name: timeout shim
         run: make test-timeout
       - name: make test
@@ -82,6 +84,7 @@ jobs:
             /tmp/herbert-x11-text-check-*/
             /tmp/herbert-desktop-check-*/
             /tmp/herbert-grid-map-*/
+            /tmp/herbert-program-build-*/
             /tmp/herbert-conformance.*/
             /tmp/herbert-stdin-contract.*/
             /tmp/herbert-cli-contract.*/

@@ -10,3 +10,9 @@ bootstrap/tests/gen_*_blob.py
 
 # Optional raw kernel-gate captures.
 _kernel_evidence/
+
+# Retained developer compiler evidence stays on disk, outside version control.
+.herbert-build.*/
+
+# Previous generated compiler-source snapshots are retained by explicit assembly.
+/stack/.compiler-source.*/
