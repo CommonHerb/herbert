@@ -170,7 +170,7 @@ its normal CI checks use QEMU TCG and do not claim a Bochs application run.
 
 Folio (link67) supplies boot-file input and exercises the
 [binary file viewer](examples/hexview_long64.md). Its normal and mutation gates
-join the existing 99 kernel gates. They check exact raw bytes and EOF, call
+bring the kernel suite to 101 scripts: 51 link gates and 50 mutation proofs. They check exact raw bytes and EOF, call
 continuity, ELF stack reservation and explicit refusal of invalid boot input.
 GDB changes selected boot registers/metadata at the real kernel entry to exercise
 invalid spans without adding production hooks. GRUB uses `module --nounzip`;
