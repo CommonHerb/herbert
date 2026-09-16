@@ -191,3 +191,21 @@ subdirectory of the same kernel-job artifact. This application adds no kernel ga
 - They do not make old archived docs current.
 
 They prove the specific executable surfaces each command invokes.
+
+## Compiler source composition and resource regression
+
+`make check` also requires exact ordered composition of `stack/compiler/*.herb`
+into the tracked `stack/native_compile_fragment.herb`; see
+[compiler maintenance](docs/COMPILER.md). `make compiler-source` explicitly
+refreshes that artifact after stage edits. A stale or missing unit fails closed;
+checks do not rebuild it automatically. The split itself preserves every byte.
+
+`make compiler-metadata` compiles and executes 2,000-operation CALL, tuple and
+heap cases using the checksum-verified committed seed. It checks independent
+runtime values and a 128 MiB compiler peak-RSS ceiling using GNU time, with
+bounded execution and retained failure evidence. This catches the demonstrated
+quadratic copying regression; it is not a general whole-compiler linearity or
+heap-reclamation claim. `verify-local` and hosted CI both run it. Failed evidence
+uses `/tmp/compiler-metadata-*/`; composition candidates use
+`/tmp/herbert-source-check.*`. The actual measured artifact hashes are printed
+on successful metadata runs as well.

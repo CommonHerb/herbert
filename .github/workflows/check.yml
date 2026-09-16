@@ -15,15 +15,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential python3 xxd xvfb libx11-6 libxtst6 gdb strace binutils
+            build-essential python3 time xxd xvfb libx11-6 libxtst6 gdb strace binutils
       - name: record actual hosted test environment
         run: |
           set -euo pipefail
           uname -a
           cat /etc/os-release
           dpkg-query -W -f='${Package}=${Version}\n' \
-            bash coreutils build-essential make gcc libc6 python3 xxd \
+            bash coreutils build-essential make gcc libc6 python3 time xxd \
             xvfb libx11-6 libxtst6 gdb strace binutils
+          /usr/bin/time --version
           python3 --version
           cc --version
           make --version
@@ -39,6 +40,8 @@ jobs:
         run: make test-timeout
       - name: make test
         run: make test
+      - name: compiler metadata resource regression
+        run: make compiler-metadata
       - name: Herbert word counter
         run: make wordcount
       - name: Hosted reusable memory and Linux calls
@@ -83,6 +86,8 @@ jobs:
             /tmp/herbert-stdin-contract.*/
             /tmp/herbert-cli-contract.*/
             /tmp/herbert-hosted-memory-*/
+            /tmp/compiler-metadata-*/
+            /tmp/herbert-source-check.*
           if-no-files-found: ignore
           retention-days: 14
           include-hidden-files: true
