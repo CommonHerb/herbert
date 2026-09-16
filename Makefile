@@ -255,12 +255,16 @@ compiler-source: compiler-source-membership
 	    rm -- "$$work/source.herb"; rmdir "$$work"; \
 	    printf 'Compiler source already current.\n'; exit 0; \
 	  fi; \
+	  previous=0; \
 	  if test -f stack/native_compile_fragment.herb; then \
-	    cp -p -- stack/native_compile_fragment.herb "$$work/previous.herb"; \
+	    cp -p -- stack/native_compile_fragment.herb "$$work/previous.herb"; previous=1; \
 	  fi; \
 	  chmod 644 "$$work/source.herb"; \
 	  mv -T -- "$$work/source.herb" stack/native_compile_fragment.herb; \
-	  printf 'Assembled compiler; previous source retained in %s. Qualify and reseed after substantive changes.\n' "$$work"
+	  if test "$$previous" -eq 1; then \
+	    printf 'Assembled compiler; previous source retained in %s.\n' "$$work"; \
+	  else printf 'Assembled new compiler source; no previous file existed.\n'; fi; \
+	  printf 'Qualify and reseed after substantive changes.\n'
 
 compiler-metadata:
 	@python3 bootstrap/tests/check_compiler_metadata.py
