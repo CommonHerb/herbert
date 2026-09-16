@@ -215,30 +215,50 @@ COMPILER_SOURCES := stack/compiler/frontend_vm.herb \
                     stack/compiler/hosted_emitter.herb \
                     stack/compiler/kernel_targets.herb \
                     stack/compiler/driver.herb
-.PHONY: compiler-source compiler-source-check compiler-metadata
-compiler-source-check:
+.PHONY: compiler-source compiler-source-check compiler-source-membership compiler-metadata
+compiler-source-membership:
+	@set -eu; \
+	  work=$$(mktemp -d /tmp/herbert-source-check.XXXXXXXX); \
+	  printf '%s\n' $(COMPILER_SOURCES) | LC_ALL=C sort > "$$work/declared"; \
+	  if ! find stack/compiler -type f -name '*.herb' > "$$work/present.raw"; then \
+	    printf 'Cannot list compiler stages; evidence retained: %s\n' "$$work" >&2; exit 1; \
+	  fi; \
+	  LC_ALL=C sort "$$work/present.raw" > "$$work/present"; \
+	  if ! cmp -s "$$work/declared" "$$work/present"; then \
+	    printf 'Compiler stage membership differs (missing, duplicate or unlisted unit); inspect: %s\n' "$$work" >&2; exit 1; \
+	  fi; \
+	  rm -- "$$work/declared" "$$work/present" "$$work/present.raw"; rmdir "$$work"
+
+compiler-source-check: compiler-source-membership
 	@set -eu; \
 	  combined=$$(mktemp /tmp/herbert-source-check.XXXXXXXX); \
-	  cat $(COMPILER_SOURCES) > "$$combined"; \
+	  if ! cat $(COMPILER_SOURCES) > "$$combined"; then \
+	    printf 'Cannot compose compiler source; candidate retained: %s\n' "$$combined" >&2; exit 1; \
+	  fi; \
 	  if ! cmp -s "$$combined" stack/native_compile_fragment.herb; then \
-	    printf 'Compiler source composition differs; edit stage files and run make compiler-source. Candidate retained: %s\n' "$$combined" >&2; \
-	    exit 1; \
+	    printf 'Compiler composition differs. Inspect stage AND assembled edits before make compiler-source; it retains the previous assembled file. Candidate: %s\n' "$$combined" >&2; exit 1; \
 	  fi; \
 	  rm -- "$$combined"; \
 	  printf 'PASS: compiler source composition is byte-exact\n'
 
-compiler-source:
+compiler-source: compiler-source-membership
 	@set -eu; \
-	  combined=$$(mktemp stack/.native-compile.XXXXXXXX); \
-	  cat $(COMPILER_SOURCES) > "$$combined"; \
-	  chmod 644 "$$combined"; \
-	  mv -- "$$combined" stack/native_compile_fragment.herb; \
-	  printf 'Assembled compiler source; qualify behavior and reseed after substantive changes.\n'
+	  work=$$(mktemp -d stack/.compiler-source.XXXXXXXX); \
+	  printf 'Compiler assembly work/evidence: %s\n' "$$work"; \
+	  cat $(COMPILER_SOURCES) > "$$work/source.herb"; \
+	  if cmp -s "$$work/source.herb" stack/native_compile_fragment.herb; then \
+	    rm -- "$$work/source.herb"; rmdir "$$work"; \
+	    printf 'Compiler source already current.\n'; exit 0; \
+	  fi; \
+	  if test -f stack/native_compile_fragment.herb; then \
+	    cp -p -- stack/native_compile_fragment.herb "$$work/previous.herb"; \
+	  fi; \
+	  chmod 644 "$$work/source.herb"; \
+	  mv -T -- "$$work/source.herb" stack/native_compile_fragment.herb; \
+	  printf 'Assembled compiler; previous source retained in %s. Qualify and reseed after substantive changes.\n' "$$work"
 
 compiler-metadata:
 	@python3 bootstrap/tests/check_compiler_metadata.py
-
-verify-local: compiler-metadata
 
 # reseed: re-mint the gen-1 seed C-FREE (the committed seed recompiles the backend
 # to its own fixpoint). Post-switchover this replaces the old C-mint reseed; run it
@@ -250,7 +270,7 @@ reseed: compiler-source-check
 # make test already dispatches the six fragment/mutation pairs and both
 # switchover-cfree scripts. Preserve their standalone targets above for diagnosis;
 # the C-free proof's absent/tombstone phases still run as distinct environments.
-verify-local: check verification-helpers test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps
+verify-local: compiler-metadata check verification-helpers test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

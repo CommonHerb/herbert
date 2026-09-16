@@ -16,7 +16,7 @@ not count as Herbert-native progress.
 | Surface | Current Role | Classification | Replacement Direction |
 | --- | --- | --- | --- |
 | `bootstrap/seed/gen1.seed` | Production compiler seed; Linux/x86_64 ELF | Required substrate | Preserve while pursuing textual-seed hardening and self-hosting fixpoints |
-| `stack/*.herb` | Herbert-owned lexer, parser, evaluator, VM, compiler, and probes | Native core | Expand only with executable proof |
+| `stack/*.herb` and `stack/compiler/*.herb` | Herbert-owned lexer, parser, evaluator, VM, compiler, and probes | Native core | Expand only with executable proof |
 | `bootstrap/tests/*.sh` | Existing host harnesses for C-free proofs, goldens, mutation gates, and CI-local coordination | Required substrate | Replace gradually with Herbert-owned manifests and native runners after parity |
 | `bootstrap/tests/*_ref.py` | Reference builders and graders for kernel/module links | Replaceable later | Preserve until Herbert-native reference builders or substrate witnesses exist |
 | `tools/scan.c` | Governance scanner for `BOOTSTRAP-ALLOWLIST` | Replaceable soon | Build a Herbert candidate beside it before deleting C |

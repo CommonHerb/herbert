@@ -27,13 +27,19 @@ maintainable boundaries without claiming that the whole compiler is modular.
 
 Edit the appropriate stage file, then run `make compiler-source` to refresh the
 assembled source. `make compiler-source-check` rejects any mismatch; `make check`
-includes it. Checks never silently regenerate the artifact and hide a stale or
-manually edited copy. The seed remains independently pinned by its checksum.
+includes it. Membership checking also rejects missing, duplicate or unlisted
+`.herb` stage files. Checks never silently regenerate the artifact and hide a stale or
+manually edited copy. `compiler-source` retains the previous assembled file in a fresh
+`stack/.compiler-source.*` directory when it changes that file, and reports the
+path. Inspect both sets of edits before rebuilding; this preserves a mistaken
+direct edit for recovery. Failed composition candidates are retained and named.
+The seed remains independently pinned by its checksum. `make test` alone does
+not check composition; use `make check` or the aggregate `make verify-local`.
 
 For a real compiler change, follow `VERIFYING.md`: qualify behavior and faults,
 run `make reseed`, prove the self-hosting fixpoint and execute applicable hosted
 and target gates. Include `make compiler-metadata` when changing metadata or its
-consumers. Expected output changes require independently justified expectations;
+consumers; `verify-local` includes that check. Expected output changes require independently justified expectations;
 do not regenerate frozen C-derived goldens from the seed as a new oracle.
 Mutation harnesses may deliberately alter a disposable assembled compiler;
 that is a test artifact, not a second authoring location.
@@ -85,13 +91,15 @@ The fields of a successful function metadata record are:
 
 Dense stream indices are bytecode instruction positions, never source-token or
 machine-code byte offsets. Tuple entries are `(wholeTupleWords, selectedStartWord,
-selectedWords)` with an all-ones default. Call entries are `(argWords, retWords,
+selectedWords)` with default `(0 - 1, 0 - 1, 0 - 1)` (each word is all 64 bits set). Call entries are `(argWords, retWords,
 kind)`, where kind 0/1 means scalar/hidden-return-pointer call and 2/3 the respective
 tail-call forms; their default is zero. Heap entries are `(kind, elemWords,
 elemType)`, with kinds 1 array creation, 2 get, 3 add and 4 buffer creation;
 buffer creation is `(4,0,0)` and the default is zero. There is no later patching.
-The construction is linear in instruction count; this does not claim whole-
-compiler linear complexity or control-flow fixed-point verification.
+Stream construction is linear in instruction count. The pre-existing tail-call
+check separately scans the function body for each candidate; this does not claim
+linear complexity for the full pass or compiler, or control-flow fixed-point
+verification.
 
 ## Comprehensibility evidence
 

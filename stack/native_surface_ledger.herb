@@ -9,7 +9,7 @@ func emit_line(s):
 end
 
 func main():
-    let l0 = emit_line("native: stack/*.herb")
+    let l0 = emit_line("native: stack/*.herb + stack/compiler/*.herb")
     let l1 = emit_line("required-substrate: bootstrap/seed/gen1.seed")
     let l2 = emit_line("required-substrate: .github/workflows")
     let l3 = emit_line("replace-soon: tools/scan.c")

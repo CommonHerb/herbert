@@ -1,4 +1,4 @@
-native: stack/*.herb
+native: stack/*.herb + stack/compiler/*.herb
 required-substrate: bootstrap/seed/gen1.seed
 required-substrate: .github/workflows
 replace-soon: tools/scan.c
