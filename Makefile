@@ -220,13 +220,18 @@ compiler-source-membership:
 	@set -eu; \
 	  work=$$(mktemp -d /tmp/herbert-source-check.XXXXXXXX); \
 	  printf '%s\n' $(COMPILER_SOURCES) | LC_ALL=C sort > "$$work/declared"; \
-	  if ! find stack/compiler -type f -name '*.herb' > "$$work/present.raw"; then \
+	  if ! find stack/compiler \( -name '*.herb' -o -type l \) > "$$work/present.raw"; then \
 	    printf 'Cannot list compiler stages; evidence retained: %s\n' "$$work" >&2; exit 1; \
 	  fi; \
 	  LC_ALL=C sort "$$work/present.raw" > "$$work/present"; \
 	  if ! cmp -s "$$work/declared" "$$work/present"; then \
 	    printf 'Compiler stage membership differs (missing, duplicate or unlisted unit); inspect: %s\n' "$$work" >&2; exit 1; \
 	  fi; \
+	  for unit in $(COMPILER_SOURCES); do \
+	    if test ! -f "$$unit" || test -L "$$unit"; then \
+	      printf 'Compiler stage must be a regular non-symlink file: %s; evidence: %s\n' "$$unit" "$$work" >&2; exit 1; \
+	    fi; \
+	  done; \
 	  rm -- "$$work/declared" "$$work/present" "$$work/present.raw"; rmdir "$$work"
 
 compiler-source-check: compiler-source-membership

@@ -28,7 +28,8 @@ maintainable boundaries without claiming that the whole compiler is modular.
 Edit the appropriate stage file, then run `make compiler-source` to refresh the
 assembled source. `make compiler-source-check` rejects any mismatch; `make check`
 includes it. Membership checking also rejects missing, duplicate or unlisted
-`.herb` stage files. Checks never silently regenerate the artifact and hide a stale or
+`.herb` stage files and symlinks within the stage directory; declared units must
+be regular non-symlink files. Checks never silently regenerate the artifact and hide a stale or
 manually edited copy. `compiler-source` retains the previous assembled file in a fresh
 `stack/.compiler-source.*` directory when it changes that file, and reports the
 path. Inspect both sets of edits before rebuilding; this preserves a mistaken
