@@ -64,9 +64,18 @@ func first_position(value, decrease, increase, low, high):
     return value
 end
 
-func first_loop(c, x, y, tick, last):
+-- A quick Escape press and release can both arrive in one event drain, so the
+-- held-key state alone can miss it. Ordered presses survive that; movement
+-- keys still read held state below.
+func first_escape(c, event):
+    if not x11_next_key(c, event): return false end
+    if linux_u32(event, 0) == 65307: return true end
+    return first_escape(c, event)
+end
+
+func first_loop(c, x, y, tick, last, event):
     let events = x11_events(c)
-    if x11_closed(c) or x11_key(c, 65307):
+    if x11_closed(c) or first_escape(c, event):
         let closed = x11_close(c)
         let checked = x11_need(closed == 0, "desktop: display close failed\n")
         do process_exit(0)
@@ -77,18 +86,20 @@ func first_loop(c, x, y, tick, last):
     if now - last < 16:
         let waited = linux_poll(linux_u64(c.0, 0), c.3, 1, 16 - (now - last))
         let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "desktop: input wait failed\n")
-        return first_loop(c, x, y, tick, last)
+        return first_loop(c, x, y, tick, last, event)
     end
     let nx = first_position(x, x11_key(c, 65361) or x11_key(c, 97), x11_key(c, 65363) or x11_key(c, 100), 42, 598)
     let ny = first_position(y, x11_key(c, 65362) or x11_key(c, 119), x11_key(c, 65364) or x11_key(c, 115), 118, 402)
     let drawn = first_draw(c, nx, ny, tick)
-    return first_loop(c, nx, ny, (tick + 1) % 180, now)
+    return first_loop(c, nx, ny, (tick + 1) % 180, now, event)
 end
 
 func main():
     let c = x11_open(640, 480, "Herbert - First steps")
+    let commands = x11_enable_text(c)
+    let event = linux_buffer(16)
     let first = first_draw(c, 320, 270, 0)
     let now = linux_clock_ms(c.4)
     let checked = x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
-    return first_loop(c, 320, 270, 1, now)
+    return first_loop(c, 320, 270, 1, now, event)
 end
