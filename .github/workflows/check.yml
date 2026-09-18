@@ -73,24 +73,36 @@ jobs:
       # (a fresh checkout has none), so it runs in this emulator-free job.
       - name: switchover-dry-run (C-free bite-proofs survive C's removal + mutation proof)
         run: make switchover-dry-run
+      # The evidence is packed into one tar archive before upload because the
+      # program-build contract deliberately retains probe files whose names carry
+      # shell metacharacters (for example "$(shell printf expanded > SOURCE_EXPANDED).herb"),
+      # and actions/upload-artifact refuses such names outright.
+      - name: pack hosted application test evidence
+        if: always()
+        run: |
+          shopt -s nullglob
+          evidence=(
+            /tmp/herbert-hosted-apps-*
+            /tmp/herbert-notes-support-*
+            /tmp/herbert-x11-text-check-*
+            /tmp/herbert-desktop-check-*
+            /tmp/herbert-grid-map-*
+            /tmp/herbert-program-build-*
+            /tmp/herbert-conformance.*
+            /tmp/herbert-stdin-contract.*
+            /tmp/herbert-cli-contract.*
+            /tmp/herbert-hosted-memory-*
+            /tmp/compiler-metadata-*
+            /tmp/herbert-source-check.*
+          )
+          if [ "${#evidence[@]}" -gt 0 ]; then
+            tar -C /tmp -czf /tmp/hosted-application-evidence.tar.gz -- "${evidence[@]#/tmp/}"
+          fi
       - name: retain hosted application test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hosted-application-evidence
-          path: |
-            /tmp/herbert-hosted-apps-*/
-            /tmp/herbert-notes-support-*/
-            /tmp/herbert-x11-text-check-*/
-            /tmp/herbert-desktop-check-*/
-            /tmp/herbert-grid-map-*/
-            /tmp/herbert-program-build-*/
-            /tmp/herbert-conformance.*/
-            /tmp/herbert-stdin-contract.*/
-            /tmp/herbert-cli-contract.*/
-            /tmp/herbert-hosted-memory-*/
-            /tmp/compiler-metadata-*/
-            /tmp/herbert-source-check.*
+          path: /tmp/hosted-application-evidence.tar.gz
           if-no-files-found: ignore
           retention-days: 14
-          include-hidden-files: true
