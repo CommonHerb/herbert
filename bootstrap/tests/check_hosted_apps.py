@@ -58,7 +58,23 @@ class App:
                     self.window = candidates[0]
                     return True
             wait_for(created, label + ' window')
-            x.focus(self.window)
+            # The window can match its title and size before the map request lands.
+            # X answers focus on an unmapped window with BadMatch, and this harness's
+            # error handler makes that error silent, so focus stays where it was. The
+            # application then receives keys by pointer position but drops them,
+            # because it accepts input only after it has seen FocusIn. Keep asking for
+            # focus until the server reports the window owns it, then wait until this
+            # harness connection has observed the FocusIn. That is not an application
+            # acknowledgment: the server queues the focus transition ahead of any later
+            # injected key on the application's own stream, which reads sequentially,
+            # so the application sets its focus flag before the first key is dispatched.
+            x.watch_focus(self.window)
+            def focused():
+                x.focus(self.window)
+                return x.owns_focus(self.window)
+            wait_for(focused, label + ' keyboard focus')
+            wait_for(lambda: any(event['event'] == 'in' for event in x.focus_events(self.window)),
+                     label + ' focus-in delivered')
             time.sleep(.15)
         except BaseException:
             self.close()
