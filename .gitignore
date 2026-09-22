@@ -16,3 +16,6 @@ _kernel_evidence/
 
 # Previous generated compiler-source snapshots are retained by explicit assembly.
 /stack/.compiler-source.*/
+
+# Failed seed-publication staging is retained as local recovery evidence.
+/bootstrap/seed/.reseed.*/

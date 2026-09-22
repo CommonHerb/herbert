@@ -40,6 +40,13 @@ search and explicit session recovery. The public guide and `make program` provid
 a supported starting point. Qualification commands and their limits live in
 `VERIFYING.md`; a roadmap entry is not evidence that a check ran.
 
+Gulpin's selected Notes workflow is opening and editing existing files. Notes
+preserves uniform LF/CRLF endings; its current ASCII and 64 KiB limits remain
+explicit. Compiler qualification includes composed conditionals, early returns,
+rebinding, short-circuit expressions and aggregate values. Actual file use should
+determine the next editor improvement; unsupported Unicode and clipboard needs
+are concrete candidates, not reasons to start a general editor framework.
+
 Use the existing applications to force the next language/runtime improvement.
 Keep the kernel work and its proofs available without resuming new OS features.
 Do not start a general engine or another language. Family languages remain an

@@ -17,6 +17,9 @@ Runs:
 
 - `make check`: confirms tracked non-`.herb` files exactly match `BOOTSTRAP-ALLOWLIST` (the from-scratch boundary scanner `tools/scan.c` — kept governance meta-tooling, not the retired interpreter).
 - `make verification-helpers`: checks exact compiler success and native runtime transcripts, rejects failing/noisy compilers even when they emit valid images, and checks emulator selection, honest kernel summaries, raw capture retention and complete CI matrix coverage.
+  It also checks seed-replacement refusal/recovery and that assertion-dependent
+  hosted verifiers refuse Python optimization (`-O`, `-OO`, `PYTHONOPTIMIZE`)
+  before performing work. Run these verifiers with assertions enabled.
 - `make program-contract`: checks the [developer build command](docs/BUILDING.md), source locations, retained evidence, output protection and atomic publication with real compiler artifacts and controlled failures.
 - `make test-timeout`: checks the repo-local portable `timeout` shim.
 - `make test`: the full non-emulator harness (see below). This already includes
@@ -43,10 +46,13 @@ Runs:
 
 - `make check-app-support`: independent map/parser and text-buffer models,
   file validation, atomic saving, external conflicts and syscall fault injection.
+  Text checks cover logical editing with preserved LF/CRLF file bytes, encoded
+  capacity, undo/redo, rescue and recovery, including copied project documents.
   Requires strace for file-failure checks; it is development tooling only.
 - `make check-hosted-apps`: maze wall/collection/completion/restart behavior and
   editor typing/navigation/save/reopen/dirty-close on private XTest windows,
-  plus 120 seconds each of repeated play/restart and edit/save/scroll memory checks.
+  plus three 120-second memory checks: Maze play/restart, Notes LF editing,
+  and Notes CRLF editing. Each Notes leg repeats edits, saves and scrolling.
   Strace also tests the visible post-publication sync warning and retry.
   Evidence includes screenshots, input history, saved bytes and memory samples;
   the hosted CI workflow uploads retained application evidence even on failure.
@@ -202,7 +208,8 @@ refreshes that artifact after stage edits. A stale or missing unit fails closed;
 checks do not rebuild it automatically. The split itself preserves every byte.
 
 `make compiler-metadata` compiles and executes 2,000-operation CALL, tuple and
-heap cases using the checksum-verified committed seed. It checks independent
+heap cases, plus a 200-local/200-conditional case with returning arms and live
+joins, using the checksum-verified committed seed. It checks independent
 runtime values and a 128 MiB compiler peak-RSS ceiling using GNU time, with
 bounded execution and retained failure evidence. This catches the demonstrated
 quadratic copying regression; it is not a general whole-compiler linearity or

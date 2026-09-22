@@ -1,40 +1,93 @@
 -- Fixed-capacity ASCII text editing. All storage is allocated at construction;
--- editing, navigation and inspection reuse it. LF ends lines; TAB is four
--- visual columns to the next tab stop. Cursor positions are byte boundaries.
--- Tuple: (bytes, state, undo records). State u64: length, cursor, desired
--- vertical column, oldest record, retained count, applied count. History holds
--- 256 single-byte edits, including cursor-before; oldest edits fall off the ring.
+-- editing, navigation and inspection reuse it. Internally LF ends lines; TAB
+-- advances to the next four-column stop. Cursor positions index logical bytes.
+-- Loads accept uniform LF or CRLF and retain that style, including new lines.
+-- Tuple: (logical bytes, state, undo records, serialized bytes). State u64:
+-- length0, cursor8, desired column16, oldest record24, retained count32,
+-- applied count40, CRLF48, serialized count56. The serialized byte limit is the
+-- capacity. History holds 256 logical-byte edits; a newline is one whole edit.
+-- Use text_file_bytes/length for file output, never t.0/text_length. Serialization
+-- happens only on request; navigation/rendering read logical bytes directly.
 func text_buffer(capacity):
-    let t = (linux_buffer(capacity), linux_buffer(48), linux_buffer(8192))
+    let t = (linux_buffer(capacity), linux_buffer(64), linux_buffer(8192), linux_buffer(capacity))
     let goal = linux_put64(t.1, 16, 0 - 1)
     return t
 end
 
 func text_length(t): return linux_u64(t.1, 0) end
 func text_cursor(t): return linux_u64(t.1, 8) end
+func text_crlf(t): return linux_u64(t.1, 48) != 0 end
+func text_file_length(t): return linux_u64(t.1, 56) end
+
+func text_file_width(t, ch):
+    if ch == 10 and text_crlf(t): return 2 end
+    return 1
+end
+
+func text_encode(t, p, out):
+    if p == text_length(t): return t.3 end
+    let ch = buffer_get(t.0, p)
+    if ch == 10:
+        let cr = buffer_set(t.3, out, 13)
+        out = out + 1
+    end
+    let stored = buffer_set(t.3, out, ch)
+    return text_encode(t, p + 1, out + 1)
+end
+
+-- Borrowed output remains valid until the next edit or serialization.
+func text_file_bytes(t):
+    if not text_crlf(t): return t.0 end
+    return text_encode(t, 0, 0)
+end
 
 func text_ascii(ch):
     return (ch >= 32 and ch <= 126) or ch == 10 or ch == 9
 end
 
-func text_validate(bytes, count, p):
-    if p >= count: return true end
-    if not text_ascii(buffer_get(bytes, p)): return false end
-    return text_validate(bytes, count, p + 1)
+-- Scan the whole input without touching text/state: 0 no newline, 1 LF,
+-- 2 CRLF, -EILSEQ unsupported byte or mixed endings. No partial acceptance.
+func text_style(bytes, count, p, style):
+    if p >= count: return style end
+    let ch = buffer_get(bytes, p)
+    if ch == 13:
+        if p + 1 >= count or style == 1: return 0 - 84 end
+        if buffer_get(bytes, p + 1) != 10: return 0 - 84 end
+        return text_style(bytes, count, p + 2, 2)
+    end
+    if not text_ascii(ch): return 0 - 84 end
+    if ch == 10:
+        if style == 2: return 0 - 84 end
+        style = 1
+    end
+    return text_style(bytes, count, p + 1, style)
 end
 
--- A rejected load leaves the previous text intact: -EFBIG or -EILSEQ.
+func text_decode(t, bytes, count, p, out):
+    if p == count: return out end
+    if buffer_get(bytes, p) == 13: p = p + 1 end
+    let copied = buffer_set(t.0, out, buffer_get(bytes, p))
+    return text_decode(t, bytes, count, p + 1, out + 1)
+end
+
+-- A rejected load leaves text, style, cursor and history intact. New/empty or
+-- newline-free files default to LF. No trailing newline is invented.
 func text_load(t, bytes, count):
     if count > buffer_length(t.0): return 0 - 27 end
     if not linux_range(bytes, 0, count): return 0 - 22 end
-    if not text_validate(bytes, count, 0): return 0 - 84 end
-    let copied = linux_copy(t.0, 0, bytes, 0, count)
-    let size = linux_put64(t.1, 0, count)
+    let style = text_style(bytes, count, 0, 0)
+    if linux_error(style): return style end
+    let copied = text_decode(t, bytes, count, 0, 0)
+    let size = linux_put64(t.1, 0, copied)
     let cursor = linux_put64(t.1, 8, 0)
     let goal = linux_put64(t.1, 16, 0 - 1)
     let base = linux_put64(t.1, 24, 0)
-    let count = linux_put64(t.1, 32, 0)
+    let retained = linux_put64(t.1, 32, 0)
     let applied = linux_put64(t.1, 40, 0)
+    let crlf = 0
+    if style == 2: crlf = 1 end
+    let stored = linux_put64(t.1, 48, crlf)
+    let filecount = linux_put64(t.1, 56, count)
     return 0
 end
 
@@ -53,11 +106,14 @@ end
 -- Returns 1 when changed, 0 at capacity or for an unsupported byte.
 func text_insert_raw(t, ch):
     let size = text_length(t)
-    if size == buffer_length(t.0) or not text_ascii(ch): return 0 end
+    if not text_ascii(ch): return 0 end
+    let width = text_file_width(t, ch)
+    if width > buffer_length(t.0) - text_file_length(t): return 0 end
     let p = text_cursor(t)
     let shifted = text_shift_right(t.0, size, p)
     let stored = buffer_set(t.0, p, ch)
     let grown = linux_put64(t.1, 0, size + 1)
+    let filecount = linux_put64(t.1, 56, text_file_length(t) + width)
     let moved = text_seek(t, p + 1)
     return 1
 end
@@ -66,8 +122,10 @@ func text_delete_raw(t):
     let p = text_cursor(t)
     let size = text_length(t)
     if p >= size: return 0 end
+    let width = text_file_width(t, buffer_get(t.0, p))
     let copied = linux_copy(t.0, p, t.0, p + 1, size - p - 1)
     let shrunk = linux_put64(t.1, 0, size - 1)
+    let filecount = linux_put64(t.1, 56, text_file_length(t) - width)
     let goal = linux_put64(t.1, 16, 0 - 1)
     return 1
 end

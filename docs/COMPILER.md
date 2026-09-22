@@ -45,6 +45,15 @@ do not regenerate frozen C-derived goldens from the seed as a new oracle.
 Mutation harnesses may deliberately alter a disposable assembled compiler;
 that is a test artifact, not a second authoring location.
 
+`make reseed` checks the previous seed's exact checksum pin before executing it,
+requires both generations' complete success envelopes and matching executable
+bytes, and runs hosted conformance before publishing a changed candidate. It
+retains failed work and refuses inputs changed during qualification. Publication
+replaces the seed and checksum separately; an interruption between replacements
+can leave a detectable mismatch, with the previous pair retained in the failed
+work directory. Use one writer. This does not replace full hosted/target
+qualification or establish independent seed provenance.
+
 ## Metadata stage contract
 
 `nc_analyze_program(pool, prog, sig)` consumes emitted bytecode and resolved type
@@ -65,6 +74,30 @@ opcode does not use that stream. Consumers index by instruction position.
 A call or tuple operation must never shift later entries. Never rebuild an
 instruction-count array merely to change one entry: the runtime's bump allocator
 keeps every discarded copy for the compiler process's lifetime.
+
+Control-flow edges are strictly forward. Conditional branches snapshot the
+operand stack and local types at their target; short-circuit branches retain
+their boolean on the taken edge and pop it on the expression-evaluation edge.
+At each instruction, merge only reachable predecessors. A local is definitely
+initialized only if every reaching predecessor initializes it. Unconditional
+BR and RET have no fallthrough; a returning arm cannot contaminate the types of
+the continuing arm. The shared `stmt_ends_return` predicate recognizes exhaustive
+nested conditionals for both lowering and inference. A conditional without an
+else cannot establish a definite return.
+
+Branch snapshots are separate from frame layout. Each local slot records its
+stored types for layout even when its path returns before the final instruction;
+that slot still needs storage. The existing supported rebinding rules keep its
+flattened width stable: every `let` allocates a fresh slot, scope exit never reuses
+it, and assignments resolve a binding whose declaration dominates the store.
+Frame layout takes the last stored type under those invariants; any future slot
+reuse must revisit layout width validation rather than assuming that remains
+safe. The unknown type ID marks an uninitialized local; initialized values with
+partially unresolved aggregate types may still be refined at a join.
+No per-instruction stack/local snapshot table is built:
+states are saved on branch edges. This is a forward join pass, not a fixed-point
+algorithm for backward branches, and does not eliminate the existing copying
+cost when a local-type array is updated.
 
 The live `nc_fail` emits a diagnostic and exits the process with status 1.
 Nominal nonzero-status paths must likewise stop before appending or consuming

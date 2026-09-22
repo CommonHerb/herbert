@@ -1,5 +1,5 @@
 -- A bounded plain-text editor, compiled and supported entirely in Herbert.
--- Libraries: linux, file_io, text_buffer, session_recovery, x11, pixel_text. ASCII + LF + TAB.
+-- Libraries: linux, file_io, text_buffer, session_recovery, x11, pixel_text. ASCII + uniform LF/CRLF + TAB.
 -- App state is accessed through named helpers below. No per-event/frame/save
 -- string or tuple creation. State fields: viewport, dirty/close mode, status,
 -- save result, redraw, recovery pending/result, search mode/count/match state.
@@ -45,7 +45,7 @@ end
 
 func notes_checkpoint(recovery, f, t, s):
     if not notes_checkpoint_pending(s): return 0 end
-    let checkpoint = recovery_save(recovery, f, t.0, text_length(t))
+    let checkpoint = recovery_save(recovery, f, text_file_bytes(t), text_file_length(t))
     let recorded = notes_set_recovery_result(s, checkpoint)
     let attempted = notes_set_recovery_attempted(s, 1)
     let done = notes_set_checkpoint_pending(s, 0)
@@ -77,7 +77,7 @@ func notes_save(f, t, s):
     if notes_recovery_attempted(s) and notes_recovery_result(s) != 0:
         let retry = notes_set_checkpoint_pending(s, 1)
     end
-    let result = file_save(f, t.0, text_length(t))
+    let result = file_save(f, text_file_bytes(t), text_file_length(t))
     let recorded = notes_set_save_result(s, result)
     if result == 0:
         let clean = notes_set_dirty(s, 0)
@@ -93,7 +93,7 @@ func notes_save(f, t, s):
 end
 
 func notes_save_copy(f, t, s):
-    let result = file_save_copy(f, t.0, text_length(t))
+    let result = file_save_copy(f, text_file_bytes(t), text_file_length(t))
     let recorded = notes_set_save_result(s, result)
     -- A rescue never adopts a new document or clears the original's dirty or
     -- close-confirmation state. Its exact sibling basename is shown below.
@@ -266,16 +266,19 @@ func notes_status(c, f, t, s, query):
     let collabel = pixel_text(c, "Column", 124, 542, 1)
     let col = pixel_number(c, text_column(t, text_cursor(t)) + 1, 170, 542, 1)
     let byteslabel = pixel_text(c, "Bytes", 248, 542, 1)
-    let bytes = pixel_number(c, text_length(t), 288, 542, 1)
+    let bytes = pixel_number(c, text_file_length(t), 288, 542, 1)
     let cap = pixel_text(c, "/ 65536", 330, 542, 1)
+    let style = "LF"
+    if text_crlf(t): style = "CRLF" end
+    let ending = pixel_text(c, style, 402, 542, 1)
     let dirty = "Saved"
     if notes_dirty(s): dirty = "UNSAVED" end
     let label = pixel_text(c, dirty, 806, 542, 1)
     let message = notes_message_id(s)
-    let status = "Ready. ASCII text, TAB and LF newlines."
+    let status = "Ready. ASCII text; original newline style is preserved."
     if message == 1: status = "Edited. Ctrl+S saves this document." end
     if message == 2: status = "Saved. File and containing directory synced." end
-    if message == 3: status = "Buffer full (65536 bytes). Delete text before inserting more." end
+    if message == 3: status = "Not enough space (65536-byte limit). Delete text before inserting more." end
     if message == 4: status = "Save failed; no replacement this attempt. Ctrl+Shift+S saves a rescue copy." end
     if message == 5:
         status = "Unsaved: Y discards edits; latest recovery INCOMPLETE. Esc returns | Ctrl+S saves."
@@ -404,7 +407,7 @@ func main():
     let loaded = text_load(t, opened.1, file_count(opened))
     if loaded != 0:
         let closed = file_close(opened)
-        return linux_die("notes: file must be at most 65536 bytes of ASCII text, TAB and LF. Unicode/CRLF/binary files are refused unchanged.\n")
+        return linux_die("notes: expected ASCII text, TAB and uniform LF or CRLF. Unicode, mixed endings, bare CR and binary files are refused unchanged.\n")
     end
     let f = opened
     let s = linux_buffer(104)

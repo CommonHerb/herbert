@@ -2294,6 +2294,9 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
     end
     if equal(tag, "if"):
         let r = nc_infer_if(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params)
+        if stmt_ends_return(stmt_idx, nodes):
+            return (r.0, r.1, r.2, r.3, 1)
+        end
         return (r.0, r.1, r.2, r.3, 0)
     end
     return (nc_fail(404, node.3, tag), env, sig, 0, 0)

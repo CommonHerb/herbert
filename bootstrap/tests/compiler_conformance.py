@@ -10,7 +10,8 @@ The corpus covers ordinary non-directive hosted input only; leading `-- emit:`
 routes are excluded.
 
 The corpus covers checked lexical/structural rejection, accepted boundaries,
-operator-class restrictions, hosted builtin arity, and direct-return lowering.
+operator-class restrictions, hosted builtin arity, direct-return lowering, and
+combinations of nested branches, returning rebindings and live continuations.
 Version 3 migrates rejection to status 1, exact stderr diagnostics and empty
 stdout. Every existing source/diagnostic and successful program expectation is
 preserved. Source rejection does not publish an artifact. The separate CLI
@@ -93,8 +94,8 @@ def read_corpus() -> list[dict]:
         if running:
             require(type(case["status"]) is int and 0 <= case["status"] <= 255, f"{ident}: invalid exit status")
         else:
-            require(re.fullmatch(r"line [1-9][0-9]*: [^\r\n]+ \(ERR [0-9]{3}\)", case["diagnostic"]),
-                    f"{ident}: expected one located diagnostic")
+            require(re.fullmatch(r"(?:line [1-9][0-9]*|program): [^\r\n]+ \(ERR [0-9]{3}\)", case["diagnostic"]),
+                    f"{ident}: expected one located or program-level diagnostic")
     require(profiles == {"run", "run-stdio", "reject"},
             "corpus must retain accept/reject and explicit stdio controls")
     return cases

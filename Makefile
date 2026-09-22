@@ -375,7 +375,10 @@ compiler-metadata:
 # reseed: re-mint the gen-1 seed C-FREE (the committed seed recompiles the backend
 # to its own fixpoint). Post-switchover this replaces the old C-mint reseed; run it
 # ONLY when stack/native_compile_fragment.herb legitimately changes (the michoi seed
-# gate goes RED). No C interpreter is involved.
+# gate goes RED). Checks the existing pin and both invocation envelopes, then
+# qualifies a changed fixpoint with hosted conformance before publication.
+# Full verify-local and applicable target qualification still follow. No C
+# interpreter is involved.
 reseed: compiler-source-check
 	@bash bootstrap/tests/reseed_gen1.sh
 

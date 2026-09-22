@@ -4,6 +4,8 @@ import os
 import re
 import json
 import hashlib
+import shutil
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -19,6 +21,33 @@ def bash(code, *args, env=None, timeout=90):
 
 
 class Helpers(unittest.TestCase):
+    def test_assertion_dependent_entrypoints_refuse_optimization(self):
+        # Imported desktop guards also protect the two consuming entrypoints.
+        hosted = ('check_desktop.py', 'check_notes_support.py',
+                  'check_hosted_apps.py', 'check_x11_text.py')
+        env = dict(os.environ)
+        env.pop('PYTHONOPTIMIZE', None)
+        for name in hosted:
+            with self.subTest(entrypoint=name, mode='normal-help'):
+                result = subprocess.run([sys.executable, str(TESTS/name), '--help'],
+                                        env=env, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(b'usage:', result.stdout)
+                self.assertEqual(result.stderr, b'')
+        for name in (*hosted, 'check_link44_attempts.py'):
+            for flag, optimize in [('-O', None), ('-OO', None), ('', '1'), ('', '2')]:
+                with self.subTest(entrypoint=name, flag=flag, optimize=optimize):
+                    child_env = dict(env)
+                    if optimize is not None:
+                        child_env['PYTHONOPTIMIZE'] = optimize
+                    command = [sys.executable] + ([flag] if flag else [])
+                    result = subprocess.run(command + [str(TESTS/name), '--help'],
+                                            env=child_env, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 1, (result.stdout, result.stderr))
+                    self.assertEqual(result.stdout, b'')
+                    self.assertEqual(result.stderr,
+                                     b'verification requires Python assertions; remove -O/-OO and PYTHONOPTIMIZE\n')
+
     def test_link34_failure_evidence_and_grader_errors(self):
         # Exercise the real shell gate and evidence cleanup with inert protocol
         # fixtures. This tests harness verdicts/retention, not guest execution.
@@ -409,6 +438,214 @@ qemu-system-x86_64'''
                         self.assertNotEqual(result.returncode, 0, (kind, label, result.stdout))
                         self.assertIn(b'native stdout is not exactly', result.stdout,
                                       'must compile and run, then fail transcript qualification')
+
+
+class Reseed(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # An actual executable ELF exercises the script's image checks. This is
+        # a host-built invocation fixture, never a Herbert compiler or runtime.
+        cls.fixture_work = tempfile.TemporaryDirectory(prefix='reseed-protocol-fixture-')
+        cls.addClassCleanup(cls.fixture_work.cleanup)
+        directory = Path(cls.fixture_work.name)
+        source = directory/'protocol.c'
+        source.write_text(r'''#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+int main(void) {
+    char directory[4096], buffer[4096]; size_t n;
+    if (!getcwd(directory, sizeof directory)) return 90;
+    const char *phase = strrchr(directory, '/') + 1;
+    FILE *in = fopen(getenv("RESEED_TEST_NEXT"), "rb");
+    FILE *out = fopen("a.out", "wb");
+    if (!in || !out) return 91;
+    while ((n = fread(buffer, 1, sizeof buffer, in)))
+        if (fwrite(buffer, 1, n, out) != n) return 92;
+    if (ferror(in) || fclose(out) || fclose(in)) return 93;
+    FILE *receipt = fopen(getenv("RESEED_TEST_CALLS"), "a");
+    if (!receipt) return 94;
+    fprintf(receipt, "%s\n", phase); fclose(receipt);
+    const char *edit = getenv("RESEED_TEST_COMPILE_EDIT");
+    if (edit && !strcmp(phase, "gen2")) {
+        FILE *file = fopen(edit, "ab"); if (!file) return 95;
+        fputs("changed by fixture\n", file); fclose(file);
+    }
+    fputs("0\n", stdout);
+    const char *bad_phase = getenv("RESEED_TEST_BAD_PHASE");
+    if (bad_phase && !strcmp(phase, bad_phase)) {
+        const char *kind = getenv("RESEED_TEST_BAD_KIND");
+        if (!strcmp(kind, "status")) return 7;
+        if (!strcmp(kind, "stdout")) fputs("unexpected\n", stdout);
+        if (!strcmp(kind, "stderr")) fputs("unexpected\n", stderr);
+    }
+    return 0;
+}
+''')
+        compiler = shutil.which('cc')
+        if compiler is None:
+            raise RuntimeError('reseed invocation tests require the host C compiler used by make check')
+        image = directory/'protocol'
+        result = subprocess.run([compiler, '-std=c99', '-O0', str(source), '-o', str(image)],
+                                capture_output=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f'cannot build reseed invocation fixture: {result.stderr!r}')
+        cls.image = image.read_bytes()
+
+    def prepare(self, directory, changed=False):
+        root = directory/'repo'
+        tests = root/'bootstrap/tests'; tests.mkdir(parents=True)
+        seeds = root/'bootstrap/seed'; seeds.mkdir()
+        stack = root/'stack'; stack.mkdir()
+        (tests/'reseed_gen1.sh').write_bytes((TESTS/'reseed_gen1.sh').read_bytes())
+        # Controlled gate checks sequencing and failure handling. The real
+        # conformance matrix is exercised separately against the real candidate.
+        (tests/'compiler_conformance.py').write_text('''import hashlib, os, sys
+from pathlib import Path
+root = Path(__file__).resolve().parents[2]
+candidate = Path(sys.argv[2])
+if sys.argv[1] != '--compiler' or candidate.read_bytes() != Path(os.environ['RESEED_TEST_NEXT']).read_bytes():
+    raise SystemExit('wrong candidate passed to conformance')
+if (root/'bootstrap/seed/gen1.seed').read_bytes() != Path(os.environ['RESEED_TEST_ORIGINAL']).read_bytes():
+    raise SystemExit('seed published before conformance')
+Path(os.environ['RESEED_TEST_GATE_RECEIPT']).write_text(hashlib.sha256(candidate.read_bytes()).hexdigest())
+edit = os.environ.get('RESEED_TEST_GATE_EDIT')
+if edit:
+    with Path(edit).open('ab') as f: f.write(b'changed by fixture\\n')
+print('controlled candidate conformance ' + os.environ.get('RESEED_TEST_GATE', 'pass'))
+raise SystemExit(1 if os.environ.get('RESEED_TEST_GATE') == 'reject' else 0)
+''')
+        seed = seeds/'gen1.seed'; seed.write_bytes(self.image)
+        pin = seeds/'gen1.seed.sha256'
+        pin.write_text(hashlib.sha256(self.image).hexdigest() + '  gen1.seed\n')
+        backend = stack/'native_compile_fragment.herb'; backend.write_text('controlled backend\n')
+        original = directory/'original.seed'; original.write_bytes(self.image)
+        candidate = directory/'candidate.seed'
+        candidate.write_bytes(self.image + (b'changed ELF fixture\n' if changed else b''))
+        temporary = directory/'tmp'; temporary.mkdir()
+        env = dict(os.environ, TMPDIR=str(temporary), RESEED_TEST_NEXT=str(candidate),
+                   RESEED_TEST_ORIGINAL=str(original), RESEED_TEST_CALLS=str(directory/'calls'),
+                   RESEED_TEST_GATE_RECEIPT=str(directory/'gate'))
+        inputs = {seed: seed.read_bytes(), pin: pin.read_bytes(), backend: backend.read_bytes()}
+        return tests/'reseed_gen1.sh', env, inputs
+
+    def invoke(self, script, env):
+        return subprocess.run(['bash', str(script)], env=env, capture_output=True, timeout=15)
+
+    def retained(self, result, env, inputs):
+        self.assertNotEqual(result.returncode, 0, (result.stdout, result.stderr))
+        work, = Path(env['TMPDIR']).iterdir()
+        self.assertIn(f'failed work retained at {work}'.encode(), result.stderr)
+        for name, data in zip(('previous.seed', 'previous.sha256', 'source.herb'), inputs.values()):
+            self.assertEqual((work/name).read_bytes(), data)
+        return work
+
+    def unchanged(self, inputs):
+        for path, before in inputs.items():
+            self.assertEqual(path.read_bytes(), before, str(path))
+
+    def test_malformed_pin_refused_before_execution(self):
+        for mode in ('wrong-digest', 'wrong-name', 'trailing-line', 'truncated'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as d:
+                script, env, inputs = self.prepare(Path(d))
+                pin = next(p for p in inputs if p.suffix == '.sha256')
+                correct = pin.read_bytes()
+                bad = {'wrong-digest': b'0'*64 + b'  gen1.seed\n',
+                       'wrong-name': correct.replace(b'gen1.seed', b'other.seed'),
+                       'trailing-line': correct + b'unexpected\n',
+                       'truncated': correct.rstrip(b'\n')}[mode]
+                pin.write_bytes(bad); inputs[pin] = bad
+                result = self.invoke(script, env)
+                self.retained(result, env, inputs); self.unchanged(inputs)
+                self.assertIn(b'current seed checksum mismatch; no compiler executed', result.stderr)
+                self.assertFalse(Path(env['RESEED_TEST_CALLS']).exists())
+                self.assertFalse(Path(env['RESEED_TEST_GATE_RECEIPT']).exists())
+
+    def test_both_generation_envelopes_despite_valid_artifact(self):
+        for phase in ('gen1', 'gen2'):
+            for kind in ('status', 'stdout', 'stderr'):
+                with self.subTest(phase=phase, kind=kind), tempfile.TemporaryDirectory() as d:
+                    script, env, inputs = self.prepare(Path(d), changed=True)
+                    env.update(RESEED_TEST_BAD_PHASE=phase, RESEED_TEST_BAD_KIND=kind)
+                    result = self.invoke(script, env)
+                    work = self.retained(result, env, inputs); self.unchanged(inputs)
+                    self.assertEqual((work/phase/'a.out').read_bytes(), Path(env['RESEED_TEST_NEXT']).read_bytes())
+                    self.assertEqual((work/phase/'compiler.status').read_text(), '7\n' if kind == 'status' else '0\n')
+                    self.assertEqual((work/phase/'compiler.stdout').read_bytes(),
+                                     b'0\nunexpected\n' if kind == 'stdout' else b'0\n')
+                    self.assertEqual((work/phase/'compiler.stderr').read_bytes(),
+                                     b'unexpected\n' if kind == 'stderr' else b'')
+                    self.assertIn(b'compiler exited 7' if kind == 'status' else
+                                  b'compiler success envelope failed', result.stderr)
+                    self.assertEqual(Path(env['RESEED_TEST_CALLS']).read_text(),
+                                     'gen1\n' if phase == 'gen1' else 'gen1\ngen2\n')
+                    self.assertFalse(Path(env['RESEED_TEST_GATE_RECEIPT']).exists())
+
+    def test_changed_candidate_gate_before_publication(self):
+        for changed, gate in ((False, 'pass'), (True, 'pass'), (True, 'reject')):
+            with self.subTest(changed=changed, gate=gate), tempfile.TemporaryDirectory() as d:
+                script, env, inputs = self.prepare(Path(d), changed=changed)
+                env['RESEED_TEST_GATE'] = gate
+                result = self.invoke(script, env)
+                self.assertEqual(Path(env['RESEED_TEST_CALLS']).read_text(), 'gen1\ngen2\n')
+                receipt = Path(env['RESEED_TEST_GATE_RECEIPT'])
+                self.assertEqual(receipt.exists(), changed)
+                if changed:
+                    self.assertEqual(receipt.read_text(), hashlib.sha256(Path(env['RESEED_TEST_NEXT']).read_bytes()).hexdigest())
+                if gate == 'reject':
+                    work = self.retained(result, env, inputs); self.unchanged(inputs)
+                    self.assertIn(b'candidate conformance failed; seed unchanged', result.stderr)
+                    self.assertIn('controlled candidate conformance reject', (work/'conformance.log').read_text())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(list(Path(env['TMPDIR']).iterdir()))
+                    seed, pin, backend = inputs
+                    self.assertEqual(seed.read_bytes(), Path(env['RESEED_TEST_NEXT']).read_bytes())
+                    self.assertEqual(pin.read_text(), hashlib.sha256(seed.read_bytes()).hexdigest() + '  gen1.seed\n')
+                    self.assertEqual(backend.read_bytes(), inputs[backend])
+
+    def test_input_edits_refused_before_current_exit_and_after_gate(self):
+        for changed in (False, True):
+            for index in range(3):
+                with self.subTest(changed=changed, input=index), tempfile.TemporaryDirectory() as d:
+                    script, env, inputs = self.prepare(Path(d), changed=changed)
+                    path = list(inputs)[index]
+                    env['RESEED_TEST_GATE_EDIT' if changed else 'RESEED_TEST_COMPILE_EDIT'] = str(path)
+                    result = self.invoke(script, env)
+                    self.retained(result, env, inputs)
+                    self.assertIn(b'inputs changed during qualification; refusing publication', result.stderr)
+                    self.assertNotIn(b'already current', result.stdout)
+                    for current, before in inputs.items():
+                        self.assertEqual(current.read_bytes(), before + (b'changed by fixture\n' if current == path else b''))
+
+    def test_second_rename_failure_retains_recoverable_prior_pair(self):
+        with tempfile.TemporaryDirectory() as d:
+            directory = Path(d)
+            script, env, inputs = self.prepare(directory, changed=True)
+            binary = directory/'bin'; binary.mkdir()
+            real_mv = shutil.which('mv')
+            self.assertIsNotNone(real_mv)
+            wrapper = binary/'mv'
+            wrapper.write_text('#!/bin/bash\n[[ "${@: -1}" != *.sha256 ]] || exit 88\nexec "$RESEED_TEST_MV" "$@"\n')
+            wrapper.chmod(0o755)
+            env.update(PATH=str(binary) + os.pathsep + os.environ['PATH'], RESEED_TEST_MV=real_mv)
+            result = self.invoke(script, env)
+            work = self.retained(result, env, inputs)
+            self.assertEqual(result.returncode, 88, result.stderr)
+            self.assertIn(b'publication staging retained at', result.stderr)
+            seed, pin, backend = inputs
+            self.assertEqual(seed.read_bytes(), Path(env['RESEED_TEST_NEXT']).read_bytes())
+            self.assertEqual(pin.read_bytes(), inputs[pin])
+            self.assertEqual(backend.read_bytes(), inputs[backend])
+            stage, = seed.parent.glob('.reseed.*')
+            self.assertEqual((stage/'gen1.seed.sha256').read_text(), hashlib.sha256(seed.read_bytes()).hexdigest() + '  gen1.seed\n')
+            self.assertNotEqual(hashlib.sha256(seed.read_bytes()).hexdigest(), pin.read_text().split()[0])
+            calls = Path(env['RESEED_TEST_CALLS']).read_bytes()
+            retry = self.invoke(script, env)
+            self.assertNotEqual(retry.returncode, 0)
+            self.assertIn(b'current seed checksum mismatch; no compiler executed', retry.stderr)
+            self.assertEqual(Path(env['RESEED_TEST_CALLS']).read_bytes(), calls)
+            self.assertEqual((work/'previous.seed').read_bytes(), inputs[seed])
 
 
 if __name__ == '__main__':

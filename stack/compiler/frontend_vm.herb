@@ -2006,22 +2006,46 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     return fault("bad expression")
 end
 
-func body_has_direct_return(stmts, i, n, nodes):
+func if_ends_return(kids, i, n, nodes):
     if i >= n:
         return false
     end
-    if equal(get(nodes, get(stmts, i)).0, "return"):
+    let arm = get(nodes, get(kids, i))
+    if equal(arm.0, "else"):
+        return body_ends_return(get(arm.2, 0), nodes)
+    end
+    if not body_ends_return(get(arm.2, 1), nodes):
+        return false
+    end
+    return if_ends_return(kids, i + 1, n, nodes)
+end
+
+func stmt_ends_return(stmt_idx, nodes):
+    let stmt = get(nodes, stmt_idx)
+    if equal(stmt.0, "return"):
         return true
     end
-    return body_has_direct_return(stmts, i + 1, n, nodes)
+    if equal(stmt.0, "if"):
+        return if_ends_return(stmt.2, 0, count(stmt.2), nodes)
+    end
+    return false
+end
+
+func body_has_return(stmts, i, n, nodes):
+    if i >= n:
+        return false
+    end
+    if stmt_ends_return(get(stmts, i), nodes):
+        return true
+    end
+    return body_has_return(stmts, i + 1, n, nodes)
 end
 
 func body_ends_return(body_idx, nodes):
-    -- A direct return terminates the body even if unreachable statements follow.
-    -- Use the same boundary for branch emission and inference's join inputs.
-    -- This does not infer termination from nested ifs whose arms all return.
+    -- A return or exhaustive returning if terminates this body. Inference,
+    -- branch joins and lowering must agree about that boundary, including nesting.
     let body = get(nodes, body_idx)
-    return body_has_direct_return(body.2, 0, count(body.2), nodes)
+    return body_has_return(body.2, 0, count(body.2), nodes)
 end
 
 func emit_body(stmts, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -2029,9 +2053,9 @@ func emit_body(stmts, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller
         return env
     end
     env = emit_stmt(get(stmts, i), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-    -- Inference ends this body at a direct return. Lowering must not request
+    -- Inference ends this body at a returning statement. Lowering must not request
     -- specializations or local metadata for statements inference never visited.
-    if equal(get(nodes, get(stmts, i)).0, "return"):
+    if stmt_ends_return(get(stmts, i), nodes):
         return env
     end
     return emit_body(stmts, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)

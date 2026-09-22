@@ -403,10 +403,17 @@ def notes_checks(args, x, display, evidence, passed):
         app.finish()
         passed('notes-external-change-refused-rescue-copy-and-dirty-state-retained')
 
-    dense = evidence / 'dense.txt'
-    initial = ''.join(f'{i:02d}: ' + ''.join(chr(ch) for ch in range(32,127))+'\n' for i in range(32))
-    dense.write_text(initial)
-    with application(args.notes, dense, b'Herbert - Notes', (900,600), x, display, evidence, 'notes-sustained') as app:
+    for style in ('lf', 'crlf'):
+        notes_sustained_checks(args, x, display, evidence, passed, style)
+
+
+def notes_sustained_checks(args, x, display, evidence, passed, style):
+    dense = evidence / ('dense-' + style + '.txt')
+    logical = ''.join(f'{i:02d}: ' + ''.join(chr(ch) for ch in range(32,127))+'\n' for i in range(32))
+    newline = b'\r\n' if style == 'crlf' else b'\n'
+    initial = logical.encode('ascii').replace(b'\n', newline)
+    dense.write_bytes(initial)
+    with application(args.notes, dense, b'Herbert - Notes', (900,600), x, display, evidence, 'notes-sustained-' + style) as app:
         dense_top = region(app.frame('ascii-dense'),30,102,838,14)
         app.tap('Next'); app.tap('Next')
         wait_for(lambda: region(app.frame(),30,102,838,14) != dense_top, 'page down scrolls visible rows')
@@ -421,30 +428,78 @@ def notes_checks(args, x, display, evidence, passed):
         while time.monotonic() - started < args.seconds:
             app.type('test')
             app.tap('s', 'Control_L')
-            wait_for(lambda: dense.read_text()==initial+'test', 'sustained insertion saved exact bytes')
+            wait_for(lambda: dense.read_bytes()==initial+b'test', 'sustained insertion saved exact bytes')
             app.tap('z','Control_L');app.tap('s','Control_L')
-            wait_for(lambda:dense.read_text()==initial+'tes','sustained undo saved exact bytes')
+            wait_for(lambda:dense.read_bytes()==initial+b'tes','sustained undo saved exact bytes')
             app.tap('y','Control_L');app.tap('s','Control_L')
-            wait_for(lambda:dense.read_text()==initial+'test','sustained redo saved exact bytes')
+            wait_for(lambda:dense.read_bytes()==initial+b'test','sustained redo saved exact bytes')
             app.tap('f','Control_L');app.type('test');app.tap('F3');app.tap('Escape');app.tap('End','Control_L')
             app.tap('BackSpace'); app.tap('BackSpace'); app.tap('BackSpace'); app.tap('BackSpace')
             app.tap('s', 'Control_L')
-            wait_for(lambda: dense.read_text()==initial, 'sustained deletion saved exact bytes')
+            wait_for(lambda: dense.read_bytes()==initial, 'sustained deletion saved exact bytes')
             app.tap('Home','Control_L'); app.tap('Next'); app.tap('Prior'); app.tap('End','Control_L')
             cycles += 1
             if cycles % 2 == 0:
                 sample = memory(app.p.pid)
                 sample['seconds'] = round(time.monotonic()-started,3)
                 samples.append(sample)
-                (evidence/'notes-memory.json').write_text(json.dumps(samples, indent=2)+'\n')
+                (evidence/('notes-memory-' + style + '.json')).write_text(json.dumps(samples, indent=2)+'\n')
         assert cycles >= 2
-        wait_for(lambda: dense.read_text()==initial, 'repeated edits and saves preserve exact text')
-        stable_memory(samples, 'editor edits saves scrolling redraw')
+        wait_for(lambda: dense.read_bytes()==initial, 'repeated edits and saves preserve exact text')
+        stable_memory(samples, style + ' editor edits saves scrolling redraw')
         app.frame('scrolled')
         app.tap('Escape')
         app.finish()
         assert not list(evidence.glob('.herbert-save-*.tmp')), 'normal save leaked temporary files'
-        passed('notes-sustained-edit-save-scroll-dense-render-memory', cycles=cycles, samples=samples)
+        passed('notes-sustained-' + style + '-edit-save-scroll-dense-render-memory',
+               newline_style=style, seconds_requested=args.seconds, cycles=cycles, samples=samples)
+
+
+def notes_newline_checks(args, x, display, evidence, passed):
+    d=evidence/'newline-editing';d.mkdir();target=d/'existing.txt'
+    original=b'first\r\n\tsecond\r\nlast';target.write_bytes(original)
+    with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,'crlf') as app:
+        initial=app.frame('loaded-crlf')
+        original_inode=target.stat().st_ino
+        app.tap('s','Control_L')
+        # Save replaces the target atomically even when its text is unchanged.
+        # Requiring a new inode prevents an ignored Ctrl+S from passing here.
+        wait_for(lambda:target.stat().st_ino!=original_inode and target.read_bytes()==original,
+                 'unedited CRLF save publishes a replacement with exact bytes')
+        app.tap('Down');app.tap('Right');app.type('!')
+        wanted=b'first\r\n\t!second\r\nlast'
+        # Delete at End removes the entire line separator; one undo restores it.
+        app.tap('Home','Control_L');app.tap('End');app.tap('Delete')
+        app.tap('s','Control_L')
+        wait_for(lambda:target.read_bytes()==b'first\t!second\r\nlast','delete whole CRLF')
+        app.tap('z','Control_L');app.tap('s','Control_L')
+        wait_for(lambda:target.read_bytes()==wanted,'undo restores whole CRLF')
+        app.tap('End','Control_L');app.tap('Return');app.type('!')
+        wanted+=b'\r\n!'
+        app.tap('s','Control_L')
+        wait_for(lambda:target.read_bytes()==wanted,'new line uses original CRLF style')
+        app.key('Control_L',True);app.tap('s','Shift_L');app.key('Control_L',False)
+        wait_for(lambda:any(p.read_bytes()==wanted for p in d.glob('herbert-rescue-*.txt')),'CRLF rescue exact bytes')
+        snapshots=list(d.glob('.herbert-notes-*/recovery.txt'))
+        assert len(snapshots)==1 and snapshots[0].read_bytes()==wanted
+        app.frame('saved-crlf');app.tap('q','Control_L');app.finish()
+    # Reopening a recovery file stays a separate document and retains its style.
+    snapshot=snapshots[0]
+    with application(args.notes,snapshot,b'Herbert - Notes',(900,600),x,display,d,'recovered-crlf') as app:
+        app.tap('End','Control_L');app.tap('Return');app.type('recovered')
+        app.tap('s','Control_L')
+        wait_for(lambda:snapshot.read_bytes()==wanted+b'\r\nrecovered','reopened recovery retains CRLF')
+        assert target.read_bytes()==wanted
+        app.tap('q','Control_L');app.finish()
+    # Equal logical text renders equally. Only the visible newline-style label
+    # differs between the loaded LF and CRLF representations.
+    lf=d/'existing-lf.txt';lf.write_bytes(original.replace(b'\r\n',b'\n'))
+    with application(args.notes,lf,b'Herbert - Notes',(900,600),x,display,d,'lf') as app:
+        frame=app.frame('loaded-lf')
+        assert region(initial,30,102,838,54)==region(frame,30,102,838,54)
+        assert region(initial,402,542,24,7)!=region(frame,402,542,24,7)
+        app.tap('q','Control_L');app.finish()
+    passed('notes-crlf-render-navigation-newline-undo-save-rescue-recovery-reopen')
 
 
 def notes_editing_checks(args, x, display, evidence, passed):
@@ -690,6 +745,7 @@ def main():
                 if args.only != 'notes':
                     maze_checks(args,x,display,evidence,passed)
                 if args.only != 'maze':
+                    notes_newline_checks(args,x,display,evidence,passed)
                     notes_checks(args,x,display,evidence,passed)
                     notes_fault_checks(args,x,display,evidence,passed)
                     notes_editing_checks(args,x,display,evidence,passed)

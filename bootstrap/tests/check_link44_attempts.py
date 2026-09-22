@@ -5,6 +5,9 @@ This checks attempt isolation and evidence retention, not kernel behavior. No
 emulator, disk mount, privileged command or compiler is executed. The real
 required-substrate gate must still run separately.
 """
+if not __debug__:
+    raise SystemExit('verification requires Python assertions; remove -O/-OO and PYTHONOPTIMIZE')
+
 import json
 import os
 from pathlib import Path

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Bound compiler memory for dense CALL, tuple-projection and heap metadata.
+"""Bound compiler memory for dense CALL, tuple, heap and branch/local metadata.
 
-Each straight-line input has 2,000 operations and an independently known result.
+The straight-line inputs have 2,000 operations and independently known results.
 The pre-repair compiler crosses the sampled RSS stop threshold on the first case;
-appending metadata keeps all three well below the RSS ceiling. This is a focused
+appending metadata keeps those cases below the RSS ceiling. A fourth input has
+200 locals and 200 conditionals, exercising returning arms and live-state joins.
+Its smaller scale leaves room under the same RSS ceiling despite pre-existing
+local-environment copying in other passes. This is a focused
 regression, not a general linear-memory guarantee for every compiler stage.
 Python and GNU time are test tools only; the programs use the Herbert seed.
 The sampled supervisor covers these single-process, single-thread Herbert
@@ -33,6 +36,7 @@ MAX_RSS_KIB = 128 * 1024
 MAX_ADDRESS_BYTES = 4 * 1024 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 OPERATIONS = 2000
+BRANCH_LOCALS = 200
 
 
 def require(condition, message):
@@ -106,6 +110,24 @@ def cases():
            + "let b = new_buffer()\ndo append(b, 65)\n"
            + "return x + get(a, 0).1 + get(a, 1).0 + length(freeze(b))\nend\n",
            OPERATIONS * (OPERATIONS + 1) // 2 + 3)
+    # Every conditional has a returning arm and two continuing predecessors.
+    # Keep all locals live across the joins; main exercises both surviving
+    # paths and an early return. The oracle is arithmetic, not compiler-derived.
+    n = BRANCH_LOCALS
+    lines = ["func branch_dense(mode):", "let total = 0"]
+    lines += [f"let v{i} = {i + 1}" for i in range(n)]
+    for i in range(n):
+        lines += [f"if mode == {i}:", f"return total + v{i}",
+                  f"elif mode == {n + i}:", f"v{i} = v{i} + 3",
+                  "else:", f"v{i} = v{i} + 7", "end",
+                  f"total = total + v{i}"]
+    halfway = n // 2
+    lines += ["return total", "end", "func main():",
+              f"return (branch_dense({2*n}), branch_dense({n+halfway}), branch_dense({halfway}))",
+              "end", ""]
+    full = n * (n + 1) // 2 + 7 * n
+    early = (halfway + 1) * (halfway + 2) // 2 + 7 * halfway
+    yield ("branches", "\n".join(lines), f"({full}, {full - 4}, {early})")
 
 
 def main():
@@ -136,6 +158,7 @@ def main():
               f"address-space limit={MAX_ADDRESS_BYTES} bytes", flush=True)
         results = []
         for label, source, answer in cases():
+            operations = BRANCH_LOCALS if label == "branches" else OPERATIONS
             directory = work / label
             directory.mkdir()
             (directory / "source.herb").write_text(source)
@@ -154,15 +177,15 @@ def main():
             result = invoke([str(artifact)], directory, "run")
             require(result == (0, f"{answer}\n".encode(), b""),
                     f"{label}: runtime result {result!r}")
-            results.append(dict(case=label, operations=OPERATIONS, rss_kib=rss,
+            results.append(dict(case=label, operations=operations, rss_kib=rss,
                                 source_bytes=len(source), compiler_sha256=digest,
                                 image_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest()))
             (work / "results.json").write_text(json.dumps(results, indent=2) + "\n")
-            print(f"PASS: compiler-metadata {label}: {OPERATIONS} operations; "
+            print(f"PASS: compiler-metadata {label}: {operations} operations; "
                   f"{rss} KiB RSS; {len(source)} source bytes; exact runtime result; "
                   f"image_sha256={results[-1]['image_sha256']}", flush=True)
         success = True
-        print("PASS: compiler-metadata (3 bounded compilation/runtime cases)", flush=True)
+        print(f"PASS: compiler-metadata ({len(results)} bounded compilation/runtime cases)", flush=True)
         return 0
     except (OSError, ValueError) as error:
         print(f"FAIL: compiler-metadata: {error}", file=sys.stderr, flush=True)

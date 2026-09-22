@@ -10,6 +10,9 @@ synthetic held key/release and close. Real focus changes interrupt that input
 check explicitly; they are not overridden or reported as a pass.
 """
 
+if not __debug__:
+    raise SystemExit('verification requires Python assertions; remove -O/-OO and PYTHONOPTIMIZE')
+
 import argparse
 import contextlib
 import ctypes as C

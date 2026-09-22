@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Separate CLI contract tests output publication and injected I/O faults.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Separate CLI contract tests output publication and injected I/O faults.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -1618,6 +1618,232 @@
       "profile": "reject",
       "source": "func main():\n    let first = clogger()\n    let second = clogger()\n    return (first, second)\nend\n",
       "diagnostic": "line 1: native-subset: more than one clogger() call is not allowed (ERR 411)"
+    },
+    {
+      "id": "flow-nested-exhaustive-in-then",
+      "profile": "run",
+      "source": "func choose(a, b):\n    if a:\n        if b:\n            return 11\n        else:\n            return 12\n        end\n    else:\n        return 13\n    end\nend\nfunc main():\n    return (choose(true, true), choose(true, false), choose(false, true), choose(false, false))\nend\n",
+      "stdin": "",
+      "stdout": "(11, 12, 13, 13)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-exhaustive-in-both-arms",
+      "profile": "run",
+      "source": "func choose(a, b):\n    if a:\n        if b:\n            return 11\n        else:\n            return 12\n        end\n    else:\n        if b:\n            return 21\n        else:\n            return 22\n        end\n    end\nend\nfunc main():\n    return (choose(true, true), choose(true, false), choose(false, true), choose(false, false))\nend\n",
+      "stdin": "",
+      "stdout": "(11, 12, 21, 22)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-exhaustive-in-elif",
+      "profile": "run",
+      "source": "func choose(n):\n    if n == 0:\n        return 10\n    elif n < 3:\n        if n == 1:\n            return 11\n        else:\n            return 12\n        end\n    else:\n        return 13\n    end\nend\nfunc main():\n    return (choose(0), choose(1), choose(2), choose(3))\nend\n",
+      "stdin": "",
+      "stdout": "(10, 11, 12, 13)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-exhaustive-string-returns",
+      "profile": "run",
+      "source": "func choose(n):\n    if n < 2:\n        if n == 0:\n            return \"left\"\n        else:\n            return \"middle\"\n        end\n    else:\n        return \"right\"\n    end\nend\nfunc main():\n    return (choose(0), choose(1), choose(2))\nend\n",
+      "stdin": "",
+      "stdout": "(\"left\", \"middle\", \"right\")\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-exhaustive-tuple-string-returns",
+      "profile": "run",
+      "source": "func choose(n):\n    if n < 2:\n        if n == 0:\n            return ((10, true), \"left\")\n        else:\n            return ((20, false), \"middle\")\n        end\n    else:\n        return ((30, true), \"right\")\n    end\nend\nfunc main():\n    return (choose(0), choose(1), choose(2))\nend\n",
+      "stdin": "",
+      "stdout": "(((10, true), \"left\"), ((20, false), \"middle\"), ((30, true), \"right\"))\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-and-equivalent-guards",
+      "profile": "run",
+      "source": "func nested(a, b):\n    if a < 10:\n        if b < 10:\n            return 11\n        else:\n            return 12\n        end\n    else:\n        return 13\n    end\nend\nfunc guarded(a, b):\n    if a < 10 and b < 10:\n        return 11\n    end\n    if a < 10:\n        return 12\n    end\n    return 13\nend\nfunc main():\n    return (nested(3, 4), guarded(3, 4), nested(3, 12), guarded(3, 12), nested(12, 4), guarded(12, 4))\nend\n",
+      "stdin": "",
+      "stdout": "(11, 11, 12, 12, 13, 13)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nonexhaustive-inner-continuation",
+      "profile": "run",
+      "source": "func choose(a, b):\n    if a:\n        if b:\n            return 11\n        end\n    else:\n        return 13\n    end\n    return 12\nend\nfunc main():\n    return (choose(true, true), choose(true, false), choose(false, true), choose(false, false))\nend\n",
+      "stdin": "",
+      "stdout": "(11, 12, 13, 13)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-exhaustive-inner-outer-continuation",
+      "profile": "run",
+      "source": "func choose(a, b):\n    if a:\n        if b:\n            return 11\n        else:\n            return 12\n        end\n    end\n    return 13\nend\nfunc main():\n    return (choose(true, true), choose(true, false), choose(false, true), choose(false, false))\nend\n",
+      "stdin": "",
+      "stdout": "(11, 12, 13, 13)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-live-integer-continuations",
+      "profile": "run",
+      "source": "func choose(a, b):\n    let x = 40\n    if a:\n        if b:\n            x = x + 1\n        else:\n            x = x + 2\n        end\n    else:\n        if b:\n            x = x + 3\n        else:\n            x = x + 4\n        end\n    end\n    return x + 10\nend\nfunc main():\n    return (choose(true, true), choose(true, false), choose(false, true), choose(false, false))\nend\n",
+      "stdin": "",
+      "stdout": "(51, 52, 53, 54)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-returning-int-to-bool-implicit-else",
+      "profile": "run",
+      "source": "func choose(flag):\n    let x = 40\n    if flag:\n        x = true\n        if x:\n            return 7\n        else:\n            return 8\n        end\n    end\n    return x + 2\nend\nfunc main():\n    return (choose(true), choose(false))\nend\n",
+      "stdin": "",
+      "stdout": "(7, 42)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-returning-bool-to-int-implicit-else",
+      "profile": "run",
+      "source": "func choose(flag):\n    let x = true\n    if flag:\n        x = 9\n        return x == 9\n    end\n    return not x\nend\nfunc main():\n    return (choose(true), choose(false))\nend\n",
+      "stdin": "",
+      "stdout": "(true, false)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-returning-int-to-bool-explicit-else",
+      "profile": "run",
+      "source": "func choose(flag):\n    let x = 40\n    if flag:\n        x = true\n        return 7\n    else:\n        x = x + 1\n    end\n    return x + 1\nend\nfunc main():\n    return (choose(true), choose(false))\nend\n",
+      "stdin": "",
+      "stdout": "(7, 42)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-returning-else-bool-to-int",
+      "profile": "run",
+      "source": "func choose(flag):\n    let x = true\n    if flag:\n        x = false\n    else:\n        x = 9\n        return x == 9\n    end\n    return x\nend\nfunc main():\n    return (choose(true), choose(false))\nend\n",
+      "stdin": "",
+      "stdout": "(false, true)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-returning-rebind-live-siblings",
+      "profile": "run",
+      "source": "func choose(a, b):\n    let x = 40\n    if a:\n        if b:\n            x = true\n            return 7\n        else:\n            x = x + 1\n        end\n    else:\n        x = x + 2\n    end\n    return x + 1\nend\nfunc main():\n    return (choose(true, true), choose(true, false), choose(false, true), choose(false, false))\nend\n",
+      "stdin": "",
+      "stdout": "(7, 42, 43, 43)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-returning-rebind-exhaustive-arm",
+      "profile": "run",
+      "source": "func choose(n):\n    let x = 40\n    if n < 2:\n        if n == 0:\n            x = true\n            return 7\n        else:\n            x = false\n            return 8\n        end\n    else:\n        return x + 2\n    end\nend\nfunc main():\n    return (choose(0), choose(1), choose(2))\nend\n",
+      "stdin": "",
+      "stdout": "(7, 8, 42)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-elif-returning-rebind-live-continuation",
+      "profile": "run",
+      "source": "func choose(n):\n    let x = 40\n    if n == 0:\n        x = true\n        return 7\n    elif n == 1:\n        x = false\n        return 8\n    else:\n        x = x + 1\n    end\n    return x + 1\nend\nfunc main():\n    return (choose(0), choose(1), choose(2))\nend\n",
+      "stdin": "",
+      "stdout": "(7, 8, 42)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-both-live-arms-rebind-common-bool",
+      "profile": "run",
+      "source": "func choose(flag):\n    let x = 40\n    if flag:\n        x = true\n    else:\n        x = false\n    end\n    return not x\nend\nfunc main():\n    return (choose(true), choose(false))\nend\n",
+      "stdin": "",
+      "stdout": "(false, true)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-single-live-arm-rebind-bool",
+      "profile": "run",
+      "source": "func choose(flag):\n    let x = 40\n    if flag:\n        return true\n    else:\n        x = false\n    end\n    return x\nend\nfunc main():\n    return (choose(true), choose(false))\nend\n",
+      "stdin": "",
+      "stdout": "(true, false)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-sequential-guards-independent-rebindings",
+      "profile": "run",
+      "source": "func choose(n):\n    let x = 40\n    let y = false\n    if n == 0:\n        x = true\n        return 7\n    end\n    if n == 1:\n        y = 3\n        return y + 5\n    end\n    return x + 2\nend\nfunc main():\n    return (choose(0), choose(1), choose(2))\nend\n",
+      "stdin": "",
+      "stdout": "(7, 8, 42)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-nested-tuple-string-updates-and-returns",
+      "profile": "run",
+      "source": "func choose(n):\n    let x = ((7, 8), \"z\")\n    if n == 0:\n        x = ((90, 91), \"aa\")\n        return x.0.0 + length(x.1)\n    elif n < 3:\n        if n == 1:\n            x = ((40, 41), \"bbb\")\n            return x.0.0 + length(x.1)\n        else:\n            x = ((12, 13), \"cccc\")\n        end\n    end\n    return x.0.0 + length(x.1)\nend\nfunc main():\n    return (choose(0), choose(1), choose(2), choose(3))\nend\n",
+      "stdin": "",
+      "stdout": "(92, 43, 16, 8)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-returning-tuple-field-type-rebind-rejected",
+      "profile": "reject",
+      "source": "func choose(flag):\n    let x = ((40, 41), \"seed\")\n    if flag:\n        x = ((true, false), \"gone\")\n        return 7\n    else:\n        return x.0.0 + length(x.1)\n    end\nend\nfunc main():\n    return (choose(true), choose(false))\nend\n",
+      "diagnostic": "line 4: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "flow-branch-local-consumed-before-return",
+      "profile": "run",
+      "source": "func choose(flag):\n    if flag:\n        let local = ((7, true), \"yes\")\n        return local.0.0 + length(local.1)\n    else:\n        return 20\n    end\nend\nfunc main():\n    return (choose(true), choose(false))\nend\n",
+      "stdin": "",
+      "stdout": "(10, 20)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-live-int-bool-join-rejected",
+      "profile": "reject",
+      "source": "func choose(flag):\n    let x = 40\n    if flag:\n        x = true\n    end\n    return x + 2\nend\nfunc main():\n    return choose(false)\nend\n",
+      "diagnostic": "program: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "flow-nested-live-type-join-rejected",
+      "profile": "reject",
+      "source": "func choose(a, b):\n    let x = 40\n    if a:\n        if b:\n            x = true\n        else:\n            x = 41\n        end\n    else:\n        x = 42\n    end\n    return x + 1\nend\nfunc main():\n    return choose(false, false)\nend\n",
+      "diagnostic": "program: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "flow-live-tuple-field-type-rebind-rejected",
+      "profile": "reject",
+      "source": "func choose(flag):\n    let x = ((40, 41), \"seed\")\n    if flag:\n        x = ((true, false), \"gone\")\n    else:\n        x = ((42, 43), \"kept\")\n    end\n    return x.0.0 + length(x.1)\nend\nfunc main():\n    return choose(false)\nend\n",
+      "diagnostic": "line 4: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "flow-branch-only-local-uninitialized-rejected",
+      "profile": "reject",
+      "source": "func choose(flag):\n    if flag:\n        let local = 7\n    end\n    return local + 1\nend\nfunc main():\n    return choose(false)\nend\n",
+      "diagnostic": "line 5: native-subset: forbidden construct 'undefined-name' (ERR 404)"
+    },
+    {
+      "id": "flow-returning-branch-local-escape-rejected",
+      "profile": "reject",
+      "source": "func choose(flag):\n    if flag:\n        let local = 7\n        return local\n    end\n    return local + 1\nend\nfunc main():\n    return choose(false)\nend\n",
+      "diagnostic": "line 6: native-subset: forbidden construct 'undefined-name' (ERR 404)"
+    },
+    {
+      "id": "flow-returning-branch-invalid-operation-rejected",
+      "profile": "reject",
+      "source": "func choose(flag):\n    let x = 40\n    if flag:\n        x = true\n        return x + 1\n    end\n    return x + 2\nend\nfunc main():\n    return choose(false)\nend\n",
+      "diagnostic": "line 5: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "flow-short-circuit-and-or-stack-join",
+      "profile": "run",
+      "source": "func mark(value, label):\n    do flogger(label)\n    return value\nend\nfunc probe(a, b, c):\n    let result = (\"base\", 40, mark(a, \"a\") and (mark(b, \"b\") or mark(c, \"c\")), \"tail\")\n    do flogger(\"|\")\n    if result.2:\n        return length(result.0) + result.1 + length(result.3) + 1\n    end\n    return length(result.0) + result.1 + length(result.3)\nend\nfunc trap():\n    return 1 / 0 == 0\nend\nfunc guarded(a, b):\n    let result = (\"guard\", a and (b or trap()))\n    return result.1\nend\nfunc main():\n    return (probe(false, false, false), probe(false, false, true), probe(false, true, false), probe(false, true, true), probe(true, false, false), probe(true, false, true), probe(true, true, false), probe(true, true, true), guarded(false, false), guarded(true, true))\nend\n",
+      "stdin": "",
+      "stdout": "a|a|a|a|abc|abc|ab|ab|(48, 48, 48, 48, 48, 49, 49, 49, false, true)\n",
+      "status": 0
+    },
+    {
+      "id": "flow-short-circuit-or-and-stack-join",
+      "profile": "run",
+      "source": "func mark(value, label):\n    do flogger(label)\n    return value\nend\nfunc probe(a, b, c):\n    let result = (\"base\", 40, mark(a, \"a\") or (mark(b, \"b\") and mark(c, \"c\")), \"tail\")\n    do flogger(\"|\")\n    if result.2:\n        return length(result.0) + result.1 + length(result.3) + 1\n    end\n    return length(result.0) + result.1 + length(result.3)\nend\nfunc trap():\n    return 1 / 0 == 0\nend\nfunc guarded(a, b):\n    let result = (\"guard\", a or (b and trap()))\n    return result.1\nend\nfunc main():\n    return (probe(false, false, false), probe(false, false, true), probe(false, true, false), probe(false, true, true), probe(true, false, false), probe(true, false, true), probe(true, true, false), probe(true, true, true), guarded(true, true), guarded(false, false))\nend\n",
+      "stdin": "",
+      "stdout": "ab|ab|abc|abc|a|a|a|a|(48, 48, 48, 49, 49, 49, 49, 49, true, false)\n",
+      "status": 0
     }
   ]
 }

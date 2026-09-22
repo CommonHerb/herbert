@@ -23,7 +23,10 @@ source; the retained source map identifies its original units.
   spawn and reachable collectible checks. Used by the maze.
 - `text_buffer.herb`: a fixed-capacity editable ASCII buffer, byte cursor,
   insertion/deletion, line navigation, four-column tabs, a fixed 256-edit
-  undo/redo log, and wrapped literal search. Used by Notes.
+  undo/redo log, and wrapped literal search. Uniform LF/CRLF loads retain their
+  newline style; internal logical bytes use LF. Save with `text_file_bytes(t)`
+  and `text_file_length(t)` to preserve that style and the on-disk capacity
+  bound. A CRLF newline is one logical edit. Used by Notes.
 - `session_recovery.herb`: descriptor-relative private Notes session directories
   and reusable atomic plain-text checkpoints. Copies persist until explicit user
   cleanup; reopening never adopts the original document. Closing a recovery

@@ -11,16 +11,20 @@ make notes
 
 Without a path it opens `notes.txt` in the current directory. A missing file
 starts empty and is created only when you save. An existing file must contain
-at most 65,536 bytes: printable ASCII, LF newlines and TAB. Unicode, CRLF,
-other control bytes and larger files are refused before editing; their contents
-are never silently converted or truncated.
+at most 65,536 bytes: printable ASCII, TAB, and either LF or CRLF newlines.
+The original newline style is preserved when saving, making rescue copies, and
+checkpointing recovery. Enter inserts a newline in that same style; deleting or
+undoing a CRLF newline handles the pair as one edit. A file without newlines
+(including a new empty document) uses LF. No trailing newline is added on save.
+Unicode, mixed LF/CRLF endings, bare CR, other control bytes and larger files are
+refused before editing; their contents are never silently converted or truncated.
 
 Type to insert text. Arrows move the cursor; Home/End move within a line;
 Ctrl+Home/End move to the beginning/end of the document. Page Up/Down move
 20 lines. The view scrolls vertically and horizontally to follow the cursor.
 Tabs advance to the next four-column stop. Backspace/Delete remove text.
-**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** The last 256 individual byte
-edits are retained in fixed storage. Navigation is not an edit. A new edit after
+**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** The last 256 individual
+character/newline edits are retained in fixed storage. Navigation is not an edit. A new edit after
 undo drops the redo branch; the oldest edits fall off the bounded history.
 History remains available after saving. Undo/redo conservatively marks the
 document unsaved, even when it returns to the saved bytes.
@@ -52,10 +56,12 @@ A rescue is private (0600) and uses the same write/sync/atomic-publication steps
 Failure before publication leaves no rescue file and retains your edits; a
 directory-sync failure is reported as a published but unconfirmed copy.
 
-The footer shows cursor position, byte count, unsaved state and save errors.
-The buffer is fixed at 64 KiB, allocated on startup and reused through edits
-and saves. At capacity, insertion stops with a message; deletion and saving
-remain available. This is a deliberate bound, not general runtime reclamation.
+The footer shows cursor position, on-disk byte count, LF/CRLF style, unsaved
+state and save errors. CRLF counts as two on-disk bytes, so inserting a newline
+requires two free bytes in a CRLF document.
+The text and save-encoding buffers are each fixed at 64 KiB, allocated on
+startup and reused through edits and saves. At capacity, insertion stops with a
+message; deletion and saving remain available. This is a deliberate bound, not general runtime reclamation.
 
 Saving writes a new, exclusively created temporary file in the same directory,
 syncs its contents and permissions, closes it, then atomically renames it over

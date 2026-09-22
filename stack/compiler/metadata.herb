@@ -347,10 +347,95 @@ func nc_meta_pop_hosted_memory(pool, stack, remaining, is_buffer):
     return nc_meta_pop_hosted_memory(pool, p.1, remaining - 1, is_buffer)
 end
 
-func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, code, new_array_meta, i, n, stack, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap):
+-- Lowered branches are forward-only. Keep immutable stack/local states only on
+-- branch edges, then merge them when their target is visited. A return or BR has
+-- no fallthrough state. Frame layout separately retains every lexical slot,
+-- including slots declared in returning arms that never reach a later join.
+func nc_meta_incoming_loop(i, n, out):
     if i >= n:
-        return (0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        return out
     end
+    do add(out, new_array((array(int), array(int))))
+    return nc_meta_incoming_loop(i + 1, n, out)
+end
+
+func nc_meta_layout_types_loop(local_types, i, n, out):
+    if i >= n:
+        return out
+    end
+    let slot = new_array(int)
+    do add(slot, get(local_types, i))
+    do add(out, slot)
+    return nc_meta_layout_types_loop(local_types, i + 1, n, out)
+end
+
+func nc_meta_layout_collect(layout_types, i, n, out):
+    if i >= n:
+        return out
+    end
+    let slot = get(layout_types, i)
+    do add(out, get(slot, count(slot) - 1))
+    return nc_meta_layout_collect(layout_types, i + 1, n, out)
+end
+
+func nc_meta_merge_types(pool, a, b, i, n, locals, out):
+    if i >= n:
+        return (0, out)
+    end
+    let at = get(a, i)
+    let bt = get(b, i)
+    if locals and (at == nc_type_unknown() or bt == nc_type_unknown()):
+        -- A local is initialized at a join only if every live predecessor
+        -- initialized it. Layout knowledge must not make it readable here.
+        do add(out, nc_type_unknown())
+    else:
+        let m = nc_type_merge(pool, at, bt, 0)
+        if m.0 != 0:
+            return (m.0, out)
+        end
+        do add(out, m.1)
+    end
+    return nc_meta_merge_types(pool, a, b, i + 1, n, locals, out)
+end
+
+func nc_meta_enter_flow(pool, incoming, i, n, stack, local_types, live):
+    if i >= n:
+        return (0, stack, local_types, live)
+    end
+    let edge = get(incoming, i)
+    if not live:
+        return nc_meta_enter_flow(pool, incoming, i + 1, n, edge.0, edge.1, true)
+    end
+    if count(stack) != count(edge.0) or count(local_types) != count(edge.1):
+        return (nc_fail(416, 0, ""), stack, local_types, live)
+    end
+    let sm = nc_meta_merge_types(pool, stack, edge.0, 0, count(stack), false, new_array(int))
+    if sm.0 != 0:
+        return (sm.0, stack, local_types, live)
+    end
+    let lm = nc_meta_merge_types(pool, local_types, edge.1, 0, count(local_types), true, new_array(int))
+    if lm.0 != 0:
+        return (lm.0, stack, local_types, live)
+    end
+    return nc_meta_enter_flow(pool, incoming, i + 1, n, sm.1, lm.1, true)
+end
+
+func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, code, new_array_meta, i, n, stack, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap, flow):
+    if i >= n:
+        let layout_types = nc_meta_layout_collect(flow.2, 0, count(flow.2), new_array(int))
+        return (0, layout_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+    end
+    let incoming = get(flow.0, i)
+    let enter = nc_meta_enter_flow(pool, incoming, 0, count(incoming), stack, local_types, flow.1)
+    if enter.0 != 0:
+        return (enter.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+    end
+    if not enter.3:
+        return (nc_fail(416, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+    end
+    stack = enter.1
+    local_types = enter.2
+    flow = (flow.0, true, flow.2)
     -- The pass visits each instruction once, in increasing index order. Build
     -- dense metadata streams alongside it; copying an n-entry array for each
     -- CALL/projection/heap operation made both work and arena use quadratic.
@@ -360,6 +445,11 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     let heap_entry = (0, 0, 0)
     let instr = get(code, i)
     let op = instr.0
+    if op == 16 or op == 17 or op == 18 or op == 19:
+        if instr.1 <= i or instr.1 >= n:
+            return (nc_fail(415, 0, int_to_str(instr.1)), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+    end
     let na_type = get(new_array_meta, i)
     if op == 28:
         if na_type == 0:
@@ -404,6 +494,9 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         end
         stack = p.1
         local_types = st.1
+        if p.2 != nc_type_unknown():
+            do add(get(flow.2, instr.1), p.2)
+        end
     elif op == 5 or op == 6 or op == 36 or op == 37 or op == 38 or op == 39 or op == 40 or op == 42 or op == 43 or op == 44:
         -- add/sub, the bitwise/shift binops (band/bor/bxor/shl/shr), and the
         -- multiplicative binops (mul/div/mod) all pop two ints and push one int;
@@ -467,18 +560,22 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         tuple_entry = (tw, es, ew)
         stack = nc_stack_push(p.1, elem_t)
     elif op == 16:
-        stack = stack
+        do add(get(flow.0, instr.1), (stack, local_types))
+        flow = (flow.0, false, flow.2)
     elif op == 17:
         let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), 0)
         if p.0 != 0:
             return (p.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         stack = p.1
+        do add(get(flow.0, instr.1), (stack, local_types))
     elif op == 18 or op == 19:
         let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), 0)
         if p.0 != 0:
             return (p.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
+        -- Short-circuit edges retain their bool; only the RHS path pops it.
+        do add(get(flow.0, instr.1), (stack, local_types))
         stack = p.1
     elif op == 20:
         if instr.1 >= count(funcs):
@@ -535,6 +632,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             end
         end
         stack = new_array(int)
+        flow = (flow.0, false, flow.2)
     elif op == 22:
         let p = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
         if p.0 != 0:
@@ -709,7 +807,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     do add(tuple_meta, tuple_entry)
     do add(call_meta, call_entry)
     do add(heap_meta, heap_entry)
-    return nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, code, new_array_meta, i + 1, n, stack, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+    return nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, code, new_array_meta, i + 1, n, stack, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap, flow)
 end
 
 func nc_build_local_layout_loop(pool, local_types, i, n, bases, widths, base):
@@ -748,7 +846,10 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     let stacks = nc_make_stacks(0)
     let tuple_meta = new_array((int, int, int))
     let call_meta = new_array((int, int, int))
-    let p = nc_meta_process_loop(pool, funcs, sig, fn_idx, prog.2, count(prog.1), code, fn.5, 0, n, new_array(int), local_types, stacks, tuple_meta, call_meta, 0, 0, 0, heap_meta0, 0)
+    let incoming = nc_meta_incoming_loop(0, n, new_array(array((array(int), array(int)))))
+    let layout_types = nc_meta_layout_types_loop(local_types, 0, count(local_types), new_array(array(int)))
+    let flow = (incoming, true, layout_types)
+    let p = nc_meta_process_loop(pool, funcs, sig, fn_idx, prog.2, count(prog.1), code, fn.5, 0, n, new_array(int), local_types, stacks, tuple_meta, call_meta, 0, 0, 0, heap_meta0, 0, flow)
     if p.0 != 0:
         return (p.0, (0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, stacks, tuple_meta, call_meta, 0, 0, p.8, p.9))
     end
