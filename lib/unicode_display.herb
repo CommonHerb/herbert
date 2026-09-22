@@ -1,0 +1,263 @@
+-- Readable fixed-cell Unicode for Notes. Requires linux, pixel_text and utf8.
+-- All bitmap artwork in this file was drawn for Herbert; no downloaded font,
+-- font service or foreign rendering library. Existing ASCII UI APIs are unchanged.
+-- The caller supplies one complete extended grapheme cluster, in UTF-8 bytes.
+-- One cell is 6*scale wide, with ink inside 5*scale by 10*scale. At Notes scale2
+-- this fits a 12x20 cell. One unsupported cluster gets ONE visible boxed cross.
+-- Supported: printable ASCII, Latin-1 except U+00AD SOFT HYPHEN, the punctuation
+-- and symbols below, and a Latin letter with at most one supported above accent
+-- plus one cedilla below (ring+cedilla does not fit and is marked unsupported).
+-- Canonical Latin-1 precompositions share their decomposed base/accent drawing.
+-- No normalization changes source bytes. This is a font repertoire, not shaping,
+-- bidirectional layout, general script support or an assertion that all Unicode
+-- scalars are visibly representable. NBSP deliberately has the same ink as SPACE.
+-- Literal glyph strings, flattened tuples and direct rectangle requests require
+-- no per-frame heap allocation; no freeze/new_buffer/append calls occur here.
+
+func unicode_display_body(cp):
+    if cp == 45: return "00000000000000001110000000000000000" end
+    if cp == 161: return "00100000000010000100001000010000100" end
+    if cp == 162: return "00100011111010010100101000111100100" end
+    if cp == 163: return "00110010010100011110010000100011111" end
+    if cp == 164: return "10001011100101001010011101000100000" end
+    if cp == 165: return "10001010100010011111001001111100100" end
+    if cp == 166: return "00100001000010000000001000010000100" end
+    if cp == 167: return "00110010000111010001011100001001100" end
+    if cp == 168: return "01010000000000000000000000000000000" end
+    if cp == 169: return "01110100011011110101101111000101110" end
+    if cp == 170: return "01110000100111001010011100000011111" end
+    if cp == 171: return "00000001010101010100010100010100000" end
+    if cp == 172: return "00000000001111100001000010000000000" end
+    if cp == 174: return "01110100011110111101110111000101110" end
+    if cp == 175: return "11111000000000000000000000000000000" end
+    if cp == 176: return "01100100101001001100000000000000000" end
+    if cp == 177: return "00100001001111100100001000000011111" end
+    if cp == 178: return "01100100100010001000111100000000000" end
+    if cp == 179: return "11100000100110000010111000000000000" end
+    if cp == 180: return "00010001000000000000000000000000000" end
+    if cp == 181: return "00000000001001010010100101110110000" end
+    if cp == 182: return "01111111011110101101001010010100101" end
+    if cp == 183: return "00000000000000000100000000000000000" end
+    if cp == 184: return "00000000000000000000000000010001000" end
+    if cp == 185: return "01000110000100001000111000000000000" end
+    if cp == 186: return "01110010100101001110000000000011111" end
+    if cp == 187: return "00000101000101000101010101010000000" end
+    if cp == 188: return "10001100100010001000101010011100001" end
+    if cp == 189: return "10001100100010001010101010001000111" end
+    if cp == 190: return "11001010101110001000101010011100001" end
+    if cp == 191: return "00100000000010001000100001000101110" end
+    if cp == 198: return "01111101001010011110101001010010111" end
+    if cp == 208: return "01110010010100111101010010100101110" end
+    if cp == 215: return "00000100010101000100010101000100000" end
+    if cp == 216: return "01111100111010110101110011000111110" end
+    if cp == 222: return "10000100001111010001111101000010000" end
+    if cp == 223: return "01100100101001010100100101000110110" end
+    if cp == 230: return "00000000001101000101111111010011111" end
+    if cp == 240: return "01010001000101000001011111000101110" end
+    if cp == 247: return "00000001000000011111000000010000000" end
+    if cp == 248: return "00000000000111110011101011100111110" end
+    if cp == 254: return "10000100001111010001100011111010000" end
+    if cp == 8211: return "00000000000000011110000000000000000" end
+    if cp == 8212: return "00000000000000011111000000000000000" end
+    if cp == 8216: return "00110001000110000000000000000000000" end
+    if cp == 8217: return "00110000100011000000000000000000000" end
+    if cp == 8218: return "00000000000000000000001100001000110" end
+    if cp == 8220: return "01001100101101100000000000000000000" end
+    if cp == 8221: return "11011010011001000000000000000000000" end
+    if cp == 8222: return "00000000000000000000110110100110010" end
+    if cp == 8226: return "00000000000111001110011100000000000" end
+    if cp == 8230: return "00000000000000000000000000000010101" end
+    if cp == 8364: return "00111010001111001000111100100000111" end
+    if cp == 8592: return "00000001000100011111010000010000000" end
+    if cp == 8593: return "00100011101010100100001000010000100" end
+    if cp == 8594: return "00000001000001011111000100010000000" end
+    if cp == 8595: return "00100001000010000100101010111000100" end
+    if cp == 8596: return "00000000000101011111010100000000000" end
+    if cp == 8722: return "00000000001111100000000000000000000" end
+    if cp == 8800: return "00010001001111100100111110100010000" end
+    if cp == 8804: return "00010001000100000100000100000011111" end
+    if cp == 8805: return "01000001000001000100010000000011111" end
+    return pixel_glyph(cp)
+end
+
+func unicode_display_parts(cp):
+    if cp >= 32 and cp <= 126: return (cp, 0, 0) end
+    if cp == 160: return (32, 0, 0) end
+    if cp == 192: return (65, 1, 0) end
+    if cp == 193: return (65, 2, 0) end
+    if cp == 194: return (65, 3, 0) end
+    if cp == 195: return (65, 4, 0) end
+    if cp == 196: return (65, 5, 0) end
+    if cp == 197: return (65, 6, 0) end
+    if cp == 199: return (67, 0, 7) end
+    if cp == 200: return (69, 1, 0) end
+    if cp == 201: return (69, 2, 0) end
+    if cp == 202: return (69, 3, 0) end
+    if cp == 203: return (69, 5, 0) end
+    if cp == 204: return (73, 1, 0) end
+    if cp == 205: return (73, 2, 0) end
+    if cp == 206: return (73, 3, 0) end
+    if cp == 207: return (73, 5, 0) end
+    if cp == 209: return (78, 4, 0) end
+    if cp == 210: return (79, 1, 0) end
+    if cp == 211: return (79, 2, 0) end
+    if cp == 212: return (79, 3, 0) end
+    if cp == 213: return (79, 4, 0) end
+    if cp == 214: return (79, 5, 0) end
+    if cp == 217: return (85, 1, 0) end
+    if cp == 218: return (85, 2, 0) end
+    if cp == 219: return (85, 3, 0) end
+    if cp == 220: return (85, 5, 0) end
+    if cp == 221: return (89, 2, 0) end
+    if cp == 224: return (97, 1, 0) end
+    if cp == 225: return (97, 2, 0) end
+    if cp == 226: return (97, 3, 0) end
+    if cp == 227: return (97, 4, 0) end
+    if cp == 228: return (97, 5, 0) end
+    if cp == 229: return (97, 6, 0) end
+    if cp == 231: return (99, 0, 7) end
+    if cp == 232: return (101, 1, 0) end
+    if cp == 233: return (101, 2, 0) end
+    if cp == 234: return (101, 3, 0) end
+    if cp == 235: return (101, 5, 0) end
+    if cp == 236: return (105, 1, 0) end
+    if cp == 237: return (105, 2, 0) end
+    if cp == 238: return (105, 3, 0) end
+    if cp == 239: return (105, 5, 0) end
+    if cp == 241: return (110, 4, 0) end
+    if cp == 242: return (111, 1, 0) end
+    if cp == 243: return (111, 2, 0) end
+    if cp == 244: return (111, 3, 0) end
+    if cp == 245: return (111, 4, 0) end
+    if cp == 246: return (111, 5, 0) end
+    if cp == 249: return (117, 1, 0) end
+    if cp == 250: return (117, 2, 0) end
+    if cp == 251: return (117, 3, 0) end
+    if cp == 252: return (117, 5, 0) end
+    if cp == 253: return (121, 2, 0) end
+    if cp == 255: return (121, 5, 0) end
+    if cp >= 161 and cp <= 255 and cp != 173: return (cp, 0, 0) end
+    if cp == 8211: return (cp, 0, 0) end
+    if cp == 8212: return (cp, 0, 0) end
+    if cp == 8216: return (cp, 0, 0) end
+    if cp == 8217: return (cp, 0, 0) end
+    if cp == 8218: return (cp, 0, 0) end
+    if cp == 8220: return (cp, 0, 0) end
+    if cp == 8221: return (cp, 0, 0) end
+    if cp == 8222: return (cp, 0, 0) end
+    if cp == 8226: return (cp, 0, 0) end
+    if cp == 8230: return (cp, 0, 0) end
+    if cp == 8364: return (cp, 0, 0) end
+    if cp == 8592: return (cp, 0, 0) end
+    if cp == 8593: return (cp, 0, 0) end
+    if cp == 8594: return (cp, 0, 0) end
+    if cp == 8595: return (cp, 0, 0) end
+    if cp == 8596: return (cp, 0, 0) end
+    if cp == 8722: return (cp, 0, 0) end
+    if cp == 8800: return (cp, 0, 0) end
+    if cp == 8804: return (cp, 0, 0) end
+    if cp == 8805: return (cp, 0, 0) end
+    return (0, 0, 0)
+end
+
+-- Two rows above the seven-row body; the ring uses three and shortens the
+-- body by omitting its second row. Cedilla uses two rows below a six-row body.
+-- Shortening never changes baseline beyond the cell or clips an accent.
+func unicode_display_accent(mark):
+    if mark == 1: return "0100000100" end
+    if mark == 2: return "0001000100" end
+    if mark == 3: return "0010001010" end
+    if mark == 4: return "0101010100" end
+    if mark == 5: return "0101000000" end
+    if mark == 6: return "001000101000100" end
+    if mark == 7: return "0010001000" end
+    return "0000000000"
+end
+
+func unicode_display_latin(base):
+    if base >= 65 and base <= 90: return true end
+    if base >= 97 and base <= 122: return true end
+    return base == 198 or base == 208 or base == 216 or base == 222 or base == 223 or base == 230 or base == 240 or base == 248 or base == 254
+end
+
+func unicode_display_marks(b, p, limit, base, top, bottom):
+    if p == limit: return (base, top, bottom, true) end
+    let next = utf8_decode(b, p, limit)
+    if next.1 == p: return (0, 0, 0, false) end
+    if not unicode_display_latin(base): return (0, 0, 0, false) end
+    let cp = next.0
+    let accent = 0
+    if cp >= 768 and cp <= 771: accent = cp - 767 end
+    if cp == 776: accent = 5 end
+    if cp == 778: accent = 6 end
+    if accent != 0:
+        if top != 0 or (accent == 6 and bottom != 0): return (0, 0, 0, false) end
+        return unicode_display_marks(b, next.1, limit, base, accent, bottom)
+    end
+    if cp == 807:
+        if bottom != 0 or top == 6: return (0, 0, 0, false) end
+        return unicode_display_marks(b, next.1, limit, base, top, 7)
+    end
+    return (0, 0, 0, false)
+end
+
+func unicode_display_shape(b, start, limit):
+    if start >= limit or limit > buffer_length(b): return (0, 0, 0, false) end
+    let head = utf8_decode(b, start, limit)
+    if head.1 == start: return (0, 0, 0, false) end
+    let shape = unicode_display_parts(head.0)
+    if shape.0 == 0: return (0, 0, 0, false) end
+    return unicode_display_marks(b, head.1, limit, shape.0, shape.1, shape.2)
+end
+
+-- Detection is independent of drawing so Notes can report unsupported glyphs.
+-- start/limit must delimit one entire cluster; the text engine owns boundaries.
+func unicode_display_supported(b, start, limit):
+    let shape = unicode_display_shape(b, start, limit)
+    return shape.3
+end
+
+-- Ink in a cell, exposed for deterministic pixel tests without an X11 server.
+func unicode_display_cell_ink(body, base, top, bottom, i):
+    if i >= 50: return false end
+    let row = i / 5
+    let col = i % 5
+    if base == 0:
+        return index("11111100011000111011101011010111011100011000111111", i) == 49
+    end
+    if top != 0:
+        let height = 2
+        if top == 6: height = 3 end
+        if row < height: return index(unicode_display_accent(top), i) == 49 end
+    end
+    if bottom != 0 and row >= 8:
+        return index(unicode_display_accent(bottom), (row - 8) * 5 + col) == 49
+    end
+    let offset = 2
+    let height = 7
+    if top == 6: offset = 3 height = 6 end
+    if bottom != 0: height = 6 end
+    if row < offset or row >= offset + height: return false end
+    let bodyrow = row - offset
+    if height == 6 and bodyrow > 0: bodyrow = bodyrow + 1 end
+    -- Accented i loses its ordinary dot; the explicit accent takes its place.
+    if base == 105 and top != 0 and bodyrow == 0: return false end
+    return index(body, bodyrow * 5 + col) == 49
+end
+
+func unicode_display_ink(base, top, bottom, i):
+    return unicode_display_cell_ink(unicode_display_body(base), base, top, bottom, i)
+end
+
+func pixel_unicode_cell(c, body, base, top, bottom, x, y, scale, i):
+    if i == 50: return 0 end
+    if unicode_display_cell_ink(body, base, top, bottom, i):
+        let drawn = x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
+    end
+    return pixel_unicode_cell(c, body, base, top, bottom, x, y, scale, i + 1)
+end
+
+func pixel_unicode_cluster(c, b, start, limit, x, y, scale):
+    let shape = unicode_display_shape(b, start, limit)
+    return pixel_unicode_cell(c, unicode_display_body(shape.0), shape.0, shape.1, shape.2, x, y, scale, 0)
+end

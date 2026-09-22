@@ -24,7 +24,7 @@ class Helpers(unittest.TestCase):
     def test_assertion_dependent_entrypoints_refuse_optimization(self):
         # Imported desktop guards also protect the two consuming entrypoints.
         hosted = ('check_desktop.py', 'check_notes_support.py',
-                  'check_hosted_apps.py', 'check_x11_text.py')
+                  'check_hosted_apps.py', 'check_x11_text.py', 'check_utf8_text.py')
         env = dict(os.environ)
         env.pop('PYTHONOPTIMIZE', None)
         for name in hosted:

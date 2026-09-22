@@ -41,11 +41,12 @@ a supported starting point. Qualification commands and their limits live in
 `VERIFYING.md`; a roadmap entry is not evidence that a check ran.
 
 Gulpin's selected Notes workflow is opening and editing existing files. Notes
-preserves uniform LF/CRLF endings; its current ASCII and 64 KiB limits remain
-explicit. Compiler qualification includes composed conditionals, early returns,
-rebinding, short-circuit expressions and aggregate values. Actual file use should
-determine the next editor improvement; unsupported Unicode and clipboard needs
-are concrete candidates, not reasons to start a general editor framework.
+preserves UTF-8 bytes and uniform LF/CRLF endings, with grapheme-aware editing.
+Its 64 KiB disk-byte limit and limited bitmap font/input coverage remain explicit. Compiler qualification includes composed conditionals, early returns,
+rebinding, short-circuit expressions and aggregate values. Existing-file qualification uses copied project guides, common accented prose,
+joined characters and the Unicode segmentation oracle. Convenient file opening
+and selection/clipboard are the next workflow candidates; keep them tied to
+ordinary editing rather than starting a general editor framework.
 
 Use the existing applications to force the next language/runtime improvement.
 Keep the kernel work and its proofs available without resuming new OS features.

@@ -409,12 +409,21 @@ def notes_checks(args, x, display, evidence, passed):
 
 def notes_sustained_checks(args, x, display, evidence, passed, style):
     dense = evidence / ('dense-' + style + '.txt')
-    logical = ''.join(f'{i:02d}: ' + ''.join(chr(ch) for ch in range(32,127))+'\n' for i in range(32))
+    logical = ''.join(f'{i:02d}: é e\u0301 — → 👩\u200d💻 ' + ''.join(chr(ch) for ch in range(32,127))+'\n' for i in range(32))
     newline = b'\r\n' if style == 'crlf' else b'\n'
-    initial = logical.encode('ascii').replace(b'\n', newline)
+    initial = logical.encode('utf-8').replace(b'\n', newline)
     dense.write_bytes(initial)
     with application(args.notes, dense, b'Herbert - Notes', (900,600), x, display, evidence, 'notes-sustained-' + style) as app:
-        dense_top = region(app.frame('ascii-dense'),30,102,838,14)
+        # Unicode must be inside the initial 70-column viewport, not merely in
+        # the saved bytes. Witness accent ink and the unsupported emoji marker
+        # before the sustained redraw/edit/save loop starts.
+        dense_frame = app.frame('utf8-dense')
+        accent = region(dense_frame,28+4*12,102,10,20)
+        assert accent == region(dense_frame,28+6*12,102,10,20)
+        ink = (15265527).to_bytes(3,'big')
+        assert ink in accent, 'visible Unicode accent has no ink'
+        assert ink in region(dense_frame,28+12*12,102,10,20), 'visible emoji marker has no ink'
+        dense_top = region(dense_frame,30,102,838,14)
         app.tap('Next'); app.tap('Next')
         wait_for(lambda: region(app.frame(),30,102,838,14) != dense_top, 'page down scrolls visible rows')
         app.frame('paged-down')
@@ -452,7 +461,181 @@ def notes_sustained_checks(args, x, display, evidence, passed, style):
         app.finish()
         assert not list(evidence.glob('.herbert-save-*.tmp')), 'normal save leaked temporary files'
         passed('notes-sustained-' + style + '-edit-save-scroll-dense-render-memory',
-               newline_style=style, seconds_requested=args.seconds, cycles=cycles, samples=samples)
+               newline_style=style, unicode_prefix_visible=True, seconds_requested=args.seconds, cycles=cycles, samples=samples)
+
+
+def unicode_entry(app, scalar):
+    app.key('Control_L',True)
+    app.tap('u','Shift_L',pause=0)
+    app.key('Control_L',False)
+    app.type(format(scalar,'x'),pause=0)
+    app.tap('Return')
+
+
+def notes_unicode_checks(args, x, display, evidence, passed):
+    # Expectations come from literal UTF-8 bytes and user actions, not renderer
+    # output or a copy of the Herbert segmentation algorithm.
+    for style,newline in [('lf',b'\n'),('crlf',b'\r\n')]:
+        d=evidence/('unicode-'+style);d.mkdir();target=d/'existing.txt'
+        logical='é e\u0301 — – - − “quoted”… → ≥ ≠\nAéB\n👩\u200d💻\n'
+        original=logical.encode().replace(b'\n',newline);target.write_bytes(original)
+        with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,'unicode') as app:
+            app.tap('End','Control_L')
+            initial=app.frame('readable-prose')
+            # Same visible glyph for canonical decompositions, with no byte
+            # normalization; punctuation must not all collapse to a fallback box.
+            assert region(initial,28,102,10,20)==region(initial,52,102,10,20),'accent decompositions render differently'
+            marks=[region(initial,28+column*12,102,10,20) for column in (4,6,8,10)]
+            assert len(set(marks))==4,'em/en dash, hyphen and minus must remain distinguishable'
+            assert (15265527).to_bytes(3,'big') in region(initial,28,142,10,20),'unsupported cluster vanished'
+            inode=target.stat().st_ino
+            app.tap('s','Control_L')
+            wait_for(lambda:target.stat().st_ino!=inode and target.read_bytes()==original,'UTF8 unchanged save publishes exact bytes')
+            app.tap('Home','Control_L');app.tap('Down');app.tap('Right');app.tap('Right');app.tap('BackSpace')
+            wanted=original.replace('AéB'.encode(),b'AB')
+            app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==wanted,'backspace removes whole multibyte character')
+            app.tap('z','Control_L');app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==original,'undo restores exact UTF8')
+            app.tap('Left');app.tap('Delete');app.tap('s','Control_L')
+            wait_for(lambda:target.read_bytes()==wanted,'delete removes whole multibyte character')
+            app.tap('z','Control_L');app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==original,'second undo restores exact UTF8')
+            app.tap('f','Control_L');unicode_entry(app,0x2014);app.tap('Escape');app.tap('Delete');app.tap('s','Control_L')
+            wait_for(lambda:target.read_bytes()==original.replace('—'.encode(),b'',1),'Unicode query positions whole-character delete')
+            app.tap('z','Control_L');app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==original,'undo searched deletion')
+            app.tap('End','Control_L');app.type('e');unicode_entry(app,0x301)
+            edited=original+'e\u0301'.encode()
+            app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==edited,'combining input preserves decomposition')
+            app.tap('BackSpace');app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==original,'backspace removes combined visible character')
+            app.tap('z','Control_L');app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==edited,'undo restores complete combining cluster')
+            app.tap('y','Control_L');app.tap('s','Control_L');wait_for(lambda:target.read_bytes()==original,'redo complete combining deletion')
+            # Last original row is one joined emoji cluster followed by newline.
+            app.tap('BackSpace');app.tap('BackSpace');app.tap('s','Control_L')
+            without=original[:-len('👩\u200d💻'.encode())-len(newline)]
+            wait_for(lambda:target.read_bytes()==without,'joined emoji is one deletion')
+            wait_for(lambda:region(app.frame(),450,542,300,7)!=region(initial,450,542,300,7),'removing visible unsupported document glyph clears its label')
+            app.tap('z','Control_L');app.tap('z','Control_L');app.tap('s','Control_L')
+            wait_for(lambda:target.read_bytes()==original,'undo emoji and original newline')
+            wait_for(lambda:region(app.frame(),450,542,300,7)==region(initial,450,542,300,7),'restored unsupported document glyph restores its label')
+            app.tap('End','Control_L');unicode_entry(app,0xE9)
+            edited=original+'é'.encode()
+            wait_for(lambda:any(p.read_bytes()==edited for p in d.glob('.herbert-notes-*/recovery.txt')),'UTF8 recovery acknowledged')
+            app.key('Control_L',True);app.tap('s','Shift_L');app.key('Control_L',False)
+            wait_for(lambda:any(p.read_bytes()==edited for p in d.glob('herbert-rescue-*.txt')),'UTF8 rescue exact bytes')
+            assert target.read_bytes()==original,'rescue overwrote original'
+            # Invalid scalar entry and cancellation do not alter acknowledged text.
+            unicode_entry(app,0xD800);app.tap('Escape')
+            app.key('Control_L',True);app.tap('u','Shift_L');app.key('Control_L',False)
+            app.type('41');app.tap('Escape');app.tap('s','Control_L')
+            wait_for(lambda:target.read_bytes()==edited,'invalid/cancelled Unicode entry preserves text')
+            app.frame('edited-utf8');app.tap('q','Control_L');app.finish()
+        with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,'reopened') as app:
+            app.tap('End','Control_L');app.tap('BackSpace');app.tap('s','Control_L')
+            wait_for(lambda:target.read_bytes()==original,'reopened UTF8 remains editable')
+            app.tap('q','Control_L');app.finish()
+        passed('notes-utf8-'+style+'-glyphs-edit-search-undo-save-rescue-recovery-reopen')
+
+    # Direct X11 Latin-1 and Unicode keysyms through a private server mapping.
+    d=evidence/'unicode-keysyms';d.mkdir();target=d/'keys.txt'
+    keycode=x.x.XKeysymToKeycode(x.display,x.x.XStringToKeysym(b'F12'))
+    stride=C.c_int();pointer=x.x.XGetKeyboardMapping(x.display,keycode,1,C.byref(stride))
+    assert pointer and stride.value>=2
+    old=[pointer[i] for i in range(stride.value)];x.x.XFree(pointer)
+    replacement=(C.c_ulong*len(old))(*([0xE9,0x01002014]+[0]*(len(old)-2)))
+    try:
+        x.x.XChangeKeyboardMapping(x.display,keycode,len(old),replacement,1);x.x.XSync(x.display,0)
+        with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,'mapped') as app:
+            def raw_key():
+                app.inputs.append([round(time.monotonic()-app.started,4),'mapped-code-'+str(keycode),'press/release'])
+                assert x.xtst.XTestFakeKeyEvent(x.display,keycode,1,0)
+                assert x.xtst.XTestFakeKeyEvent(x.display,keycode,0,0)
+                x.x.XSync(x.display,0)
+            raw_key();app.key('Shift_L',True);raw_key();app.key('Shift_L',False)
+            app.tap('s','Control_L')
+            wait_for(lambda:target.exists() and target.read_bytes()=='é—'.encode(),'Latin1 and Unicode keysyms insert scalars')
+            app.tap('q','Control_L');app.finish()
+    finally:
+        restore=(C.c_ulong*len(old))(*old)
+        x.x.XChangeKeyboardMapping(x.display,keycode,len(old),restore,1);x.x.XSync(x.display,0)
+    passed('notes-core-latin1-and-direct-unicode-keysyms')
+
+    for name in ('docs/BUILDING.md','docs/LANGUAGE.md'):
+        d=evidence/('unicode-project-'+Path(name).stem);d.mkdir();target=d/Path(name).name
+        original=(ROOT/name).read_bytes();target.write_bytes(original)
+        with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,'project-document') as app:
+            app.tap('End','Control_L');app.type('\nEdited with Herbert Notes.');app.tap('s','Control_L')
+            wait_for(lambda:target.read_bytes()==original+b'\nEdited with Herbert Notes.','project document exact saved edit')
+            app.frame('project-edited');app.tap('q','Control_L');app.finish()
+        assert (ROOT/name).read_bytes()==original,'test touched original project document'
+        passed('notes-existing-utf8-project-document-'+Path(name).stem)
+
+
+def notes_unicode_limits_checks(args, x, display, evidence, passed):
+    d=evidence/'unicode-limits';d.mkdir();target=d/'limits.txt'
+    first=('a'*62+'é').encode();second=b'a'*64
+    original=b'anchor\n'+first+b'\n'+second+b'\n';target.write_bytes(original)
+    with application(args.notes,target,b'Herbert - Notes',(900,600),x,display,d,'limits') as app:
+        def open_hex():
+            app.key('Control_L',True);app.tap('u','Shift_L');app.key('Control_L',False)
+        def status(): return region(app.frame(),28,560,780,7)
+        def encoding(): return region(app.frame(),450,542,300,7)
+        ready=status();plain_encoding=encoding()
+        open_hex();app.tap('Escape')
+        wait_for(lambda:status()==ready,'cancelling clean Unicode entry keeps neutral status')
+        app.tap('End','Control_L');app.type('x');app.tap('z','Control_L')
+        app.key('Control_L',True);app.tap('z','Shift_L');app.tap('z','Shift_L');app.key('Control_L',False)
+        wait_for(lambda:(16173151).to_bytes(3,'big') in status(),'redo exhaustion warning is drawn')
+        app.frame('shift-redo-exhausted');shift_status=status()
+        app.tap('y','Control_L')
+        wait_for(lambda:status()==shift_status,'both redo shortcuts give the same exhausted message')
+        app.tap('s','Control_L');wanted=original+b'x'
+        wait_for(lambda:target.read_bytes()==wanted,'redo exhaustion does not edit text')
+
+        app.tap('f','Control_L');unicode_entry(app,0x1F600)
+        wait_for(lambda:encoding()!=plain_encoding,'visible unsupported query labels the fallback')
+        app.frame('unsupported-query-labelled')
+        open_hex()
+        wait_for(lambda:encoding()==plain_encoding,'hidden query does not claim visible fallback')
+        app.tap('Escape')
+        wait_for(lambda:encoding()!=plain_encoding,'returning to query restores fallback label')
+        app.tap('BackSpace')
+        wait_for(lambda:encoding()==plain_encoding,'removing unsupported query clears fallback label')
+        # A published rescue must expose its basename even when input panels
+        # were active. Pending hex input is cancelled; typing resumes editing.
+        open_hex();app.type('41')
+        app.key('Control_L',True);app.tap('s','Shift_L');app.key('Control_L',False)
+        wait_for(lambda:any(p.read_bytes()==wanted for p in d.glob('herbert-rescue-*.txt')),'rescue during Unicode/Find keeps exact bytes')
+        app.frame('rescue-leaves-input-panels')
+        app.type('!');app.tap('s','Control_L');wanted+=b'!'
+        wait_for(lambda:target.read_bytes()==wanted,'published rescue leaves input panels for editing')
+        app.tap('End','Control_L')
+
+        open_hex();app.tap('Return');app.tap('Escape')
+        open_hex();app.type('0000e90');app.tap('space')
+        open_hex();app.type('20140');app.tap('BackSpace');app.tap('space')
+        app.tap('s','Control_L');wanted+='é—'.encode()
+        wait_for(lambda:target.read_bytes()==wanted,'empty hex rejected, seventh digit ignored, hex backspace and Space commit')
+        app.frame('hex-limits-saved')
+
+        # 62 ASCII bytes + a two-byte scalar exactly fills the 64-byte query.
+        # A further scalar must leave that query intact. Re-run the query from
+        # another cursor position before deletion so a stale match cannot pass.
+        app.tap('f','Control_L');app.type('a'*62,pause=0);unicode_entry(app,0xE9)
+        unicode_entry(app,0x1F600);app.tap('Escape');app.tap('Home','Control_L');app.tap('F3');app.tap('Delete');app.tap('s','Control_L')
+        after=wanted.replace(first,first[1:],1)
+        wait_for(lambda:target.read_bytes()==after,'64-byte UTF8 query survives overflow unchanged and matches')
+        app.tap('z','Control_L');app.tap('s','Control_L')
+        wait_for(lambda:target.read_bytes()==wanted,'undo boundary-query deletion')
+
+        # 63 + 2 must reject the entire scalar. TAB/LF hexadecimal entry is
+        # also rejected in Find without altering the query or document.
+        app.tap('f','Control_L');app.type('a'*63,pause=0);unicode_entry(app,0xE9)
+        unicode_entry(app,9);app.tap('Escape');unicode_entry(app,10);app.tap('Escape')
+        app.tap('Escape');app.tap('Home','Control_L');app.tap('F3');app.tap('Delete');app.tap('s','Control_L')
+        after=wanted.replace(b'\n'+second+b'\n',b'\n'+second[1:]+b'\n',1)
+        wait_for(lambda:target.read_bytes()==after,'oversized scalar and query controls leave the 63-byte query intact')
+        app.tap('z','Control_L');app.tap('s','Control_L')
+        wait_for(lambda:target.read_bytes()==wanted,'all rejected input preserves saved Unicode bytes')
+        app.tap('q','Control_L');app.finish()
+    passed('notes-unicode-input-query-limits-and-feedback')
 
 
 def notes_newline_checks(args, x, display, evidence, passed):
@@ -745,6 +928,8 @@ def main():
                 if args.only != 'notes':
                     maze_checks(args,x,display,evidence,passed)
                 if args.only != 'maze':
+                    notes_unicode_checks(args,x,display,evidence,passed)
+                    notes_unicode_limits_checks(args,x,display,evidence,passed)
                     notes_newline_checks(args,x,display,evidence,passed)
                     notes_checks(args,x,display,evidence,passed)
                     notes_fault_checks(args,x,display,evidence,passed)

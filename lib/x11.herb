@@ -546,3 +546,17 @@ func x11_ack_close(c): return linux_put32(c.0, 84, 0) end
 
 func x11_exposed(c): return linux_u32(c.0, 116) != 0 end
 func x11_ack_expose(c): return linux_put32(c.0, 116, 0) end
+
+-- Core Latin-1 and directly encoded Unicode keysyms, independent of modifiers.
+-- Legacy script-specific keysyms, compose sequences and IMEs are not decoded.
+-- Applications validate which scalar values their text format permits.
+func x11_text_scalar(key):
+    if key >= 32 and key <= 126: return key end
+    if key >= 160 and key <= 255: return key end
+    if key >= 16777472 and key <= 17891327:
+        let scalar = key - 16777216
+        if scalar >= 55296 and scalar <= 57343: return 0 - 1 end
+        return scalar
+    end
+    return 0 - 1
+end

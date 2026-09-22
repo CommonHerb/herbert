@@ -20,7 +20,7 @@ order. Each name selects the matching `lib/NAME.herb`, placed before your source
 
 ```sh
 make program SOURCE=examples/notes.herb \
-  SUPPORT='linux x11 pixel_text file_io text_buffer session_recovery' OUTPUT=build/my-notes
+  SUPPORT='linux x11 pixel_text utf8 unicode_tables unicode_grapheme unicode_display file_io text_buffer session_recovery' OUTPUT=build/my-notes
 ```
 
 Support names contain only letters, digits and underscores and must name an

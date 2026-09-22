@@ -46,13 +46,17 @@ Runs:
 
 - `make check-app-support`: independent map/parser and text-buffer models,
   file validation, atomic saving, external conflicts and syscall fault injection.
-  Text checks cover logical editing with preserved LF/CRLF file bytes, encoded
-  capacity, undo/redo, rescue and recovery, including copied project documents.
+  Text checks cover UTF-8 decoding, the pinned Unicode 18 grapheme-boundary
+  oracle, reviewed-table integrity, literal font geometry and scalar key mapping,
+  logical editing with preserved LF/CRLF bytes, encoded capacity, bounded
+  history, rescue and recovery, including copied project documents.
   Requires strace for file-failure checks; it is development tooling only.
 - `make check-hosted-apps`: maze wall/collection/completion/restart behavior and
   editor typing/navigation/save/reopen/dirty-close on private XTest windows,
   plus three 120-second memory checks: Maze play/restart, Notes LF editing,
-  and Notes CRLF editing. Each Notes leg repeats edits, saves and scrolling.
+  and Notes CRLF editing. Each Notes leg renders mixed ASCII/UTF-8 prose and repeats edits, saves and
+  scrolling. Additional UI checks cover Unicode entry, grapheme deletion,
+  exact search, readable glyphs, save/rescue/recovery and project-document edits.
   Strace also tests the visible post-publication sync warning and retry.
   Evidence includes screenshots, input history, saved bytes and memory samples;
   the hosted CI workflow uploads retained application evidence even on failure.

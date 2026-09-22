@@ -1,5 +1,6 @@
 -- A bounded plain-text editor, compiled and supported entirely in Herbert.
--- Libraries: linux, file_io, text_buffer, session_recovery, x11, pixel_text. ASCII + uniform LF/CRLF + TAB.
+-- Libraries: linux, utf8, unicode_grapheme, file_io, text_buffer,
+-- session_recovery, x11, pixel_text, unicode_display. UTF-8 + LF/CRLF + TAB.
 -- App state is accessed through named helpers below. No per-event/frame/save
 -- string or tuple creation. State fields: viewport, dirty/close mode, status,
 -- save result, redraw, recovery pending/result, search mode/count/match state.
@@ -30,6 +31,14 @@ func notes_query_count(s): return linux_u64(s, 88) end
 func notes_set_query_count(s, value): return linux_put64(s, 88, value) end
 func notes_query_matched(s): return linux_u64(s, 96) != 0 end
 func notes_set_query_matched(s, value): return linux_put64(s, 96, value) end
+func notes_missing_glyphs(s): return linux_u64(s, 104) != 0 end
+func notes_set_missing_glyphs(s, value): return linux_put64(s, 104, value) end
+func notes_unicode_input(s): return linux_u64(s, 112) != 0 end
+func notes_set_unicode_input(s, value): return linux_put64(s, 112, value) end
+func notes_unicode_value(s): return linux_u64(s, 120) end
+func notes_set_unicode_value(s, value): return linux_put64(s, 120, value) end
+func notes_unicode_digits(s): return linux_u64(s, 128) end
+func notes_set_unicode_digits(s, value): return linux_put64(s, 128, value) end
 func notes_redraw(s): return notes_set_needs_draw(s, 1) end
 
 func notes_message(s, message):
@@ -66,6 +75,7 @@ func notes_quit(c, f, t, s, recovery):
 end
 
 func notes_request_close(c, f, t, s, recovery):
+    let cancelled = notes_set_unicode_input(s, 0)
     let checkpoint = notes_checkpoint(recovery, f, t, s)
     let acknowledged = x11_ack_close(c)
     if not notes_dirty(s): return notes_quit(c, f, t, s, recovery) end
@@ -96,7 +106,12 @@ func notes_save_copy(f, t, s):
     let result = file_save_copy(f, text_file_bytes(t), text_file_length(t))
     let recorded = notes_set_save_result(s, result)
     -- A rescue never adopts a new document or clears the original's dirty or
-    -- close-confirmation state. Its exact sibling basename is shown below.
+    -- close-confirmation state. Show the exact sibling basename by leaving any
+    -- input panel after publication. The last search query remains repeatable.
+    if result == 0 or result == 1:
+        let finding = notes_set_finding(s, 0)
+        let unicode = notes_set_unicode_input(s, 0)
+    end
     if result == 0: return notes_message(s, 7) end
     if result == 1: return notes_message(s, 8) end
     return notes_message(s, 9)
@@ -125,6 +140,62 @@ func notes_find(t, s, query, backward, advance):
     return notes_message(s, 13)
 end
 
+-- Text arrives as Unicode scalar values. Encode an entire scalar or reject it;
+-- query input and document input never expose a partial UTF-8 sequence.
+func notes_insert_scalar(t, s, query, ch):
+    if not utf8_text_allowed(ch): return notes_message(s, 18) end
+    if notes_finding(s):
+        if ch == 9 or ch == 10: return notes_message(s, 18) end
+        let count = notes_query_count(s)
+        let width = utf8_width(ch)
+        if width > 64 - count: return notes_message(s, 14) end
+        let next = utf8_store(query, count, ch)
+        let stored = notes_set_query_count(s, next)
+        return notes_find(t, s, query, false, false)
+    end
+    let changed = text_insert(t, ch)
+    if changed == 0: return notes_message(s, 3) end
+    return notes_changed(s)
+end
+
+func notes_hex_digit(key):
+    if key >= 48 and key <= 57: return key - 48 end
+    if key >= 65 and key <= 70: return key - 65 + 10 end
+    if key >= 97 and key <= 102: return key - 97 + 10 end
+    return 0 - 1
+end
+
+-- Ctrl+Shift+U, hex digits, Enter/Space is an explicit scalar-entry method.
+-- Compose/IME services are not used. Escape cancels without editing anything.
+func notes_unicode_key(t, s, query, key, mods):
+    if key == 65307:
+        let cancelled = notes_set_unicode_input(s, 0)
+        return notes_message(s, 1)
+    end
+    if (mods & 12) != 0: return 0 end
+    let digits = notes_unicode_digits(s)
+    if key == 65288:
+        if digits > 0:
+            let shortened = notes_set_unicode_value(s, notes_unicode_value(s) / 16)
+            let fewer = notes_set_unicode_digits(s, digits - 1)
+        end
+        return notes_message(s, 16)
+    end
+    if key == 65293 or key == 32:
+        let value = notes_unicode_value(s)
+        if digits == 0 or not utf8_text_allowed(value): return notes_message(s, 18) end
+        if notes_finding(s) and (value == 9 or value == 10): return notes_message(s, 18) end
+        let closed = notes_set_unicode_input(s, 0)
+        return notes_insert_scalar(t, s, query, value)
+    end
+    let digit = notes_hex_digit(key)
+    if digit == 0 - 1: return 0 end
+    if digits == 6: return notes_message(s, 17) end
+    let grown = notes_set_unicode_value(s, notes_unicode_value(s) * 16 + digit)
+    let count = notes_set_unicode_digits(s, digits + 1)
+    return notes_message(s, 16)
+end
+
 func notes_search_key(t, s, query, key, mods):
     if key == 65307:
         let closed = notes_set_finding(s, 0)
@@ -134,18 +205,15 @@ func notes_search_key(t, s, query, key, mods):
         return notes_find(t, s, query, (mods & 1) != 0, notes_query_matched(s))
     end
     if (mods & 12) != 0: return 0 end
-    let count = notes_query_count(s)
     if key == 65288:
-        if count > 0: count = count - 1 end
-    elif key >= 32 and key <= 126:
-        if count == 64: return notes_message(s, 14) end
-        let added = buffer_set(query, count, key)
-        count = count + 1
-    else:
-        return 0
+        let count = notes_query_count(s)
+        let previous = unicode_grapheme_previous(query, count, count)
+        let stored = notes_set_query_count(s, previous)
+        return notes_find(t, s, query, false, false)
     end
-    let stored = notes_set_query_count(s, count)
-    return notes_find(t, s, query, false, false)
+    let ch = x11_text_scalar(key)
+    if ch == 0 - 1: return 0 end
+    return notes_insert_scalar(t, s, query, ch)
 end
 
 func notes_key(c, f, t, s, recovery, query, key, mods):
@@ -160,6 +228,13 @@ func notes_key(c, f, t, s, recovery, query, key, mods):
             return notes_quit(c, f, t, s, recovery)
         end
         return 0
+    end
+    if notes_unicode_input(s): return notes_unicode_key(t, s, query, key, mods) end
+    if control and (mods & 1) != 0 and (key == 117 or key == 85):
+        let opened = notes_set_unicode_input(s, 1)
+        let value = notes_set_unicode_value(s, 0)
+        let digits = notes_set_unicode_digits(s, 0)
+        return notes_message(s, 16)
     end
     if control and (key == 113 or key == 81): return notes_request_close(c, f, t, s, recovery) end
     if control and (key == 102 or key == 70):
@@ -178,14 +253,17 @@ func notes_key(c, f, t, s, recovery, query, key, mods):
     let changed = 0
     if control and (key == 122 or key == 90):
         if (mods & 1) != 0: changed = text_redo(t) else: changed = text_undo(t) end
-        if changed == 0: return notes_message(s, 10) end
+        if changed == 0:
+            if (mods & 1) != 0: return notes_message(s, 11) end
+            return notes_message(s, 10)
+        end
     elif control and (key == 121 or key == 89):
         changed = text_redo(t)
         if changed == 0: return notes_message(s, 11) end
     elif key == 65361:
-        if cursor > 0: let moved = text_seek(t, cursor - 1) end
+        let moved = text_seek(t, text_previous(t, cursor))
     elif key == 65363:
-        let moved = text_seek(t, cursor + 1)
+        let moved = text_seek(t, text_next(t, cursor))
     elif key == 65362:
         let moved = text_vertical(t, false, 1)
     elif key == 65364:
@@ -209,13 +287,10 @@ func notes_key(c, f, t, s, recovery, query, key, mods):
     elif key == 65535:
         changed = text_delete(t)
     else:
-        let ch = key
+        let ch = x11_text_scalar(key)
         if key == 65293: ch = 10 end
         if key == 65289: ch = 9 end
-        if text_ascii(ch):
-            changed = text_insert(t, ch)
-            if changed == 0: return notes_message(s, 3) end
-        end
+        if ch != 0 - 1: return notes_insert_scalar(t, s, query, ch) end
     end
     if changed != 0: return notes_changed(s) end
     if cursor != text_cursor(t): return notes_redraw(s) end
@@ -241,22 +316,51 @@ func notes_view(t, s):
     return notes_set_left(s, left)
 end
 
-func notes_draw_line(c, t, p, col, left, y):
+func notes_draw_line(c, t, s, p, col, left, y):
     if p >= text_length(t) or col >= left + 70: return 0 end
     let ch = buffer_get(t.0, p)
     if ch == 10: return 0 end
+    let next = text_next(t, p)
     if col >= left and ch != 9:
-        let letter = pixel_letter(c, pixel_glyph(ch), 28 + (col - left) * 12, y, 2, 0)
+        if not unicode_display_supported(t.0, p, next):
+            let missing = notes_set_missing_glyphs(s, 1)
+        end
+        let letter = pixel_unicode_cluster(c, t.0, p, next, 28 + (col - left) * 12, y, 2)
     end
-    return notes_draw_line(c, t, p + 1, text_next_column(col, ch), left, y)
+    return notes_draw_line(c, t, s, next, text_next_column(col, ch), left, y)
 end
 
-func notes_draw_rows(c, t, p, left, row):
+func notes_draw_rows(c, t, s, p, left, row):
     if row == 21: return 0 end
-    let line = notes_draw_line(c, t, p, 0, left, 102 + row * 20)
+    let line = notes_draw_line(c, t, s, p, 0, left, 102 + row * 20)
     let e = text_line_end(t, p)
     if e >= text_length(t): return 0 end
-    return notes_draw_rows(c, t, e + 1, left, row + 1)
+    return notes_draw_rows(c, t, s, e + 1, left, row + 1)
+end
+
+func notes_draw_query(c, query, count, p, x):
+    if p >= count: return 0 end
+    let next = unicode_grapheme_next(query, count, p)
+    let letter = pixel_unicode_cluster(c, query, p, next, x, 578, 1)
+    return notes_draw_query(c, query, count, next, x + 6)
+end
+
+-- Inspect the query before drawing the status line so its fallback label is
+-- current in the same frame. Call only while the Find field is visible.
+func notes_query_missing(query, count, p):
+    if p >= count: return false end
+    let next = unicode_grapheme_next(query, count, p)
+    if not unicode_display_supported(query, p, next): return true end
+    return notes_query_missing(query, count, next)
+end
+
+func notes_draw_hex(c, value, digits, x):
+    if digits == 0: return 0 end
+    let digit = value % 16
+    let ch = 48 + digit
+    if digit >= 10: ch = 65 + digit - 10 end
+    let letter = pixel_letter(c, pixel_glyph(ch), x + (digits - 1) * 6, 580, 1, 0)
+    return notes_draw_hex(c, value / 16, digits - 1, x)
 end
 
 func notes_status(c, f, t, s, query):
@@ -271,12 +375,15 @@ func notes_status(c, f, t, s, query):
     let style = "LF"
     if text_crlf(t): style = "CRLF" end
     let ending = pixel_text(c, style, 402, 542, 1)
+    let encoding = "UTF-8"
+    if notes_missing_glyphs(s): encoding = "UTF-8 | Boxed glyphs unavailable" end
+    let encoded = pixel_text(c, encoding, 450, 542, 1)
     let dirty = "Saved"
     if notes_dirty(s): dirty = "UNSAVED" end
     let label = pixel_text(c, dirty, 806, 542, 1)
     let message = notes_message_id(s)
-    let status = "Ready. ASCII text; original newline style is preserved."
-    if message == 1: status = "Edited. Ctrl+S saves this document." end
+    let status = "Ready. UTF-8 text; original bytes and newline style are preserved."
+    if message == 1 and notes_dirty(s): status = "Edited. Ctrl+S saves this document." end
     if message == 2: status = "Saved. File and containing directory synced." end
     if message == 3: status = "Not enough space (65536-byte limit). Delete text before inserting more." end
     if message == 4: status = "Save failed; no replacement this attempt. Ctrl+Shift+S saves a rescue copy." end
@@ -288,12 +395,15 @@ func notes_status(c, f, t, s, query):
     if message == 6: status = "Written; sync/verification failed. Ctrl+S retries; Ctrl+Shift+S rescues." end
     if message == 7: status = "Rescue copy saved. Original stays open; its unsaved state is unchanged." end
     if message == 8: status = "Rescue copy written, but directory sync failed. Keep this window open." end
-    if message == 10: status = "No more undo history (256 edits retained)." end
+    if message == 10: status = "No more undo history (up to 256 edits / 65536 history bytes)." end
     if message == 11: status = "No more redo history." end
     if message == 12: status = "Match. F3 next | Shift+F3 previous | Ctrl+F new search" end
     if message == 13: status = "No matching text. Search is case-sensitive and wraps at either end." end
     if message == 15: status = "Type a case-sensitive search. Enter next | Shift+Enter previous | Esc done" end
-    if message == 14: status = "Search is limited to 64 printable ASCII characters." end
+    if message == 14: status = "Search is limited to 64 UTF-8 bytes." end
+    if message == 16: status = "Unicode entry: type up to 6 hex digits, then Enter/Space. Esc cancels." end
+    if message == 17: status = "Unicode entry: at most 6 hex digits. Backspace removes one." end
+    if message == 18: status = "Not an allowed Unicode character. Text is unchanged." end
     if message == 9: status = "Rescue failed; no copy published this attempt. Your edits remain here." end
     if notes_confirming(s) and message == 7:
         status = "Rescue saved. Close pending: Y closes; Esc returns."
@@ -301,14 +411,17 @@ func notes_status(c, f, t, s, query):
     if notes_confirming(s) and message == 8:
         status = "Copy written; sync uncertain. Close pending: Y closes; Esc returns."
     end
-    if (message >= 3 and message <= 11) or message == 13 or message == 14: let warning = x11_color(c, 16173151) end
+    if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18: let warning = x11_color(c, 16173151) end
     let statusline = pixel_text(c, status, 28, 560, 1)
     if message == 4 or message == 9:
         let code = pixel_number(c, 0 - notes_save_result(s), 830, 560, 1)
     end
-    if notes_finding(s) and not notes_confirming(s):
+    if notes_unicode_input(s) and not notes_confirming(s):
+        let help = pixel_text(c, "Unicode U+", 28, 580, 1)
+        let number = notes_draw_hex(c, notes_unicode_value(s), notes_unicode_digits(s), 88)
+    elif notes_finding(s) and not notes_confirming(s):
         let help = pixel_text(c, "Find:", 28, 580, 1)
-        let typed = pixel_text_buffer(c, query, 0, notes_query_count(s), 70, 580, 1)
+        let typed = notes_draw_query(c, query, notes_query_count(s), 0, 70)
         let help2 = pixel_text(c, "Enter next | Shift+Enter previous | Esc done", 570, 580, 1)
     elif message == 7 or message == 8:
         let label = pixel_text(c, "Sibling file:", 28, 580, 1)
@@ -319,7 +432,7 @@ func notes_status(c, f, t, s, query):
         if notes_recovery_current(s): closehelp = "Close pending: Y closes (recovery kept) | Esc returns | Ctrl+S saves" end
         let help = pixel_text(c, closehelp, 28, 580, 1)
     else:
-        let help = pixel_text(c, "Ctrl+S save | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | F3 next | Ctrl+Q close", 28, 580, 1)
+        let help = pixel_text(c, "Ctrl+S save | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
     end
     return 0
 end
@@ -353,7 +466,13 @@ func notes_draw(c, f, t, s, recovery, query, path, blink):
     let paper = x11_rect(c, 26, 98, 848, 424)
     let ink = x11_color(c, 15265527)
     let first = text_row_start(t, 0, notes_top(s))
-    let text = notes_draw_rows(c, t, first, notes_left(s), 0)
+    let reset = notes_set_missing_glyphs(s, 0)
+    let text = notes_draw_rows(c, t, s, first, notes_left(s), 0)
+    if notes_finding(s) and not notes_unicode_input(s) and not notes_confirming(s):
+        if notes_query_missing(query, notes_query_count(s), 0):
+            let missingquery = notes_set_missing_glyphs(s, 1)
+        end
+    end
     if blink:
         let cursorcolor = x11_color(c, 16173151)
         let col = text_column(t, text_cursor(t)) - notes_left(s)
@@ -407,10 +526,10 @@ func main():
     let loaded = text_load(t, opened.1, file_count(opened))
     if loaded != 0:
         let closed = file_close(opened)
-        return linux_die("notes: expected ASCII text, TAB and uniform LF or CRLF. Unicode, mixed endings, bare CR and binary files are refused unchanged.\n")
+        return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
-    let s = linux_buffer(104)
+    let s = linux_buffer(136)
     let recovery = recovery_new(65536)
     let query = linux_buffer(64)
     let draw = notes_set_needs_draw(s, 1)

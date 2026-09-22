@@ -164,7 +164,7 @@ program-contract:
 DESKTOP_LIBS := lib/linux.herb lib/x11.herb lib/pixel_text.herb
 first-steps_SOURCES := $(DESKTOP_LIBS) examples/first_steps.herb
 maze_SOURCES := $(DESKTOP_LIBS) lib/grid_map.herb examples/maze.herb
-notes_SOURCES := $(DESKTOP_LIBS) lib/file_io.herb lib/text_buffer.herb lib/session_recovery.herb examples/notes.herb
+notes_SOURCES := $(DESKTOP_LIBS) lib/utf8.herb lib/unicode_tables.herb lib/unicode_grapheme.herb lib/unicode_display.herb lib/file_io.herb lib/text_buffer.herb lib/session_recovery.herb examples/notes.herb
 .PHONY: first-steps maze notes hosted-apps hosted-memory-io check-desktop check-hosted-apps
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze
@@ -199,6 +199,7 @@ check-desktop: first-steps
 check-app-support: maze
 	@python3 bootstrap/tests/check_grid_map.py --maze $(BUILD)/maze
 	@python3 bootstrap/tests/check_notes_support.py
+	@python3 bootstrap/tests/check_utf8_text.py
 	@python3 bootstrap/tests/check_x11_text.py
 
 check-hosted-apps: maze notes

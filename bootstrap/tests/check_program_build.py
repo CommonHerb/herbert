@@ -142,17 +142,18 @@ def main():
                 'located support error not mapped')
         library.write_bytes(original_library)
 
-        result, _ = build('multiple-support-units', support='linux text_buffer',
+        result, _ = build('multiple-support-units', support='linux utf8 unicode_tables unicode_grapheme text_buffer',
                           code=b'func main():\n    return text_length(text_buffer(8))\nend\n')
         require(result.returncode == 0, result.stderr.decode())
         require(subprocess.check_output([str(output)], timeout=5) == b'0\n', 'multiple libraries did not compose')
         output.write_bytes(OLD)
-        result, work = build('mapped-source-after-multiple-units', support='linux text_buffer',
+        result, work = build('mapped-source-after-multiple-units', support='linux utf8 unicode_tables unicode_grapheme text_buffer',
                              code=b'func main():\n    return $\nend\n')
         preserved(result)
         require((str(source)+':2: unexpected character (ERR 101)').encode() in result.stderr,
                 'source error after multiple libraries was not mapped')
-        raw_line = original_library.count(b'\n')+(repo/'lib/text_buffer.herb').read_bytes().count(b'\n')+2
+        raw_line = sum((repo/'lib'/unit).read_bytes().count(b'\n') for unit in
+                       ('linux.herb','utf8.herb','unicode_tables.herb','unicode_grapheme.herb','text_buffer.herb'))+2
         require((work/'compiler.stderr').read_bytes().startswith(f'line {raw_line}:'.encode()),
                 'multi-unit raw line was not independently predicted')
         source.write_bytes(GOOD)

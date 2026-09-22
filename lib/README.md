@@ -21,12 +21,20 @@ source; the retained source map identifies its original units.
   and decimal numbers, rendered without temporary per-frame strings.
 - `grid_map.herb`: bounded rectangular ASCII tile maps with enclosure, unique
   spawn and reachable collectible checks. Used by the maze.
-- `text_buffer.herb`: a fixed-capacity editable ASCII buffer, byte cursor,
-  insertion/deletion, line navigation, four-column tabs, a fixed 256-edit
-  undo/redo log, and wrapped literal search. Uniform LF/CRLF loads retain their
-  newline style; internal logical bytes use LF. Save with `text_file_bytes(t)`
-  and `text_file_length(t)` to preserve that style and the on-disk capacity
-  bound. A CRLF newline is one logical edit. Used by Notes.
+- `utf8.herb`: strict scalar decoding/encoding without allocation or normalization.
+- `unicode_tables.herb` and `unicode_grapheme.herb`: pinned Unicode 18 data and
+  extended grapheme boundaries. Data provenance and regeneration are documented
+  in [the Unicode guide](../docs/UNICODE.md).
+- `unicode_display.herb`: original Latin prose and punctuation glyphs, with
+  supported combining accents and an explicit marker for unavailable glyphs.
+- `text_buffer.herb`: fixed-capacity UTF-8 text with byte offsets constrained to
+  grapheme boundaries, whole-cluster deletion/navigation, four-column tabs and
+  wrapped literal search. History retains up to 256 operations and at most
+  `capacity` payload bytes; whole oldest records are evicted to fit. All editing
+  storage is allocated at construction and reused. Uniform LF/CRLF loads retain
+  their style; internal logical bytes use LF. Save with `text_file_bytes(t)` and
+  `text_file_length(t)` to preserve exact encoding and the on-disk capacity bound.
+  A CRLF newline is one logical edit. Used by Notes.
 - `session_recovery.herb`: descriptor-relative private Notes session directories
   and reusable atomic plain-text checkpoints. Copies persist until explicit user
   cleanup; reopening never adopts the original document. Closing a recovery
@@ -88,8 +96,9 @@ held movement keys clear on focus loss. `x11_ack_close(c)` lets an application
 acknowledge a close request while asking about unsaved edits.
 
 Keyboard translation uses the first two core keymap columns and ASCII
-Shift/Caps Lock. It does not implement Unicode, compose/IME, full XKB groups
-or NumLock translation. A mapping refresh becomes active when its reply is
+Shift/Caps Lock. `x11_text_scalar` maps Latin-1 and direct Unicode keysyms to
+scalar values; applications enforce their own text policy. Legacy script-specific
+keysyms, compose/IME, full XKB groups and NumLock translation are unsupported. A mapping refresh becomes active when its reply is
 processed; keys received before that use the last completed keymap snapshot.
 Already queued keys retain their symbols. This is not an atomic layout switch
 while typing. Drawing requests flush bounded batches into the retained pixmap;

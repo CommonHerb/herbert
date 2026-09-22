@@ -11,25 +11,45 @@ make notes
 
 Without a path it opens `notes.txt` in the current directory. A missing file
 starts empty and is created only when you save. An existing file must contain
-at most 65,536 bytes: printable ASCII, TAB, and either LF or CRLF newlines.
-The original newline style is preserved when saving, making rescue copies, and
-checkpointing recovery. Enter inserts a newline in that same style; deleting or
-undoing a CRLF newline handles the pair as one edit. A file without newlines
-(including a new empty document) uses LF. No trailing newline is added on save.
-Unicode, mixed LF/CRLF endings, bare CR, other control bytes and larger files are
-refused before editing; their contents are never silently converted or truncated.
+at most 65,536 bytes of valid UTF-8, TAB, and either LF or CRLF newlines.
+The original UTF-8 bytes and newline style are preserved when saving, making
+rescue copies and checkpointing recovery. Enter inserts a newline in that same
+style. A file without newlines (including an empty document) uses LF. No trailing
+newline is added and text is never normalized or silently replaced.
+Malformed UTF-8, C0/DEL/C1 controls (except TAB and supported newlines), mixed
+LF/CRLF endings, bare CR and larger files are refused before editing unchanged.
 
-Type to insert text. Arrows move the cursor; Home/End move within a line;
+The original bitmap font displays ASCII, printable Latin-1 letters/symbols,
+common typographic quotes, dashes, arrows and mathematical signs. Common Latin
+combining accents display like their precomposed forms while keeping their
+original bytes. A cluster the font cannot draw appears as one boxed marker;
+`Boxed glyphs unavailable` appears in the footer when such a cluster is visible.
+This includes unsupported scripts, complex emoji and unsupported accent
+combinations. Their bytes remain intact. See [the Unicode guide](../docs/UNICODE.md)
+for precise font and character-boundary scope.
+
+Direct Latin-1 and Unicode keysyms from the first two desktop keymap columns
+insert their characters. **Ctrl+Shift+U**, up to six hexadecimal digits, then
+**Enter or Space** inserts a Unicode scalar (for example `e9` for é or `2014`
+for an em dash). Backspace removes a hex digit; Escape cancels without editing.
+This also works while searching. Compose/IME and full XKB layouts are not
+implemented.
+
+Type to insert text. Left/Right move across whole grapheme clusters; Home/End move within a line;
 Ctrl+Home/End move to the beginning/end of the document. Page Up/Down move
 20 lines. The view scrolls vertically and horizontally to follow the cursor.
-Tabs advance to the next four-column stop. Backspace/Delete remove text.
-**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** The last 256 individual
-character/newline edits are retained in fixed storage. Navigation is not an edit. A new edit after
+Tabs advance to the next four-column stop. Backspace/Delete remove a whole grapheme cluster, so accents and joined emoji
+are not split into broken fragments.
+**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 65,536 bytes of inserted/deleted text in
+fixed storage. Large edits can evict older complete history records sooner. A deletion using all
+65,536 history bytes is evicted by the next accepted edit. Navigation is not an edit. A new edit after
 undo drops the redo branch; the oldest edits fall off the bounded history.
 History remains available after saving. Undo/redo conservatively marks the
 document unsaved, even when it returns to the saved bytes.
 
-**Ctrl+F searches** for up to 64 printable ASCII characters, case-sensitive.
+**Ctrl+F searches** for up to 64 UTF-8 bytes, case-sensitive and byte-exact. Matches must start
+and end on grapheme boundaries; canonically equivalent spellings are not
+automatically equated.
 Typing finds the first matching position at/after the cursor. Enter/F3 finds the
 next match; Shift+Enter/Shift+F3 finds the previous match. Search wraps at both
 ends and includes overlapping matches. Escape leaves search; F3/Shift+F3 then
@@ -51,7 +71,9 @@ save refuses to overwrite it. Existing rescue files are never overwritten.
 The original document stays open with its dirty/conflict state unchanged;
 the rescue does not silently switch which file Ctrl+S targets. After a confirmed
 rescue, you can close the original, explicitly discard its in-memory edits, and
-open the named rescue file. The command also works from the dirty-close prompt.
+open the named rescue file. The command also works from the dirty-close prompt. A published rescue leaves
+Find and cancels pending hexadecimal entry so its sibling filename is visible;
+the last search query remains available with F3.
 A rescue is private (0600) and uses the same write/sync/atomic-publication steps.
 Failure before publication leaves no rescue file and retains your edits; a
 directory-sync failure is reported as a published but unconfirmed copy.
@@ -59,8 +81,8 @@ directory-sync failure is reported as a published but unconfirmed copy.
 The footer shows cursor position, on-disk byte count, LF/CRLF style, unsaved
 state and save errors. CRLF counts as two on-disk bytes, so inserting a newline
 requires two free bytes in a CRLF document.
-The text and save-encoding buffers are each fixed at 64 KiB, allocated on
-startup and reused through edits and saves. At capacity, insertion stops with a
+Text, serialization, grapheme boundaries and history use bounded buffers,
+allocated on startup and reused through edits and saves. At capacity, insertion stops with a
 message; deletion and saving remain available. This is a deliberate bound, not general runtime reclamation.
 
 Saving writes a new, exclusively created temporary file in the same directory,
@@ -81,9 +103,9 @@ use that opened directory. There is no multi-editor lock: another writer can
 race the final conflict check and rename. A crash can leave an owned
 `.herbert-save-*.tmp` file beside the document.
 
-Current limits: fixed-size 900x600 window, ASCII keyboard layout support through
-the desktop's first two keymap columns, no Unicode/compose/IME, clipboard,
-selection, mouse editing, general save-as dialog or multi-file tabs.
+Current limits: fixed-size 900x600 window, limited font and keyboard coverage,
+no compose/IME, clipboard, selection, mouse editing, general save-as dialog or
+multi-file tabs.
 Open another file by launching another instance with its path. The visible path
 is clipped after 130 bytes; the supplied full path is used for file operations.
 

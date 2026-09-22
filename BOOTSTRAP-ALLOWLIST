@@ -522,3 +522,11 @@ docs/COMPILER.md
 
 # Developer source-build guide.
 docs/BUILDING.md
+
+# Unicode standardized data/license and focused development verification.
+# Generated runtime property tables are .herb assets; no foreign runtime is added.
+docs/UNICODE.md
+docs/UNICODE-LICENSE.txt
+tools/generate_unicode_tables.py
+bootstrap/tests/check_utf8_text.py
+bootstrap/tests/fixtures/unicode-18.0.0/GraphemeBreakTest.txt

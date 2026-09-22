@@ -1,16 +1,22 @@
--- Fixed-capacity ASCII text editing. All storage is allocated at construction;
--- editing, navigation and inspection reuse it. Internally LF ends lines; TAB
--- advances to the next four-column stop. Cursor positions index logical bytes.
--- Loads accept uniform LF or CRLF and retain that style, including new lines.
--- Tuple: (logical bytes, state, undo records, serialized bytes). State u64:
--- length0, cursor8, desired column16, oldest record24, retained count32,
--- applied count40, CRLF48, serialized count56. The serialized byte limit is the
--- capacity. History holds 256 logical-byte edits; a newline is one whole edit.
--- Use text_file_bytes/length for file output, never t.0/text_length. Serialization
--- happens only on request; navigation/rendering read logical bytes directly.
+-- Fixed-capacity UTF-8 editing; storage is allocated only at construction.
+-- Logical LF, preserved uniform LF/CRLF file style, disk-byte capacity limit.
+-- Cursor offsets count logical UTF-8 bytes and always lie on Unicode 18 default
+-- extended grapheme boundaries. Each grapheme occupies one editor column;
+-- TAB advances to the next four-column stop. Bytes are never normalized.
+-- Tuple: logical bytes0, state1, history metadata2, serialized bytes3,
+-- boundary flags4, history byte ring5, scalar encoding scratch6.
+-- State u64: length0 cursor8 desired-column16 oldest-record24 retained32
+-- applied40 CRLF48 disk-bytes56 oldest-payload64 payload-bytes72.
+-- History: at most 256 records AND capacity payload bytes. Each 56-byte record
+-- has kind0 pos8 byte-count16 cursor-before24 cursor-after32 payload-offset40
+-- disk-width48. Arbitrarily long deleted clusters are complete records; oldest
+-- complete records are evicted until both limits fit. Editing discards redo.
+-- A boundary cache rebuild scans once per edit/load; each navigation/render
+-- traversal then visits its bytes once, with no whole-document scan per glyph.
 func text_buffer(capacity):
-    let t = (linux_buffer(capacity), linux_buffer(64), linux_buffer(8192), linux_buffer(capacity))
+    let t = (linux_buffer(capacity), linux_buffer(80), linux_buffer(14336), linux_buffer(capacity), linux_buffer(capacity + 1), linux_buffer(capacity), linux_buffer(4))
     let goal = linux_put64(t.1, 16, 0 - 1)
+    let first = buffer_set(t.4, 0, 1)
     return t
 end
 
@@ -19,9 +25,9 @@ func text_cursor(t): return linux_u64(t.1, 8) end
 func text_crlf(t): return linux_u64(t.1, 48) != 0 end
 func text_file_length(t): return linux_u64(t.1, 56) end
 
-func text_file_width(t, ch):
-    if ch == 10 and text_crlf(t): return 2 end
-    return 1
+func text_file_width(t, cp):
+    if cp == 10 and text_crlf(t): return 2 end
+    return utf8_width(cp)
 end
 
 func text_encode(t, p, out):
@@ -41,26 +47,30 @@ func text_file_bytes(t):
     return text_encode(t, 0, 0)
 end
 
+-- Retained ASCII predicate for callers with explicitly ASCII-only interfaces.
 func text_ascii(ch):
     return (ch >= 32 and ch <= 126) or ch == 10 or ch == 9
 end
 
--- Scan the whole input without touching text/state: 0 no newline, 1 LF,
--- 2 CRLF, -EILSEQ unsupported byte or mixed endings. No partial acceptance.
+-- Validate all bytes without changing text/state. Return 0 no newline, 1 LF,
+-- 2 CRLF, or -EILSEQ (malformed UTF-8, C0/DEL/C1 except TAB/LF/CRLF,
+-- bare CR, mixed endings). Unicode format characters/noncharacters are valid.
 func text_style(bytes, count, p, style):
     if p >= count: return style end
-    let ch = buffer_get(bytes, p)
-    if ch == 13:
-        if p + 1 >= count or style == 1: return 0 - 84 end
-        if buffer_get(bytes, p + 1) != 10: return 0 - 84 end
-        return text_style(bytes, count, p + 2, 2)
+    let decoded = utf8_decode(bytes, p, count)
+    if linux_error(decoded.0): return decoded.0 end
+    let cp = decoded.0
+    if cp == 13:
+        if decoded.1 >= count or style == 1: return 0 - 84 end
+        if buffer_get(bytes, decoded.1) != 10: return 0 - 84 end
+        return text_style(bytes, count, decoded.1 + 1, 2)
     end
-    if not text_ascii(ch): return 0 - 84 end
-    if ch == 10:
+    if not utf8_text_allowed(cp): return 0 - 84 end
+    if cp == 10:
         if style == 2: return 0 - 84 end
         style = 1
     end
-    return text_style(bytes, count, p + 1, style)
+    return text_style(bytes, count, decoded.1, style)
 end
 
 func text_decode(t, bytes, count, p, out):
@@ -70,8 +80,10 @@ func text_decode(t, bytes, count, p, out):
     return text_decode(t, bytes, count, p + 1, out + 1)
 end
 
--- A rejected load leaves text, style, cursor and history intact. New/empty or
--- newline-free files default to LF. No trailing newline is invented.
+func text_refresh(t): return unicode_grapheme_mark(t.0, text_length(t), t.4) end
+
+-- Rejection leaves text, style, cursor and history intact. New/empty or
+-- newline-free files default to LF. No trailing newline or BOM is invented.
 func text_load(t, bytes, count):
     if count > buffer_length(t.0): return 0 - 27 end
     if not linux_range(bytes, 0, count): return 0 - 22 end
@@ -88,55 +100,189 @@ func text_load(t, bytes, count):
     if style == 2: crlf = 1 end
     let stored = linux_put64(t.1, 48, crlf)
     let filecount = linux_put64(t.1, 56, count)
-    return 0
+    let payloadbase = linux_put64(t.1, 64, 0)
+    let payloadcount = linux_put64(t.1, 72, 0)
+    return text_refresh(t)
+end
+
+func text_boundary(t, pos):
+    if pos > text_length(t): return false end
+    return buffer_get(t.4, pos) != 0
+end
+
+func text_floor(t, pos):
+    if text_boundary(t, pos): return pos end
+    return text_floor(t, pos - 1)
+end
+
+func text_ceil(t, pos):
+    if text_boundary(t, pos): return pos end
+    return text_ceil(t, pos + 1)
+end
+
+func text_next(t, pos):
+    if pos >= text_length(t): return text_length(t) end
+    return text_ceil(t, pos + 1)
+end
+
+func text_previous(t, pos):
+    if pos > text_length(t): pos = text_length(t) end
+    if pos == 0: return 0 end
+    return text_floor(t, pos - 1)
 end
 
 func text_seek(t, pos):
     if pos > text_length(t): pos = text_length(t) end
-    let stored = linux_put64(t.1, 8, pos)
+    let stored = linux_put64(t.1, 8, text_floor(t, pos))
     return linux_put64(t.1, 16, 0 - 1)
 end
 
-func text_shift_right(bytes, last, stop):
+func text_shift_right(bytes, last, stop, width):
     if last <= stop: return 0 end
-    let moved = buffer_set(bytes, last, buffer_get(bytes, last - 1))
-    return text_shift_right(bytes, last - 1, stop)
+    let moved = buffer_set(bytes, last - 1 + width, buffer_get(bytes, last - 1))
+    return text_shift_right(bytes, last - 1, stop, width)
 end
 
--- Returns 1 when changed, 0 at capacity or for an unsupported byte.
-func text_insert_raw(t, ch):
+func text_history_at(t, i): return ((linux_u64(t.1, 24) + i) % 256) * 56 end
+
+func text_history_sum(t, i, stop, total):
+    if i == stop: return total end
+    return text_history_sum(t, i + 1, stop, total + linux_u64(t.2, text_history_at(t, i) + 16))
+end
+
+-- Truncate redo only once an edit has passed every rejection/capacity check.
+func text_history_truncate(t):
+    let applied = linux_u64(t.1, 40)
+    let count = linux_put64(t.1, 32, applied)
+    return linux_put64(t.1, 72, text_history_sum(t, 0, applied, 0))
+end
+
+func text_history_make_room(t, need):
+    let used = linux_u64(t.1, 72)
+    let retained = linux_u64(t.1, 32)
+    if retained < 256 and need <= buffer_length(t.5) - used: return 0 end
+    let at = text_history_at(t, 0)
+    let oldcount = linux_u64(t.2, at + 16)
+    let nextbyte = (linux_u64(t.2, at + 40) + oldcount) % buffer_length(t.5)
+    let oldest = linux_put64(t.1, 24, (linux_u64(t.1, 24) + 1) % 256)
+    let head = linux_put64(t.1, 64, nextbyte)
+    let bytes = linux_put64(t.1, 72, used - oldcount)
+    let count = linux_put64(t.1, 32, retained - 1)
+    let applied = linux_put64(t.1, 40, retained - 1)
+    return text_history_make_room(t, need)
+end
+
+func text_history_copy_in(t, at, src, from, count):
+    if count == 0: return 0 end
+    let copied = buffer_set(t.5, at, buffer_get(src, from))
+    return text_history_copy_in(t, (at + 1) % buffer_length(t.5), src, from + 1, count - 1)
+end
+
+func text_history_push(t, kind, pos, src, from, count, width, before):
+    let truncated = text_history_truncate(t)
+    let room = text_history_make_room(t, count)
+    let retained = linux_u64(t.1, 32)
+    let used = linux_u64(t.1, 72)
+    let payload = (linux_u64(t.1, 64) + used) % buffer_length(t.5)
+    let copied = text_history_copy_in(t, payload, src, from, count)
+    let at = text_history_at(t, retained)
+    let a = linux_put64(t.2, at, kind)
+    let b = linux_put64(t.2, at + 8, pos)
+    let c = linux_put64(t.2, at + 16, count)
+    let d = linux_put64(t.2, at + 24, before)
+    let e = linux_put64(t.2, at + 40, payload)
+    let f = linux_put64(t.2, at + 48, width)
+    let bytes = linux_put64(t.1, 72, used + count)
+    let total = linux_put64(t.1, 32, retained + 1)
+    let applied = linux_put64(t.1, 40, retained + 1)
+    return at
+end
+
+func text_history_copy_out(t, at, to, count):
+    if count == 0: return 0 end
+    let copied = buffer_set(t.0, to, buffer_get(t.5, at))
+    return text_history_copy_out(t, (at + 1) % buffer_length(t.5), to + 1, count - 1)
+end
+
+-- Exact recorded byte spans deliberately ignore current grapheme boundaries:
+-- undoing an inserted combining mark removes only that mark, not its base.
+-- Internal only: a history record guarantees capacity and valid UTF-8 result.
+func text_history_apply(t, at, inserting):
+    let pos = linux_u64(t.2, at + 8)
+    let count = linux_u64(t.2, at + 16)
+    let width = linux_u64(t.2, at + 48)
     let size = text_length(t)
-    if not text_ascii(ch): return 0 end
-    let width = text_file_width(t, ch)
+    if inserting:
+        let moved = text_shift_right(t.0, size, pos, count)
+        let restored = text_history_copy_out(t, linux_u64(t.2, at + 40), pos, count)
+        let grown = linux_put64(t.1, 0, size + count)
+        let disk = linux_put64(t.1, 56, text_file_length(t) + width)
+    else:
+        let moved = linux_copy(t.0, pos, t.0, pos + count, size - pos - count)
+        let shrunk = linux_put64(t.1, 0, size - count)
+        let disk = linux_put64(t.1, 56, text_file_length(t) - width)
+    end
+    return text_refresh(t)
+end
+
+-- Returns 1 if changed, 0 for disallowed scalar or insufficient disk capacity.
+-- A scalar may join surrounding clusters; move to the first boundary at/after
+-- its final byte so subsequent navigation never starts inside a cluster.
+func text_insert(t, cp):
+    if not utf8_text_allowed(cp): return 0 end
+    let width = text_file_width(t, cp)
     if width > buffer_length(t.0) - text_file_length(t): return 0 end
-    let p = text_cursor(t)
-    let shifted = text_shift_right(t.0, size, p)
-    let stored = buffer_set(t.0, p, ch)
-    let grown = linux_put64(t.1, 0, size + 1)
-    let filecount = linux_put64(t.1, 56, text_file_length(t) + width)
-    let moved = text_seek(t, p + 1)
+    let count = utf8_store(t.6, 0, cp)
+    let before = text_cursor(t)
+    let at = text_history_push(t, 1, before, t.6, 0, count, width, before)
+    let changed = text_history_apply(t, at, true)
+    let after = text_ceil(t, before + count)
+    let moved = text_seek(t, after)
+    let saved = linux_put64(t.2, at + 32, after)
     return 1
 end
 
-func text_delete_raw(t):
-    let p = text_cursor(t)
-    let size = text_length(t)
-    if p >= size: return 0 end
-    let width = text_file_width(t, buffer_get(t.0, p))
-    let copied = linux_copy(t.0, p, t.0, p + 1, size - p - 1)
-    let shrunk = linux_put64(t.1, 0, size - 1)
-    let filecount = linux_put64(t.1, 56, text_file_length(t) - width)
-    let goal = linux_put64(t.1, 16, 0 - 1)
+func text_remove(t, pos, stop, before):
+    let count = stop - pos
+    let width = count
+    if text_crlf(t) and buffer_get(t.0, pos) == 10: width = width + 1 end
+    let at = text_history_push(t, 2, pos, t.0, pos, count, width, before)
+    let changed = text_history_apply(t, at, false)
+    let moved = text_seek(t, pos)
+    let saved = linux_put64(t.2, at + 32, text_cursor(t))
     return 1
+end
+
+func text_delete(t):
+    let before = text_cursor(t)
+    if before >= text_length(t): return 0 end
+    return text_remove(t, before, text_next(t, before), before)
 end
 
 func text_backspace(t):
-    let p = text_cursor(t)
-    if p == 0: return 0 end
-    let ch = buffer_get(t.0, p - 1)
-    let moved = text_seek(t, p - 1)
-    let changed = text_delete_raw(t)
-    return text_record(t, 2, p - 1, ch, p)
+    let before = text_cursor(t)
+    if before == 0: return 0 end
+    return text_remove(t, text_previous(t, before), before, before)
+end
+
+func text_undo(t):
+    let applied = linux_u64(t.1, 40)
+    if applied == 0: return 0 end
+    let at = text_history_at(t, applied - 1)
+    let changed = text_history_apply(t, at, linux_u64(t.2, at) == 2)
+    let moved = text_seek(t, linux_u64(t.2, at + 24))
+    let stored = linux_put64(t.1, 40, applied - 1)
+    return 1
+end
+
+func text_redo(t):
+    let applied = linux_u64(t.1, 40)
+    if applied == linux_u64(t.1, 32): return 0 end
+    let at = text_history_at(t, applied)
+    let changed = text_history_apply(t, at, linux_u64(t.2, at) == 1)
+    let moved = text_seek(t, linux_u64(t.2, at + 32))
+    let stored = linux_put64(t.1, 40, applied + 1)
+    return 1
 end
 
 func text_line_start(t, p):
@@ -158,10 +304,12 @@ end
 
 func text_column_loop(t, p, stop, column):
     if p >= stop: return column end
-    return text_column_loop(t, p + 1, stop, text_next_column(column, buffer_get(t.0, p)))
+    return text_column_loop(t, text_next(t, p), stop, text_next_column(column, buffer_get(t.0, p)))
 end
 
 func text_column(t, p):
+    if p > text_length(t): p = text_length(t) end
+    p = text_floor(t, p)
     return text_column_loop(t, text_line_start(t, p), p, 0)
 end
 
@@ -186,7 +334,7 @@ func text_column_position(t, p, target, column):
     if ch == 10: return p end
     let next = text_next_column(column, ch)
     if next > target: return p end
-    return text_column_position(t, p + 1, target, next)
+    return text_column_position(t, text_next(t, p), target, next)
 end
 
 func text_vertical(t, downward, steps):
@@ -211,70 +359,9 @@ func text_vertical(t, downward, steps):
     return text_vertical(t, downward, steps - 1)
 end
 
--- History is an edit log rather than full-document snapshots. Navigation and
--- rejected edits do not consume entries. Editing after undo drops the redo tail.
-func text_history_at(t, i): return ((linux_u64(t.1, 24) + i) % 256) * 32 end
-func text_record(t, kind, pos, ch, before):
-    let used = linux_u64(t.1, 40)
-    if used == 256:
-        let oldest = linux_put64(t.1, 24, (linux_u64(t.1, 24) + 1) % 256)
-        used = 255
-    end
-    let at = text_history_at(t, used)
-    let a = linux_put64(t.2, at, kind)
-    let b = linux_put64(t.2, at + 8, pos)
-    let c = linux_put64(t.2, at + 16, ch)
-    let d = linux_put64(t.2, at + 24, before)
-    let count = linux_put64(t.1, 32, used + 1)
-    let applied = linux_put64(t.1, 40, used + 1)
-    return 1
-end
-
-func text_insert(t, ch):
-    let before = text_cursor(t)
-    if text_insert_raw(t, ch) == 0: return 0 end
-    return text_record(t, 1, before, ch, before)
-end
-
-func text_delete(t):
-    let before = text_cursor(t)
-    if before >= text_length(t): return 0 end
-    let ch = buffer_get(t.0, before)
-    let changed = text_delete_raw(t)
-    return text_record(t, 2, before, ch, before)
-end
-
-func text_undo(t):
-    let applied = linux_u64(t.1, 40)
-    if applied == 0: return 0 end
-    let at = text_history_at(t, applied - 1)
-    let moved = text_seek(t, linux_u64(t.2, at + 8))
-    if linux_u64(t.2, at) == 1:
-        let changed = text_delete_raw(t)
-    else:
-        let changed = text_insert_raw(t, linux_u64(t.2, at + 16))
-    end
-    let cursor = text_seek(t, linux_u64(t.2, at + 24))
-    let stored = linux_put64(t.1, 40, applied - 1)
-    return 1
-end
-
-func text_redo(t):
-    let applied = linux_u64(t.1, 40)
-    if applied == linux_u64(t.1, 32): return 0 end
-    let at = text_history_at(t, applied)
-    let moved = text_seek(t, linux_u64(t.2, at + 8))
-    if linux_u64(t.2, at) == 1:
-        let changed = text_insert_raw(t, linux_u64(t.2, at + 16))
-    else:
-        let changed = text_delete_raw(t)
-    end
-    let stored = linux_put64(t.1, 40, applied + 1)
-    return 1
-end
-
--- Case-sensitive literal byte search. Caller chooses inclusive starting byte;
--- scan once with wrap, including overlapping matches; -1 means not found.
+-- Literal, case-sensitive, byte-exact search without normalization. A match
+-- must begin AND end at document grapheme boundaries. Interior bytes cannot
+-- match a combining suffix, variation selector, or one scalar of a ZWJ cluster.
 func text_match(t, query, count, pos, i):
     if i == count: return true end
     if buffer_get(t.0, pos + i) != buffer_get(query, i): return false end
@@ -283,7 +370,9 @@ end
 
 func text_find_loop(t, query, count, pos, backward, candidates, remaining):
     if remaining == 0: return 0 - 1 end
-    if text_match(t, query, count, pos, 0): return pos end
+    if text_boundary(t, pos) and text_boundary(t, pos + count):
+        if text_match(t, query, count, pos, 0): return pos end
+    end
     let next = (pos + 1) % candidates
     if backward: next = (pos + candidates - 1) % candidates end
     return text_find_loop(t, query, count, next, backward, candidates, remaining - 1)

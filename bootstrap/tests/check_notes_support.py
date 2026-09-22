@@ -17,7 +17,7 @@ seed_sha = hashlib.sha256(seed).hexdigest()
 assert seed_sha == (root / 'bootstrap/seed/gen1.seed.sha256').read_text().split()[0], 'committed seed checksum mismatch'
 work = a.evidence or Path(tempfile.mkdtemp(prefix='herbert-notes-support-'))
 work.mkdir(exist_ok=True, parents=True)
-libs = ['lib/linux.herb', 'lib/file_io.herb', 'lib/text_buffer.herb', 'lib/session_recovery.herb']
+libs = ['lib/linux.herb', 'lib/file_io.herb', 'lib/utf8.herb', 'lib/unicode_tables.herb', 'lib/unicode_grapheme.herb', 'lib/text_buffer.herb', 'lib/session_recovery.herb']
 prelude = '\n'.join(((root / x).read_text() for x in libs)) + '\n'
 checks = []
 print(f'notes support evidence: {work}', flush=True)
@@ -149,7 +149,10 @@ def newline_frame(payload, cursor=0, status=0, style=None):
 source_copy = (root/'examples/notes.herb').read_bytes()
 roundtrips = [('empty', b''), ('no-newline', b'abc\t~'), ('lf', b'a\nb\n'),
               ('crlf', b'a\r\nb\r\n'), ('crlf-no-final-newline', b'a\r\nb'),
-              ('only-crlf', b'\r\n\r\n'), ('repository-lf', source_copy),
+              ('only-crlf', b'\r\n\r\n'), ('utf8-lf', 'naïve café — e\u0301 😀\n'.encode()),
+              ('utf8-crlf', 'naïve café — e\u0301 😀\r\n'.encode()),
+              ('repository-building', (root/'docs/BUILDING.md').read_bytes()),
+              ('repository-language', (root/'docs/LANGUAGE.md').read_bytes()), ('repository-lf', source_copy),
               ('repository-crlf', source_copy.replace(b'\n', b'\r\n')),
               ('crlf-capacity', b'\r\n' * 32768), ('lf-capacity', b'\n' * 65536)]
 for label, payload in roundtrips:
@@ -162,8 +165,8 @@ for label, payload in roundtrips:
 for label, payload, error in [('mixed-crlf-first', b'a\r\nb\n', -84), ('mixed-lf-first', b'a\nb\r\n', -84),
                               ('bare-cr', b'a\rb', -84), ('trailing-cr', b'abc\r', -84),
                               ('double-cr', b'a\r\r\n', -84), ('nul', b'a\x00\r\n', -84),
-                              ('unicode', 'naïve\r\n'.encode(), -84),
-                              ('repository-unicode', (root/'docs/BUILDING.md').read_bytes(), -84), ('oversize-crlf', b'\r\n'*32768+b'x', -27)]:
+                              ('malformed-utf8', b'a\xff', -84),
+                              ('c1-control', b'a\xc2\x85', -84), ('oversize-crlf', b'\r\n'*32768+b'x', -27)]:
     d=work/('newline-reject-'+label);d.mkdir();target=d/'document';target.write_bytes(payload)
     r=subprocess.run([str(newline),str(target)],input=b'',capture_output=True,timeout=10)
     result('newline-refuses-'+label, r.returncode==0 and not r.stderr and r.stdout==newline_frame(b'',status=error) and target.read_bytes()==payload)
@@ -174,7 +177,7 @@ rng = random.Random(20160921)
 for label, initial, operations in [
     ('crlf-history', b'alpha\r\nbeta\r\n', [('s',5),('d',0),('u',0),('r',0),('b',0),('u',0)] +
      [('s',0),('d',0)] * 12 + [('i',10),('u',0),('r',0)] +
-     [(rng.choice('iidbsuur'), rng.choice([9,10,13,32,65,90,126,255])) for _ in range(1800)]),
+     [(rng.choice('iidbsuur'), rng.choice([9,10,13,32,65,90,126,129])) for _ in range(1800)]),
     ('crlf-capacity', b'x'*65533+b'\r\n', [('i',10),('i',65),('i',10),('b',0),('i',10),('e',0),('b',0),('i',10),('u',0),('r',0)]),
     ('crlf-full', b'x'*65534+b'\r\n', [('i',65),('i',10),('b',0),('e',0),('b',0),('i',10),('i',65),('u',0),('u',0),('r',0)]),
 ]:
@@ -261,14 +264,19 @@ newline_save = compile('newline-save', r"""func main():
  return (loaded, first, saved)
 end
 """)
-for label,payload in [('lf',source_copy),('crlf',source_copy.replace(b'\n',b'\r\n'))]:
+for label,payload in [('lf',source_copy),('crlf',source_copy.replace(b'\n',b'\r\n')),
+                      ('utf8-lf',(root/'docs/BUILDING.md').read_bytes()),
+                      ('utf8-crlf',(root/'docs/BUILDING.md').read_bytes().replace(b'\n',b'\r\n'))]:
     d=work/('newline-save-repository-'+label);d.mkdir();target=d/'document';target.write_bytes(payload)
     r=subprocess.run([str(newline_save),str(target),'roundtrip'],capture_output=True,timeout=10)
     result('newline-file-save-repository-'+label,r.returncode==0 and not r.stderr and r.stdout==b'(0, 0, 0)\n' and target.read_bytes()==payload)
 
-for mode in ('save','copy','recovery'):
+for mode, unicode_payload in [(mode,unicode_payload) for mode in ('save','copy','recovery') for unicode_payload in (False,True)]:
     for faultlabel,fault,expected in [('success',None,0),('prepublication','fsync:error=EIO:when='+('4' if mode=='recovery' else '1'),-5),('postpublication','fsync:error=EIO:when='+('5' if mode=='recovery' else '2'),1)]:
-        d=work/f'newline-{mode}-{faultlabel}';d.mkdir();target=d/'document';payload=b'original\r\ntext';target.write_bytes(payload)
+        label=f'{mode}-{faultlabel}' + ('-utf8' if unicode_payload else '')
+        d=work/f'newline-{label}';d.mkdir();target=d/'document'
+        payload='café — e\u0301 😀\r\ntext'.encode() if unicode_payload else b'original\r\ntext'
+        target.write_bytes(payload)
         before=target.stat();command=[str(newline_save),str(target),mode]
         if fault:command=['strace','-o',str(d/'strace.log'),'-e','inject='+fault]+command
         r=subprocess.run(command,capture_output=True,timeout=10)
@@ -282,7 +290,7 @@ for mode in ('save','copy','recovery'):
             if mode=='copy' and expected<0:assert not copies
             else:assert len(copies)==1 and copies[0].read_bytes()==(payload if expected<0 else wanted)
         assert not list(d.rglob('.herbert-save-*.tmp'))
-        result(f'newline-{mode}-{faultlabel}-exact-bytes',True)
+        result(f'newline-{label}-exact-bytes',True)
 
 
 def run_file(label, initial='regular', fault=None, expected=0):
@@ -562,7 +570,7 @@ bounds = compile('bounds', r"""func main():
  let b = text_insert(t, 66)
  let c = text_insert(t, 67)
  let overflow = text_insert(t, 68)
- let invalid = text_insert(t, 255)
+ let invalid = text_insert(t, 55296)
  let dirty = linux_buffer(1)
  let byte = buffer_set(dirty, 0, 128)
  let badload = text_load(t, dirty, 1)
@@ -633,7 +641,9 @@ for op, value in operations:
         model = bytearray(content); applied += 1
     if changed:
         entries = entries[:applied] + [(before, (bytes(model), cursor))]
-        entries = entries[-256:]; applied = len(entries)
+        # Each ASCII edit retains one byte; the 128-byte history budget
+        # evicts complete oldest records before the separate 256-record limit.
+        entries = entries[-128:]; applied = len(entries)
     expected += struct.pack('<QQ', len(model), cursor) + model
 commands = ''.join(f'{op}{value:03d}\n' for op,value in operations).encode()
 r = subprocess.run([str(history)], input=commands, capture_output=True, timeout=10)

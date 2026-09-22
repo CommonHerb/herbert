@@ -18,9 +18,11 @@ make maze notes
 ```
 
 The maze reads an editable text map, checks walls, counts collected dots and
-supports completion and restart. Notes opens, edits and saves a bounded ASCII
+supports completion and restart. Notes opens, edits and saves a bounded UTF-8
 text file, preserving uniform LF or CRLF line endings through saves and recovery.
-It has undo/redo, wrapped search and private session recovery copies. These are small usable applications, not a general game engine or a
+It has whole-character navigation/deletion, undo/redo, wrapped search and private
+session recovery copies. Latin prose and common punctuation have original bitmap
+glyphs; unsupported glyphs are visibly marked without changing their bytes. These are small usable applications, not a general game engine or a
 full word processor. The [support guide](lib/README.md) explains the reusable
 Herbert code and the actual host boundary: Linux and X11/XWayland supply system,
 display and device services; no foreign runtime or graphics library is linked

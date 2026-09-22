@@ -1,0 +1,154 @@
+-- Unicode 18.0.0 default extended grapheme rules (UAX #29 rev49).
+-- Handwritten Herbert streaming state machine; generated data is separate in
+-- unicode_tables.herb. No allocation during segmentation or navigation.
+-- https://www.unicode.org/reports/tr29/tr29-49.html#Grapheme_Cluster_Boundary_Rules
+
+func unicode_hex_digit(ch):
+    if ch <= 57: return ch - 48 end
+    return ch - 87
+end
+
+func unicode_hex_field(s, at, digits, value):
+    if digits == 0: return value end
+    return unicode_hex_field(s, at + 1, digits - 1, value * 16 + unicode_hex_digit(index(s, at)))
+end
+
+func unicode_grapheme_lookup(s, cp, lo, hi):
+    if lo == hi: return 0 end
+    let middle = lo + (hi - lo) / 2
+    let at = middle * 14
+    let first = unicode_hex_field(s, at, 6, 0)
+    if cp < first: return unicode_grapheme_lookup(s, cp, lo, middle) end
+    let last = unicode_hex_field(s, at + 6, 6, 0)
+    if cp > last: return unicode_grapheme_lookup(s, cp, middle + 1, hi) end
+    return unicode_hex_field(s, at + 12, 2, 0)
+end
+
+func unicode_grapheme_property(cp):
+    if cp <= 127:
+        if cp == 13: return 1 end
+        if cp == 10: return 2 end
+        if cp <= 31 or cp == 127: return 3 end
+        return 0
+    end
+    if cp >= 44032 and cp <= 55203:
+        if (cp - 44032) % 28 == 0: return 12 end
+        return 13
+    end
+    let ranges = unicode_grapheme_ranges()
+    return unicode_grapheme_lookup(ranges, cp, 0, length(ranges) / 14)
+end
+
+-- Streaming state: preceding GCB class, trailing RI parity, emoji suffix
+-- (0 absent, 1 EP Extend*, 2 EP Extend* ZWJ), Indic suffix (0 absent,
+-- 1 Linker Extend*). Unicode 18 GB9c does not require a leading consonant.
+-- These four integers are flattened stack values, not heap allocations.
+func unicode_grapheme_break(state, props):
+    let a = state.0
+    let b = props & 15
+    -- GB3, GB4, GB5: controls have precedence over every combining rule.
+    if a == 1 and b == 2: return false end
+    if a >= 1 and a <= 3: return true end
+    if b >= 1 and b <= 3: return true end
+    -- GB6..GB8: Hangul syllable composition.
+    if a == 9 and (b == 9 or b == 10 or b == 12 or b == 13): return false end
+    if (a == 12 or a == 10) and (b == 10 or b == 11): return false end
+    if (a == 13 or a == 11) and b == 11: return false end
+    -- GB9, GB9a, GB9b.
+    if b == 4 or b == 5 or b == 8: return false end
+    if a == 7: return false end
+    -- GB9c (Unicode 18): InCB=Linker InCB=Extend* x InCB=Consonant.
+    if state.3 == 1 and (props >> 6) == 1: return false end
+    -- GB11: an Extended_Pictographic after EP Extend* ZWJ.
+    if state.2 == 2 and (props & 16) != 0: return false end
+    -- GB12/GB13: pair consecutive regional indicators from the run's start.
+    if a == 6 and b == 6 and state.1 == 1: return false end
+    return true
+end
+
+func unicode_grapheme_step(state, props):
+    let gcb = props & 15
+    let ri = 0
+    if gcb == 6: ri = (state.1 + 1) % 2 end
+    let emoji = 0
+    if (props & 16) != 0: emoji = 1
+    elif gcb == 4 and state.2 == 1: emoji = 1
+    elif gcb == 5 and state.2 == 1: emoji = 2
+    end
+    let indic = 0
+    let incb = props >> 6
+    if incb == 3: indic = 1
+    elif incb == 2: indic = state.3
+    end
+    return (gcb, ri, emoji, indic)
+end
+
+func unicode_grapheme_clear(marks, p, stop):
+    if p >= stop: return 0 end
+    let cleared = buffer_set(marks, p, 0)
+    return unicode_grapheme_clear(marks, p + 1, stop)
+end
+
+func unicode_grapheme_mark_loop(bytes, count, marks, p, state):
+    if p == count:
+        let endmark = buffer_set(marks, count, 1)
+        return 0
+    end
+    -- Common prose bytes avoid decoding/property lookup. GB9b is the only
+    -- joining rule whose right side can be printable ASCII (class Other).
+    let first = buffer_get(bytes, p)
+    if first >= 32 and first <= 126:
+        let boundary = 1
+        if state.0 == 7: boundary = 0 end
+        let marked = buffer_set(marks, p, boundary)
+        return unicode_grapheme_mark_loop(bytes, count, marks, p + 1, (0, 0, 0, 0))
+    end
+    let decoded = utf8_decode(bytes, p, count)
+    if linux_error(decoded.0): return decoded.0 end
+    let props = unicode_grapheme_property(decoded.0)
+    let boundary = 0
+    if p == 0 or unicode_grapheme_break(state, props): boundary = 1 end
+    let marked = buffer_set(marks, p, boundary)
+    let cleared = unicode_grapheme_clear(marks, p + 1, decoded.1)
+    return unicode_grapheme_mark_loop(bytes, count, marks, decoded.1, unicode_grapheme_step(state, props))
+end
+
+-- Fill count+1 byte flags, including start/end boundaries. On bad UTF-8 the
+-- returned status is -EILSEQ and flags may be partially written. No allocation.
+func unicode_grapheme_mark(bytes, count, marks):
+    if not linux_range(bytes, 0, count) or count >= buffer_length(marks): return 0 - 22 end
+    return unicode_grapheme_mark_loop(bytes, count, marks, 0, (0, 0, 0, 0))
+end
+
+-- Raw-buffer navigation is intended for small inputs such as a search query.
+-- It scans from zero to retain RI/Indic/emoji context at arbitrary byte offsets.
+-- Document rendering/navigation should instead use text_buffer's cached flags.
+func unicode_grapheme_next_loop(bytes, count, target, p, state):
+    if p == count: return count end
+    let decoded = utf8_decode(bytes, p, count)
+    if linux_error(decoded.0): return decoded.0 end
+    let props = unicode_grapheme_property(decoded.0)
+    if p > target and unicode_grapheme_break(state, props): return p end
+    return unicode_grapheme_next_loop(bytes, count, target, decoded.1, unicode_grapheme_step(state, props))
+end
+
+func unicode_grapheme_next(bytes, count, pos):
+    if not linux_range(bytes, 0, count): return 0 - 22 end
+    if pos >= count: return count end
+    return unicode_grapheme_next_loop(bytes, count, pos, 0, (0, 0, 0, 0))
+end
+
+func unicode_grapheme_previous_loop(bytes, count, target, p, prior, state):
+    if p >= target: return prior end
+    let decoded = utf8_decode(bytes, p, count)
+    if linux_error(decoded.0): return decoded.0 end
+    let props = unicode_grapheme_property(decoded.0)
+    if p == 0 or unicode_grapheme_break(state, props): prior = p end
+    return unicode_grapheme_previous_loop(bytes, count, target, decoded.1, prior, unicode_grapheme_step(state, props))
+end
+
+func unicode_grapheme_previous(bytes, count, pos):
+    if not linux_range(bytes, 0, count): return 0 - 22 end
+    if pos > count: pos = count end
+    return unicode_grapheme_previous_loop(bytes, count, pos, 0, 0, (0, 0, 0, 0))
+end

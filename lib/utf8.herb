@@ -1,0 +1,78 @@
+-- RFC 3629 scalar UTF-8. No allocation, normalization, or replacement decoding.
+-- https://www.rfc-editor.org/rfc/rfc3629#section-4
+-- A decoder error returns (-EILSEQ, original offset); successful next offsets
+-- never pass limit. Callers may apply their own control-character policy.
+func utf8_width(cp):
+    if cp <= 127: return 1 end
+    if cp <= 2047: return 2 end
+    if cp >= 55296 and cp <= 57343: return 0 end
+    if cp <= 65535: return 3 end
+    if cp <= 1114111: return 4 end
+    return 0
+end
+
+func utf8_continuation(ch): return ch >= 128 and ch <= 191 end
+
+-- Editor prose policy, separate from Unicode validity: TAB/LF plus all scalar
+-- values outside C0/DEL/C1. Format characters and noncharacters retain bytes.
+func utf8_text_allowed(cp):
+    if cp == 9 or cp == 10: return true end
+    if cp < 32 or (cp >= 127 and cp <= 159): return false end
+    return utf8_width(cp) != 0
+end
+
+func utf8_decode(bytes, offset, limit):
+    if limit > buffer_length(bytes) or offset >= limit: return (0 - 84, offset) end
+    let a = buffer_get(bytes, offset)
+    if a <= 127: return (a, offset + 1) end
+    if a >= 194 and a <= 223:
+        if limit - offset < 2: return (0 - 84, offset) end
+        let b = buffer_get(bytes, offset + 1)
+        if not utf8_continuation(b): return (0 - 84, offset) end
+        return ((a - 192) * 64 + b - 128, offset + 2)
+    end
+    if a >= 224 and a <= 239:
+        if limit - offset < 3: return (0 - 84, offset) end
+        let b = buffer_get(bytes, offset + 1)
+        let c = buffer_get(bytes, offset + 2)
+        if not utf8_continuation(b) or not utf8_continuation(c): return (0 - 84, offset) end
+        if a == 224 and b < 160: return (0 - 84, offset) end
+        if a == 237 and b >= 160: return (0 - 84, offset) end
+        return ((a - 224) * 4096 + (b - 128) * 64 + c - 128, offset + 3)
+    end
+    if a >= 240 and a <= 244:
+        if limit - offset < 4: return (0 - 84, offset) end
+        let b = buffer_get(bytes, offset + 1)
+        let c = buffer_get(bytes, offset + 2)
+        let d = buffer_get(bytes, offset + 3)
+        if not utf8_continuation(b) or not utf8_continuation(c) or not utf8_continuation(d): return (0 - 84, offset) end
+        if a == 240 and b < 144: return (0 - 84, offset) end
+        if a == 244 and b >= 144: return (0 - 84, offset) end
+        return ((a - 240) * 262144 + (b - 128) * 4096 + (c - 128) * 64 + d - 128, offset + 4)
+    end
+    return (0 - 84, offset)
+end
+
+-- Validate before writing: insufficient room or a non-scalar changes no byte.
+-- Success returns the offset immediately after the encoded scalar.
+func utf8_store(bytes, offset, cp):
+    let width = utf8_width(cp)
+    if width == 0: return 0 - 84 end
+    if not linux_range(bytes, offset, width): return 0 - 27 end
+    if width == 1:
+        let a = buffer_set(bytes, offset, cp)
+    elif width == 2:
+        let a = buffer_set(bytes, offset, 192 + cp / 64)
+        let b = buffer_set(bytes, offset + 1, 128 + cp % 64)
+    elif width == 3:
+        let a = buffer_set(bytes, offset, 224 + cp / 4096)
+        let b = buffer_set(bytes, offset + 1, 128 + (cp / 64) % 64)
+        let c = buffer_set(bytes, offset + 2, 128 + cp % 64)
+    else:
+        let a = buffer_set(bytes, offset, 240 + cp / 262144)
+        let b = buffer_set(bytes, offset + 1, 128 + (cp / 4096) % 64)
+        let c = buffer_set(bytes, offset + 2, 128 + (cp / 64) % 64)
+        let d = buffer_set(bytes, offset + 3, 128 + cp % 64)
+    end
+    return offset + width
+end
