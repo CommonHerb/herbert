@@ -25,18 +25,24 @@
 #                 bite-proof mislabeled "-" to dodge the frozen set cannot hide.
 #
 # Exit 0 iff all five bite and the matching CONTROL is GREEN.
+#
+# Every mutation runs in a private copy of the tracked files, so nothing here can
+# change, replace or delete a path in the real checkout, even when interrupted.
 set -u
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
-repo_root="$(cd "$script_dir/../.." && pwd)"
-driver="$script_dir/run_switchover_dryrun.sh"
-[[ -x "$driver" ]] || { echo "FAIL: missing run_switchover_dryrun.sh"; exit 1; }
+real_root="$(cd "$(dirname "$0")/../.." && pwd)"
+[[ -x "$real_root/bootstrap/tests/run_switchover_dryrun.sh" ]] || { echo "FAIL: missing run_switchover_dryrun.sh"; exit 1; }
 
-work="$(mktemp -d)"
-mut="$script_dir/dryrun_mut_tmp_$$.sh"   # a temp driver copy must live in script_dir
-                                         # so its repo_root + gate paths still resolve.
-restore_emitter() { [[ -f "$work/emitter.orig" ]] && cp "$work/emitter.orig" "$script_dir/run_emitter_native_mutation.sh"; }
-trap 'restore_emitter; rm -rf "$work" "$mut"; rm -f "$repo_root/build/herbert"' EXIT
+work="$(mktemp -d)" || { echo "FAIL: switchover-dry-run mutation proof (mktemp -d failed)"; exit 1; }
+trap 'rm -rf "$work"' EXIT
+repo_root="$work/tree"
+mkdir "$repo_root" && git -C "$real_root" ls-files -z >"$work/tracked" \
+    && (cd "$real_root" && xargs -0 cp -p --parents -t "$repo_root" <"$work/tracked") \
+    || { echo "FAIL: switchover-dry-run mutation proof (could not copy the tracked files)"; exit 1; }
+script_dir="$repo_root/bootstrap/tests"
+driver="$script_dir/run_switchover_dryrun.sh"
+mut="$script_dir/dryrun_mut_tmp.sh"      # the driver copy lives beside the driver so
+                                         # its repo_root + gate paths still resolve.
 
 pass=0; fail=0
 ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
@@ -70,8 +76,7 @@ fi
 # --- M-cleanstate: a stale C-built binary is refused ------------------------
 printf '== M-cleanstate: the clean-state precondition refuses a stale C binary ==\n'
 mkdir -p "$repo_root/build"
-# Use a sentinel name the trap cleans; the check looks for build/herbert exactly,
-# so plant build/herbert (saved/restored is unnecessary -- a fresh worktree has none).
+# The check looks for build/herbert exactly; the private copy has no build/.
 : >"$repo_root/build/herbert"
 if run_driver "$driver"; then rm -f "$repo_root/build/herbert"; bad "M-cleanstate did NOT bite: dry-run ran with a stale build/herbert present"; else
     rm -f "$repo_root/build/herbert"
@@ -90,14 +95,13 @@ fi
 
 # --- M-forge: a silent-success (exit 0, no PASS) bite-proof is caught --------
 printf '== M-forge: the dry-run requires the PASS signature, not just exit 0 ==\n'
-# Replace a real bite-proof's CONTENTS with a SILENT-SUCCESS forge (exit 0 with no
-# verdict) -- the exact attack the PASS-signature check defends. Membership is
-# UNCHANGED, so this isolates the bite-semantics requirement from the frozen-set check.
+# Replace a real bite-proof's CONTENTS (in the private copy) with a SILENT-SUCCESS
+# forge (exit 0 with no verdict) -- the exact attack the PASS-signature check
+# defends. Membership is UNCHANGED, so this isolates the bite-semantics requirement
+# from the frozen-set check.
 emitter="$script_dir/run_emitter_native_mutation.sh"
-cp "$emitter" "$work/emitter.orig"
 printf '#!/usr/bin/env bash\necho "silent success, no verdict"\nexit 0\n' >"$emitter"; chmod +x "$emitter"
 run_driver "$driver"; rc=$?
-restore_emitter
 if [[ $rc -eq 0 ]]; then bad "M-forge did NOT bite: dry-run passed a silent-success (exit 0, no PASS) bite-proof"; else
     grep -qiE "NO .PASS. verdict|vacuous/forged" "$work/out" && ok "M-forge BITES: dry-run RED on a forged-green bite-proof (no PASS signature)" || bad "M-forge failed but not via the PASS-signature check ($(grep -i fail "$work/out" | head -1))"
 fi

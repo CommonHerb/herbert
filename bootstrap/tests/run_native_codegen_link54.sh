@@ -66,7 +66,7 @@ REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 if [[ ! -f "$REF" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing $REF)"; exit 1; fi
 if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (missing feeder $feeder)"; exit 1; fi
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
-work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # clean up only THIS gate's orphaned bochs (scoped to its unique mktemp; never a system-wide `pkill bochs`). F2 sweep 2026-07-04.
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "${work:?}" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # clean up only THIS gate's orphaned bochs (scoped to its unique mktemp; never a system-wide `pkill bochs`). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -277,7 +277,7 @@ bochs_two_boot() { # x b2out
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
     # pre-run hygiene: a prior crashed Bochs can leave the disk locked
-    pkill -9 -f "$work" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
+    pkill -9 -f "${work:?}" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
     rm -f "$d/disk.img.lock" 2>/dev/null || true
     ( cd "$d"
       dd if=/dev/zero of=disk.img bs=1M count=64 status=none
@@ -333,7 +333,7 @@ BX
     python3 "$feeder" "$port" "$x" --hold 150 > "$d/feed.log" 2>&1 & local fp=$!
     _feed_ok "$d/feed.log" "writer.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
-    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" > bochs_b1.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "$work"`
+    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" > bochs_b1.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b1.txt" "writer.bin(BOOT-1)" || return 1

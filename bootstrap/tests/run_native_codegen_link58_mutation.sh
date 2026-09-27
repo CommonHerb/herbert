@@ -48,7 +48,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "$REQUIRE_EMU" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
     echo "SKIP: qemu not found (mutation proof needs the silicon gate)"; exit 0
 fi
-work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # scoped to THIS gate's own $work-referencing procs, never a system-wide `pkill bochs` (would false-RED a concurrent gate -- F4). This gate is QEMU-only (spawns no bochs); the scope is precautionary + reaps any hung own qemu. (Packet A item 3, 2026-07-05.)
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "${work:?}" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # scoped to THIS gate's own $work-referencing procs, never a system-wide `pkill bochs` (would false-RED a concurrent gate -- F4). This gate is QEMU-only (spawns no bochs); the scope is precautionary + reaps any hung own qemu. (Packet A item 3, 2026-07-05.)
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }

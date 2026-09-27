@@ -295,7 +295,7 @@ bochs_run() { # out timeout chasemaparg
     # pre-run hygiene: a prior crashed Bochs can leave the disk locked. Scoped to THIS gate's own process
     # (`-f "$work"`; the bochs cmdline carries the absolute $work/b.d bochsrc path) -- a system-wide `pkill bochs`
     # would false-RED a CONCURRENT gate's boot, the F4 class. (Packet A item 3, 2026-07-05; F2 own-process rule.)
-    pkill -9 -f "$work" 2>/dev/null || true
+    pkill -9 -f "${work:?}" 2>/dev/null || true
     rm -f "$d/disk.img.lock" 2>/dev/null || true
     ( cd "$d"
       dd if=/dev/zero of=disk.img bs=1M count=64 status=none
@@ -336,7 +336,7 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" > bochs_out.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "$work"`
+      xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" > bochs_out.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
     python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$out"
 }
 if have_bochs; then

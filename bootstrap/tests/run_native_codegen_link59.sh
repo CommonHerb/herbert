@@ -38,7 +38,7 @@ for f in "$REF" "$LB" "$DEL_REF" "$feeder"; do
     [[ -f "$f" ]] || { echo "FAIL: stack/native_compile_fragment.herb (missing $f)"; exit 1; }
 done
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
-work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "$work" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
+work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'KERNEL_TEST_EXIT_STATUS=$?; pkill -9 -f "${work:?}" 2>/dev/null || true; kernel_test_cleanup "$work"; exit "$KERNEL_TEST_EXIT_STATUS"' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp; a system-wide `pkill bochs` false-REDs a CONCURRENT gate's boot -- the F4 class). F2 sweep 2026-07-04.
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
@@ -249,7 +249,7 @@ bochs_three_boot_reuse() { # fillstream delstream newstream  -> nonzero (sets BO
     local d="$work/b.d"; kernel_test_cleanup "$d"; mkdir -p "$d"
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    pkill -9 -f "$work" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
+    pkill -9 -f "${work:?}" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
     rm -f "$d/disk.img.lock" 2>/dev/null || true
     ( cd "$d"
       dd if=/dev/zero of=disk.img bs=1M count=64 status=none
@@ -322,7 +322,7 @@ BX
             kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1
         fi
         sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_run.txt"
-        ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_run.txt" > "$logf" 2>&1 )   # absolute bochsrc path -> $work in the cmdline so the scoped `pkill -f "$work"` matches only THIS gate's bochs
+        ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_run.txt" > "$logf" 2>&1 )   # absolute bochsrc path -> $work in the cmdline so the scoped `pkill -f "${work:?}"` matches only THIS gate's bochs
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
         rm -f "$d/disk.img.lock"
         _bochs_ran_ok "$logf" "$mod" || return 1
