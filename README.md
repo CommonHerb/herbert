@@ -121,8 +121,8 @@ Use `stderr_write` in an expression (for example, bind its result with `let`);
 `do process_exit(status)` accepts one integer and terminates the process with
 its low eight bits as the exit status, without rendering `main`'s return value.
 It is not a value expression. The compiler still requires the existing return
-structure and checks statements following this call; it does not infer a
-never-returning type. Both names are reserved builtin function names. These
+structure and checks statements following this call; it does not treat
+this call as never returning. Both names are reserved builtin function names. These
 operations are not additions to the VM or kernel target interfaces.
 
 Normal program `main` return rendering, `clogger` and `flogger` are unchanged.

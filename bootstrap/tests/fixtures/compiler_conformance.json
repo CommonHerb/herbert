@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Separate CLI contract tests output publication and injected I/O faults.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Separate CLI contract tests output publication and injected I/O faults.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -1843,6 +1843,93 @@
       "source": "func mark(value, label):\n    do flogger(label)\n    return value\nend\nfunc probe(a, b, c):\n    let result = (\"base\", 40, mark(a, \"a\") or (mark(b, \"b\") and mark(c, \"c\")), \"tail\")\n    do flogger(\"|\")\n    if result.2:\n        return length(result.0) + result.1 + length(result.3) + 1\n    end\n    return length(result.0) + result.1 + length(result.3)\nend\nfunc trap():\n    return 1 / 0 == 0\nend\nfunc guarded(a, b):\n    let result = (\"guard\", a or (b and trap()))\n    return result.1\nend\nfunc main():\n    return (probe(false, false, false), probe(false, false, true), probe(false, true, false), probe(false, true, true), probe(true, false, false), probe(true, false, true), probe(true, true, false), probe(true, true, true), guarded(true, true), guarded(false, false))\nend\n",
       "stdin": "",
       "stdout": "ab|ab|abc|abc|a|a|a|a|(48, 48, 48, 49, 49, 49, 49, 49, true, false)\n",
+      "status": 0
+    },
+    {
+      "id": "never-returns-later-let-shadows-parameter",
+      "profile": "run",
+      "source": "func first(x):\n    return get(x, 0)\n    let x = new_array(string)\nend\nfunc fwd(a):\n    if count(a) == 0:\n        return \"none\"\n    end\n    return first(a)\nend\nfunc main():\n    let a = new_array(string)\n    do add(a, \"hello\")\n    return fwd(a)\nend\n",
+      "stdin": "",
+      "stdout": "\"hello\"\n",
+      "status": 0
+    },
+    {
+      "id": "never-returns-unused-let-after-guarded-return",
+      "profile": "run",
+      "source": "func first(x, c):\n    if c:\n        return get(x, 0)\n    end\n    let x = new_array(string)\n    let z = new_array(string)\n    return get(z, 0)\nend\nfunc fwd(a):\n    if count(a) == 0:\n        return \"none\"\n    end\n    return first(a, true)\nend\nfunc main():\n    let a = new_array(string)\n    do add(a, \"hello\")\n    return fwd(a)\nend\n",
+      "stdin": "",
+      "stdout": "\"hello\"\n",
+      "status": 0
+    },
+    {
+      "id": "never-returns-later-lets-two-parameters-tuple",
+      "profile": "run",
+      "source": "func first(x, y, c):\n    if c:\n        return get(x, 0)\n    end\n    return get(y, 0)\n    let x = new_array((int, int))\n    let y = new_array((int, int))\nend\nfunc fwd(a, b):\n    if count(a) == 0:\n        return (1, 2)\n    end\n    return first(a, b, false)\nend\nfunc main():\n    let a = new_array((int, int))\n    do add(a, (7, 8))\n    let b = new_array((int, int))\n    do add(b, (17, 18))\n    return fwd(a, b)\nend\n",
+      "stdin": "",
+      "stdout": "(17, 18)\n",
+      "status": 0
+    },
+    {
+      "id": "never-returns-later-let-keeps-return-conflict",
+      "profile": "reject",
+      "source": "func first(x):\n    return get(x, 0)\n    let x = new_array(int)\nend\nfunc fwd(a):\n    if count(a) == 0:\n        return false\n    end\n    return first(a)\nend\nfunc main():\n    let a = new_array(int)\n    do add(a, 41)\n    return fwd(a)\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "never-returns-later-let-keeps-rebind-width",
+      "profile": "reject",
+      "source": "func first(x):\n    return get(x, 0)\n    let x = new_array(string)\nend\nfunc main():\n    let a = new_array(string)\n    do add(a, \"hello\")\n    let v = 7\n    v = first(a)\n    return v\nend\n",
+      "diagnostic": "line 9: native-subset: local rebind changes value width (ERR 433)"
+    },
+    {
+      "id": "never-returns-not-applied-to-main",
+      "profile": "run-stdio",
+      "source": "func main():\n    let a = new_array(int)\n    return get(a, 3)\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 3: get: position 3 out of range (count 0)\n",
+      "status": 1
+    },
+    {
+      "id": "never-returns-helper-at-two-types",
+      "profile": "run",
+      "source": "func fault(why):\n    let slot = new_array((int, int))\n    return get(slot, 0)\nend\nfunc name_of(n):\n    if n > 9:\n        return fault(\"too big\")\n    end\n    return \"small\"\nend\nfunc next_of(n):\n    if n > 9:\n        return fault(\"too big\")\n    end\n    return n + 1\nend\nfunc main():\n    return (next_of(4), name_of(4))\nend\n",
+      "stdin": "",
+      "stdout": "(5, \"small\")\n",
+      "status": 0
+    },
+    {
+      "id": "never-returns-helper-faults-when-reached",
+      "profile": "run-stdio",
+      "source": "func fault(why):\n    let slot = new_array((int, int))\n    return get(slot, 0)\nend\nfunc name_of(n):\n    if n > 9:\n        return fault(\"too big\")\n    end\n    return \"small\"\nend\nfunc main():\n    return name_of(12)\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 3: get: position 0 out of range (count 0)\n",
+      "status": 1
+    },
+    {
+      "id": "never-returns-earlier-let-shadows-parameter",
+      "profile": "run-stdio",
+      "source": "func first(x):\n    let x = new_array(string)\n    return get(x, 0)\nend\nfunc fwd(a):\n    if count(a) == 0:\n        return \"none\"\n    end\n    return first(a)\nend\nfunc main():\n    let a = new_array(string)\n    do add(a, \"hello\")\n    return fwd(a)\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 3: get: position 0 out of range (count 0)\n",
+      "status": 1
+    },
+    {
+      "id": "never-returns-later-let-after-nested-statements",
+      "profile": "run",
+      "source": "func first(x, c):\n    if c:\n        let q = 1\n        let r = 2\n        return get(x, 0)\n    end\n    let x = new_array(string)\n    let z = new_array(string)\n    return get(z, 0)\nend\nfunc fwd(a):\n    if count(a) == 0:\n        return \"none\"\n    end\n    return first(a, true)\nend\nfunc main():\n    let a = new_array(string)\n    do add(a, \"hello\")\n    return fwd(a)\nend\n",
+      "stdin": "",
+      "stdout": "\"hello\"\n",
+      "status": 0
+    },
+    {
+      "id": "never-returns-nested-returns-two-arrays",
+      "profile": "run",
+      "source": "func fault(why):\n    let a = new_array((int, int))\n    let b = new_array((int, int))\n    if length(why) > 3:\n        return get(a, 0)\n    end\n    return get(b, 0)\nend\nfunc name_of(n):\n    if n > 9:\n        return fault(\"too big\")\n    end\n    return \"small\"\nend\nfunc next_of(n):\n    if n > 9:\n        return fault(\"big\")\n    end\n    return n + 1\nend\nfunc main():\n    return (next_of(4), name_of(4))\nend\n",
+      "stdin": "",
+      "stdout": "(5, \"small\")\n",
       "status": 0
     }
   ]

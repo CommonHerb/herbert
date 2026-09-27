@@ -64,6 +64,8 @@ stmt    := 'let' NAME '=' expr        -- local binding; see current shadowing be
 
 The native compiler currently permits repeated `let` bindings in one scope and same-width `int`/`bool` rebinding; do not assume the older full-language `ERR 301` duplicate-let rule is enforced here. Return-path diagnostics are also incomplete: a body with no return can report `ERR 424`, and a partial-return body can reach `ERR 415` rather than a dedicated missing-return error. Do not mistake these observations for a settled, complete semantic contract.
 
+**Always-faulting helpers.** A function whose every `return` is `get(X, i)` never returns normally when each such `X` is bound by a top-level `let X = new_array(TYPE)` placed before the statement holding that return, and `X` appears nowhere else in the function: not in another return, an `add` or an assignment. If evaluating `i` completes, the read from the empty array faults. The compiler treats a call to such a function as never returning, so `return helper(...)` is accepted in functions of any result type. A `let` placed after the return does not count: there `X` still names the parameter, so the function can return normally. `main` is never treated this way. Other uses of such a call are stricter than run-time behaviour: unconstrained or differently typed uses can be rejected with `ERR 424`, `ERR 430` or `ERR 433`. Passing the call's result to another user function, directly or through a local, can stop the compiler with an internal fault; that is a known compiler defect.
+
 **Comments:** `--` to end of line only. No block comments. A recognized leading `-- emit: ...` marker selects a specialized compiler route before ordinary hosted validation; those routes are outside this pack.
 
 **Expression precedence, loosest → tightest** (all binary tiers left-associative):
@@ -125,8 +127,8 @@ process on a broken pipe. This is a Linux-hosted interface, not a kernel intrins
 bits as process status; there is no main-result rendering. Unlike `return 7`
 (stdout `7\n`, process status 0), `do process_exit(7)` produces status 7. Keep a
 trailing `return` to satisfy the compiler's current return/type analysis; following
-statements are still checked. No never-returning type or new return-path analysis
-is implemented. These builtin names are reserved against function definitions.
+statements are still checked. `process_exit` is not treated as never returning.
+These builtin names are reserved against function definitions.
 
 **Input:** prefer `stdin_read()`, which returns `(errno, bytes)`. Zero errno means a complete read through EOF; a positive Linux errno means failure and the returned string is empty. Short reads continue and EINTR is retried. The compiler itself uses checked input before selecting any emit route. The result is a whole-input allocation, not a streaming interface. At arena capacity a one-byte probe distinguishes exact-fit EOF from excess input; excess consumes that byte and returns errno 12 (ENOMEM) with an empty string. Initial arena mapping failure occurs before `main` and is outside this result contract.
 

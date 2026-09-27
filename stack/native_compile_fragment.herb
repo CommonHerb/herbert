@@ -5896,7 +5896,7 @@ func nc_top_let_is_new_array(nodes, stmts, i, n, name):
     return nc_top_let_is_new_array(nodes, stmts, i + 1, n, name)
 end
 
-func nc_return_is_trap(nodes, top_stmts, expr_idx):
+func nc_return_is_trap(nodes, top_stmts, before, expr_idx):
     let node = get(nodes, expr_idx)
     if not equal(node.0, "call"):
         return false
@@ -5912,7 +5912,10 @@ func nc_return_is_trap(nodes, top_stmts, expr_idx):
         return false
     end
     let xname = get(arr.1, 0)
-    if not nc_top_let_is_new_array(nodes, top_stmts, 0, count(top_stmts), xname):
+    -- The fresh array's let must be a top-level statement that runs before the
+    -- one holding this return. A later let leaves the name bound to a parameter
+    -- or earlier value here, and that function does return.
+    if not nc_top_let_is_new_array(nodes, top_stmts, 0, before, xname):
         return false
     end
     if nc_body_let_target_count_name(nodes, top_stmts, 0, count(top_stmts), xname) != 1:
@@ -5927,7 +5930,9 @@ func nc_return_is_trap(nodes, top_stmts, expr_idx):
     return true
 end
 
-func nc_returns_all_trap(nodes, top_stmts, stmts, i, n):
+-- `before` is the top-level position of the statement being walked; nested
+-- bodies inherit it from the top-level if that contains them.
+func nc_returns_all_trap(nodes, top_stmts, stmts, i, n, top, before):
     if i >= n:
         return (true, 0)
     end
@@ -5935,22 +5940,26 @@ func nc_returns_all_trap(nodes, top_stmts, stmts, i, n):
     let tag = stmt.0
     let here_ok = true
     let here_cnt = 0
+    let here_before = before
+    if top:
+        here_before = i
+    end
     if equal(tag, "return"):
         here_cnt = 1
-        here_ok = nc_return_is_trap(nodes, top_stmts, get(stmt.2, 0))
+        here_ok = nc_return_is_trap(nodes, top_stmts, here_before, get(stmt.2, 0))
     elif equal(tag, "if"):
-        let r = nc_if_returns_all_trap(nodes, top_stmts, stmt.2, 0, count(stmt.2))
+        let r = nc_if_returns_all_trap(nodes, top_stmts, here_before, stmt.2, 0, count(stmt.2))
         here_ok = r.0
         here_cnt = r.1
     end
     if not here_ok:
         return (false, here_cnt)
     end
-    let rest = nc_returns_all_trap(nodes, top_stmts, stmts, i + 1, n)
+    let rest = nc_returns_all_trap(nodes, top_stmts, stmts, i + 1, n, top, before)
     return (rest.0, here_cnt + rest.1)
 end
 
-func nc_if_returns_all_trap(nodes, top_stmts, kids, i, n):
+func nc_if_returns_all_trap(nodes, top_stmts, before, kids, i, n):
     if i >= n:
         return (true, 0)
     end
@@ -5962,18 +5971,22 @@ func nc_if_returns_all_trap(nodes, top_stmts, kids, i, n):
         body_idx = get(arm.2, 1)
     end
     let body = get(nodes, body_idx)
-    let r = nc_returns_all_trap(nodes, top_stmts, body.2, 0, count(body.2))
+    let r = nc_returns_all_trap(nodes, top_stmts, body.2, 0, count(body.2), false, before)
     if not r.0:
         return (false, r.1)
     end
-    let rest = nc_if_returns_all_trap(nodes, top_stmts, kids, i + 1, n)
+    let rest = nc_if_returns_all_trap(nodes, top_stmts, before, kids, i + 1, n)
     return (rest.0, r.1 + rest.1)
 end
 
 func nc_func_never_returns_node(nodes, fn):
+    -- main is never called, so its result is never used at another type.
+    if equal(get(fn.1, 0), "main"):
+        return false
+    end
     let body = get(nodes, get(fn.2, 1))
     let stmts = body.2
-    let r = nc_returns_all_trap(nodes, stmts, stmts, 0, count(stmts))
+    let r = nc_returns_all_trap(nodes, stmts, stmts, 0, count(stmts), true, 0)
     if r.1 == 0:
         return false
     end
