@@ -333,7 +333,7 @@ BX
     python3 "$feeder" "$port" "$x" --hold 150 > "$d/feed.log" 2>&1 & local fp=$!
     _feed_ok "$d/feed.log" "writer.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
-    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" > bochs_b1.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b1.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b1.txt" "writer.bin(BOOT-1)" || return 1
@@ -352,7 +352,7 @@ BX
         BOCHS_HARNESS_ERR="the GRUB config swap to reader.bin FAILED (losetup/mount/tee/umount) -- Bochs would boot the STALE writer; harness failure, not a kernel miscompile"
         return 1
     fi
-    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc.txt" > bochs_b2.txt 2>&1 )   # BOOT-2 reader: no COM1 feeder; absolute bochsrc path (scoped-kill: $work in the cmdline)
+    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b2.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc.txt" )   # BOOT-2 reader: no COM1 feeder; absolute bochsrc path (scoped-kill: $work in the cmdline)
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b2.txt" "reader.bin(BOOT-2)" || return 1
     python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_b2.txt" "$b2out"

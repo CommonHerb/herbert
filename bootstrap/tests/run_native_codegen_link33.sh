@@ -226,7 +226,7 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" )
     if [[ ! -s "$W/bochs_out.txt" ]]; then kernel_test_cleanup "$W"; echo "NO-OUTPUT"; return; fi
     local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"
     if [[ "$sd" -lt 1 ]]; then kernel_test_cleanup "$W"; echo "NO-SHUTDOWN"; return; fi

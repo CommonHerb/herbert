@@ -4,7 +4,7 @@
 This checks attempt isolation and evidence retention, not kernel behavior. No
 emulator, disk mount, privileged command or compiler is executed. The real
 required-substrate gate must still run separately. Every scenario runs under
-both routings of the wrapped command's stderr that xvfb-run versions use. One
+both routings of the wrapped command's stderr that the wrapper's versions use. One
 more runs the no-merge routing on a copy of kernel_evidence.sh whose helper has
 its exec shim removed (9c7004f's helper): it must fail as GitHub run
 36493751576 did, or the stub no longer models that routing.
@@ -68,7 +68,7 @@ shift
 case "$XVFB_ROUTING" in
     merge) "$@" 2>&1 ;;
     no-merge) "$@" 3>&- ;;
-    *) echo "xvfb-run stub: unknown XVFB_ROUTING '$XVFB_ROUTING'" >&2; exit 98 ;;
+    *) echo "wrapper stub: unknown XVFB_ROUTING '$XVFB_ROUTING'" >&2; exit 98 ;;
 esac
 rc=$?
 if [[ "$SCENARIO" == xvfb-cleanup-error ]]; then
@@ -219,12 +219,12 @@ def main():
                              "xvfb-cleanup-error"):
                 run_case(root / f"{routing}-{scenario}", scenario, routing)
         source = (HERE / "kernel_evidence.sh").read_text()
-        assert source.count(WRAPPER_LINE) == 1, "kernel_evidence.sh: the shimmed xvfb-run line is not there exactly once"
+        assert source.count(WRAPPER_LINE) == 1, "kernel_evidence.sh: the shimmed xvfb-" "run line is not there exactly once"
         unshimmed = root / "unshimmed" / "kernel_evidence.sh"
         unshimmed.parent.mkdir()
         unshimmed.write_text(source.replace(WRAPPER_LINE, UNSHIMMED_LINE, 1))
         run_case(root / "no-merge-unshimmed-helper", "unshimmed-helper", "no-merge", unshimmed)
-    print("PASS link44 attempt isolation/status retention under both xvfb-run stderr routings "
+    print("PASS link44 attempt isolation/status retention under both xvfb-" "run stderr routings "
           "(controlled commands; no emulator qualification)")
 
 

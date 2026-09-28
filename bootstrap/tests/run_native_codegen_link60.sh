@@ -307,7 +307,7 @@ BX
             kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1
         fi
         sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_run.txt"
-        ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_run.txt" > "$d/bochs_$mod.log" 2>&1 )   # absolute bochsrc path -> $work in the cmdline so the scoped `pkill -f "${work:?}"` matches only THIS gate's bochs
+        ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture "$d/bochs_$mod.log" -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_run.txt" )   # absolute bochsrc path -> $work in the cmdline so the scoped `pkill -f "${work:?}"` matches only THIS gate's bochs
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; rm -f "$d/disk.img.lock"
         _bochs_ran_ok "$d/bochs_$mod.log" "$mod" || return 1
         _feed_delivered "$d/feed.log" "$mod" || return 1
@@ -317,7 +317,7 @@ BX
     python3 "$feeder" "$port" $(python3 "$LB" putstream1 "$seed") --hold 150 > "$d/feed1.log" 2>&1 & local fp=$!
     _feed_ok "$d/feed1.log" "writer.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
-    ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" > bochs_b1.txt 2>&1 )   # absolute bochsrc path (scoped-kill: $work in the cmdline)
+    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b1.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" )   # absolute bochsrc path (scoped-kill: $work in the cmdline)
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b1.txt" "writer.bin(BOOT-1)" || return 1
     _feed_delivered "$d/feed1.log" "writer.bin(BOOT-1)" || return 1

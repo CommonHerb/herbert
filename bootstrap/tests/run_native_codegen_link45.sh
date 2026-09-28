@@ -191,7 +191,7 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" )
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     _bochs_ran_ok "$d/bochs_out.txt" "$kind" || return 1
     _feed_delivered "$d/feed.log" "$kind" || return 1

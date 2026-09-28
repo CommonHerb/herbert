@@ -361,7 +361,7 @@ BX
         _ok_listen=1; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && { _ok_listen=0; break; }; sleep 0.1; done
         if [[ $_ok_listen -ne 0 ]]; then BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; echo "  HARNESS ERROR (Bochs larder witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi
         sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b.txt"
-        ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b.txt" > bochs.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+        ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
         if ! grep -q '^SENT' "$d/feed.log" 2>/dev/null; then BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload (no SENT / NOCONN -- Bochs did not connect COM1, the kernel got no input)"; echo "  HARNESS ERROR (Bochs larder witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi
         if ! grep -qa 'shutdown requested' "$d/bochs.txt" 2>/dev/null; then BOCHS_HARNESS_ERR="Bochs did NOT run through to the kernel shutdown tail (no 'shutdown requested' -- killed or hung mid-run)"; echo "  HARNESS ERROR (Bochs larder witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi

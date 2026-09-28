@@ -336,7 +336,7 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" > bochs_out.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
     python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$out"
 }
 if have_bochs; then

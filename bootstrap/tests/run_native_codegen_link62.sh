@@ -339,7 +339,7 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" )
     hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
     local nf sd
     nf=$(grep -o "de${ph}ad" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')

@@ -3,7 +3,7 @@
 
 FLAKE-LOG F12. The real shared harness (bochs_f2_harness.sh: f2_bochs_leg,
 f2__boot and its load guard) and the real binary-safe frame parser run against
-controlled host-command stubs. The xvfb-run stub keeps the real wrapper's
+controlled host-command stubs. The wrapper's stub keeps the real xvfb-run's
 stream topology in both packaged routings of the wrapped command's stderr:
 merge (xvfb 2:21.1.12-1ubuntu1.8, `"$@" 2>&1` at /usr/bin/xvfb-run:184) and
 no-merge (xvfb 2:21.1.22-1ubuntu1.2, `"$@" 3>&-` at :200). In both, the
@@ -23,6 +23,15 @@ unknown emulator-side text stay RED in both columns. A third column
 is 9c7004f's helper: GREEN under merge, and under no-merge the NO-SHUTDOWN
 re-rolls and HARNESS-ERROR of GitHub run 36493751576. The helper's argument
 split and the command line of the process it leaves running are checked too.
+
+Row J is a static census of the tracked files, Markdown documents aside: it
+fails on a literal direct call of the wrapper anywhere but inside
+kernel_xvfb_capture (kernel_evidence.sh), the one sanctioned call, in the
+shell and Python forms listed above CENSUS_INVOCATION. A reverted or copied
+inline boot in one of those forms therefore goes RED. Row J-census-planted
+proves each shell form on a real gate file. The census is a guard for those
+forms, not proof that no direct call exists: one made through a variable,
+alias or function, or kept in an untracked file, is not seen.
 """
 if not __debug__:
     raise SystemExit('verification requires Python assertions; remove -O/-OO and PYTHONOPTIMIZE')
@@ -31,6 +40,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -72,6 +82,141 @@ SIDE = 'bochs_out.txt.xvfb-run.stderr'
 EXIT = 'bochs_out.txt.xvfb-run.exit'
 PARSE_ERROR = 'holler malformed/truncated debugcon record at byte 0 of'
 WRONG_ANSWER = 'answer de01ad != de00ad'
+
+# Row J, the census. It scans every tracked file in the repository except
+# Markdown documents (git ls-files; without git the row fails closed), one
+# line at a time. It skips full-line comments (first non-blank character '#',
+# in shell, Python and embedded stub text alike), the body of
+# kernel_xvfb_capture() in kernel_evidence.sh (the sanctioned call), and a
+# name that directly follows an availability probe (`command -v`,
+# `command -V`, `type`, `which`). Anywhere else the wrapper's name counts as an
+# invocation when it is
+#   1. bare or at the end of a path (NAME, /usr/bin/NAME, \NAME), or
+#   2. quoted as one whole word, a path included ("NAME", 'NAME', $'NAME',
+#      "/usr/bin/NAME"),
+# and is followed by
+#   - blanks and the start of an argument word: a letter, digit, '_', quote,
+#     '$', '/', '.', '~', '{', '\', '`' or '-' (after a quoted name, not the
+#     Python words and, or, not, in, is, if, else, for, which no wrapper call
+#     has as its command); this covers the scope's pre-registered predicate,
+#     \bNAME\s+-;
+#   - a redirection, with or without blanks: NAME > CAP 2>&1 -a ...,
+#     NAME>CAP ..., NAME < /dev/null ..., NAME &> CAP ...;
+#   - a backslash that continues the line: NAME \, NAME\, "NAME" \;
+# or, in Python, it is 3. one argv element followed on the same line by an
+# option: ['NAME', '-a', ...]. Whatever comes before the name is irrelevant,
+# so assignments, env, command, exec, timeout, sudo, leading redirections, a
+# subshell, a brace group, a pipeline or a command substitution around the
+# call do not hide it. A pipe, list operator, parenthesis or comment right
+# after the name is not an argument: a bare name has no command to run.
+# The census guards these literal forms and no others. It does not see a call
+# through a variable, alias or function, or through a path computed at run
+# time ("$(command -v NAME)"); a name split or glued by quoting or by a line
+# continuation inside it; a Python argv whose next element is not an option
+# or that is split across lines; a name built by concatenation (as this file
+# builds it); a file that is not tracked; or a Markdown document. Each shell
+# shape in CENSUS_SHAPES is run once against a stub wrapper, so it is known to
+# invoke it, and planted in a scratch copy of a real gate file, where the
+# census must name it (row J-census-planted). A real-Bochs matrix's capture
+# grep sees a missed call only on a boot where the wrapper's intermittent
+# error happens to occur.
+_NAME = re.escape(WRAPPER)
+_ARGUMENT = r'''[\w"'$/.~{\\`-]'''
+_REDIRECT = r'\s*(?:[<>]|&>)'
+_CONTINUED = r'\s*\\\r?$'
+_PYTHON_WORD = r'(?:and|or|not|in|is|if|else|for)\b'
+CENSUS_INVOCATION = re.compile(
+    r'\b' + _NAME + r'(?:\s+' + _ARGUMENT + '|' + _REDIRECT + '|' + _CONTINUED + ')'
+    + r'''|(["'])(?:[^"']*/)?''' + _NAME + r'\1(?:\s+(?!' + _PYTHON_WORD + ')' + _ARGUMENT
+    + '|' + _REDIRECT + '|' + _CONTINUED + ')'
+    + r'|\b' + _NAME + r'''["']\s*,\s*[rRbBuUfF]*["']-''')
+CENSUS_PROBE = re.compile(r'''\b(?:command\s+-[vV]|type(?:\s+-[a-zA-Z]+)*|which)\s+\$?["']?(?:[^\s"']*/)?$''')
+HELPER_FILE = 'bootstrap/tests/kernel_evidence.sh'
+HELPER_OPEN = 'kernel_xvfb_capture() {'
+# The rule's own bite proof: each line must be flagged outside the helper's
+# body, and none of the clean ones anywhere.
+CENSUS_FLAGGED = tuple(line.replace('NAME', WRAPPER) for line in (
+    '      NAME -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )',
+    '    ( cd "$d"; rm -f disk.img.lock; NAME -a bash -c "yes c | bochs -q -f $d/b.txt" > "$logf" 2>&1 )   # note',
+    'NAME bash -c "bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1',
+    'exec /usr/bin/NAME --auto-servernum bochs -q',
+    'timeout 300 NAME -a bochs -q',
+    '"NAME" -a bochs -q',
+    "subprocess.run(['NAME', '-a', 'bochs'])",
+    'subprocess.run("NAME -a bochs -q", shell=True)',
+    '    NAME "$@" > "$capture" 2> "$side" || rc=$?',
+    '    NAME \\',
+    '    "NAME" \\',
+    '"NAME" bash -c "printf GUEST" > capture.txt 2>&1',
+    'NAME > capture.txt 2>&1 -a bash -c "printf GUEST"',
+    "'/usr/bin/NAME' \"${command[@]}\"",
+    'NAME `command -v bochs` -q -f bochsrc.txt',
+    '    NAME\\',
+    'command -v NAME >/dev/null && NAME -a bochs -q',
+))
+CENSUS_CLEAN = tuple(line.replace('NAME', WRAPPER) for line in (
+    '    && command -v NAME >/dev/null 2>&1 && sudo -n true 2>/dev/null; }',
+    'command -v NAME 2>/dev/null || exit 1',
+    '    # NAME -a bash -c "..." > bochs_out.txt 2>&1 merged the wrapper\'s stderr',
+    'fail_test "Bochs required but bochs/parted/grub-install/NAME/sudo not available"',
+    '    side="$capture.NAME.stderr"',
+    'needed = ("bochs", "grub-install", "NAME", "sudo")',
+    'assert b"NAME" not in capture',
+    'CLEANUP_ERROR = "NAME: error: problem while cleaning up temporary directory\\n"',
+    'executable(tools / "NAME", STUB)',
+    'if "NAME" in line and tool == "NAME" or tool is None:',
+    'command -v "NAME" >/dev/null 2>&1',
+    'type -P NAME > /dev/null || which NAME>/dev/null || command -V /usr/bin/NAME >/dev/null',
+    '    # NAME > bochs_out.txt 2>&1 -a bash -c "..." (redirections first)',
+    '"""Bite proof: NAME\'s own diagnostics never reach a graded Bochs capture.',
+    '    printf \'%s\\n\' "$rc" > "$capture.NAME.exit"',
+    'merge (xvfb 2:21.1.12-1ubuntu1.8, `"$@" 2>&1` at /usr/bin/NAME:184) and',
+))
+# Shell invocation shapes for the planted mutants (J-census-planted). Each is
+# run once under bash with CMD = bash -c "printf GUEST" and a stub wrapper
+# first on PATH (BIN = ./bin), which must run and write GUEST into CAP; then it
+# replaces a real call site in a scratch copy of its gate file (BIN =
+# /usr/bin, and that site's own capture and inner command), which must still
+# pass bash -n, and the census must name exactly the line that holds the name.
+CENSUS_SHAPES = (
+    ('pre-fix-line', 'NAME -a CMD > CAP 2>&1'),
+    ('no-option', 'NAME CMD > CAP 2>&1'),
+    ('double-quoted-name', '"NAME" -a CMD > CAP 2>&1'),
+    ('single-quoted-name', "'NAME' -a CMD > CAP 2>&1"),
+    ('ansi-c-quoted-name', "$'NAME' -a CMD > CAP 2>&1"),
+    ('quoted-name-no-option', '"NAME" CMD > CAP 2>&1'),
+    ('quoted-path-no-option', '"BIN/NAME" CMD > CAP 2>&1'),
+    ('path', 'BIN/NAME -a CMD > CAP 2>&1'),
+    ('escaped-name', '\\NAME -a CMD > CAP 2>&1'),
+    ('redirect-before-arguments', 'NAME > CAP 2>&1 -a CMD'),
+    ('glued-redirect-before-arguments', 'NAME>CAP 2>&1 -a CMD'),
+    ('stderr-redirect-before-arguments', 'NAME 2>&1 >CAP -a CMD'),
+    ('both-streams-redirect-before-arguments', 'NAME &>CAP -a CMD'),
+    ('input-redirect-before-arguments', 'NAME </dev/null >CAP 2>&1 -a CMD'),
+    ('quoted-name-redirect-before-arguments', '"NAME" >CAP 2>&1 CMD'),
+    ('redirections-before-name', '>CAP 2>&1 NAME -a CMD'),
+    ('assignment-prefix', 'LC_ALL=C NAME -a CMD > CAP 2>&1'),
+    ('env-prefix', 'env LC_ALL=C NAME -a CMD > CAP 2>&1'),
+    ('command-prefix', 'command NAME -a CMD > CAP 2>&1'),
+    ('exec-prefix', 'exec NAME -a CMD > CAP 2>&1'),
+    ('timeout-prefix', 'timeout 300 NAME -a CMD > CAP 2>&1'),
+    ('brace-group', '{ NAME -a CMD; } > CAP 2>&1'),
+    ('pipeline', 'NAME -a CMD 2>&1 | cat > CAP'),
+    ('command-substitution', 'printf %s "$(NAME -a CMD 2>&1)" > CAP'),
+    ('continuation', 'NAME \\\n          -a CMD > CAP 2>&1'),
+    ('glued-continuation', 'NAME\\\n          -a CMD > CAP 2>&1'),
+    ('quoted-name-continuation', '"NAME" \\\n          -a CMD > CAP 2>&1'),
+    ('continuation-before-name', 'LC_ALL=C \\\n          NAME -a CMD > CAP 2>&1'),
+)
+# A converted call site: kernel_xvfb_capture CAPTURE -a bash -c "INNER".
+CENSUS_CALL = re.compile(r'^(?P<pre>.*?)kernel_xvfb_capture (?P<cap>"[^"]*"|[^\s"]+) -a '
+                         r'(?P<cmd>bash -c "(?:[^"\\]|\\.)*")(?P<post>.*)$')
+CENSUS_STUB = '''#!/bin/bash
+# Census stand-in: records that it ran, then runs the command after -a.
+printf 'ran\\n' >> "$CENSUS_STUB_LOG"
+if [[ "${1-}" == -a ]]; then shift; fi
+exec "$@"
+'''
 
 SUDO = r'''#!/bin/bash
 # Disk-build stand-in: no privilege, no loop device, no mount.
@@ -605,7 +750,7 @@ def unshimmed_rows(bench, rows, routing, helper):
 def helper_cmdline(bench, rows, routing):
     """The shim execs: the process left running keeps the caller's own argv
     (scoped `pkill -f` patterns and bash's job reports see the same text), its
-    parent is xvfb-run itself, and its stdout and stderr both reach the capture
+    parent is the wrapper itself, and its stdout and stderr both reach the capture
     in write order."""
     label = f'TREE-{routing}-N-cmdline'
     directory = bench.root / label
@@ -712,8 +857,204 @@ def routing_independent(column, results, boots, rows):
     rows.append((f'{column}-ROUTING byte-identical captures, side files and statuses under both routings', ok))
 
 
+def census_lines(path, text):
+    """Invocation-shaped lines of one file, outside and inside the helper's body."""
+    lines = text.split('\n')
+    body = None
+    if path == HELPER_FILE:
+        starts = [i for i, line in enumerate(lines) if line.startswith(HELPER_OPEN)]
+        if len(starts) == 1:
+            end = next((j for j in range(starts[0] + 1, len(lines)) if lines[j] == '}'), None)
+            if end is not None:
+                body = (starts[0], end)
+    found, sanctioned = [], []
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith('#'):
+            continue
+        if not any(not CENSUS_PROBE.search(line[:m.start()]) for m in CENSUS_INVOCATION.finditer(line)):
+            continue
+        inside = body is not None and body[0] < i < body[1]
+        (sanctioned if inside else found).append((i + 1, line.strip()))
+    return found, sanctioned, body
+
+
+def tracked_files(root):
+    """Every tracked file except Markdown documents, or None without git."""
+    try:
+        top = subprocess.run(['git', '-C', str(root), 'rev-parse', '--show-toplevel'],
+                             capture_output=True, text=True, timeout=60)
+        if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root.resolve():
+            return None
+        listing = subprocess.run(['git', '-C', str(root), 'ls-files', '-z'], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if listing.returncode != 0:
+        return None
+    return [name for name in listing.stdout.decode().split('\0') if name and not name.endswith('.md')]
+
+
+def census(rows):
+    # The rule bites: every flagged example is caught, no clean one is, and the
+    # helper exemption covers the helper's body and nothing after it.
+    ok = True
+    for line in CENSUS_FLAGGED:
+        ok &= expect('J-census-rule', census_lines('probe.sh', line)[0] == [(1, line.strip())],
+                     f'not flagged: {line!r}')
+    for line in CENSUS_CLEAN:
+        ok &= expect('J-census-rule', census_lines('probe.sh', line) == ([], [], None),
+                     f'flagged: {line!r}')
+    fake = '\n'.join((HELPER_OPEN + ' # CAPTURE ARGS', CENSUS_FLAGGED[-1],
+                      f'    echo "HARNESS-NOTE: {WRAPPER} exited $rc"', '}', CENSUS_FLAGGED[0]))
+    found, sanctioned, _ = census_lines(HELPER_FILE, fake)
+    ok &= expect('J-census-rule', found == [(5, CENSUS_FLAGGED[0].strip())] and len(sanctioned) == 2,
+                 f'helper exemption: outside {found}, inside {sanctioned}')
+    found, sanctioned, _ = census_lines('bootstrap/tests/other.sh', fake)
+    ok &= expect('J-census-rule', len(found) == 3 and not sanctioned,
+                 f'the exemption must hold only in {HELPER_FILE}: {found} {sanctioned}')
+    rows.append((f'J-census-rule: {len(CENSUS_FLAGGED)} invocation shapes flagged, '
+                 f'{len(CENSUS_CLEAN)} non-invocations clean', ok))
+
+    root = HERE.parent.parent
+    scan = census_scan(root)
+    if not expect('J-census', scan is not None,
+                  f'cannot list tracked files with git at {root}; the census fails closed'):
+        rows.append(('J-census', False))
+        return
+    scanned, sites, helper, sanctioned = scan
+    for name, number, line in sites:
+        expect('J-census', False, f'direct {WRAPPER} invocation at {name}:{number}: {line}')
+    ok = not sites
+    ok &= expect('J-census', helper is not None and sanctioned,
+                 f'no {WRAPPER} call inside kernel_xvfb_capture() in {HELPER_FILE}: {helper} {sanctioned}')
+    this = str(Path(__file__).resolve().relative_to(root.resolve()))
+    ok &= expect('J-census', this in scanned and HELPER_FILE in scanned,
+                 f'the census did not scan {this} and {HELPER_FILE}')
+    rows.append((f'J-census: {len(scanned)} tracked files (all but Markdown), {len(sites)} direct '
+                 f'{WRAPPER} invocation(s) outside kernel_xvfb_capture()', ok))
+    census_planted(rows, root, scanned)
+
+
+def census_scan(root):
+    """(scanned files, invocation sites, helper body, sanctioned lines) over the
+    tracked files of the repository at root, or None without git."""
+    names = tracked_files(root)
+    if names is None:
+        return None
+    scanned, sites, helper, sanctioned = [], [], None, []
+    for name in names:
+        path = root / name
+        if not path.is_file():
+            continue
+        found, own, body = census_lines(name, path.read_bytes().decode('utf-8', errors='replace'))
+        scanned.append(name)
+        sites += [(name, number, line) for number, line in found]
+        if name == HELPER_FILE:
+            helper, sanctioned = body, own
+    return scanned, sites, helper, sanctioned
+
+
+def census_planted(rows, root, scanned):
+    """Tracked-file mutation controls for row J. Every shape in CENSUS_SHAPES
+    is first run against a stub wrapper (so it really invokes it), then planted
+    over a real call site in a scratch Git copy of the gate files, where the
+    same scan row J runs must name exactly that line. The unplanted copy and a
+    commented-out call must scan clean."""
+    label = 'J-census-planted'
+    sites = []
+    for name in scanned:
+        if not name.endswith('.sh') or name == HELPER_FILE:
+            continue
+        for number, line in enumerate((root / name).read_bytes().decode('utf-8', 'surrogateescape')
+                                      .split('\n'), 1):
+            m = CENSUS_CALL.match(line)
+            if m and not line.lstrip().startswith('#'):
+                sites.append((name, number, m))
+    if not expect(label, sites, f'no converted kernel_xvfb_capture call site found under {root}'):
+        rows.append((label, False))
+        return
+    files = sorted({name for name, _, _ in sites})
+
+    def instantiate(template, cap, cmd, bin_dir):
+        values = {'NAME': WRAPPER, 'BIN': bin_dir, 'CAP': cap, 'CMD': cmd}
+        return re.sub('NAME|BIN|CAP|CMD', lambda k: values[k.group()], template)
+
+    ok = True
+    with tempfile.TemporaryDirectory(prefix='herbert-census-planted-') as temporary:
+        temporary = Path(temporary)
+        # 1. Each shape invokes the wrapper: a stub first on PATH must run.
+        for shape, template in CENSUS_SHAPES:
+            box = temporary / 'run' / shape
+            (box / 'bin').mkdir(parents=True)
+            executable(box / 'bin' / WRAPPER, CENSUS_STUB)
+            command = instantiate(template, 'capture.txt', 'bash -c "printf GUEST"', './bin')
+            if not expect(label, '/usr/' not in command, f'{shape}: would run a real program: {command!r}'):
+                ok = False
+                continue
+            env = dict(os.environ, PATH=f"{box / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
+                       CENSUS_STUB_LOG=str(box / 'ran.log'))
+            r = subprocess.run(['bash', '-c', command], cwd=box, env=env, capture_output=True, timeout=30)
+            ran = (box / 'ran.log').read_text() if (box / 'ran.log').exists() else ''
+            capture = (box / 'capture.txt').read_bytes() if (box / 'capture.txt').exists() else b''
+            ok &= expect(label, r.returncode == 0 and ran == 'ran\n' and b'GUEST' in capture,
+                         f'{shape}: {command!r} did not run the stub wrapper: rc={r.returncode} ran={ran!r} '
+                         f'capture={capture!r} stderr={r.stderr!r}')
+        # 2. A scratch Git repository holding the real gate files and the helper.
+        scratch = temporary / 'repo'
+        originals = {}
+        for name in files + [HELPER_FILE]:
+            originals[name] = (root / name).read_bytes()
+            (scratch / name).parent.mkdir(parents=True, exist_ok=True)
+            (scratch / name).write_bytes(originals[name])
+        for git in (['git', 'init', '-q'], ['git', 'add', '--', *originals]):
+            r = subprocess.run(git, cwd=scratch, capture_output=True, timeout=60)
+            if not expect(label, r.returncode == 0, f'{" ".join(git[:2])} in the scratch copy: {r.stderr!r}'):
+                rows.append((label, False))
+                return
+
+        def scan(name, text):
+            (scratch / name).write_bytes(text.encode('utf-8', 'surrogateescape'))
+            try:
+                result = census_scan(scratch)
+                syntax = subprocess.run(['bash', '-n', str(scratch / name)], capture_output=True, timeout=60)
+            finally:
+                (scratch / name).write_bytes(originals[name])
+            return result, syntax
+
+        result = census_scan(scratch)
+        ok &= expect(label, result is not None and result[1] == [] and set(result[0]) == set(originals)
+                     and result[3], f'the unplanted scratch copy must scan clean: {result}')
+        # 3. Each shape over a real call site (a different one each time, in turn).
+        for index, (shape, template) in enumerate(CENSUS_SHAPES):
+            name, number, m = sites[index % len(sites)]
+            planted = m['pre'] + instantiate(template, m['cap'], m['cmd'], '/usr/bin') + m['post']
+            lines = originals[name].decode('utf-8', 'surrogateescape').split('\n')
+            text = '\n'.join(lines[:number - 1] + [planted] + lines[number:])
+            parts = planted.split('\n')
+            at = next(i for i, part in enumerate(parts) if WRAPPER in part)
+            want = [(name, number + at, parts[at].strip())]
+            result, syntax = scan(name, text)
+            ok &= expect(label, syntax.returncode == 0, f'{shape} at {name}:{number} is not valid shell: '
+                         f'{syntax.stderr!r}')
+            ok &= expect(label, result is not None and result[1] == want,
+                         f'{shape} planted at {name}:{number + at} not named by the census: '
+                         f'want {want}, got {result and result[1]}')
+        # 4. The same call commented out is not an invocation.
+        name, number, m = sites[0]
+        lines = originals[name].decode('utf-8', 'surrogateescape').split('\n')
+        commented = (m['pre'][:len(m['pre']) - len(m['pre'].lstrip())] + '# '
+                     + instantiate(CENSUS_SHAPES[0][1], m['cap'], m['cmd'], '/usr/bin'))
+        result, _ = scan(name, '\n'.join(lines[:number - 1] + [commented] + lines[number:]))
+        ok &= expect(label, result is not None and result[1] == [],
+                     f'a commented-out call at {name}:{number} was flagged: {result and result[1]}')
+    rows.append((f'{label}: {len(CENSUS_SHAPES)} shell shapes each run a stub wrapper and, planted over '
+                 f'one of {len(sites)} real call sites in a scratch Git copy of the {len(files)} files '
+                 'that hold them, are each named by the census; the unplanted copy and a commented-out '
+                 'call scan clean', ok))
+
+
 def main():
     rows = []
+    census(rows)
     with tempfile.TemporaryDirectory(prefix='herbert-xvfb-capture-check-') as temporary:
         bench = Bench(Path(temporary))
         source = HARNESS.read_text()

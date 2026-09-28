@@ -468,7 +468,7 @@ panic: action=report
 log: bochs_log.txt
 BX
       date +%s.%N > t_launch
-      xvfb-run -a bash -c "yes c | timeout -s KILL $kill_s bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $kill_s bochs -q -f bochsrc.txt"
       date +%s.%N > t_exit )
     local di; for di in $(seq 1 50); do kill -0 "$fp" 2>/dev/null || break; sleep 0.1; done
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null

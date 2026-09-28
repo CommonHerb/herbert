@@ -194,7 +194,7 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL $to bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $to bochs -q -f bochsrc.txt" )
     kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null
     # RUN-1 (expect_full=0) DELIBERATELY withholds the byte (--delay > timeout): the reader PARKS, so there is NO SENT
     # by design and the boot is timeout-killed (never reaches shutdown()). Applying SENT/shutdown there would false-fail

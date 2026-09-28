@@ -159,7 +159,7 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" )
     python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$e9"
 }
 if have_bochs; then

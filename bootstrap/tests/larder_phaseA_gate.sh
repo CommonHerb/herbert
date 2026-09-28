@@ -172,7 +172,7 @@ BX
   python3 "$feeder" "$port" $STREAM --hold 150 > "$d/feed.log" 2>&1 & fp=$!
   for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && break; sleep 0.1; done
   sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b.txt"
-  ( cd "$d"; rm -f disk.img.lock; xvfb-run -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b.txt" > bochs.txt 2>&1 )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+  ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
   kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
   python3 - "$d/bochs.txt" "$d/out" <<'PY'
 import sys
