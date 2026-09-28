@@ -16,7 +16,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import hexview_long64 as driver
-from check_boot_input import bochs_boot
+from check_boot_input import bochs_boot, require
 
 EHDR = struct.Struct("<16sHHIQQQIHHHHHH")
 PHDR = struct.Struct("<IIQQQQQQ")
@@ -121,27 +121,27 @@ def main():
                 process = subprocess.run(command, capture_output=True, timeout=70)
                 (work / "compiler-cli.stdout").write_bytes(process.stdout)
                 (work / "compiler-cli.stderr").write_bytes(process.stderr)
-                assert process.returncode == 0 and process.stdout == want and process.stderr == b"", label
+                require(process.returncode == 0 and process.stdout == want and process.stderr == b"", label)
             else:
                 output = io.BytesIO()
                 try:
                     driver.run_file_program(image, source, output, evidence=capture)
                 except driver.ProtocolError:
-                    assert not accepted, label
+                    require(not accepted, label)
                     record = json.loads((capture / "run.json").read_text())
                     # A host error or bad boot handoff cannot pass as an application rejection.
-                    assert record["qemu_exit"] == 97, (label, record)
-                    assert (capture / "debugcon.bin").read_bytes() == b"\xde\x01\xad", label
+                    require(record["qemu_exit"] == 97, (label, record))
+                    require((capture / "debugcon.bin").read_bytes() == b"\xde\x01\xad", label)
                 else:
-                    assert accepted, label
-                assert output.getvalue() == want, label
+                    require(accepted, label)
+                require(output.getvalue() == want, label)
             outcomes.append(label)
             print(f"PASS elfinfo {label}", flush=True)
         if os.access("/dev/kvm", os.R_OK | os.W_OK):
             output = io.BytesIO()
             driver.run_file_program(image, work / "header-fields.elf", output,
                                     accel="kvm", evidence=work / "kvm-header-fields")
-            assert output.getvalue() == expected(valid)
+            require(output.getvalue() == expected(valid), "kvm-header-fields")
             outcomes.append("kvm-header-fields")
             print("PASS elfinfo kvm-header-fields", flush=True)
         else:
