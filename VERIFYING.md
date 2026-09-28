@@ -50,6 +50,9 @@ Runs:
   oracle, reviewed-table integrity, literal font geometry and scalar key mapping,
   logical editing with preserved LF/CRLF bytes, encoded capacity, bounded
   history, rescue and recovery, including copied project documents.
+  The Notes session-endurance case records wall and child CPU seconds; its wall
+  limits (60 s to READY, 300 s for the 2,000 sampled iterations) are hang guards,
+  not performance bounds.
   Requires strace for file-failure checks; it is development tooling only.
 - `make check-hosted-apps`: maze wall/collection/completion/restart behavior and
   editor typing/navigation/save/reopen/dirty-close on private XTest windows,

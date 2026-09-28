@@ -4,7 +4,7 @@ if not __debug__:
     raise SystemExit('verification requires Python assertions; remove -O/-OO and PYTHONOPTIMIZE')
 
 from pathlib import Path
-import argparse, hashlib, json, os, random, select, shutil, signal, stat, struct, subprocess, tempfile, time
+import argparse, hashlib, json, os, random, resource, select, shutil, signal, stat, struct, subprocess, tempfile, time
 p = argparse.ArgumentParser()
 p.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
 p.add_argument('--evidence', type=Path)
@@ -49,16 +49,16 @@ def stop_owned(proc):
         pass
     proc.communicate(timeout=5)
 
-def ready(proc):
+def ready(proc, seconds=10):
     """Bound partial-marker reads too; each helper owns its process group."""
     wanted = b'READY\n'
     marker = b''
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + seconds
     while marker != wanted:
         remaining = deadline - time.monotonic()
         if remaining <= 0 or not select.select([proc.stderr], [], [], remaining)[0]:
             stop_owned(proc)
-            raise AssertionError('child did not reach READY within ten seconds')
+            raise AssertionError(f'child did not reach READY within {seconds} seconds')
         byte = os.read(proc.stderr.fileno(), 1)
         marker += byte
         if not byte or not wanted.startswith(marker):
@@ -832,22 +832,82 @@ func main():
  return 0
 end
 """)
+# The two wall limits of the session-reuse case are hang guards, not performance
+# bounds: each is the only exit from an otherwise unbounded wait, and each raises
+# before result(), outside its pass predicate. cpu_seconds in result.json and cpu_s
+# in memory.json are the cost evidence. The limits are fixed on purpose; an
+# override could be set arbitrarily large.
+# READY covers the 300 un-sampled warm-up iterations: 4.4 s measured at load ~6,
+# about 9 s estimated under load on 2026-09-28, 16.5-20.4 s measured at load
+# 65-77. 60 s is about 3x the worst measured.
+# The loop covers the 2,000 sampled iterations: 63.4 s measured at load ~30, and
+# about 64.5 s projected for the 2026-09-28 run that tripped the old 60 s. 300 s
+# is about 4.7x that, close to the 4.8-5x the old 60 s had over the 11.9-12.5 s
+# measured on 2026-09-15; a loop extrapolated from READY at load 65-77 (about
+# 160 s) is 1.9x.
+SESSION_READY_WALL = 60
+SESSION_LOOP_WALL = 300
+
+def child_stat(pid):
+    """State and utime+stime CPU seconds of an unreaped child; comm may hold spaces or ')'."""
+    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+    return fields[0], (int(fields[11]) + int(fields[12])) / os.sysconf('SC_CLK_TCK')
+
+def host_load():
+    try:
+        return os.getloadavg()
+    except OSError:
+        return None
+
+def session_hang_guard(proc, d, samples, started, ready_seconds, loadavg_ready):
+    """Keep the evidence while the child still exists, then stop it and fail."""
+    elapsed = round(time.monotonic() - started, 3)
+    state, cpu, stale = None, None, False
+    try:
+        state, cpu = child_stat(proc.pid)
+    except (OSError, ValueError, IndexError):
+        stale = True
+        cpu = next((s['cpu_s'] for s in reversed(samples) if 'cpu_s' in s), None)
+    note = ''
+    try:
+        (d / 'memory.json').write_text(json.dumps(samples, indent=2) + '\n')
+        (d / 'watchdog.json').write_text(json.dumps(dict(
+            reason='session endurance hang guard', limit_seconds=SESSION_LOOP_WALL, elapsed_seconds=elapsed,
+            child_pid=proc.pid, child_state=state, child_cpu_s=cpu, cpu_stale=stale, samples=len(samples),
+            ready_seconds=ready_seconds, loadavg_ready=loadavg_ready, loadavg_trip=host_load()), indent=2) + '\n')
+    except OSError as error:
+        note = f'; evidence write failed: {error!r}'
+    finally:
+        stop_owned(proc)
+    usage = 'CPU unknown' if cpu is None else f'{cpu:.1f} s CPU' + (', stale' if stale else '')
+    raise AssertionError(f'session endurance hang guard: child still running after {SESSION_LOOP_WALL} s wall ({usage}); evidence {d}{note}')
+
 d=work/'case-session-reuse';d.mkdir();target=d/'document';target.write_bytes(b'A'*65534+b'\r\n')
 proc=subprocess.Popen([str(recovery_reuse),str(target)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
-ready(proc);samples=[];started=time.monotonic()
+# Taken after Popen, whose cleanup may reap an older child; this child counts only once reaped below.
+usage_before=resource.getrusage(resource.RUSAGE_CHILDREN);spawned=time.monotonic()
+ready(proc,SESSION_READY_WALL);samples=[];started=time.monotonic()
+ready_seconds=round(started-spawned,3);loadavg_ready=host_load()
 while proc.poll() is None:
- if time.monotonic()-started>60:stop_owned(proc);raise AssertionError('session endurance exceeded 60 seconds')
+ if time.monotonic()-started>SESSION_LOOP_WALL:session_hang_guard(proc,d,samples,started,ready_seconds,loadavg_ready)
+ count=len(samples)
  try:
   fields={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in Path(f'/proc/{proc.pid}/status').read_text().splitlines() if ':' in line}
   rollup={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in Path(f'/proc/{proc.pid}/smaps_rollup').read_text().splitlines() if ':' in line}
   if 'Rss' in rollup and 'VmSize' in fields:samples.append(dict(seconds=round(time.monotonic()-started,3),rss_kib=int(rollup['Rss'].split()[0]),vmsize_kib=int(fields['VmSize'].split()[0])))
  except (FileNotFoundError,ProcessLookupError):pass
+ # CPU is read after the memory sample, so a failed CPU read never drops one.
+ if len(samples)>count:
+  try:samples[-1]['cpu_s']=child_stat(proc.pid)[1]
+  except (OSError,ValueError,IndexError):pass
  time.sleep(.1)
 out,err=finish(proc);(d/'memory.json').write_text(json.dumps(samples,indent=2)+'\n')
+usage_after=resource.getrusage(resource.RUSAGE_CHILDREN);loadavg_end=host_load()
+cpu_seconds=round(usage_after.ru_utime-usage_before.ru_utime+usage_after.ru_stime-usage_before.ru_stime,3)
 snapshot=next(d.glob('.herbert-notes-*/recovery.txt'))
 assert proc.returncode==0 and not err and out==b'0\n' and snapshot.read_bytes()==b'A'*65534+b'\r\n' and target.read_bytes()==b'A'*65534+b'\r\n'
 rss=[s['rss_kib'] for s in samples];vm=[s['vmsize_kib'] for s in samples]
-result('session-2000-full-capacity-crlf-checkpoints-undo-redo-search-bounded-memory',len(samples)>=20 and max(rss)-min(rss)<=64 and max(vm)==min(vm),seconds=round(time.monotonic()-started,3),samples=len(samples),rss_min_kib=min(rss),rss_max_kib=max(rss),vmsize_kib=vm[0])
+result('session-2000-full-capacity-crlf-checkpoints-undo-redo-search-bounded-memory',len(samples)>=20 and max(rss)-min(rss)<=64 and max(vm)==min(vm),seconds=round(time.monotonic()-started,3),samples=len(samples),rss_min_kib=min(rss),rss_max_kib=max(rss),vmsize_kib=vm[0],ready_seconds=ready_seconds,cpu_seconds=cpu_seconds,loadavg_ready=loadavg_ready,loadavg_end=loadavg_end,ready_limit_seconds=SESSION_READY_WALL,loop_limit_seconds=SESSION_LOOP_WALL)
 
 # Sample steady-state memory after warmup across 4,000 real save transactions.
 reuse = compile('reuse', r"""func cycle(f, t, poll, left, sampling):
