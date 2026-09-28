@@ -35,6 +35,16 @@ for native_codegen_override in NATIVE_CODEGEN_GOLDENS_DIR NATIVE_CODEGEN_MANIFES
         exit 1
     fi
 done
+# The error-vocab gate reads two ambient names: ERROR_VOCAB_CAPTURE=1 re-mints the TRACKED golden
+# instead of asserting (the whole gate is off, and a regression passed 43 of 43 while rewriting
+# stack/error_probes_native.expected), and ERROR_VOCAB_FRAGMENT grades some other klondike file.
+# The suite reaches that gate through run_switchover_cfree.sh; refuse both here (R06-verification-bite-03).
+for error_vocab_override in ERROR_VOCAB_CAPTURE ERROR_VOCAB_FRAGMENT; do
+    if [[ -n "${!error_vocab_override:-}" ]]; then
+        echo "FAIL: $error_vocab_override is set in the environment -- the suite grades the committed stack/klondike.herb against the committed error-vocab golden (stack/error_probes_native.expected) and never re-mints it; re-bless only by running bootstrap/tests/run_error_vocab_native.sh directly. Refusing."
+        exit 1
+    fi
+done
 # GUARDED: this script sets `set -u` but never `set -e`, so a bare `source` of a missing oracle
 # printed its error and CONTINUED -- and `--check-pinned` needs nothing the oracle defines, so
 # `make check` still printed its green OK and exited 0 with the file every suite gate sources

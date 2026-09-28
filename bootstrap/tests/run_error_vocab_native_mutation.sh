@@ -47,10 +47,13 @@ VOCAB='differs from golden|!= manifest|did NOT reject|did not track the input'
 
 checks=0
 
+# Every gate call clears ERROR_VOCAB_CAPTURE: inherited, it would make the gate re-mint the
+# TRACKED golden from a mutant instead of asserting (R06-verification-bite-03).
+
 # --- CONTROL: an unmutated copy must pass (non-vacuity) -----------------------------
 ctrl="$tmp/klondike.control.herb"
 cp "$klondike" "$ctrl"
-if ERROR_VOCAB_FRAGMENT="$ctrl" bash "$gate" >/dev/null 2>&1; then
+if env -u ERROR_VOCAB_CAPTURE ERROR_VOCAB_FRAGMENT="$ctrl" bash "$gate" >/dev/null 2>&1; then
     echo "PASS control: unmutated klondike GREEN through the gate"
     checks=$((checks + 1))
 else
@@ -65,7 +68,7 @@ mutate() {
     if cmp -s "$klondike" "$mut"; then
         fail "$name: mutation sed was a no-op (anchor moved in klondike.herb -- update the mutation)"
     fi
-    if ERROR_VOCAB_FRAGMENT="$mut" bash "$gate" >"$out" 2>&1; then
+    if env -u ERROR_VOCAB_CAPTURE ERROR_VOCAB_FRAGMENT="$mut" bash "$gate" >"$out" 2>&1; then
         fail "$name: mutated klondike passed the gate GREEN -- the gate does NOT catch this rot (NOT RED-first)"
     fi
     if grep -qE "$INFRA" "$out"; then

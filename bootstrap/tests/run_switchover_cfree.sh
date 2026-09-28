@@ -36,6 +36,14 @@ seed="$script_dir/../seed/gen1.seed"
 note() { printf '%s\n' "$*"; }
 die()  { printf 'FAIL: switchover-cfree (%s)\n' "$1"; exit 1; }
 
+# run_error_vocab_native.sh is on the surface and reads two ambient names: ERROR_VOCAB_CAPTURE=1
+# re-mints the TRACKED golden instead of asserting, and ERROR_VOCAB_FRAGMENT grades some other
+# klondike file. Either one turns that gate off while this driver reports it green. Refuse both
+# before any work, as run_tests.sh does (R06-verification-bite-03).
+for error_vocab_override in ERROR_VOCAB_CAPTURE ERROR_VOCAB_FRAGMENT; do
+    [[ -z "${!error_vocab_override:-}" ]] || die "$error_vocab_override is set in the environment -- the C-free surface grades the committed stack/klondike.herb against the committed error-vocab golden and never re-mints it; re-bless only by running bootstrap/tests/run_error_vocab_native.sh directly. Refusing."
+done
+
 # The frozen C-free production surface (sovereignty link 14). Changing this set is
 # a deliberate act recorded in git -- the manifest's CFREE_SWITCHOVER rows must
 # equal it exactly, or the proof is RED.
