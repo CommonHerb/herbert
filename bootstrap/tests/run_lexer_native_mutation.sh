@@ -21,6 +21,7 @@ script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 fragment="$repo_root/stack/lexer_fragment.herb"
 oracle="$repo_root/stack/lexer_probe.expected"
+gate="$script_dir/run_lexer_native.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -30,6 +31,7 @@ fail_test() { echo "FAIL: lexer native mutation ($1)"; FAILED=1; }
 FAILED=0
 
 [[ -f "$fragment" ]] || { echo "FAIL: missing fragment"; exit 1; }
+[[ -f "$gate" && -r "$gate" ]] || { echo "FAIL: missing lexer native gate"; exit 1; }
 
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || { echo "FAIL: could not acquire gen-1 compiler"; exit 1; }
@@ -50,19 +52,28 @@ native_line1() {
     return 0
 }
 
+# Exercise the production gate, including its own oracle comparison. The separate
+# native run above qualifies the mutation; it must not stand in for this check.
+actual_gate() {
+    LEXER_NATIVE_NO_C=1 NATIVE_CODEGEN_COMPILER="$GEN1" \
+        bash "$gate" --fragment "$1" >"$2" 2>&1
+}
+
 # ===== CONTROL: the unmutated fragment must grade GREEN (else the grader is vacuous) =====
 ctl="$tmp/ctl.line1"
-if native_line1 "$fragment" "$ctl" && cmp -s "$ctl" "$oracle"; then
+if native_line1 "$fragment" "$ctl" && cmp -s "$ctl" "$oracle" && \
+        actual_gate "$fragment" "$tmp/control.gate.log"; then
     pass=$((pass + 1))
 else
-    fail_test "CONTROL: unmutated lexer did not grade GREEN (native line1 != oracle) -- grader vacuous"
+    fail_test "CONTROL: unmutated lexer did not match the oracle and pass the actual gate"
 fi
 
 # ===== mutation helper: replace a UNIQUE anchor, require the STRONG bite =====
 # Strong bite = the mutated fragment (a) has the anchor exactly once (an unscoped
 # multi-hit substitution is rejected), (b) compiles to a real native ELF, (c) the
-# ELF runs cleanly (rc 0) and emits a non-empty line 1, and (d) that line 1
-# DIFFERS from the oracle. A compile failure or a crash is NOT accepted for these
+# ELF runs cleanly (rc 0) and emits a non-empty line 1, (d) that line 1 DIFFERS
+# from the oracle, and (e) the ACTUAL gate rejects it at its enduring oracle
+# comparison. A compile failure or a crash is NOT accepted for these
 # shipped mutations -- we are proving the C-free path grades a WRONG RUNTIME VALUE
 # (a wrong token kind in the emitted stream), not merely that broken input fails to build.
 mutate_expect_red() {
@@ -100,6 +111,11 @@ PY
     fi
     if cmp -s "$ln" "$oracle"; then
         fail_test "$label: mutated lexer STILL matched the oracle -- the gate is blind to this rule"
+    elif actual_gate "$m" "$tmp/$label.gate.log"; then
+        fail_test "$label: actual lexer gate accepted a qualified wrong-value mutation"
+    # Keep this prefix in sync with the enduring-leg failure in run_lexer_native.sh.
+    elif ! grep -Fq 'FAIL: lexer native execution (native gen-1 lexer line 1 differs from independent oracle' "$tmp/$label.gate.log"; then
+        fail_test "$label: actual lexer gate failed outside its enduring oracle comparison"
     else
         pass=$((pass + 1))
     fi
@@ -129,7 +145,7 @@ mutate_expect_red "M-punct" '(4, slice_text(src, i, i + 1))' '(7, slice_text(src
 
 echo "lexer native mutation proof: pass=$pass fail=$([[ $FAILED -eq 1 ]] && echo "$((4 - pass))" || echo 0)"
 if [[ $FAILED -eq 0 && $pass -eq 4 ]]; then
-    echo "PASS: lexer native mutation (CONTROL green; M-ident/M-int/M-punct each compile natively then DIVERGE from the oracle -- the C-free gate bites)"
+    echo "PASS: lexer native mutation (CONTROL green; M-ident/M-int/M-punct each compile natively then DIVERGE from the oracle and are rejected by the actual C-free gate)"
 else
     exit 1
 fi

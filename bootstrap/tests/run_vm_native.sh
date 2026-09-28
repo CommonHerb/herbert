@@ -101,6 +101,8 @@ native_line1() {
 # --- 2. ENDURING leg: native gen-1 VM output == independent oracle -------
 nat="$tmp/native.line1"
 native_line1 "$fragment" "$nat" || fail "native gen-1 VM did not run cleanly"
+# This failure prefix is asserted by run_vm_native_mutation.sh so setup or
+# transcript failures cannot masquerade as an enduring-oracle rejection.
 cmp -s "$nat" "$oracle" || fail "native gen-1 VM line 1 differs from independent oracle (native=$(cat "$nat") oracle=$(cat "$oracle"))"
 
 # --- 3. RETIREABLE leg: faithfulness vs the C interpreter (migration guard) ------

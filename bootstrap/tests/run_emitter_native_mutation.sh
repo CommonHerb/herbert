@@ -32,6 +32,7 @@ script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 fragment="$repo_root/stack/emitter_fragment.herb"
 oracle="$repo_root/stack/emitter_probe.expected"
+gate="$script_dir/run_emitter_native.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -42,6 +43,7 @@ fail_test() { echo "FAIL: emitter native mutation ($1)"; FAILED=1; }
 
 [[ -f "$fragment" ]] || { echo "FAIL: missing fragment"; exit 1; }
 [[ -f "$oracle" ]] || { echo "FAIL: missing oracle"; exit 1; }
+[[ -f "$gate" && -r "$gate" ]] || { echo "FAIL: missing emitter native gate"; exit 1; }
 
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 native_codegen_ensure_compiler "$tmp/native-compiler" || { echo "FAIL: could not acquire gen-1 compiler"; exit 1; }
@@ -50,10 +52,12 @@ GEN1="$NATIVE_CODEGEN_COMPILER"
 
 # Produce an adapted (main->flogger+return0) emitter, optionally with ONE extra anchor
 # substitution applied first. Asserts both anchors are unique (an unscoped multi-hit
-# substitution is rejected with exit 3). Writes to $out.
-make_variant() { # $1=out  [$2=mut_old $3=mut_new]
-    local out="$1" mo="${2:-}" mn="${3:-}"
-    MUT_OLD="$mo" MUT_NEW="$mn" python3 - "$fragment" "$out" <<'PY'
+# substitution is rejected with exit 3). Writes to $out. When $raw is given, the mutated
+# but UNADAPTED source is also written there, before the adapter step: the actual gate
+# applies its own adapter, so it must receive that.
+make_variant() { # $1=out  [$2=mut_old $3=mut_new $4=raw]
+    local out="$1" mo="${2:-}" mn="${3:-}" raw="${4:-}"
+    MUT_OLD="$mo" MUT_NEW="$mn" python3 - "$fragment" "$out" "$raw" <<'PY'
 import os, sys
 src = open(sys.argv[1]).read()
 mo, mn = os.environ.get("MUT_OLD",""), os.environ.get("MUT_NEW","")
@@ -61,6 +65,8 @@ if mo:
     if src.count(mo) != 1:
         sys.stderr.write("mutation anchor count %d\n" % src.count(mo)); sys.exit(3)
     src = src.replace(mo, mn, 1)
+if sys.argv[3]:
+    open(sys.argv[3], "w").write(src)
 adapt_old = "    return serialize_bytecode(prog)\n"
 adapt_new = ("    do flogger(serialize_bytecode(prog))\n"
              "    return 0\n")
@@ -137,19 +143,28 @@ sig_ok() { # $1=listing  $2=spec
     esac
 }
 
+# Exercise the production gate, including its own oracle comparison. The separate
+# native run above qualifies the mutation; it must not stand in for this check.
+# The gate receives UNADAPTED source and applies its own main adapter.
+actual_gate() {
+    EMITTER_NATIVE_NO_C=1 NATIVE_CODEGEN_COMPILER="$GEN1" \
+        bash "$gate" --fragment "$1" >"$2" 2>&1
+}
+
 # ===== CONTROL: adapter-only (unmutated) emitter must grade GREEN ================
 ctl_src="$tmp/ctl.herb"; ctl="$tmp/ctl.out"
-if make_variant "$ctl_src" && native_listing "$ctl_src" "$ctl" && cmp -s "$ctl" "$oracle"; then
+if make_variant "$ctl_src" && native_listing "$ctl_src" "$ctl" && cmp -s "$ctl" "$oracle" && \
+        actual_gate "$fragment" "$tmp/control.gate.log"; then
     pass=$((pass + 1))
 else
-    fail_test "CONTROL: unmutated adapted emitter did not grade GREEN (native listing != oracle) -- grader vacuous"
+    fail_test "CONTROL: unmutated emitter did not match the oracle and pass the actual gate"
 fi
 
 # ===== mutation helper: require the STRONG bite (compiles, runs, diverges) =======
 mutate_expect_red() {
     local label="$1" old="$2" new="$3" sig="$4"
-    local m="$tmp/mut.$label.herb" out="$tmp/mut.$label.out"
-    make_variant "$m" "$old" "$new"; local mk=$?
+    local m="$tmp/mut.$label.herb" raw="$tmp/mut.$label.raw.herb" out="$tmp/mut.$label.out"
+    make_variant "$m" "$old" "$new" "$raw"; local mk=$?
     if [[ $mk -eq 3 ]]; then
         fail_test "$label: mutation anchor is not unique in emitter (unscoped mutation)"
         return
@@ -181,7 +196,14 @@ mutate_expect_red() {
         fail_test "$label: mutant diverges but NOT in the expected way (signature '$sig' not met) -- bite is for the wrong reason"
         return
     fi
-    pass=$((pass + 1))
+    if actual_gate "$raw" "$tmp/$label.gate.log"; then
+        fail_test "$label: actual emitter gate accepted a qualified wrong-value mutation"
+    # Keep this prefix in sync with the enduring-leg failure in run_emitter_native.sh.
+    elif ! grep -Fq 'FAIL: emitter native execution (native gen-1 emitter listing differs from independent oracle' "$tmp/$label.gate.log"; then
+        fail_test "$label: actual emitter gate failed outside its enduring oracle comparison"
+    else
+        pass=$((pass + 1))
+    fi
 }
 
 # A VALID mutation must hit a SELECTION site (which opcode/slot/branch the lowering CHOOSES),
@@ -225,7 +247,7 @@ mutate_expect_red "M-cf" 'ir = emit_target_instr(ir, op_br_if_false(), next_labe
 
 echo "emitter native mutation proof: pass=$pass"
 if [[ $FAILED -eq 0 && $pass -eq 6 ]]; then
-    echo "PASS: emitter native mutation (CONTROL green; M-add/M-lt/M-eq/M-frame/M-cf each compile natively then DIVERGE from the oracle across opcode/frame/control-flow lowering -- the C-free gate bites)"
+    echo "PASS: emitter native mutation (CONTROL green; M-add/M-lt/M-eq/M-frame/M-cf each compile natively then DIVERGE from the oracle across opcode/frame/control-flow lowering and are rejected by the actual C-free gate)"
 else
     exit 1
 fi

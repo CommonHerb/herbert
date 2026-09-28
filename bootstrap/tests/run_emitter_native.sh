@@ -56,6 +56,13 @@
 # or a control-flow branch) makes the native listing diverge from the oracle (proven by
 # run_emitter_native_mutation.sh).
 #
+# --fragment ABS_PATH explicitly overrides the source for the mutation proof,
+# which exercises THIS gate's enduring comparison against the fixed oracle. The
+# named source is unadapted: the gate applies its own main adapter to it, as it
+# does to the committed file. With no arguments the committed fragment is always
+# used; ambient environment variables cannot redirect this input. Every explicit
+# override is logged.
+#
 # SCOPE (honest -- folding the cross-model Codex self-deception flags + the completeness
 # critic's silicon survey): this is the FINAL FINITE Role-C closure for the standalone
 # lowering OBSERVABLE, over ONE fixed probe (the embedded 12-test evaluator probe).
@@ -96,7 +103,13 @@ trap 'rm -rf "$tmp"' EXIT
 
 fail() { echo "FAIL: emitter native execution ($1)"; exit 1; }
 
-[[ -f "$fragment" ]] || fail "missing fragment $fragment"
+case "$#" in
+    0) ;;
+    2) [[ "$1" == "--fragment" ]] || fail "usage: $0 [--fragment ABS_PATH]"; fragment="$2" ;;
+    *) fail "usage: $0 [--fragment ABS_PATH]" ;;
+esac
+[[ "$fragment" == /* && -f "$fragment" && -r "$fragment" ]] || fail "fragment must be an absolute readable file: $fragment"
+[[ "$#" -eq 0 ]] || echo "NOTE: emitter native execution explicit fragment override: $fragment"
 [[ -f "$oracle" ]] || fail "missing oracle $oracle"
 oracle_lines="$(wc -l <"$oracle")"
 
@@ -175,6 +188,8 @@ native_listing() {
 # --- 3. ENDURING leg: native gen-1 emitter listing == independent oracle ----------
 nat="$tmp/native.listing"
 native_listing "$adapter" "$nat" || fail "native gen-1 emitter did not run cleanly"
+# This failure prefix is asserted by run_emitter_native_mutation.sh so setup or
+# transcript failures cannot masquerade as an enduring-oracle rejection.
 cmp -s "$nat" "$oracle" || fail "native gen-1 emitter listing differs from independent oracle (native head: $(head -c80 "$nat" | tr '\n' '|'))"
 
 # --- 4. RETIREABLE leg: faithfulness vs the C interpreter (migration guard) --------

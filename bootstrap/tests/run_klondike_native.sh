@@ -63,6 +63,13 @@
 # this link; mutating a reachable klondike VM rule makes the native output diverge
 # from the oracle (proven by run_klondike_native_mutation.sh).
 #
+# --fragment ABS_PATH explicitly overrides the source for the mutation proof,
+# which exercises THIS gate's enduring comparison against the fixed oracle. The
+# named source is unadapted: the gate applies its own main adapter to it, as it
+# does to the committed file. With no arguments the committed fragment is always
+# used; ambient environment variables cannot redirect this input. Every explicit
+# override is logged.
+#
 # SCOPE (honest): two fixed forcing probes. "These probes compile+run natively and
 # match their oracles" is broad coverage of klondike's stages, but is NOT "klondike
 # fully replaces the C toolchain over all programs".
@@ -83,7 +90,13 @@ trap 'rm -rf "$tmp"' EXIT
 
 fail() { echo "FAIL: klondike native execution ($1)"; exit 1; }
 
-[[ -f "$fragment" ]] || fail "missing fragment $fragment"
+case "$#" in
+    0) ;;
+    2) [[ "$1" == "--fragment" ]] || fail "usage: $0 [--fragment ABS_PATH]"; fragment="$2" ;;
+    *) fail "usage: $0 [--fragment ABS_PATH]" ;;
+esac
+[[ "$fragment" == /* && -f "$fragment" && -r "$fragment" ]] || fail "fragment must be an absolute readable file: $fragment"
+[[ "$#" -eq 0 ]] || echo "NOTE: klondike native execution explicit fragment override: $fragment"
 [[ -f "$compute_probe" ]] || fail "missing probe $compute_probe"
 [[ -f "$io_probe" ]] || fail "missing probe $io_probe"
 [[ -f "$oracle" ]] || fail "missing oracle $oracle"
@@ -151,6 +164,8 @@ native_run() { # $1=probe-file  $2=payload  $3=outfile  -> 0 ok / nonzero on fai
 # --- 4. ENDURING leg: native transcript == independent oracle (NO C) ------------
 nat5="$tmp/native.compute.5"
 native_run "$compute_probe" "5" "$nat5" || fail "native gen-1 klondike did not run cleanly on compute/5"
+# This failure prefix is asserted by run_klondike_native_mutation.sh so setup or
+# transcript failures cannot masquerade as an enduring-oracle rejection.
 cmp -s "$nat5" "$oracle" || fail "native klondike transcript (compute/5) differs from independent oracle (native=$(head -c80 "$nat5" | tr '\n' '|') oracle=$(head -c80 "$oracle" | tr '\n' '|'))"
 
 # --- 4b. INPUT-SENSITIVITY (anti-forgery): payload 8 -> a DIFFERENT correct answer

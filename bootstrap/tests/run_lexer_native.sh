@@ -104,6 +104,8 @@ native_line1() {
 # --- 2. ENDURING leg: native gen-1 lexer output == independent oracle ----------
 nat="$tmp/native.line1"
 native_line1 "$fragment" "$nat" || fail "native gen-1 lexer did not run cleanly"
+# This failure prefix is asserted by run_lexer_native_mutation.sh so setup or
+# transcript failures cannot masquerade as an enduring-oracle rejection.
 cmp -s "$nat" "$oracle" || fail "native gen-1 lexer line 1 differs from independent oracle (native=$(head -c80 "$nat") oracle=$(head -c80 "$oracle"))"
 
 # --- 3. RETIREABLE leg: faithfulness vs the C interpreter (migration guard) ------
