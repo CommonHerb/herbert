@@ -27,7 +27,7 @@ sha256sum bootstrap/seed/gen1.seed stack/native_compile_fragment.herb > "$eviden
     uname -a
     qemu-system-x86_64 --version
     bochs --help 2>&1 || true
-    dpkg-query -W qemu-system-x86 bochs 2>&1 || true
+    dpkg-query -W qemu-system-x86 bochs xvfb 2>&1 || true
 } > "$evidence/ENV.txt"
 failed=0
 for ((link=lo; link<=hi; link++)); do

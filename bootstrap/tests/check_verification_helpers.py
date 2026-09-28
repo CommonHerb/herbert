@@ -34,7 +34,7 @@ class Helpers(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(b'usage:', result.stdout)
                 self.assertEqual(result.stderr, b'')
-        for name in (*hosted, 'check_link44_attempts.py'):
+        for name in (*hosted, 'check_link44_attempts.py', 'check_bochs_xvfb_capture.py'):
             for flag, optimize in [('-O', None), ('-OO', None), ('', '1'), ('', '2')]:
                 with self.subTest(entrypoint=name, flag=flag, optimize=optimize):
                     child_env = dict(env)

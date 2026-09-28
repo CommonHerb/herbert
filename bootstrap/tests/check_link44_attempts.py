@@ -16,6 +16,7 @@ import tempfile
 
 
 HERE = Path(__file__).resolve().parent
+CLEANUP_ERROR = "xvfb-run: error: problem while cleaning up temporary directory\n"
 
 
 def executable(path, text):
@@ -46,7 +47,19 @@ if [[ "$SCENARIO" == setup-failure && "$PWD" == *attempt-1.* ]]; then
 fi
 ''')
     executable(tools / "find", '#!/bin/bash\necho /unused-test-bios\n')
-    executable(tools / "xvfb-run", '#!/bin/bash\nshift\nexec "$@"\n')
+    # Faithful to /usr/bin/xvfb-run's streams: the wrapped command's stdout AND
+    # stderr go to the wrapper's stdout (line 184); its own error() goes to its
+    # stderr, as the cleanup-trap failure does before it exits 5 (lines 85-88).
+    executable(tools / "xvfb-run", f'''#!/bin/bash
+shift
+"$@" 2>&1
+rc=$?
+if [[ "$SCENARIO" == xvfb-cleanup-error ]]; then
+    echo {CLEANUP_ERROR.strip()!r} >&2
+    exit 5
+fi
+exit "$rc"
+''')
     executable(tools / "bochs", '''#!/usr/bin/env python3
 import os
 from pathlib import Path
@@ -93,6 +106,7 @@ have_bochs() { return 0; }
 free_port() { echo 54321; }
 ok() { echo "PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: $1"; fail=$((fail + 1)); }
+source "$TEST_SCRIPTS/kernel_evidence.sh" || exit 1
 ''' + block)
     env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
                SCENARIO=scenario, TEST_WORK=str(work), TEST_SCRIPTS=str(HERE),
@@ -103,8 +117,10 @@ fail_test() { echo "FAIL: $1"; fail=$((fail + 1)); }
     expected_status = 1 if scenario in ("all-fail", "grade-failure", "cleanup-failure") else 0
     assert result.returncode == expected_status, (scenario, result.returncode, result.stdout, result.stderr)
     attempts = sorted(work.glob("b.gx.attempt-*"))
-    expected_attempts = {"first-fails": 2, "all-fail": 3, "grade-failure": 1, "setup-failure": 2, "cleanup-failure": 1}[scenario]
+    expected_attempts = {"first-fails": 2, "all-fail": 3, "grade-failure": 1, "setup-failure": 2, "cleanup-failure": 1,
+                         "xvfb-cleanup-error": 1}[scenario]
     assert len(attempts) == expected_attempts, (scenario, attempts)
+    notes = [line for line in result.stderr.splitlines() if line.startswith(b"HARNESS-NOTE:")]
     for index, attempt in enumerate(attempts, 1):
         status = (attempt / "process-status.txt").read_text()
         assert f"attempt={index}\n" in status
@@ -121,6 +137,17 @@ fail_test() { echo "FAIL: $1"; fail=$((fail + 1)); }
             assert not (attempt / "bochs_out.txt").exists()
             continue
         assert "xvfb_run_exit=" in status
+        side = attempt / "bochs_out.txt.xvfb-run.stderr"
+        if scenario == "xvfb-cleanup-error":
+            # The wrapper's own line stays out of the graded capture; the
+            # completed boot is graded once, on guest bytes, and passes.
+            assert b"xvfb-run" not in (attempt / "bochs_out.txt").read_bytes()
+            assert "xvfb_run_exit=5\n" in status and "grade_exit=0\n" in status
+            assert side.read_text() == CLEANUP_ERROR
+            assert (attempt / "bochs_out.txt.xvfb-run.exit").read_text() == "5\n"
+            assert notes and str(side.resolve()) in notes[0].decode()
+        else:
+            assert not side.exists() and not (attempt / "bochs_out.txt.xvfb-run.exit").exists()
         pipeline = (attempt / "emulator-pipeline-status.txt").read_text()
         assert "yes_exit=" in pipeline
         failed = scenario == "all-fail" or (scenario == "first-fails" and index == 1)
@@ -130,6 +157,9 @@ fail_test() { echo "FAIL: $1"; fail=$((fail + 1)); }
             assert not (attempt / "grade.log").exists()
         else:
             assert "grade_exit=" in status and (attempt / "grade.log").is_file()
+    # The wrapper's diagnostics reach stderr as one note, never stdout.
+    assert len(notes) == (scenario == "xvfb-cleanup-error"), (scenario, notes)
+    assert b"HARNESS-NOTE" not in result.stdout
     # Exercise the production capture path too: every attempt's status/logs and
     # the first lock must survive cleanup's ordinary inventory rules.
     evidence = directory / "captured"
@@ -139,6 +169,8 @@ fail_test() { echo "FAIL: $1"; fail=$((fail + 1)); }
     for attempt in attempts:
         assert (capture / attempt.name / "process-status.txt").read_bytes() == (attempt / "process-status.txt").read_bytes()
         assert (capture / attempt.name / "attempt-result.txt").read_bytes() == (attempt / "attempt-result.txt").read_bytes()
+        if scenario == "xvfb-cleanup-error":
+            assert (capture / attempt.name / "bochs_out.txt.xvfb-run.stderr").read_text() == CLEANUP_ERROR
     for row in inventory["files"]:
         if row["path"].endswith("disk.img.lock"):
             assert row["retained"] and (capture / row["path"]).is_file()
@@ -148,7 +180,8 @@ fail_test() { echo "FAIL: $1"; fail=$((fail + 1)); }
 def main():
     with tempfile.TemporaryDirectory(prefix="herbert-link44-attempt-check-") as temporary:
         root = Path(temporary)
-        for scenario in ("first-fails", "all-fail", "grade-failure", "setup-failure", "cleanup-failure"):
+        for scenario in ("first-fails", "all-fail", "grade-failure", "setup-failure", "cleanup-failure",
+                         "xvfb-cleanup-error"):
             run_case(root / scenario, scenario)
     print("PASS link44 attempt isolation/status retention (controlled commands; no emulator qualification)")
 

@@ -117,7 +117,7 @@ panic: action=report
 log: bochs_log.txt
 BX
       } > bochsrc.txt
-      xvfb-run -a bash -c "yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt" )
 }
 
 f2__classify_boot() { # W outlog  -> echoes NO-OUTPUT | NO-SHUTDOWN | EXTRACT-FAILURE | COMPLETED
@@ -308,3 +308,14 @@ f2_bochs_feed_leg_replay() { # leg-label grade_fn feed_args feedlog outlog grubc
     local leg="$1" gfn="$2" fargs="$3" feedlog="$4" outlog="$5" grubcfg="$6" tmo="$7" megs="$8"; shift 8
     f2__replay_drive feed "$leg" "$gfn" "$fargs" "$feedlog" "$outlog" "$grubcfg" "$tmo" "$megs" "$@"
 }
+
+# f2__boot needs kernel_xvfb_capture (kernel_evidence.sh). Gates already have it
+# through qemu_prefix.sh; check_boot_input.py sources only this file. Test
+# `declare -F` FIRST and keep this guard LAST: link66_mutation and
+# check_bochs_xvfb_capture.py source relocated copies of this file whose
+# directory has no kernel_evidence.sh, and they work only because the helper is
+# already defined; appended last, a failed load still leaves every function
+# above defined, and it keeps this file's earlier line numbers stable.
+declare -F kernel_xvfb_capture >/dev/null \
+    || source "$(dirname -- "${BASH_SOURCE[0]}")/kernel_evidence.sh" \
+    || { echo "HARNESS-ERROR: bochs_f2_harness.sh cannot load kernel_evidence.sh" >&2; return 1; }

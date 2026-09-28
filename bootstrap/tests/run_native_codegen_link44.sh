@@ -281,12 +281,12 @@ panic: action=report
 log: bochs_log.txt
 BX
     ( cd "$d" || exit
-      xvfb-run -a bash -c '
+      kernel_xvfb_capture bochs_out.txt -a bash -c '
           yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt
           statuses=("${PIPESTATUS[@]}")
           printf "yes_exit=%s\ntimeout_bochs_exit=%s\n" "${statuses[0]}" "${statuses[1]}" > emulator-pipeline-status.txt
           exit "${statuses[1]}"
-      ' > bochs_out.txt 2>&1
+      '
     )
     status=$?
     printf 'xvfb_run_exit=%s\nemulator_finished_utc=%s\n' "$status" "$(date -u +%FT%TZ)" >> "$d/process-status.txt"

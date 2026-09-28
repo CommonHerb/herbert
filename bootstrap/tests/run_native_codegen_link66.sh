@@ -43,7 +43,7 @@ unset CDPATH
 # the same pinned stream -- transcript, proof, exit and seed-echo all agree while the 64-bit
 # floor is gone. Two implementations are only independent if their interpreters are. Scrubbed
 # here rather than per-invocation because the shared Bochs harness launches the feeder itself
-# (bochs_f2_harness.sh:153) and this export reaches that child too; the driver's own calls
+# (f2_bochs_feed_attempt, bochs_f2_harness.sh) and this export reaches that child too; the driver's own calls
 # additionally use `python3 -I`. STATED, because the two children do NOT have the same startup
 # surface: the shared harness's launch is a bare `python3 "$feeder"`, so sys.path[0] is the tests
 # directory there while `-I` clears it for the driver. Adding `-I` in the shared harness would
@@ -1394,8 +1394,8 @@ if [[ "$boot_legs" -eq 1 ]]; then
             local cap; cap=$(xxd -p "$W/cap.bin" 2>/dev/null | tr -d "\n")
             # NO FRAME COUNT HERE, AND THAT IS THE HONEST FORM. A review leg traced it:
             # f2__classify_boot returns NO-SHUTDOWN *before* the `cp "$W/bochs_out.txt" "$outlog"`
-            # (bochs_f2_harness.sh:126-127), and f2_bochs_feed_attempt truncates the outlog at
-            # entry (:145) and rm -rf's the attempt directory afterwards. So on a NO-SHUTDOWN boot
+            # (both in bochs_f2_harness.sh), and f2_bochs_feed_attempt truncates the outlog at
+            # entry and rm -rf's the attempt directory afterwards. So on a NO-SHUTDOWN boot
             # -- which is EVERY accepted fault attempt -- out.log is an empty file, and
             # `frames -eq 0` was unconditionally true: a third leg of mine grading nothing.
             # The completion barrier on this engine is the CLASS, not a frame count: NO-SHUTDOWN
