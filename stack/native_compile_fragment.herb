@@ -5100,30 +5100,21 @@ func nc_type_has_array_unknown_children(pool, kids, i, n):
     return nc_type_has_array_unknown_children(pool, kids, i + 1, n)
 end
 
-func nc_type_merge_children(pool, a, b, i, n, out, changed, line):
+func nc_type_merge_children(pool, a, b, i, n, out, changed, line, cache):
     if i >= n:
         return (0, out, changed)
     end
-    let m = nc_type_merge(pool, get(a, i), get(b, i), line)
+    let m = nc_type_merge_cached(pool, get(a, i), get(b, i), line, cache)
     if m.0 != 0:
         return (m.0, out, changed)
     end
     do add(out, m.1)
-    return nc_type_merge_children(pool, a, b, i + 1, n, out, nc_or_changed(changed, m.2), line)
+    return nc_type_merge_children(pool, a, b, i + 1, n, out, nc_or_changed(changed, m.2), line, cache)
 end
 
-func nc_type_merge(pool, old, want, line):
-    if want == nc_type_unknown():
-        return (0, old, 0)
-    end
-    if old == nc_type_unknown():
-        return (0, want, 1)
-    end
-    if nc_type_equal(pool, old, want):
-        return (0, old, 0)
-    end
+func nc_type_merge_struct(pool, old, want, line, cache):
     if nc_type_is_array(pool, old) and nc_type_is_array(pool, want):
-        let merged_elem = nc_type_merge(pool, nc_type_array_elem(pool, old), nc_type_array_elem(pool, want), line)
+        let merged_elem = nc_type_merge_cached(pool, nc_type_array_elem(pool, old), nc_type_array_elem(pool, want), line, cache)
         if merged_elem.0 != 0:
             return (nc_fail(436, line, ""), old, 0)
         end
@@ -5139,7 +5130,7 @@ func nc_type_merge(pool, old, want, line):
         if count(oa) != count(wa):
             return (nc_fail(430, line, ""), old, 0)
         end
-        let merged = nc_type_merge_children(pool, oa, wa, 0, count(oa), new_array(int), 0, line)
+        let merged = nc_type_merge_children(pool, oa, wa, 0, count(oa), new_array(int), 0, line, cache)
         if merged.0 != 0:
             return (merged.0, old, 0)
         end
@@ -5150,6 +5141,56 @@ func nc_type_merge(pool, old, want, line):
         return (0, tid, 1)
     end
     return (nc_fail(430, line, ""), old, 0)
+end
+
+-- A growing recursive return can share the same subtree in many tuple
+-- positions. Reuse each completed pair within this merge so the syntax-depth
+-- bound below is reached without expanding the interned DAG into a tree.
+-- Keep the original left-to-right traversal and interning order on first visits.
+func nc_type_merge_cache_find(cache, old, want, i):
+    if i >= count(cache):
+        return 0 - 1
+    end
+    let entry = get(cache, i)
+    if entry.0 == old and entry.1 == want:
+        return i
+    end
+    return nc_type_merge_cache_find(cache, old, want, i + 1)
+end
+
+func nc_type_merge_cached(pool, old, want, line, cache):
+    if want == nc_type_unknown():
+        return (0, old, 0)
+    end
+    if old == nc_type_unknown():
+        return (0, want, 1)
+    end
+    if nc_type_equal(pool, old, want):
+        return (0, old, 0)
+    end
+    let found = nc_type_merge_cache_find(cache, old, want, 0)
+    if found != 0 - 1:
+        let entry = get(cache, found)
+        return (0, entry.2, entry.3)
+    end
+    let merged = nc_type_merge_struct(pool, old, want, line, cache)
+    if merged.0 == 0:
+        do add(cache, (old, want, merged.1, merged.2))
+    end
+    return merged
+end
+
+func nc_type_merge(pool, old, want, line):
+    if want == nc_type_unknown():
+        return (0, old, 0)
+    end
+    if old == nc_type_unknown():
+        return (0, want, 1)
+    end
+    if nc_type_equal(pool, old, want):
+        return (0, old, 0)
+    end
+    return nc_type_merge_cached(pool, old, want, line, new_array((int, int, int, int)))
 end
 
 func nc_type_is_int_bool(t):
@@ -5551,13 +5592,14 @@ func nc_poly_seed_main(nodes, prog_idx):
     let main_lookup = nc_func_lookup(nodes, prog_idx, "main")
     let instances = new_array((int, array(int), int, int, int, int))
     let call_targets = new_array((int, int, int))
+    let pushes = new_array((int, int))
     let params = new_array(array(int))
     let returns = new_array(int)
     let empty = new_array(int)
     do add(instances, nc_poly_make_instance(main_lookup.1, empty, nc_type_unknown(), 0, 0, 0 - 1))
     do add(params, empty)
     do add(returns, nc_type_unknown())
-    return ((params, returns), (instances, call_targets))
+    return ((params, returns), (instances, call_targets, pushes))
 end
 
 func nc_poly_current_base(funcs, fn_idx):
@@ -6013,8 +6055,171 @@ func nc_sig_unify_param(pool, sig, fn_idx, param_idx, want, line):
     return (0, nc_sig_set_param(sig, fn_idx, param_idx, u.1), 1)
 end
 
-func nc_sig_unify_ret(pool, sig, fn_idx, want, line):
+func nc_tuple_depth_cached(depths, t):
+    if t < nc_type_struct_base():
+        return 0
+    end
+    return get(depths, t - nc_type_struct_base())
+end
+
+func nc_tuple_depth_kids(depths, kids, i, n, depth):
+    if i >= n:
+        return depth
+    end
+    let child = nc_tuple_depth_cached(depths, get(kids, i))
+    if child > depth:
+        depth = child
+    end
+    return nc_tuple_depth_kids(depths, kids, i + 1, n, depth)
+end
+
+-- Interned types only refer to earlier pool entries. Measure the DAG once,
+-- rather than expanding shared children such as (f(), f()) exponentially.
+-- Arrays carry their element's tuple depth without adding a tuple level.
+func nc_tuple_depth_loop(pool, t, i, depths):
+    if i > t - nc_type_struct_base():
+        return nc_tuple_depth_cached(depths, t)
+    end
+    let entry = get(pool, i)
+    let depth = nc_tuple_depth_kids(depths, entry.1, 0, count(entry.1), 0)
+    if entry.0 == 1:
+        depth = depth + 1
+    end
+    do add(depths, depth)
+    return nc_tuple_depth_loop(pool, t, i + 1, depths)
+end
+
+-- A caller can supply tuple levels absent from a callee's own syntax. Record
+-- the deepest pushed return before unification, even if it is still partial.
+-- Parameters are already fixed by the fully known specialization key.
+func nc_tuple_note_push(pool, funcs, inst, want):
+    if want < nc_type_struct_base():
+        return 0
+    end
+    let d = nc_tuple_depth_loop(pool, want, 0, new_array(int))
+    if d > nc_tuple_push_depth(funcs.2, inst, 0, count(funcs.2), 0):
+        do add(funcs.2, (inst, d))
+    end
+    return d
+end
+
+func nc_tuple_sites_node(nodes, idx, acc):
+    let node = get(nodes, idx)
+    let c = 0
+    if equal(node.0, "tuple") or equal(node.0, "type-tuple"):
+        c = 1
+    end
+    if equal(node.0, "call"):
+        if equal(get(node.1, 0), "stdin_read"):
+            c = 1
+        end
+    end
+    return nc_tuple_sites_kids(nodes, node.2, 0, count(node.2), acc + c)
+end
+
+func nc_tuple_sites_kids(nodes, kids, i, n, acc):
+    if i >= n:
+        return acc
+    end
+    return nc_tuple_sites_kids(nodes, kids, i + 1, n, nc_tuple_sites_node(nodes, get(kids, i), acc))
+end
+
+func nc_tuple_int_array_has(a, v, i, n):
+    if i >= n:
+        return false
+    end
+    if get(a, i) == v:
+        return true
+    end
+    return nc_tuple_int_array_has(a, v, i + 1, n)
+end
+
+func nc_tuple_add_callees(targets, cur, i, n, order):
+    if i >= n:
+        return 0
+    end
+    let t = get(targets, i)
+    if t.0 == cur:
+        if not nc_tuple_int_array_has(order, t.2, 0, count(order)):
+            do add(order, t.2)
+        end
+    end
+    return nc_tuple_add_callees(targets, cur, i + 1, n, order)
+end
+
+func nc_tuple_depth_vec(depths, vec, i, n, best):
+    if i >= n:
+        return best
+    end
+    let d = nc_tuple_depth_cached(depths, get(vec, i))
+    if d > best:
+        best = d
+    end
+    return nc_tuple_depth_vec(depths, vec, i + 1, n, best)
+end
+
+func nc_tuple_push_depth(pushes, inst, i, n, best):
+    if i >= n:
+        return best
+    end
+    let p = get(pushes, i)
+    if p.0 == inst:
+        if p.1 > best:
+            best = p.1
+        end
+    end
+    return nc_tuple_push_depth(pushes, inst, i + 1, n, best)
+end
+
+-- A finite return path gains levels only at tuple literals, tuple type
+-- expressions and stdin_read, or from parameter/pushed-return types entering
+-- these instances. Merge adds no level; arrays and projections add none.
+-- Count each constructor site once per reachable specialization, plus the
+-- deepest entering type. Revisiting a constructor on a type path would require
+-- infinite depth. Recorded call targets include every callee used so far.
+-- Unrelated callers and functions cannot raise this bound.
+-- Breadth-first over the instances reachable from the growing one; stop as
+-- soon as the budget reaches the checked depth, since that cannot reject.
+func nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos, sites, edge, depth):
+    if sites + edge >= depth:
+        return sites + edge
+    end
+    if pos >= count(order):
+        return sites + edge
+    end
+    let cur = get(order, pos)
+    let inst = get(funcs.0, cur)
+    let here = nc_tuple_sites_node(nodes, get(fn_nodes, inst.0), 0)
+    let e = nc_tuple_depth_vec(depths, inst.1, 0, count(inst.1), edge)
+    e = nc_tuple_push_depth(funcs.2, cur, 0, count(funcs.2), e)
+    let added = nc_tuple_add_callees(funcs.1, cur, 0, count(funcs.1), order)
+    return nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos + 1, sites + here, e, depth)
+end
+
+func nc_check_recursive_tuple(pool, nodes, prog_idx, funcs, t, line, fn_idx):
+    if t < nc_type_struct_base() or not nc_type_has_unknown(pool, t):
+        return 0
+    end
+    let depths = new_array(int)
+    let top = nc_tuple_depth_loop(pool, count(pool) + nc_type_struct_base() - 1, 0, depths)
+    let depth = nc_tuple_depth_cached(depths, t)
+    let prog = get(nodes, prog_idx)
+    let order = new_array(int)
+    do add(order, fn_idx)
+    if nc_tuple_local_budget(nodes, prog.2, funcs, depths, order, 0, 0, 0, depth) < depth:
+        return nc_fail(430, line, "")
+    end
+    return 0
+end
+
+func nc_sig_unify_ret(pool, sig, fn_idx, want, line, nodes, prog_idx, funcs):
     let old = nc_sig_get_ret(sig, fn_idx)
+    if old != want:
+        let growth = nc_check_recursive_tuple(pool, nodes, prog_idx, funcs, want, line, fn_idx)
+        if growth != 0:
+            return (growth, sig, 0)
+        end
+    end
     let u = nc_type_merge(pool, old, want, line)
     if u.0 != 0:
         return (u.0, sig, 0)
@@ -6202,7 +6407,8 @@ func nc_poly_constrain_user_call(pool, nodes, prog_idx, call_idx, env, want, sig
     if nc_func_never_returns(nodes, prog_idx, callee.1):
         return (0, ar.2, gi.2, changed)
     end
-    let su = nc_sig_unify_ret(pool, gi.2, gi.1, want, node.3)
+    let pushed = nc_tuple_note_push(pool, funcs, gi.1, want)
+    let su = nc_sig_unify_ret(pool, gi.2, gi.1, want, node.3, nodes, prog_idx, funcs)
     if su.0 != 0:
         return (su.0, ar.2, gi.2, changed)
     end
@@ -6731,7 +6937,7 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
             return (0, r.2, sig, changed, 1)
         end
         if r.1 != 0:
-            let su = nc_sig_unify_ret(pool, sig, fn_idx, r.1, node.3)
+            let su = nc_sig_unify_ret(pool, sig, fn_idx, r.1, node.3, nodes, prog_idx, funcs)
             if su.0 != 0:
                 return (su.0, r.2, sig, changed, 1)
             end
@@ -7170,13 +7376,13 @@ func nc_verify_ast(nodes, prog_idx, pool):
     if mix_line > 0:
         let mix_instances = new_array((int, array(int), int, int, int, int))
         let mix_targets = new_array((int, int, int))
-        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets))
+        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int))))
     end
     let tbl = nc_table_check(nodes, prog_idx)
     if tbl != 0:
         let empty_instances = new_array((int, array(int), int, int, int, int))
         let empty_targets = new_array((int, int, int))
-        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets))
+        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets, new_array((int, int))))
     end
     let seeded = nc_poly_seed_main(nodes, prog_idx)
     let solved = nc_poly_sig_solve_loop(pool, nodes, prog_idx, seeded.1, seeded.0, nc_poly_max_instances())
