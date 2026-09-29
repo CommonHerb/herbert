@@ -156,7 +156,12 @@ bochs_run() { # e9out seed  -> nonzero (sets BOCHS_HARNESS_ERR) on a harness fai
     _feed_delivered() { local fl="$1" lbl="$2"; grep -q '^SENT' "$fl" 2>/dev/null && return 0
         BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload for $lbl (log: $fl has LISTENING but no SENT / shows NOCONN -- Bochs did not connect COM1, the kernel received no input, not a kernel miscompile)"; return 1; }
     local kelf; kelf="$(readlink -f "$MKELF")"; local gbin; gbin="$(readlink -f "$GROWER")"
-    local d="$work/b.d"; mkdir -p "$d"; local port; port="$(free_port)"
+    # A FRESH directory for every attempt (red-run sweep 2026-09-29). The retry loop used to reuse one fixed
+    # directory and never removed Bochs's disk.img.lock, so an attempt whose Bochs was killed mid-boot left the
+    # lock behind and every later attempt's Bochs refused the locked disk: one bad attempt failed all three (the
+    # shape that made link44 RED in run 34731709873, fixed there by 3b2478c). Each attempt's directory stays under
+    # $work, so the gate's exit keeps every attempt as evidence.
+    local d; d="$(mktemp -d "$work/b.attempt.XXXXXX")" || { BOCHS_HARNESS_ERR="the attempt directory could not be created"; return 1; }; local port; port="$(free_port)"
     python3 "$script_dir/kernel_input_feed.py" "$port" "$seed" --hold 40 > "$d/feed.log" 2>&1 &
     local bfp=$!
     _feed_ok "$d/feed.log" "grower(BOOT)" || { kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null; return 1; }
