@@ -12,6 +12,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import struct
@@ -31,6 +32,23 @@ BAD_INPUT = b"BI\n\xde\x01\xad"
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def refused(leg, message, action, witness=None):
+    """Mutation legs: action() must raise AssertionError whose text is exactly message.
+
+    No refusal, or a refusal with other text, fails the run; other exceptions
+    propagate. witness, if given, then checks that leg's own evidence.
+    """
+    try:
+        action()
+    except AssertionError as error:
+        require(str(error) == message, f"{leg}: refused with {str(error)!r}, want {message!r}")
+    else:
+        raise AssertionError(f"{leg}: the normal-mode oracle did not refuse (want {message!r})")
+    if witness:
+        witness()
+    print(f"PASS folio {leg} refused by the normal-mode oracle", flush=True)
 
 
 def identity(path):
@@ -259,7 +277,27 @@ def main():
     render = lambda data: b"".join(data[i:i+16].hex(" ").encode() + b"\n" for i in range(0, len(data), 16))
     qemu = shutil.which("qemu-system-x86_64")
     require_emu = os.environ.get("KERNEL_CODEGEN_REQUIRE_EMU", "0") == "1"
+    needed = ("bochs", "parted", "losetup", "mkfs.vfat", "grub-install", "xvfb-run", "sudo")
+    bochs = all(shutil.which(name) for name in needed)
+    bochs = bochs and subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0
+
+    def viewer_publishes(label, supplied, binary):
+        # Normal mode's viewer publish check, shared with its mutation leg. The
+        # parameter is named binary so the compare line is unchanged by this factor.
+        published = io.BytesIO()
+        run_viewer(viewer, supplied, published, qemu=qemu, evidence=work / label)
+        require(published.getvalue() == render(binary), "viewer adapter published incorrect bytes")
+
     if args.mode == "mutation":
+        # Mutation mode checks that a reduced reservation is refused by layout()
+        # and, through the adapter, by the guest. It also feeds deliberately
+        # wrong expectations to these normal-mode checks, each of which must
+        # refuse with its exact message: layout()'s guard/identity mappings;
+        # qemu_boot's completion, stderr and serial comparisons (TCG only);
+        # the viewer publish compare; and, where Bochs runs, bochs_boot's
+        # completion and serial comparisons. It does not check layout()'s ELF
+        # header conditions, compile_image, the GDB injection legs, or which
+        # legs normal mode runs.
         mutant = work / "short-reservation.elf"
         changed = bytearray(viewer.read_bytes())
         struct.pack_into("<I", changed, 72, geometry["filesz"] + 16384)
@@ -271,6 +309,17 @@ def main():
         else:
             raise AssertionError("reduced reservation passed the normal layout check")
         print("PASS folio reduced reservation rejected by file-derived layout", flush=True)
+        # Clear the first non-guard entry of the viewer's page directory (at
+        # file offset segment offset + filesz - 4096, as layout() reads it).
+        cleared = bytearray(viewer.read_bytes())
+        slot = min(set(range(512)) - set(geometry["guards"]))
+        table = struct.unpack_from("<I", cleared, 56)[0] + geometry["filesz"] - 4096
+        require(struct.unpack_from("<Q", cleared, table + 8 * slot)[0] == slot * 2 * MIB + 131,
+                "viewer lacks the identity entry the guard leg clears")
+        struct.pack_into("<Q", cleared, table + 8 * slot, 0)
+        (work / "cleared-identity.elf").write_bytes(cleared)
+        refused("cleared identity mapping", "guard/identity mappings disagree with file-derived layout",
+                lambda: layout(work / "cleared-identity.elf"))
         if qemu:
             qemu_boot(work, qemu, "mutation-control", viewer, [b"\xff"], b"ff\n")
             supplied = work / "mutation-input.bin"
@@ -291,9 +340,57 @@ def main():
                     and published.getvalue() == b"",
                     "mutation lacked an explicit boot-input refusal or published output")
             print("PASS folio reservation refusal through adapter; no output published", flush=True)
+            # In each leg below only the named check's expectation is wrong; the
+            # boot's other checks would pass. The reduced-reservation guest
+            # refuses with BAD_INPUT/97, no stderr and no serial (checked above).
+            refused("mutation-completion", f"mutation-completion: wrong completion {BAD_INPUT.hex()}/97",
+                    lambda: qemu_boot(work, qemu, "mutation-completion", mutant, [b"\xff"], b""))
+            noisy = work / "qemu-with-stderr"
+            noisy.write_text("#!/bin/sh\necho 'planted emulator stderr line' >&2\n"
+                             f"exec {shlex.quote(str(Path(qemu).resolve()))} \"$@\"\n")
+            noisy.chmod(0o700)
+            refused("mutation-stderr", "mutation-stderr: unexpected emulator stderr",
+                    lambda: qemu_boot(work, str(noisy), "mutation-stderr", viewer, [b"\xff"], b"ff\n"))
+            refused("mutation-serial", "mutation-serial: serial bytes differ",
+                    lambda: qemu_boot(work, qemu, "mutation-serial", viewer, [b"\xff"], b"fe\n"))
+            # Positive control through the same adapter path: 0xff must publish
+            # its rendering, so lost output cannot pass as the planted mismatch.
+            viewer_publishes("mutation-viewer-control", supplied, b"\xff")
+            refused("mutation-viewer-publish", "viewer adapter published incorrect bytes",
+                    lambda: viewer_publishes("mutation-viewer-publish", supplied, b"\xfe"))
         else:
             require(not require_emu, "QEMU required for mutation witness")
             print("SKIP folio mutation boot: QEMU unavailable", flush=True)
+        if bochs:
+            def captured_ff():
+                # The grader reads a missing serial.bin as empty bytes, which also
+                # differ from fe\n: require this boot's own capture to hold ff\n.
+                serial = work / "mutation-bochs-serial" / "serial.bin"
+                require(serial.is_file() and serial.read_bytes() == b"ff\n",
+                        "mutation-bochs-serial: capture not attributable to the 0xff control")
+
+            refused("mutation-bochs-serial", "mutation-bochs-serial: serial bytes differ",
+                    lambda: bochs_boot(work, "mutation-bochs-serial", viewer, b"\xff", b"fe\n"),
+                    captured_ff)
+            # A guest that completes with grade 1 frames de01ad, never GOOD.
+            grade_one = compile_image(work, compiler, "grade-one", declaration + "func main(): return 4294967296 end\n")
+            completion = work / "mutation-bochs-completion"
+
+            def completed_with_grade_one():
+                # The same message also covers a boot that did not finish, or a
+                # harness exit status (FLAKE-LOG F12): require this boot's
+                # evidence to show the guest ran to shutdown after framing grade 1.
+                capture = (completion / "bochs_out.txt").read_bytes()
+                require(json.loads((completion / "boot.json").read_text())["exit"] == 1
+                        and capture.count(b"\xde\x01\xad") == 1 and b"shutdown requested" in capture,
+                        "mutation-bochs-completion: refusal not attributable to a completed grade-1 boot")
+
+            refused("mutation-bochs-completion", "Bochs did not attest exactly one successful completion",
+                    lambda: bochs_boot(work, "mutation-bochs-completion", grade_one, b"\xff", b""),
+                    completed_with_grade_one)
+        else:
+            require(not require_emu, "Bochs disk/boot prerequisites required")
+            print("SKIP folio mutation Bochs legs: prerequisites unavailable", flush=True)
         return
     count = len(binary)
     calls = compile_image(work, compiler, "calls-eof", declaration + f"""func pull(): return boot_read() end
@@ -352,9 +449,7 @@ func main(): return scan(0, 0) * 4294967296 end
         require(shutil.which("gdb"), "GDB required for boot metadata checks")
         supplied = work / "viewer-input.bin"
         supplied.write_bytes(binary)
-        published = io.BytesIO()
-        run_viewer(viewer, supplied, published, qemu=qemu, evidence=work / "tcg-viewer")
-        require(published.getvalue() == render(binary), "viewer adapter published incorrect bytes")
+        viewer_publishes("tcg-viewer", supplied, binary)
         print("PASS folio tcg-viewer through the file adapter", flush=True)
         qemu_boot(work, qemu, "tcg-empty", viewer, [b""], b"")
         qemu_boot(work, qemu, "tcg-missing", viewer, [], b"", reject=True)
@@ -374,9 +469,6 @@ func main(): return scan(0, 0) * 4294967296 end
     else:
         require(not require_emu, "QEMU required")
         print("SKIP folio QEMU/GDB/KVM: QEMU unavailable", flush=True)
-    needed = ("bochs", "parted", "losetup", "mkfs.vfat", "grub-install", "xvfb-run", "sudo")
-    bochs = all(shutil.which(name) for name in needed)
-    bochs = bochs and subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0
     if bochs:
         bochs_boot(work, "bochs-viewer", viewer, binary, render(binary))
         bochs_boot(work, "bochs-empty", viewer, b"", b"")
