@@ -53,6 +53,8 @@ jobs:
     # the locally validated emulator pair the FULL 45-harness suite is golden on (quiet host,
     # 2026-07-16, SUITE-EXIT=0). The pinned-version asserts below fail closed on either asserted
     # emulator package-version drift (other image components stay unpinned).
+    # 2026-09-29: the install step now installs exactly the pinned emulator versions from Ubuntu's
+    # snapshot service (Gulpin's F8 ruling); those asserts stay as a backstop.
     name: kernel links ${{ matrix.lo }}..${{ matrix.hi }}
     strategy:
       fail-fast: false
@@ -71,14 +73,137 @@ jobs:
       - uses: actions/checkout@v5
       - name: install emulators + boot tooling (TEST dependencies)
         run: |
-          sudo apt-get update
+          set -euo pipefail
+          # 2026-09-29: EXACT-VERSION INSTALL, by Gulpin's ruling on FLAKE-LOG F8 (verbatim: "Install
+          # exact versions (Recommended)"; the option read: "GitHub installs the exact QEMU/Bochs
+          # versions our tests were validated on, and the version check stays as a backstop. Ubuntu
+          # updates stop turning runs red; we move to new versions on purpose."). Until now this step
+          # installed whatever the archive held, and the assert step went RED on every new Ubuntu
+          # revision (run 32551779622). `apt-get install pkg=version` alone would not last:
+          # resolute-updates keeps only the newest revision (Launchpad: qemu ...ubuntu3.1 superseded
+          # 2026-08-06, removed 2026-08-07). So the pinned packages come from Ubuntu's snapshot
+          # service, frozen at EMU_SNAPSHOT: the archive as of 2026-09-29 13:55 UTC, when kernel run
+          # 36578733589 (ci/slice4-link62-c29b, f8665e8, green) installed exactly these versions.
+          # Pinned: every package built from source qemu (x86, common, data, ubuntu-virt) or source
+          # bochs (bochs, bochs-x, bochsbios) that this install pulls in. qemu-system-x86 requires
+          # qemu-system-common at its own version and bochs-x requires bochs at its own; the others
+          # are the same emulator build. Everything else (libraries, seabios, ipxe-qemu, vgabios, the
+          # tools below) still comes from the runner's archive, unpinned, as before.
+          # How, on every run (so the snapshot path is never first used on the day Ubuntu moves on):
+          # the snapshot is an apt source only while this step fetches its indexes, checks that it
+          # lists every pinned version (an unreachable source is only a warning in `apt-get update`)
+          # and downloads the seven .debs through apt with the snapshot as the only source (apt
+          # checks each file against the signed index). Then the source is removed, so the install
+          # below sees only the runner's archive. The seven are installed from those files, copied
+          # into apt's archive cache first: when two sources serve one version, apt downloads the
+          # copy from the source listed first, and apt preferences cannot change that
+          # (apt_preferences(5)); a cached file with the right name and size is not fetched again.
+          # Fails loudly: a snapshot that cannot be used (unreachable, pruned, or not serving a pinned
+          # version) gets 3 attempts, 20 s and 60 s apart (nothing is graded in this step), then the
+          # step exits with an "EMULATOR PIN: snapshot ... unusable" line (FLAKE-LOG F14). It never
+          # installs another version.
+          # To move to a new emulator version on purpose:
+          #  1. Pick a snapshot ID (UTC, YYYYMMDDTHHMMSSZ) at or after the new version's publication
+          #     (Launchpad publishing history of source qemu or bochs in resolute).
+          #  2. In one commit, change EMU_SNAPSHOT, QEMU_VERSION and BOCHS_VERSION here and the two
+          #     version literals in the assert step below. If a new binary package from the qemu or
+          #     bochs source starts being pulled in, add it to PINNED (the check at the end of this
+          #     step fails until you do). A new runner release also changes the suites and the
+          #     codename check.
+          #  3. Push to a ci/ test branch. That run's full dual-substrate suite is the golden
+          #     re-validation; a RED there is investigated, never re-rolled.
+          #  4. Add a dated line here and to FLAKE-LOG F8 naming the validating run.
+          #  5. Land on main (ask-first).
+          EMU_SNAPSHOT=20260929T135500Z
+          QEMU_VERSION=1:10.2.1+ds-1ubuntu3.2
+          BOCHS_VERSION=2.8+dfsg-1
+          PINNED=(
+            qemu-system-x86="$QEMU_VERSION" qemu-system-common="$QEMU_VERSION"
+            qemu-system-data="$QEMU_VERSION" ubuntu-virt="$QEMU_VERSION"
+            bochs="$BOCHS_VERSION" bochs-x="$BOCHS_VERSION" bochsbios="$BOCHS_VERSION"
+          )
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          test "$codename" = resolute || { echo "EMULATOR PIN: runner is $codename, but the pinned emulator builds are resolute's -- move the pin deliberately"; exit 1; }
+          apt-get --version | sed -n 1p
+          snapsrc=/etc/apt/sources.list.d/herbert-emulator-snapshot.sources
+          snapview=(-o "Dir::Etc::SourceList=$snapsrc" -o Dir::Etc::SourceParts=/dev/null)
+          printf '%s\n' 'Types: deb' "URIs: https://snapshot.ubuntu.com/ubuntu/$EMU_SNAPSHOT/" \
+            'Suites: resolute resolute-updates' 'Components: main universe' \
+            'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+            | sudo tee "$snapsrc"
+          # True iff `apt-cache madison` lists version $2 of package $1 from this snapshot.
+          snapshot_serves() {
+            local name ver from
+            while IFS='|' read -r name ver from; do
+              if [ "${ver// /}" = "$2" ] && [[ $from == *"snapshot.ubuntu.com/ubuntu/$EMU_SNAPSHOT"* ]]; then return 0; fi
+            done < <(apt-cache madison "$1" 2>/dev/null)
+            return 1
+          }
+          # One attempt: fetch the indexes, check the snapshot lists every pin, download the seven.
+          # It runs as a loop condition, where errexit is off, so every command is checked here.
+          pin_attempt() {
+            local spec table
+            sudo apt-get update || { why="apt-get update failed"; return 1; }
+            for spec in "${PINNED[@]}"; do
+              if ! snapshot_serves "${spec%%=*}" "${spec#*=}"; then
+                table=$(apt-cache madison "${spec%%=*}" 2>&1) || true
+                if [[ $table == *"snapshot.ubuntu.com/ubuntu/$EMU_SNAPSHOT"* ]]; then
+                  why="it does not serve ${spec%%=*} ${spec#*=}"
+                else
+                  why="apt has no index from it (snapshot.ubuntu.com unreachable?)"
+                fi
+                printf '%s\n' "$table"
+                return 1
+              fi
+            done
+            dl=$(mktemp -d) || { why="mktemp failed"; return 1; }
+            (cd "$dl" && apt-get "${snapview[@]}" download "${PINNED[@]}") || { why="downloading the pinned packages from it failed"; return 1; }
+          }
+          why= dl= attempt=1
+          until pin_attempt; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "EMULATOR PIN: snapshot $EMU_SNAPSHOT unusable after 3 attempts: $why -- refusing to install any other version"
+              exit 1
+            fi
+            pause=$(( attempt == 1 ? 20 : 60 ))
+            echo "emulator pin: attempt $attempt of 3 failed ($why); retrying in $pause s"
+            sleep "$pause"
+            attempt=$(( attempt + 1 ))
+          done
+          debs=()
+          for spec in "${PINNED[@]}"; do
+            name=${spec%%=*} ver=${spec#*=}
+            echo "emulator pin: snapshot $EMU_SNAPSHOT serves $name $ver"
+            files=("$dl/${name}_${ver//:/%3a}_"*.deb)
+            [ "${#files[@]}" = 1 ] && [ -f "${files[0]}" ] || { echo "EMULATOR PIN: expected one downloaded .deb for $name $ver, found: ${files[*]}"; exit 1; }
+            debs+=("${files[0]}")
+          done
+          sudo rm -f "$snapsrc"
+          echo "emulator pin: installing qemu-system-x86=$QEMU_VERSION bochs=$BOCHS_VERSION; the archive's own candidates (information only, not gated):"
+          apt-cache policy qemu-system-x86 bochs || true
+          eval "$(apt-config shell APT_ARCHIVES Dir::Cache::Archives/d)"
+          sudo cp -- "${debs[@]}" "$APT_ARCHIVES"
           sudo apt-get install -y --no-install-recommends \
             build-essential gdb \
-            qemu-system-x86 \
-            bochs bochs-x bochsbios vgabios \
+            "${debs[@]}" vgabios \
             xvfb \
             grub-pc-bin grub-common \
             parted dosfstools
+          dpkg-query -W -f='installed ${Package}=${Version}\n' "${PINNED[@]%%=*}"
+          # Every installed binary package built from source qemu or bochs must be one of PINNED
+          # (any dpkg state counts except not-installed and config-files).
+          pinned_names=" ${PINNED[*]%%=*} "
+          unpinned=$(dpkg-query -W -f='${db:Status-Status} ${source:Package} ${Package}\n' \
+            | while read -r status src name; do
+                if [ "$status" != not-installed ] && [ "$status" != config-files ] \
+                  && { [ "$src" = qemu ] || [ "$src" = bochs ]; } \
+                  && [[ $pinned_names != *" $name "* ]]; then echo "$name (source $src)"; fi
+              done)
+          if [ -n "$unpinned" ]; then
+            echo "UNPINNED EMULATOR PACKAGE: ${unpinned//$'\n'/, } -- installed but not in PINNED; add it there (version-move step 2). A rerun cannot fix this."
+            exit 1
+          fi
+          echo "emulator pin: every installed package built from source qemu or bochs is in PINNED"
       - id: pinned
         name: assert pinned emulator versions (far-axis -- a silent runner bump must go RED, not silently reshape the spec)
         run: |
@@ -86,6 +211,9 @@ jobs:
           q=$(dpkg-query -W -f='${Version}' qemu-system-x86)
           b=$(dpkg-query -W -f='${Version}' bochs)
           echo "qemu-system-x86=$q bochs=$b"
+          # 2026-09-29: the firmware the emulators load is not pinned and not asserted; its versions
+          # are printed so a log shows when it moved (FLAKE-LOG F8 current policy).
+          echo "firmware (not pinned, not asserted): $(dpkg-query -W -f='${Package}=${Version} ' seabios ipxe-qemu vgabios 2>&1 || true)"
           qemu-system-x86_64 --version | head -1
           bochs --help 2>&1 | head -1 || true
           grub-install --version | head -1
@@ -103,6 +231,11 @@ jobs:
           # Ubuntu packaging revision only; bochs pin unchanged and holding. No local re-validation
           # host exists this session (kingdom: qemu 8.2.2, no bochs) -- this run's full 45-harness
           # dual-substrate suite IS the golden re-validation on the new package.
+          # 2026-09-29: this assert is now the BACKSTOP behind the exact-version install in the step
+          # above (Gulpin's F8 ruling); an Ubuntu archive update no longer reaches it. If it fires,
+          # the install and these literals disagree (a half-done version move) or apt installed
+          # something it was not asked for: investigate, never re-roll. Change these literals only
+          # together with EMU_SNAPSHOT, QEMU_VERSION and BOCHS_VERSION in the install step.
           test "$q" = "1:10.2.1+ds-1ubuntu3.2" || { echo "QEMU version drift: got $q, pinned 1:10.2.1+ds-1ubuntu3.2 -- update the pin deliberately after re-validating the goldens"; exit 1; }
           test "$b" = "2.8+dfsg-1" || { echo "Bochs version drift: got $b, pinned 2.8+dfsg-1 -- update the pin deliberately after re-validating the goldens"; exit 1; }
       - name: native-codegen QEMU diagnostics (emitter diag suite -- 2026-07-03 canon-cleanup §4; a verify-local suite CI never ran, runs here because it needs QEMU)
