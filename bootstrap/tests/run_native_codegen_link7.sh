@@ -52,15 +52,18 @@ compile_probe() {
     local label="$1"
     local probe="$2"
     local elf="$3"
-    local out="$tmp/${label}.compile.out"
-    local err="$tmp/${label}.compile.err"
     # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter),
     # not stdout. Run it in a per-label scratch dir and harvest that dir's a.out.
     # (NB: the smug PROBES below still write their flogger payload to STDOUT when
     # run -- that is the probe's output, unrelated to the compiler's a.out.)
     local cdir="$tmp/${label}.cdir"
+    local out="$cdir/compile.log"
+    local err="$cdir/compile.err"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "compile $label failed: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected or did not emit a.out: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
         return 1

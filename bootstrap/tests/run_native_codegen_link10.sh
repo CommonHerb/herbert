@@ -39,9 +39,12 @@ compile_probe() {
     # not stdout. Run it in a per-label scratch dir and harvest that dir's a.out.
     local cdir="$tmp/$label.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.o" 2>"$tmp/$label.e" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "compile $label failed: $(head -1 "$cdir/compile.log") $(head -1 "$cdir/compile.err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
-        fail_test "compile $label rejected/no a.out: $(head -1 "$tmp/$label.o") $(head -1 "$tmp/$label.e")"
+        fail_test "compile $label rejected/no a.out: $(head -1 "$cdir/compile.log") $(head -1 "$cdir/compile.err")"
         return 1
     fi
     local magic
@@ -130,12 +133,13 @@ if [[ -x "$NATIVE_CODEGEN_COMPILER" && "$self_magic" == "7f454c46" ]]; then
     # the live backend on the probe must byte-match the seed).
     nd="$tmp/altimeter.native.d"; acd="$tmp/altimeter.c.d"
     rm -rf "$nd" "$acd"; mkdir -p "$nd" "$acd"
-    ( cd "$nd" && "$tmp/self_compiler.elf" <"$tmp/self_host_probe.herb" >"$tmp/self_probe.native.out" 2>"$tmp/self_probe.native.err" )
-    native_rc=$?
+    native_ok=0
+    native_codegen_compile_success "$tmp/self_compiler.elf" "$tmp/self_host_probe.herb" "$nd" && native_ok=1
+    native_rc="$(cat "$nd/compile.status" 2>/dev/null)"
     native_magic=""
     [[ -f "$nd/a.out" ]] && native_magic=$(head -c4 "$nd/a.out" | xxd -p | tr -d '\n')
     altimeter_ok=0
-    if [[ $native_rc -eq 0 && "$native_magic" == "7f454c46" ]]; then
+    if [[ $native_ok -eq 1 && "$native_magic" == "7f454c46" ]]; then
         altimeter_ok=1
     fi
     if [[ "$altimeter_ok" -eq 1 && "$NATIVE_CODEGEN_ORACLE" == "c" ]]; then
@@ -151,7 +155,7 @@ if [[ -x "$NATIVE_CODEGEN_COMPILER" && "$self_magic" == "7f454c46" ]]; then
     if [[ "$altimeter_ok" -eq 1 ]]; then
         pass=$((pass + 1))
     elif [[ "$NATIVE_CODEGEN_ORACLE" != "c" ]]; then
-        fail_test "self-compile altimeter: seed did not emit a valid ELF for the self-host probe (self_rc=$self_rc native_rc=$native_rc native_magic=$native_magic native_size=$([[ -f "$nd/a.out" ]] && wc -c <"$nd/a.out" || echo none))"
+        fail_test "self-compile altimeter: seed did not emit a valid ELF for the self-host probe (self_rc=$self_rc native_rc=${native_rc:-none} native_contract=$native_ok native_magic=$native_magic native_size=$([[ -f "$nd/a.out" ]] && wc -c <"$nd/a.out" || echo none))"
     fi
     # tito: full native self-hosting FIXPOINT. gen-1 (the self-compiler just built)
     # compiles the WHOLE backend into gen-2. With D12 both gen-1 and gen-2 are
@@ -162,20 +166,16 @@ if [[ -x "$NATIVE_CODEGEN_COMPILER" && "$self_magic" == "7f454c46" ]]; then
     # this only adds the ~1-2s gen-2.
     g2d="$tmp/gen2.d"; rm -rf "$g2d"; mkdir -p "$g2d"
     fix_timeout="${NATIVE_FIXPOINT_TIMEOUT:-180s}"
-    if command -v timeout >/dev/null 2>&1; then
-        ( cd "$g2d" && timeout "$fix_timeout" "$tmp/self_compiler.elf" <"$backend" >"$tmp/gen2.out" 2>"$tmp/gen2.err" )
-        gen2_rc=$?
-    else
-        ( cd "$g2d" && "$tmp/self_compiler.elf" <"$backend" >"$tmp/gen2.out" 2>"$tmp/gen2.err" )
-        gen2_rc=$?
-    fi
+    gen2_ok=0
+    native_codegen_compile_success "$tmp/self_compiler.elf" "$backend" "$g2d" "$PATH" "$fix_timeout" && gen2_ok=1
+    gen2_rc="$(cat "$g2d/compile.status" 2>/dev/null)"
     gen2_magic=""
     [[ -f "$g2d/a.out" ]] && gen2_magic=$(head -c4 "$g2d/a.out" | xxd -p | tr -d '\n')
-    if [[ $gen2_rc -eq 0 && "$gen2_magic" == "7f454c46" ]] \
+    if [[ $gen2_ok -eq 1 && "$gen2_magic" == "7f454c46" ]] \
         && cmp -s "$tmp/self_compiler.elf" "$g2d/a.out"; then
         pass=$((pass + 1))
     else
-        fail_test "self-host FIXPOINT: gen-2 (self-compiler compiling the whole backend) did not byte-match gen-1 (gen2_rc=$gen2_rc gen2_magic=$gen2_magic gen1_size=$(wc -c <"$tmp/self_compiler.elf") gen2_size=$([[ -f "$g2d/a.out" ]] && wc -c <"$g2d/a.out" || echo none))"
+        fail_test "self-host FIXPOINT: gen-2 (self-compiler compiling the whole backend) did not byte-match gen-1 (gen2_rc=${gen2_rc:-none} gen2_contract=$gen2_ok gen2_magic=$gen2_magic gen1_size=$(wc -c <"$tmp/self_compiler.elf") gen2_size=$([[ -f "$g2d/a.out" ]] && wc -c <"$g2d/a.out" || echo none))"
     fi
 else
     fail_test "self-compile altimeter: expected self-host ELF, rc=$self_rc magic=$self_magic compiler=$NATIVE_CODEGEN_COMPILER"

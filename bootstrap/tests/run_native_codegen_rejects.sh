@@ -76,10 +76,13 @@ check_driver_reject_code() {
     # byte-faithfulness cross-check under NATIVE_CODEGEN_ORACLE=c.
     local cdir="$tmp/driver_${label}.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$driver" >"$tmp/driver_${label}.cc.out" 2>"$tmp/driver_${label}.cc.err" )
+    local compiled=0
+    native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$driver" "$cdir" && compiled=1
     [[ -f "$cdir/a.out" ]] && chmod +x "$cdir/a.out"
-    if [[ ! -f "$cdir/a.out" ]]; then
-        fail_test "driver reject $label: seed did not compile driver: $(head -1 "$tmp/driver_${label}.cc.out") $(head -1 "$tmp/driver_${label}.cc.err")"
+    if [[ $compiled -ne 1 ]]; then
+        fail_test "driver reject $label: seed compile of driver failed: $(head -1 "$cdir/compile.log") $(head -1 "$cdir/compile.err")"
+    elif [[ ! -f "$cdir/a.out" ]]; then
+        fail_test "driver reject $label: seed did not compile driver: $(head -1 "$cdir/compile.log") $(head -1 "$cdir/compile.err")"
     elif ! { native_codegen_expect_rejection "$cdir/a.out" /dev/null "$out" "$err" "ERR $code"; }; then
         fail_test "driver reject $label: expected ERR $code, stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
     elif [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]] && ! { "$HERBERT" "$driver" >"$tmp/driver_${label}.cref" 2>/dev/null; cmp -s "$out" "$tmp/driver_${label}.cref"; }; then
@@ -93,15 +96,18 @@ compile_probe() {
     local label="$1"
     local probe="$2"
     local elf="$3"
-    local out="$tmp/${label}.compile.out"
-    local err="$tmp/${label}.compile.err"
     # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
     # stdout. Run it in a per-label scratch dir and harvest that dir's a.out. (Only
     # the frontier-cap ACCEPT probe uses this; every reject check below reads the
     # diagnostic from stderr, with status 1 -- a rejected program writes no a.out.)
     local cdir="$tmp/${label}.compile.d"
+    local out="$cdir/compile.log"
+    local err="$cdir/compile.err"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "compile $label failed: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected or did not emit a.out: stdout=$(head -1 "$out"), stderr=$(head -1 "$err")"
         return 1

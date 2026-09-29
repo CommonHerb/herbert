@@ -71,14 +71,19 @@ compile_probe_bounded() {
     local label="$1" probe="$2" elf="$3"
     local cdir="$tmp/$label.compile.d"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && timeout "$compile_bound" "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
-    local crc=$?
-    if [[ $crc -eq 124 ]]; then
+    local compiled=0 crc
+    native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir" "$PATH" "$compile_bound" && compiled=1
+    crc="$(cat "$cdir/compile.status" 2>/dev/null)"
+    if [[ "$crc" == 124 ]]; then
         fail_test "compile $label EXCEEDED ${compile_bound} bound -- large-literal O(value) encoder regression (D15/throne)"
         return 1
     fi
+    if [[ $compiled -ne 1 ]]; then
+        fail_test "compile $label failed (rc=${crc:-none}): stdout=$(head -1 "$cdir/compile.log") stderr=$(head -1 "$cdir/compile.err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
-        fail_test "compile $label rejected/no a.out (rc=$crc): stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
+        fail_test "compile $label rejected/no a.out (rc=$crc): stdout=$(head -1 "$cdir/compile.log") stderr=$(head -1 "$cdir/compile.err")"
         return 1
     fi
     local magic

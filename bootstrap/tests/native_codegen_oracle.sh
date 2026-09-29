@@ -475,9 +475,23 @@ oracle_expect_file() {
 # The caller supplies a fresh absolute work directory and still checks ELF magic
 # and its own runtime oracle. An optional PATH applies only to the compiler, so
 # the emitter's external-toolchain exclusion survives this shared helper.
+# An optional fifth argument is a wall-clock bound. timeout is resolved on the
+# caller's PATH before the compiler-only PATH applies, and a bound with no
+# timeout refuses rather than running unbounded. compile.status records the
+# status, so an exceeded bound reads 124. A failed timeout lookup is handled
+# here, so a caller under set -e still gets the refusal message and status 1.
 native_codegen_compile_success() {
-    local compiler="$1" source="$2" directory="$3" compile_path="${4-$PATH}" rc
-    if ( cd "$directory" && PATH="$compile_path" "$compiler" <"$source" >compile.log 2>compile.err ); then
+    local compiler="$1" source="$2" directory="$3" compile_path="${4-$PATH}" bound="${5-}" rc timeout_path
+    local -a bounded=()
+    if [[ -n "$bound" ]]; then
+        timeout_path="$(command -v timeout)" || timeout_path=
+        if [[ "$timeout_path" != /* || ! -x "$timeout_path" ]]; then
+            echo "    (compiler not run: bound $bound needs a timeout executable on PATH)" >&2
+            return 1
+        fi
+        bounded=("$timeout_path" "$bound")
+    fi
+    if ( cd "$directory" && PATH="$compile_path" ${bounded[@]+"${bounded[@]}"} "$compiler" <"$source" >compile.log 2>compile.err ); then
         rc=0
     else
         rc=$?

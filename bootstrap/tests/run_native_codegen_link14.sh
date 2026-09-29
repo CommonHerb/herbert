@@ -51,9 +51,12 @@ compile_probe() {
     local label="$1" probe="$2" elf="$3"
     local cdir="$tmp/$label.compile.d"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "compile $label failed: stdout=$(head -1 "$cdir/compile.log") stderr=$(head -1 "$cdir/compile.err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
-        fail_test "compile $label rejected/no a.out: stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
+        fail_test "compile $label rejected/no a.out: stdout=$(head -1 "$cdir/compile.log") stderr=$(head -1 "$cdir/compile.err")"
         return 1
     fi
     local magic

@@ -33,9 +33,11 @@ source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source nat
 native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
 frag_native="$tmp/native_elf_fragment.elf"
 frag_cdir="$tmp/frag.cdir"; rm -rf "$frag_cdir"; mkdir -p "$frag_cdir"
-( cd "$frag_cdir" && "$NATIVE_CODEGEN_COMPILER" <"$fragment" >"$tmp/frag.cc.out" 2>"$tmp/frag.cc.err" )
+if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$fragment" "$frag_cdir"; then
+    fail "seed compile of native_elf_fragment.herb failed: $(head -1 "$frag_cdir/compile.log") $(head -1 "$frag_cdir/compile.err")"
+fi
 if [[ ! -f "$frag_cdir/a.out" ]]; then
-    fail "seed did not compile native_elf_fragment.herb: $(head -1 "$tmp/frag.cc.out") $(head -1 "$tmp/frag.cc.err")"
+    fail "seed did not compile native_elf_fragment.herb: $(head -1 "$frag_cdir/compile.log") $(head -1 "$frag_cdir/compile.err")"
 fi
 cp "$frag_cdir/a.out" "$frag_native"; chmod +x "$frag_native"
 

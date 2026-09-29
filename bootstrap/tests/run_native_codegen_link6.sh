@@ -37,13 +37,16 @@ oracle_le64() {
 
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
-    local out="$tmp/${label}.out" err="$tmp/${label}.err"
     # D12: compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
     # stdout. Run in a per-label scratch dir; harvest that dir's a.out (no a.out
     # means rejected before the emit).
     local cdir="$tmp/${label}.cdir"
+    local out="$cdir/compile.log" err="$cdir/compile.err"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "compile $label failed: $(head -1 "$err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected/no a.out: $(head -1 "$out")"
         return 1
@@ -427,10 +430,13 @@ HERB
 # preserved as an OPT-IN byte-faithfulness cross-check under
 # NATIVE_CODEGEN_ORACLE=c.
 mmd="$tmp/missing_meta_driver.cdir"; rm -rf "$mmd"; mkdir -p "$mmd"
-( cd "$mmd" && "$NATIVE_CODEGEN_COMPILER" <"$tmp/missing_meta_driver.herb" >"$tmp/missing_meta.cc.out" 2>"$tmp/missing_meta.cc.err" )
+mmd_compiled=0
+native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$tmp/missing_meta_driver.herb" "$mmd" && mmd_compiled=1
 [[ -f "$mmd/a.out" ]] && chmod +x "$mmd/a.out"
-if [[ ! -f "$mmd/a.out" ]]; then
-    fail_test "reject missing_new_array_metadata: seed did not compile driver: $(head -1 "$tmp/missing_meta.cc.out") $(head -1 "$tmp/missing_meta.cc.err")"
+if [[ $mmd_compiled -ne 1 ]]; then
+    fail_test "reject missing_new_array_metadata: seed compile of driver failed: $(head -1 "$mmd/compile.log") $(head -1 "$mmd/compile.err")"
+elif [[ ! -f "$mmd/a.out" ]]; then
+    fail_test "reject missing_new_array_metadata: seed did not compile driver: $(head -1 "$mmd/compile.log") $(head -1 "$mmd/compile.err")"
 elif ! { native_codegen_expect_rejection "$mmd/a.out" /dev/null "$tmp/missing_meta.out" "$tmp/missing_meta.err" "ERR 439"; }; then
     fail_test "reject missing_new_array_metadata: expected ERR 439, stdout=$(head -1 "$tmp/missing_meta.out"), stderr=$(head -1 "$tmp/missing_meta.err")"
 elif [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]] && ! { "$HERBERT" "$tmp/missing_meta_driver.herb" >"$tmp/missing_meta.cref.out" 2>/dev/null; cmp -s "$tmp/missing_meta.out" "$tmp/missing_meta.cref.out"; }; then

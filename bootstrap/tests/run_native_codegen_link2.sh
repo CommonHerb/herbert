@@ -75,13 +75,11 @@ HERB
 for probe_name in p1 p2 p3; do
     probe="$tmp/$probe_name.herb"
     elf="$tmp/$probe_name.elf"
-    err_file="$tmp/$probe_name.compile.err"
-    out_file="$tmp/$probe_name.compile.out"
     cdir="$tmp/$probe_name.cdir"
+    err_file="$cdir/compile.err"
+    out_file="$cdir/compile.log"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < "$probe" > "$out_file" 2>"$err_file" )
-    rc=$?
-    if [[ $rc -ne 0 ]]; then
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
         echo "FAIL: stack/native_compile_fragment.herb (compile $probe_name failed: $(cat "$err_file" | head -1))"
         exit 1
     fi
@@ -342,15 +340,18 @@ check_accept() {
     local expected_hex="$4"
     total=$((total + 1))
     local elf_file="$tmp/accept_${label}.elf"
-    local err_file="$tmp/accept_${label}.err"
-    local out_file="$tmp/accept_${label}.compile.out"
     local rt_file="$tmp/accept_${label}.rt"
     local actual_file="$tmp/accept_${label}.actual"
     local expected_file="$tmp/accept_${label}.expected"
 
     local cdir="$tmp/accept_${label}.cdir"
+    local err_file="$cdir/compile.err"
+    local out_file="$cdir/compile.log"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < "$probe_file" > "$out_file" 2>"$err_file" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe_file" "$cdir"; then
+        fail_test "accept $label: compile failed: $(head -1 "$err_file")"
+        return
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "accept $label: no a.out emitted (unexpected rejection?): $(head -1 "$out_file")"
         return

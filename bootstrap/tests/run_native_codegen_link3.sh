@@ -54,17 +54,15 @@ oracle_le64() {
 compile_probe() {
     local name="$1"
     local probe="$tmp/$name.herb"
-    local out="$tmp/$name.compile.out"
-    local err="$tmp/$name.compile.err"
     local elf="$tmp/$name.elf"
     # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
     # stdout. Run it in a per-probe scratch dir and harvest that dir's a.out; no
     # a.out means the program was rejected (it returns before the emit).
     local cdir="$tmp/$name.cdir"
+    local out="$cdir/compile.log"
+    local err="$cdir/compile.err"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < "$probe" >"$out" 2>"$err" )
-    local rc=$?
-    if [[ $rc -ne 0 ]]; then
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
         echo "FAIL: stack/native_compile_fragment.herb (compile $name failed: $(head -1 "$err"))"
         exit 1
     fi
@@ -275,15 +273,18 @@ check_accept() {
     local probe="$2"
     local rt_hex="$3"
     total=$((total + 1))
-    local out="$tmp/accept_${label}.out"
-    local err="$tmp/accept_${label}.err"
     local elf="$tmp/accept_${label}.elf"
     local rt="$tmp/accept_${label}.rt"
     local actual="$tmp/accept_${label}.actual"
     local expected="$tmp/accept_${label}.expected"
     local cdir="$tmp/accept_${label}.cdir"
+    local out="$cdir/compile.log"
+    local err="$cdir/compile.err"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "accept $label: compile failed: $(head -1 "$err")"
+        return
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "accept $label: no a.out emitted (unexpected rejection?): $(head -1 "$out")"
         return

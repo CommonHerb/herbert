@@ -37,13 +37,16 @@ oracle_le64() {
 
 compile_probe() {
     local label="$1" probe="$2" elf="$3"
-    local out="$tmp/${label}.out" err="$tmp/${label}.err"
     # D12: compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
     # stdout. Run in a per-label scratch dir; harvest that dir's a.out (no a.out
     # means rejected before the emit).
     local cdir="$tmp/${label}.cdir"
+    local out="$cdir/compile.log" err="$cdir/compile.err"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "compile $label failed: $(head -1 "$err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
         fail_test "compile $label rejected/no a.out: $(head -1 "$out")"
         return 1

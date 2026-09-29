@@ -52,9 +52,12 @@ compile_probe() {
     # flogger when run -- that is the probe's I/O, unrelated to the a.out file.)
     local cdir="$tmp/$label.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.o" 2>"$tmp/$label.e" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "compile $label failed: $(head -1 "$cdir/compile.err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
-        fail_test "compile $label rejected/no a.out: $(head -1 "$tmp/$label.e")"
+        fail_test "compile $label rejected/no a.out: $(head -1 "$cdir/compile.err")"
         return 1
     fi
     local magic

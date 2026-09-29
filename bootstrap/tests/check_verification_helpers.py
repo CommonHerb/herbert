@@ -20,6 +20,97 @@ def bash(code, *args, env=None, timeout=90):
                           env=env, capture_output=True, timeout=timeout)
 
 
+# The hosted link gates must send every successful compile through
+# native_codegen_compile_success (status 0, stdout exactly "0\n", empty stderr).
+# raw_success_compiles is a heuristic, non-exhaustive census of raw compiler
+# invocations in them; its docstring names what it is tuned to and known misses.
+LINK_GATES = tuple(f'run_native_codegen_link{n}.sh' for n in range(1, 17)) + ('run_native_codegen_rejects.sh',)
+# One redirection word: an optional descriptor, the operator, one quoted or one bare target.
+_REDIRECTION = r'\d*(?:<<<|<<-?|<[&>]?|&>>?|>[>&|]?)\s*(?:"[^"]*"|\'[^\']*\'|[^\s"\'();&|<>]+)'
+# ( cd "<dir>" && [redirections] [timeout <bound>] [redirections] "$<word>" [redirections]
+CENSUS_SUBSHELL = re.compile(
+    r'\(\s*cd\s+"[^"]+"\s*&&\s*((?:' + _REDIRECTION + r'\s*)*)(?:timeout\s+[^\s<>]+\s*)?'
+    r'((?:' + _REDIRECTION + r'\s*)*)"\$[A-Za-z0-9_{}/.]+"((?:\s*' + _REDIRECTION + r')*)')
+NAMED_COMPILER = re.compile(r'\$\{?(?:NATIVE_CODEGEN_COMPILER|be_elf|tmp\}?/self_compiler\.elf)')
+_REDIRECTION_TARGET = re.compile(r'[<>]&?\s*"?$')
+# Simple commands end at ; && || a pipe (not >|) and parentheses; the separators are kept.
+_COMMAND_SEPARATOR = re.compile(r'(&&|\|\||(?<!>)\||[;()])')
+_GROUP_REDIRECTIONS = re.compile(r'\s*(?:\}|done|fi|esac)?\s*(?:' + _REDIRECTION + r'\s*)+$')
+
+
+def _substitutions(text):
+    """text with each $( ... ) replaced by one word, and the substitutions' own texts."""
+    outer, inner, i = [], [], 0
+    while (j := text.find('$(', i)) >= 0:
+        depth, k = 1, j + 2
+        while k < len(text) and depth:
+            depth += {'(': 1, ')': -1}.get(text[k], 0)
+            k += 1
+        outer.append(text[i:j] + 'SUBSTITUTION')
+        inner.append(text[j + 2:k - 1])
+        i = k
+    return ''.join(outer) + text[i:], inner
+
+
+def _runs_named_compiler(command):
+    return any(not _REDIRECTION_TARGET.search(command[:m.start()]) for m in NAMED_COMPILER.finditer(command))
+
+
+def _raw_compile(text):
+    if any('<' in group for census in CENSUS_SUBSHELL.finditer(text) for group in census.groups()):
+        return True
+    outer, inner = _substitutions(text)
+    parts = _COMMAND_SEPARATOR.split(outer)
+    commands, separators = parts[0::2], [''] + parts[1::2]
+    for index, command in enumerate(commands):
+        if separators[index] == '|' and _runs_named_compiler(command):
+            return True
+        if '<' not in command:
+            continue
+        if _runs_named_compiler(command):
+            return True
+        group = separators[index] == ')' or command.lstrip().startswith(('}', 'done', 'fi', 'esac'))
+        if group and _GROUP_REDIRECTIONS.match(command) and any(map(_runs_named_compiler, commands[:index])):
+            return True
+    return any(map(_raw_compile, inner))
+
+
+def raw_success_compiles(text):
+    r"""One (first line number, logical line) pair per completed logical line the heuristic flags.
+
+    A heuristic census of literal shell text, not a shell parser, and not
+    exhaustive. It is tuned to the compile shapes these 17 gates have used
+    (the named compilers $NATIVE_CODEGEN_COMPILER, $be_elf and
+    $tmp/self_compiler.elf fed stdin with <, and the census subshell
+    ( cd "<dir>" && ... "$VAR" ... ) with its redirections) and to the planted
+    variants in its controls. Any shell form it does not recognise is not
+    checked. Known misses found in review include: escaped quotes inside a
+    quoted redirection target; a backslash continuation on the file's last
+    line; a target mixing quoted and bare text before the compiler word;
+    process substitution feeding stdin before the compiler word; computed
+    command names; stdin set up on another line; and text run through eval,
+    bash -c or source unless the literal shape is on one line. It guards
+    against the old raw pattern coming back. It skips full-line comments and
+    drops a pending continuation at end of file. The dynamic 17-gate test
+    requires every gate to fail with the helper's diagnostic under a
+    stdout-noisy and a stderr-noisy compiler; it does not establish
+    enforcement at every compile site or test a nonzero compiler status.
+    """
+    hits, pending, start = [], None, 0
+    for number, line in enumerate(text.splitlines(), 1):
+        if pending is None:
+            if line.lstrip().startswith('#'):
+                continue
+            pending, start = '', number
+        if line.endswith('\\'):
+            pending += line[:-1]
+            continue
+        logical, pending = pending + line, None
+        if _raw_compile(logical):
+            hits.append((start, logical.strip()))
+    return hits
+
+
 class Helpers(unittest.TestCase):
     def test_assertion_dependent_entrypoints_refuse_optimization(self):
         # Imported desktop guards also protect the two consuming entrypoints.
@@ -200,6 +291,51 @@ sys.exit(215)  # legitimate guest exit codes above 124 are not harness verdicts
             self.assertEqual((p/'compile.status').read_text(), '7\n')
             self.assertIn(b'compiler success contract failed: status=7', scrubbed.stderr)
 
+    def test_compiler_success_bound(self):
+        # The fifth argument bounds the compiler. timeout is resolved on the caller's
+        # PATH, so a compiler-only PATH of /nonexistent still runs bounded; an
+        # exceeded bound records 124; a bound with no timeout refuses unrun, with
+        # its message and status 1 even in a caller running set -e, bare or checked.
+        sleep = shutil.which('sleep')
+        self.assertIsNotNone(sleep)
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d); (p/'source.herb').write_bytes(b'')
+            compiler = p/'compiler'
+            compiler.write_text('#!/bin/sh\n: > "$FIXTURE_MARK"\n'
+                                f'[ -z "$FIXTURE_SLEEP" ] || exec {sleep} "$FIXTURE_SLEEP"\n'
+                                'printf "0\\n"\n')
+            compiler.chmod(0o755)
+            code = 'source "$1" || exit 1; PATH="$6" native_codegen_compile_success "$2" "$3" "$4" /nonexistent "$5"'
+            call = 'native_codegen_compile_success "$2" "$3" "$4" /nonexistent "$5"'
+            # Under set -e a failed lookup used to exit the caller at the lookup,
+            # silently. The trailing exit 0 runs only if the helper returned 0.
+            bare = f'source "$1" || exit 1; set -eu; PATH="$6"; {call}; exit 0'
+            checked = f'source "$1" || exit 1; set -eu; PATH="$6"; if {call}; then exit 0; else exit "$?"; fi'
+            caller = os.environ['PATH']
+            for label, fixture_sleep, bound, caller_path, status, script in [
+                    ('within bound', '', '30s', caller, 0, code),
+                    ('exceeded bound', '30', '0.3s', caller, 124, code),
+                    ('no timeout on caller PATH', '', '30s', '/nonexistent', None, code),
+                    ('no timeout, bare call under set -e', '', '30s', '/nonexistent', None, bare),
+                    ('no timeout, checked call under set -e', '', '30s', '/nonexistent', None, checked)]:
+                with self.subTest(case=label):
+                    work = p/label.replace(' ', '-').replace(',', ''); work.mkdir()
+                    mark = work/'compiler-ran'
+                    env = dict(os.environ, FIXTURE_MARK=str(mark), FIXTURE_SLEEP=fixture_sleep)
+                    r = bash(script, TESTS/'native_codegen_oracle.sh', compiler, p/'source.herb', work,
+                             bound, caller_path, env=env, timeout=20)
+                    if status is None:
+                        self.assertEqual(r.returncode, 1, r.stderr)
+                        self.assertIn(b'compiler not run: bound 30s needs a timeout executable', r.stderr)
+                        self.assertFalse(mark.exists())
+                        self.assertFalse((work/'compile.status').exists())
+                        continue
+                    self.assertTrue(mark.exists(), r.stderr)
+                    self.assertEqual((work/'compile.status').read_text(), f'{status}\n')
+                    self.assertEqual(r.returncode == 0, status == 0, r.stderr)
+                    if status:
+                        self.assertIn(f'compiler success contract failed: status={status}'.encode(), r.stderr)
+
     def test_real_fragment_gates_reject_compiler_failures(self):
         # The real seed emits a valid ELF BEFORE the wrapper corrupts only the
         # invocation envelope. This reproduces artifact-exists false greens;
@@ -251,6 +387,139 @@ esac
                                     self.assertIn(b'compiler success contract failed:', result.stderr)
                                 rejected += 1
             print(f'native compile contract: {controls} controls green; {rejected} malformed invocations rejected')
+
+    def test_real_link_gates_reject_compiler_success_violations(self):
+        # The real seed compiles and publishes a.out BEFORE the wrapper corrupts one
+        # success channel, so only the invocation envelope is wrong. Each gate must
+        # fail with the helper's own message: bare rc != 0 is not enough, because
+        # link10 also fails any non-ELF compiler at its self-compile altimeter. For
+        # the same reason no clean control runs through the wrapper; make test runs
+        # the 17 gates green on the real seed. The wrapper corrupts every compile,
+        # so this proves each gate's first success compile; the lint below
+        # heuristically checks completed logical lines, skipping full-line
+        # comments and dropping a pending continuation at end of file.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            seed = p/'seed'; seed.write_bytes((ROOT/'bootstrap/seed/gen1.seed').read_bytes())
+            seed.chmod(0o755)
+            wrapper = p/'compiler'
+            wrapper.write_text('''#!/bin/sh
+"$LINK_TEST_SEED"
+rc=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+[ -s a.out ] || exit 93
+printf 'seed_status=0 artifact=present\n' >> "$LINK_TEST_RECEIPT"
+case "$LINK_TEST_CORRUPTION" in
+    stdout) printf 'unexpected compiler stdout\n' ;;
+    stderr) printf 'unexpected compiler stderr\n' >&2 ;;
+    *) exit 94 ;;
+esac
+''')
+            wrapper.chmod(0o755)
+            ambient = ('THRONE_COMPILE_TIMEOUT', 'NATIVE_FIXPOINT_TIMEOUT')
+            base = {k: v for k, v in os.environ.items()
+                    if not k.startswith('NATIVE_CODEGEN_') and k not in ambient}
+            rejected = 0
+            for name in LINK_GATES:
+                for corruption in ('stdout', 'stderr'):
+                    with self.subTest(gate=name, corruption=corruption):
+                        receipt = p/f'{name}-{corruption}.receipt'
+                        env = dict(base, NATIVE_CODEGEN_COMPILER=str(wrapper), NATIVE_CODEGEN_ORACLE='golden',
+                                   HERBERT='/bin/false', LINK_TEST_SEED=str(seed),
+                                   LINK_TEST_RECEIPT=str(receipt), LINK_TEST_CORRUPTION=corruption)
+                        result = subprocess.run(['bash', str(TESTS/name)], env=env,
+                                                capture_output=True, timeout=900)
+                        evidence = (name, corruption, result.returncode, result.stdout[-1500:], result.stderr[-1500:])
+                        self.assertTrue(receipt.is_file(), evidence)
+                        self.assertIn('seed_status=0 artifact=present\n', receipt.read_text())
+                        self.assertNotEqual(result.returncode, 0, evidence)
+                        self.assertIn(b'compiler success contract failed:', result.stderr, evidence)
+                        rejected += 1
+            print(f'link compile contract: {rejected} malformed invocations rejected by {len(LINK_GATES)} gates')
+
+    def test_link_gates_route_success_compiles_through_helper(self):
+        # The dynamic test above reaches only each gate's first success compile.
+        # This lint checks every line of the 17 gates: none may hold a raw compiler
+        # invocation of a shape raw_success_compiles recognises (a bounded syntax
+        # census, not a shell parser).
+        gates = [TESTS/name for name in LINK_GATES]
+        self.assertEqual(len(gates), 17)
+        for gate in gates:
+            with self.subTest(gate=gate.name):
+                text = gate.read_text()
+                self.assertEqual(raw_success_compiles(text), [])
+                calls = [l for l in text.splitlines()
+                         if not l.lstrip().startswith('#') and 'native_codegen_compile_success ' in l]
+                self.assertTrue(calls, 'gate has no helper call left to guard')
+        # Planted mutants: every raw shape the census found, and others the lint
+        # claims, must be flagged exactly once at the planted line.
+        host = (TESTS/'run_native_codegen_link5.sh').read_text().splitlines()
+        anchor = next(i for i, l in enumerate(host) if 'native_codegen_compile_success ' in l)
+        planted = [
+            '    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < "$probe" > "$out_file" 2>"$err_file" )',
+            '( cd "$frag_cdir" && "$NATIVE_CODEGEN_COMPILER" <"$fragment" >"$tmp/frag.cc.out" 2>"$tmp/frag.cc.err" )',
+            '        ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$be" >/dev/null 2>&1 )',
+            '        ( cd "$cdir" && "$be_elf" <"$probe" >"$out" 2>"$err" )',
+            '    ( cd "$nd" && "$tmp/self_compiler.elf" <"$tmp/self_host_probe.herb" >"$tmp/o" 2>"$tmp/e" )',
+            '    ( cd "$cdir" && timeout "$compile_bound" "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/o" 2>"$tmp/e" )',
+            '        ( cd "$g2d" && timeout "$fix_timeout" "$tmp/self_compiler.elf" <"$backend" >"$tmp/o" 2>"$tmp/e" )',
+            '    ( cd "$cdir" && "$PROBE_COMPILER" <"$probe" >"$out" 2>"$err" )',
+            '    "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err"',
+            '    (cd $cdir && $NATIVE_CODEGEN_COMPILER < $probe)',
+            '    ( cd "$cdir" && "${NATIVE_CODEGEN_COMPILER}" <"$probe" )',
+            '    ( cd "$nd" && "$tmp/self_compiler.elf" "$extra" <"$probe" )',
+            '    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <<<"$source" )',
+            '    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" \\\n        <"$probe" >"$out" 2>"$err" )',
+            # stdin before the compiler word or after other redirections (review R2),
+            # through process substitution, on a group, or from a pipe
+            '    ( cd "$cdir" && <"$probe_file" "$NATIVE_CODEGEN_COMPILER" >"$out_file" 2>"$err_file" )',
+            '    <"$src" "$NATIVE_CODEGEN_COMPILER" >"$out" 2>"$err"',
+            '    ( cd "$cdir" && <src "$C" >out 2>err )',
+            '    ( cd "$cdir" && "$PROBE_COMPILER" >"$out" <"$probe" )',
+            '    ( cd "$g2d" && 2>"$err" <"$backend" timeout "$fix_timeout" "$tmp/self_compiler.elf" >"$out" )',
+            '    ( cd "$cdir" && <"$probe" timeout "$bound" "$PROBE_COMPILER" )',
+            '    "$NATIVE_CODEGEN_COMPILER" "$(printf x)" <"$probe"',
+            '    "$NATIVE_CODEGEN_COMPILER" >"$out" 2>"$err" <"$probe"',
+            '    "$be_elf" 0<"$probe" >"$out"',
+            '    out=$( <"$probe" "$NATIVE_CODEGEN_COMPILER" )',
+            '    "$NATIVE_CODEGEN_COMPILER" < <(printf \'%s\\n\' "$source")',
+            '    { "$NATIVE_CODEGEN_COMPILER"; } <"$probe" >"$out"',
+            '    ( "$NATIVE_CODEGEN_COMPILER" ) <"$probe"',
+            '    cat "$probe" | "$NATIVE_CODEGEN_COMPILER" >"$out"',
+            # a < with no blank before it (review2 R2), including after the timeout bound
+            '    ( cd "$cdir" && $NATIVE_CODEGEN_COMPILER<"$probe_file" >"$out_file" 2>"$err_file" )',
+            '    ( cd "$cdir" && >compile.log<"$probe_file" "$NATIVE_CODEGEN_COMPILER" 2>"$err_file" )',
+            '    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" >compile.log<"$probe_file" 2>"$err_file" )',
+            '    ( cd "$cdir" && timeout "$bound"<"$probe" "$PROBE_COMPILER" )',
+            # digits in the census subshell's variable name
+            '    ( cd "$cdir" && <"$probe_file" "$PROBE_COMPILER_2" )',
+            '    ( cd "$cdir" && <"$probe_file" "${PROBE_COMPILER_2}" )',
+            # a raw census subshell after a clean one on the same line
+            '    ( cd "$cdir" && "$X" >out ); ( cd "$cdir" && <src "$C" >out )',
+            '    ( cd "$cdir" && "$X" >first-output ); ( cd "$cdir" && <"$probe_file" "$C" )',
+            # a backslash-newline inside a word, which bash removes without leaving a blank
+            '    ( cd "$cdir" && $NATIVE_CODEGEN_\\\nCOMPILER <"$probe_file" )',
+            '    ( cd "$cdir" && <"$probe_file" "$PROBE_\\\nCOMPILER_2" )',
+        ]
+        clean = [
+            '    # ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )',
+            '    native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir" "$PATH" "$bound" || return 1',
+            '    gen1_size=$(wc -c <"$tmp/self_compiler.elf")',
+            '    if ! "$elf" <"$rt" >"$actual" 2>/dev/null; then',
+            '''    [[ -f "$NATIVE_CODEGEN_COMPILER" ]] && magic=$(head -c4 "$NATIVE_CODEGEN_COMPILER" | xxd -p | tr -d '\\n')''',
+            '    native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir" || fail_test "$(head -1 <"$cdir/compile.err")"',
+            '    native_codegen_compile_success "$be_elf" "$probe" "$cdir" || fail_test "$(<"$cdir/compile.err")"',
+            '    fail_test "gen1_size=$(wc -c <"$tmp/self_compiler.elf") gen2_size=$(wc -c <"$g2d/a.out")"',
+            '    gen1_size=$(wc -c<"$tmp/self_compiler.elf")',
+        ]
+        for line in planted + clean:
+            with self.subTest(planted=line):
+                text = '\n'.join(host[:anchor + 1] + [line] + host[anchor + 1:]) + '\n'
+                hits = raw_success_compiles(text)
+                if line in planted:
+                    self.assertEqual([number for number, _ in hits], [anchor + 2], hits)
+                else:
+                    self.assertEqual(hits, [])
 
     def test_kernel_summary_reports_gate_status_only(self):
         # Deliberately inert fixtures establish exactly what the aggregate

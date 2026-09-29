@@ -57,7 +57,7 @@ seed_compile_backend() {
     be_elf="$tmp/be_compiler.$key.elf"
     if [[ ! -f "$be_elf" ]]; then
         cdir="$tmp/be_compiler.$key.cdir"; rm -rf "$cdir"; mkdir -p "$cdir"
-        ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$be" >/dev/null 2>&1 )
+        native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$be" "$cdir" || return 1
         [[ -f "$cdir/a.out" ]] || return 1
         cp "$cdir/a.out" "$be_elf"; chmod +x "$be_elf"
     fi
@@ -66,7 +66,6 @@ seed_compile_backend() {
 
 compile_probe() {
     local label="$1" probe="$2" elf="$3" be="${4:-$backend}"
-    local out="$tmp/${label}.out" err="$tmp/${label}.err"
     # D12: the compiler emits its ELF to a byte-pure file "a.out" (do fwriter), not
     # stdout. Run it in a per-label scratch dir and harvest that dir's a.out; a
     # missing a.out means the program was rejected before the emit. (Works for the
@@ -74,9 +73,13 @@ compile_probe() {
     # is the post-D12 backend with only nc_is_tail_call swapped, so main still
     # writes a.out.)
     local cdir="$tmp/${label}.cdir"
+    local out="$cdir/compile.log" err="$cdir/compile.err"
     rm -rf "$cdir"; mkdir -p "$cdir"
     if [[ "$be" == "$backend" ]]; then
-        ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$out" 2>"$err" )
+        if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+            echo "FAIL: stack/native_compile_fragment.herb (compile $label failed: $(head -1 "$err"))"
+            exit 1
+        fi
     else
         # tollgate: seed-compile the mutated backend, then run it on the probe
         # (C-free); preserve C-interpretation as an opt-in a.out cross-check.
@@ -85,7 +88,10 @@ compile_probe() {
             echo "FAIL: stack/native_compile_fragment.herb (compile $label: seed did not compile mutated backend $(basename "$be"))"
             exit 1
         fi
-        ( cd "$cdir" && "$be_elf" <"$probe" >"$out" 2>"$err" )
+        if ! native_codegen_compile_success "$be_elf" "$probe" "$cdir"; then
+            echo "FAIL: stack/native_compile_fragment.herb (compile $label with mutated backend $(basename "$be") failed: $(head -1 "$err"))"
+            exit 1
+        fi
         if [[ "$NATIVE_CODEGEN_ORACLE" == "c" ]]; then
             local ccdir="$tmp/${label}.c.cdir"; rm -rf "$ccdir"; mkdir -p "$ccdir"
             ( cd "$ccdir" && "$HERBERT" "$be" <"$probe" >/dev/null 2>&1 )

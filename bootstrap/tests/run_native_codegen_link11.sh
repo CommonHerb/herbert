@@ -43,9 +43,12 @@ compile_probe() {
     # unaffected -- it still writes its LAY/TARGET layout lines to stdout.)
     local cdir="$tmp/$label.cdir"
     rm -rf "$cdir"; mkdir -p "$cdir"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$probe" >"$tmp/$label.compile.out" 2>"$tmp/$label.compile.err" )
+    if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$probe" "$cdir"; then
+        fail_test "compile $label failed: stdout=$(head -1 "$cdir/compile.log") stderr=$(head -1 "$cdir/compile.err")"
+        return 1
+    fi
     if [[ ! -f "$cdir/a.out" ]]; then
-        fail_test "compile $label rejected/no a.out: stdout=$(head -1 "$tmp/$label.compile.out") stderr=$(head -1 "$tmp/$label.compile.err")"
+        fail_test "compile $label rejected/no a.out: stdout=$(head -1 "$cdir/compile.log") stderr=$(head -1 "$cdir/compile.err")"
         return 1
     fi
     local magic
@@ -183,7 +186,10 @@ layout_via() {
     local driver="$1" input="$2" out="$3"
     if [[ "$layout_driver_for" != "$driver" ]]; then
         local cdir="$tmp/layout_driver.cdir"; rm -rf "$cdir"; mkdir -p "$cdir"
-        ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" <"$driver" >/dev/null 2>&1 )
+        if ! native_codegen_compile_success "$NATIVE_CODEGEN_COMPILER" "$driver" "$cdir"; then
+            fail_test "layout driver: seed compile of the introspection driver failed: $(head -1 "$cdir/compile.err")"
+            return 1
+        fi
         if [[ ! -f "$cdir/a.out" ]]; then
             fail_test "layout driver: seed did not compile the introspection driver"
             return 1
