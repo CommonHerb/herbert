@@ -22,7 +22,13 @@ unknown emulator-side text stay RED in both columns. A third column
 (UNSHIMMED) runs this tree's harness with the helper's exec shim removed, which
 is 9c7004f's helper: GREEN under merge, and under no-merge the NO-SHUTDOWN
 re-rolls and HARNESS-ERROR of GitHub run 36493751576. The helper's argument
-split and the command line of the process it leaves running are checked too.
+split and the command line of the process it leaves running are checked too,
+and a refused call must remove a stale capture, read-only or not, from a
+writable directory, so that the harness cannot grade an earlier boot's bytes as
+this one. In a read-only directory a writable capture must be emptied, and
+whatever is left reported; a read-only capture there can be neither removed
+nor emptied and keeps its bytes, and a caller would still grade them (HF-01's
+residual, pinned here, not closed).
 
 Row J is a static census of the tracked files, Markdown documents aside: it
 fails on a literal direct call of the wrapper anywhere but inside
@@ -41,6 +47,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -786,7 +793,7 @@ def helper_cmdline(bench, rows, routing):
 
 def helper_shapes(bench, rows):
     """Only CAPTURE [-a|--auto-servernum]... COMMAND... reaches the wrapper.
-    Any other shape is refused on stderr with status 2, the capture emptied
+    Any other shape is refused on stderr with status 2, the capture removed
     and nothing run, because the shim can go only between options it knows
     take no argument and the command."""
     probe = 'source "$1" || exit 99; shift; kernel_xvfb_capture "$@"; echo "rc=$?"'
@@ -817,7 +824,7 @@ def helper_shapes(bench, rows):
         r = subprocess.run(['bash', '-c', probe, 'shape', str(HELPER), *args], cwd=directory, env=env,
                            capture_output=True, timeout=30)
         calls = log.read_text().splitlines() if log.exists() else []
-        capture = (directory / 'cap').read_bytes()
+        capture = (directory / 'cap').read_bytes() if (directory / 'cap').exists() else None
         stray = sorted(p.name for p in directory.iterdir() if p.name not in ('cap', 'argv.log'))
         if wrapper_args is None:
             valid_capture = bool(args) and args[0] == 'cap'
@@ -825,13 +832,127 @@ def helper_shapes(bench, rows):
             ok &= expect(label, r.stderr.startswith(b'HARNESS-ERROR: ') and r.stderr.count(b'\n') == 1,
                          f'want one HARNESS-ERROR line on stderr: {r.stderr!r}')
             ok &= expect(label, calls == [], f'{WRAPPER} was run: {calls}')
-            ok &= expect(label, capture == (b'' if valid_capture else b'STALE\n'),
-                         f'capture {capture!r} (a named capture is emptied; nothing else is touched)')
+            ok &= expect(label, capture == (None if valid_capture else b'STALE\n'),
+                         f'capture {capture!r} (a named capture is removed; nothing else is touched)')
             ok &= expect(label, stray == [], f'files created: {stray}')
         else:
             ok = expect(label, r.stdout == b'rc=0\n' and r.stderr == b'', f'{r.stdout!r} {r.stderr!r}')
             ok &= expect(label, calls == [wrapper_args], f'{WRAPPER} arguments {calls}, want {[wrapper_args]}')
             ok &= expect(label, capture == b'ran', f'capture {capture!r}')
+        rows.append((label, ok))
+
+
+# An earlier boot's complete, correct capture: graded, it would pass.
+STALE_CAPTURE = b'earlier boot preamble\n\x9c\xde\x00\xad' + BOCHS_TAIL
+REFUSED = 'kernel_xvfb_capture cannot place its stderr-merging shim'
+UNREMOVED = 'kernel_xvfb_capture could not remove the stale capture'
+EMPTIED = 'emptied it instead'
+NOT_EMPTIED = "or empty it; it is not this boot's output and must not be graded"
+
+
+def refused_stale(bench, rows):
+    """A refused call must leave nothing gradeable at the capture path. An
+    earlier boot's capture there is removed, not truncated: truncation fails on
+    a read-only file, and the harness grades whatever bytes it finds, so a
+    read-only stale capture would pass as a boot that never ran. A capture that
+    cannot be removed (its directory is read-only) is emptied instead if it is
+    writable, and gets a HARNESS-ERROR of its own either way; the refusal status
+    stays 2. A read-only capture in a read-only directory keeps its bytes, and
+    callers would still grade it: the last row pins that report (HF-01's
+    residual), not an ungradable capture."""
+    classify = ('source "$1" || exit 99; source "$2" || exit 98; '
+                'kernel_xvfb_capture bochs_out.txt -e refused bash -c "printf MUST-NOT-RUN"; '
+                'echo "helper_status=$?"; ')
+    label = 'TREE-P-refused-stale-read-only-direct'
+    directory = bench.root / label
+    directory.mkdir()
+    capture = directory / 'bochs_out.txt'
+    capture.write_bytes(STALE_CAPTURE)
+    capture.chmod(0o400)
+    log = directory / 'argv.log'
+    env = dict(bench.env, XVFB_ROUTING='no-merge', XVFB_MODE='clean', XVFB_ARGV_LOG=str(log))
+    r = subprocess.run(['bash', '-c', classify + 'f2__classify_boot "$PWD" "$PWD/graded.bin"', 'refused',
+                        str(HELPER), str(HARNESS)], cwd=directory, env=env, capture_output=True, timeout=30)
+    ok = expect(label, r.stdout == b'helper_status=2\nNO-OUTPUT\n',
+                f'a refused call left a gradeable capture: {r.stdout!r} {r.stderr!r}')
+    ok &= expect(label, not capture.exists() and not (directory / 'graded.bin').exists(),
+                 f"capture left: {capture.exists()}; graded copy made: {(directory / 'graded.bin').exists()}")
+    ok &= expect(label, r.stderr.startswith(b'HARNESS-ERROR: ') and REFUSED.encode() in r.stderr
+                 and r.stderr.count(b'\n') == 1, f'want exactly the refusal line on stderr: {r.stderr!r}')
+    ok &= expect(label, not log.exists(), f'{WRAPPER} was run')
+    rows.append((label, ok))
+
+    # The same through the real shared harness: every boot attempt meets an
+    # earlier boot's read-only capture and a refused call (a test adapter
+    # around this tree's helper; the harness itself passes accepted arguments).
+    adapter = bench.root / 'refused-adapter.sh'
+    source = HELPER.read_text()
+    if expect('TREE-P-refused-stale-read-only-leg', source.count('\nkernel_xvfb_capture() {') == 1,
+              f'{HELPER.name}: the helper definition is not there exactly once'):
+        stale = bench.root / 'stale-capture'
+        stale.write_bytes(STALE_CAPTURE)
+        adapter.write_text(source.replace('\nkernel_xvfb_capture() {', '\ntree_kernel_xvfb_capture() {', 1) + f"""
+kernel_xvfb_capture() {{   # test adapter: an earlier boot's read-only capture, then a refused call
+    cp -- {shlex.quote(str(stale))} "$1" || return 91
+    chmod 400 -- "$1" || return 92
+    tree_kernel_xvfb_capture "$1" -e refused "${{@:2}}"
+}}
+""")
+        r = bench.run('TREE-P-refused-stale-read-only-leg', HARNESS, routing='no-merge', helper=adapter)
+        ok = verdict(r, rc=1, fails=0, harness_errors=2, notes_count=0)
+        ok &= expect(r['label'], 'GREEN probe' not in r['out_lines'], 'a boot that never ran was graded GREEN')
+        ok &= expect(r['label'], any('last=NO-OUTPUT' in line for line in r['out_lines']),
+                     f"want NO-OUTPUT exhaustion: {r['out_lines']}")
+        ok &= expect(r['label'], len(r['snapshots']) == 3, f"{len(r['snapshots'])} attempt snapshot(s), want 3")
+        ok &= expect(r['label'], r['probe'] == b'', f"probe.log {r['probe']!r}; nothing may be graded")
+        refusals = [line for line in r['err_lines'] if line.startswith('HARNESS-ERROR: ') and REFUSED in line]
+        ok &= expect(r['label'], len(refusals) == 3 and not any(UNREMOVED in line for line in r['err_lines']),
+                     f"want three refusals and no unremoved capture: {r['err_lines']}")
+        rows.append((r['label'], ok))
+    else:
+        rows.append(('TREE-P-refused-stale-read-only-leg', False))
+
+    # A capture in a read-only directory cannot be removed. A writable one is
+    # emptied instead, as before, so the harness still sees NO-OUTPUT; a
+    # read-only one keeps its bytes, and only a HARNESS-ERROR marks it (every
+    # current caller ignores that line and would grade it: HF-01's residual).
+    # Both are reported.
+    for kind, mode in (('writable', 0o644), ('read-only', 0o400)):
+        label = f'TREE-P-refused-stale-{kind}-in-read-only-directory'
+        directory = bench.root / label
+        box = directory / 'box'
+        box.mkdir(parents=True)
+        capture = box / 'bochs_out.txt'
+        capture.write_bytes(STALE_CAPTURE)
+        capture.chmod(mode)
+        log = directory / 'argv.log'
+        env = dict(bench.env, XVFB_ROUTING='no-merge', XVFB_MODE='clean', XVFB_ARGV_LOG=str(log))
+        box.chmod(0o500)
+        try:
+            r = subprocess.run(['bash', '-c', classify + 'f2__classify_boot "$PWD" "$3"', 'refused', str(HELPER),
+                                str(HARNESS), str(directory / 'graded.bin')], cwd=box, env=env,
+                               capture_output=True, timeout=30)
+            left = capture.read_bytes() if capture.exists() else None
+        finally:
+            box.chmod(0o700)
+        errors = [line for line in r.stderr.decode(errors='replace').splitlines()
+                  if line.startswith('HARNESS-ERROR: ')]
+        ok = expect(label, r.stdout.startswith(b'helper_status=2\n'), f'{r.stdout!r} {r.stderr!r}')
+        ok &= expect(label, not log.exists(), f'{WRAPPER} was run')
+        ok &= expect(label, any(REFUSED in line for line in errors), f'no refusal line: {errors}')
+        # Without root the directory really is read-only, so the file survives
+        # and must be reported; as root it is simply removed.
+        ok &= expect(label, left is not None or os.geteuid() == 0, 'the capture was removed from a read-only directory')
+        if kind == 'writable':
+            ok &= expect(label, r.stdout == b'helper_status=2\nNO-OUTPUT\n' and left in (None, b''),
+                         f'a writable stale capture must be emptied, not graded: {r.stdout!r} {left!r}')
+            ok &= expect(label, left is None or any(f'{UNREMOVED} bochs_out.txt; {EMPTIED}' in line
+                                                    for line in errors), f'no emptied-instead report: {errors}')
+        else:
+            ok &= expect(label, left in (None, STALE_CAPTURE), f'capture changed to {left!r}')
+            ok &= expect(label, left is None or any(f'{UNREMOVED} bochs_out.txt {NOT_EMPTIED}' in line
+                                                    for line in errors),
+                         f'a stale capture survived with no HARNESS-ERROR naming it: {errors}')
         rows.append((label, ok))
 
 
@@ -1084,6 +1205,7 @@ def main():
                 unshimmed_rows(bench, rows, routing, unshimmed)
         load_guard(bench, rows)
         helper_shapes(bench, rows)
+        refused_stale(bench, rows)
         routing_independent('TREE', tree, tree_boot, rows)
         if legacy is not None:
             routing_independent('LEGACY', old, old_boot, rows)

@@ -75,8 +75,19 @@ kernel_test_cleanup() {
 # note and never signalled. The shim can go only between options known to take
 # no argument and the command, so the only options accepted are -a and
 # --auto-servernum; any other argument shape is refused with a HARNESS-ERROR on
-# stderr and status 2, with the capture emptied and nothing run. Keep this file
-# self-contained: helper tests copy it alone into fixtures.
+# stderr and status 2, and nothing is run. A refused call also removes the
+# capture. Removal needs a writable directory, not a writable file, so a stale
+# capture there, read-only or not, is not left to be graded as this boot. A
+# capture that cannot be removed (in a read-only directory) is emptied instead
+# if it is writable, and either way a second HARNESS-ERROR names what is left.
+# HF-01 residual: a capture that can be neither removed nor emptied, such as a
+# read-only capture in a read-only directory, keeps its bytes. Callers act on
+# neither status 2 nor that line: they classify and grade whatever capture
+# they find, so they would grade those bytes as this boot. No current
+# caller is refused: all 29 call sites pass CAPTURE -a bash -c ..., and each
+# capture lies in a directory its gate or the harness made during the same
+# run, under its own mktemp -d directory.
+# Keep this file self-contained: helper tests copy it alone into fixtures.
 kernel_xvfb_capture() { # CAPTURE [-a|--auto-servernum]... COMMAND [ARG]...  -> xvfb-run's own exit status
     local capture="${1-}" side here pid pids="" text rc=0 got options=()
     if (( $# )); then shift; fi
@@ -85,8 +96,21 @@ kernel_xvfb_capture() { # CAPTURE [-a|--auto-servernum]... COMMAND [ARG]...  -> 
         shift
     done
     if [[ -z "$capture" || "$capture" == -* || $# -eq 0 || "$1" == -* ]]; then
-        # Emptied, not left alone: a stale capture must never be graded as this boot.
-        [[ -z "$capture" || "$capture" == -* ]] || : > "$capture"
+        # Removed, not left alone: a stale capture must never be graded as this
+        # boot. Callers grade whatever they find. Removal needs a writable
+        # directory and emptying a writable file, so try both; neither failure
+        # may stop the reports below, even under a caller's set -e.
+        if [[ -n "$capture" && "$capture" != -* ]]; then
+            rm -f -- "${capture:?}" || true
+            if [[ -e "$capture" || -L "$capture" ]]; then
+                if [[ -f "$capture" ]]; then : > "$capture" || true; fi
+                if [[ -s "$capture" ]]; then
+                    echo "HARNESS-ERROR: ${0##*/}: kernel_xvfb_capture could not remove the stale capture $capture or empty it; it is not this boot's output and must not be graded" >&2
+                else
+                    echo "HARNESS-ERROR: ${0##*/}: kernel_xvfb_capture could not remove the stale capture $capture; emptied it instead" >&2
+                fi
+            fi
+        fi
         printf -v got ' %q' "$capture" "${options[@]}" "$@"
         echo "HARNESS-ERROR: ${0##*/}: kernel_xvfb_capture cannot place its stderr-merging shim in this argument list (want CAPTURE [-a|--auto-servernum]... COMMAND...); nothing was run; got:$got" >&2
         return 2
