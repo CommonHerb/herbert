@@ -58,6 +58,7 @@ native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -286,34 +287,27 @@ else
 fi
 
 # ---- Bochs (2nd substrate via GRUB; 1 module line + the chase bytes dd'd into the SAME disk) ----
-bochs_run() { # out timeout chasemaparg
-    local out="$1" to="$2" cmap="$3"
-    local kelf; kelf="$(readlink -f "$MKELF")"
-    local d="$work/b.d"; kernel_test_cleanup "$d"; mkdir -p "$d"
-    local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    # pre-run hygiene: a prior crashed Bochs can leave the disk locked. Scoped to THIS gate's own process
-    # (`-f "$work"`; the bochs cmdline carries the absolute $work/b.d bochsrc path) -- a system-wide `pkill bochs`
-    # would false-RED a CONCURRENT gate's boot, the F4 class. (Packet A item 3, 2026-07-05; F2 own-process rule.)
-    pkill -9 -f "${work:?}" 2>/dev/null || true
-    rm -f "$d/disk.img.lock" 2>/dev/null || true
-    ( cd "$d"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf
-      sudo cp "$PROBER" mnt/boot/prober.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/prober.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      # AFTER GRUB is installed and the FS unmounted, dd the per-run author-unknown chase bytes at the ABSOLUTE window
-      # LBA (raw, bypassing FAT -- the kernel reads via ATA PIO at the absolute LBA, never through the filesystem). The
-      # window (LBA 120000.. ~58.6 MiB) is past where GRUB placed its few files, so the FS never allocates those sectors.
-      python3 - disk.img "$DISK_LO" "$cmap" <<'PY'
+# Each attempt builds a FRESH disk in its own directory with the shared harness's CHECKED build
+# (bochs_f2_harness.sh f2__disk_build_class; red-run sweep 2026-09-29), then writes the chase bytes (checked),
+# boots, and is classified by the shared f2__classify_boot. A failed build or chase write, a boot with no output
+# or no shutdown, or an emulator that died of a signal is a harness class: re-rolled (3 attempts), then
+# HARNESS-ERROR, fail-closed (f2_harness_summary below), never graded. Only a COMPLETED boot is extracted and
+# graded, exactly as before. This leg used to build once, unchecked (mkfs's errors discarded), and grade whatever
+# booted, with no retry, so one host mkfs/mount race became a kernel RED. The CHS geometry, the absolute bochsrc
+# path (for the scoped pkill) and the boot line are unchanged.
+bochs_attempt() { # rawout timeout chasemaparg  -> 0: a COMPLETED boot, its capture copied to RAWOUT; 1: harness class in BOCHS_HARNESS_ERR
+    local rawout="$1" to="$2" cmap="$3"
+    : > "$rawout" 2>/dev/null || { BOCHS_HARNESS_ERR="DISK-BUILD(log-init)"; return 1; }   # no stale capture can be graded
+    local kelf; kelf="$(readlink -f "$MKELF")"; local prb; prb="$(readlink -f "$PROBER")"
+    local d; d="$(mktemp -d "$work/b.XXXXXX")" || { BOCHS_HARNESS_ERR="DISK-BUILD(attempt-dir)"; return 1; }
+    f2__bios_find || { BOCHS_HARNESS_ERR="DISK-BUILD(bios-images-missing)"; return 1; }
+    local cfg bcls
+    printf -v cfg 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/prober.bin\n boot\n}\n'
+    bcls="$(f2__disk_build_class "$d" "$cfg" "$kelf:boot/kernel.elf" "$prb:boot/prober.bin")" || { BOCHS_HARNESS_ERR="$bcls"; return 1; }
+    # AFTER GRUB is installed and the FS unmounted, dd the per-run author-unknown chase bytes at the ABSOLUTE window
+    # LBA (raw, bypassing FAT -- the kernel reads via ATA PIO at the absolute LBA, never through the filesystem). The
+    # window (LBA 120000.. ~58.6 MiB) is past where GRUB placed its few files, so the FS never allocates those sectors.
+    if ! python3 - "$d/disk.img" "$DISK_LO" "$cmap" <<'PY'
 import sys
 img, lo = sys.argv[1], int(sys.argv[2])
 cm = {}
@@ -323,11 +317,12 @@ with open(img, 'r+b') as f:
     for i, b in cm.items():
         f.seek((lo + i) * 512); f.write(bytes([b])); f.write(b'\x00' * 511)
 PY
-      # CHS geometry fix (the STEP-0 recipe): a 64 MiB disk with 256 cylinders x 16 heads x 32 spt = 64 MiB so Bochs and
-      # the GRUB/BIOS agree on the geometry; without it Bochs mis-derives CHS and the boot or the ATA LBA28 read drifts.
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
+    then BOCHS_HARNESS_ERR="DISK-BUILD(chase-bytes)"; return 1; fi
+    # CHS geometry fix (the STEP-0 recipe): a 64 MiB disk with 256 cylinders x 16 heads x 32 spt = 64 MiB so Bochs and
+    # the GRUB/BIOS agree on the geometry; without it Bochs mis-derives CHS and the boot or the ATA LBA28 read drifts.
+    cat > "$d/bochsrc.txt" <<BX
+romimage: file=$F2_BXSHARE/BIOS-bochs-legacy
+vgaromimage: file=$F2_VGABIOS
 megs: 64
 ata0-master: type=disk, path=disk.img, mode=flat, cylinders=256, heads=16, spt=32
 boot: disk
@@ -336,14 +331,32 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
-    python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$out"
+    local brc=0
+    ( cd "$d"
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" ) || brc=$?   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+    { printf '%s\n' "$brc" > "$d/boot.status"; } 2>/dev/null   # evidence only
+    local cls; cls="$(f2__classify_boot "$d" "$rawout" "$brc")"
+    [[ "$cls" == COMPLETED ]] || { BOCHS_HARNESS_ERR="$cls"; return 1; }
 }
 if have_bochs; then
     emu_ran=1
-    bochs_run "$work/b" 150 "$CHASEMAP"
-    if python3 "$REF" gradedisk "$work/b" "$KEND" "$CHASEMAP" >/dev/null 2>&1; then ok "(C) Bochs: the addressed block-device chase is byte-identical on the 2nd substrate (GRUB delivers the kernel+prober; Bochs' ATA controller serves the per-run author-unknown sectors dd'd at the absolute window LBA; the emitted chain == disk_chase_expect(chasemap))"
-    else fail_test "(C) Bochs -> $(python3 "$REF" gradedisk "$work/b" "$KEND" "$CHASEMAP" 2>&1 | tr '\n' ';')"; fi
+    # pre-run hygiene: a prior crashed Bochs can leave a disk locked. Scoped to THIS gate's own process
+    # (`-f "$work"`; the bochs cmdline carries the absolute bochsrc path under $work) -- a system-wide `pkill bochs`
+    # would false-RED a CONCURRENT gate's boot, the F4 class. (Packet A item 3, 2026-07-05; F2 own-process rule.)
+    pkill -9 -f "${work:?}" 2>/dev/null || true
+    bochs_done=0
+    for attempt in 1 2 3; do
+        BOCHS_HARNESS_ERR=""
+        if bochs_attempt "$work/b.bochs_out.txt" 150 "$CHASEMAP"; then bochs_done=1; break; fi
+        echo "HARNESS re-roll: ${F2_GATE} (C) Bochs attempt $attempt = $BOCHS_HARNESS_ERR (fresh disk retry; NOT a kernel grade)" >&2
+    done
+    if [[ "$bochs_done" -eq 1 ]]; then
+        python3 "$script_dir/debugcon_frames.py" extract "$work/b.bochs_out.txt" "$work/b"
+        if python3 "$REF" gradedisk "$work/b" "$KEND" "$CHASEMAP" >/dev/null 2>&1; then ok "(C) Bochs: the addressed block-device chase is byte-identical on the 2nd substrate (GRUB delivers the kernel+prober; Bochs' ATA controller serves the per-run author-unknown sectors dd'd at the absolute window LBA; the emitted chain == disk_chase_expect(chasemap))"
+        else fail_test "(C) Bochs -> $(python3 "$REF" gradedisk "$work/b" "$KEND" "$CHASEMAP" 2>&1 | tr '\n' ';')"; fi
+    else
+        f2_harness_error "(C) Bochs" "$BOCHS_HARNESS_ERR"
+    fi
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
@@ -352,6 +365,7 @@ if [[ "$REQUIRE_EMU" != "1" && "$emu_ran" -eq 0 ]]; then
     echo "  NOTE: no emulator ran; byte-pin + white-box gates only (set KERNEL_CODEGEN_REQUIRE_EMU=1 for the silicon gate)"
 fi
 
+f2_harness_summary || exit 1
 echo "native-codegen link53 (platter / FIRST BLOCK DEVICE -- addressed random-access disk READ): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link53 platter / FIRST BLOCK DEVICE -- one ring-3 prober (K=1) pointer-chases $DISK_KHOPS sectors via SYS_DISK_READ (int 0x30, eax=5): each sector's byte 0 NAMES the next sector as a window index, next LBA = $DISK_LO + (b & $DISK_MASK); the module puts the LBA in EBX + byte-offset in ECX, the kernel (CPL0) BOUNDS-CHECKS the LBA to [$DISK_LO,$DISK_HI) (access_ok -- no GRUB/FAT/arbitrary-sector read), does an ATA PIO LBA28 single-sector read with rep insw (0x66 prefix, NOT insd) into its OWN 512B supervisor diskbuf (a CPL3 module cannot PIO -- in al,dx at CPL3 #GPs), and returns [diskbuf+offset] in eax; iret. The first time the kernel reads a persistent, randomly-ADDRESSED block device. Byte-pinned to platter_ref.build_elf (binds the SYS_DISK_READ arm + the 512B diskbuf), white-box assertplatter (the LBA access_ok + the ATA sequence + the diskbuf return), QEMU+KVM+Bochs GREEN on a per-run AUTHOR-UNKNOWN chasemap dd'd into the reserved window AFTER the kernel/prober are frozen, chasemap-differential (re-dd a different map -> old-map grade RED, new-map grade GREEN -- genuine data-dependence on the disk), frozen-lethe differential RED (no SYS_DISK_READ arm -> eax=5 falls to SYS_EXIT -> the prober EXITs before any chain), hostile-LBA out-of-window request returns the sentinel 0 (access_ok holds), hostile-DF (a module that did std before int 0x30) STILL reads the correct disk byte (the kernel cld's before rep insw -> a FORWARD transfer regardless of the module's direction flag, no backward-walk corruption below diskbuf), additive on lethe/cleave/tessera/furlough/homestead/tenement/rollcall/tickover. Output-forced -- the chase order is the late-bound author-unknown disk bytes a serial COM1 stream cannot reproduce. HONEST SCOPE: ONE block device (ATA master), single-sector synchronous PIO reads, a fixed reserved window with a power-of-two size (the prober masks indices in-window); no writes, no DMA, no filesystem, no multi-drive)"

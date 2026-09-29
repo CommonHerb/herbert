@@ -65,6 +65,7 @@ trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # local real-silicon leg (links 44..62 KVM-leg pattern)
@@ -308,44 +309,26 @@ qemu_run() { # label elf v [kvm]
 }
 
 # ---- Bochs runtime (independent second decoder): GRUB multiboot ----
+# On the shared F2 harness (bochs_f2_harness.sh; red-run sweep 2026-09-29): the disk build is checked and every
+# attempt gets a fresh disk; a failed build, a boot with no output or no shutdown, or an emulator that died of a
+# signal is re-rolled (3 attempts) and then fails closed as HARNESS-ERROR (f2_harness_summary below), never as a
+# kernel grade. This leg used to build once, unchecked (mkfs's errors discarded), with no retry, and grade whatever
+# booted. The grade is unchanged and runs on a COMPLETED boot only: exactly one de<proof>ad frame in the capture
+# (hex kept at $tmp/<label>.b/hex.txt, which link62_mutation reads) and the shutdown marker.
 bochs_run() { # label elf v
     local label="$1" elf="$2" v="$3"
     local p ph; p=$(host_proof "$v"); ph=$(printf '%02x' "$p")
     local W="$tmp/$label.b"; mkdir -p "$W"; local kelf; kelf="$(readlink -f "$elf")"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; return 1; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "s" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 64
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-log: bochs_log.txt
-BX
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" )
-    hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
-    local nf sd
-    nf=$(grep -o "de${ph}ad" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
-    sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null || echo 0)
-    if [[ "$nf" -eq 1 ]] && [[ "$sd" -ge 1 ]]; then return 0; fi
-    fail_test "$label Bochs: frames(de${ph}ad)=$nf shutdown=$sd"; return 1
+    local cfg; printf -v cfg 'set timeout=0\nset default=0\nmenuentry "s" {\n multiboot /boot/kernel.elf\n boot\n}\n'
+    l62_bochs_grade() { # rawlog label proofhex
+        local hex="${1%/*}/hex.txt" nf sd
+        hexdump -ve '1/1 "%02x"' "$1" > "$hex" 2>/dev/null
+        nf=$(grep -o "de${3}ad" "$hex" 2>/dev/null | wc -l | tr -d ' ')
+        sd=$(grep -ac 'shutdown requested' "$1" 2>/dev/null); sd="${sd:-0}"
+        if [[ "$nf" -eq 1 ]] && [[ "$sd" -ge 1 ]]; then return 0; fi
+        fail_test "$2 Bochs: frames(de${3}ad)=$nf shutdown=$sd"; return 1
+    }
+    f2_bochs_leg "$label Bochs" l62_bochs_grade "$W/bochs_out.txt" "$cfg" 90 64 "$kelf:boot/kernel.elf" -- "$label" "$ph"
 }
 
 # ---- reject probes (+ twins): still-out-of-subset multi-function sources must NOT emit an image ----
@@ -494,6 +477,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]] && have_qemu; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link62 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link62 / taproot / 46th kernel-arc link: USER CALLS + RECURSION on the sovereign x86-64 freestanding target -- multi-function programs with forward+BACKWARD calls, the ouroboros 8-byte-slot pure-stack ABI, a relocated GUARD-PAGE stack (overflow faults, not corrupts); post-gyre call-form provenance: tail recursion = exact backward tail-E9 (reclamation window + entry target, p1/p3/p4/p5), non-tail recursion = backward E8 (p2); $pass checks: full-image golden hash + static + call-form whitelist via REAL instruction-boundary decoding (no 9A/FF-indirect opcodes; E8 present; every opcode inspected is one the decoder actually walked to) + guard-PD white-box (exactly one non-present PDE at the guard index) + per-form BACKWARD-call value-pin per recursive probe, a >=3-program distinctness panel (distinct recurrences -> distinct proof bytes), QEMU substrate (9 probes incl. param+local coexistence, mutual recursion, a FRAMEFUL main with calls, and the 14-param/15-slot boundary) + Bochs substrate ($BOCHS_PROBES) + KVM real-silicon leg on the accepted-probe value witness (when /dev/kvm present; links 44..62 KVM-leg pattern), single-function byte-identity dispatch (full identity map, no guard), a 1,000,000-deep NON-TAIL guard-fault runtime proof + its shallow completing twin (the tail-recursive proof program now COMPLETES -- that constant-stack capability is link65's gate), and 8 rejects+twins (arity/call-main/>14-params/out-of-subset-callee); graded vs an independent hand-derived host golden on the dual-substrate oracle, no C)"
 exit 0

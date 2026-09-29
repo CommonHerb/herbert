@@ -73,6 +73,7 @@ trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }   # local real-silicon leg (links 44..65 KVM-leg pattern)
@@ -476,44 +477,26 @@ qemu_run() { # label elf v [kvm]
 }
 
 # ---- Bochs runtime (independent second decoder): GRUB multiboot (link62 pattern) ----
+# On the shared F2 harness (bochs_f2_harness.sh; red-run sweep 2026-09-29): the disk build is checked and every
+# attempt gets a fresh disk; a failed build, a boot with no output or no shutdown, or an emulator that died of a
+# signal is re-rolled (3 attempts) and then fails closed as HARNESS-ERROR (f2_harness_summary below), never as a
+# kernel grade. This leg used to build once, unchecked (mkfs's errors discarded), with no retry, and grade whatever
+# booted. The grade is unchanged and runs on a COMPLETED boot only: exactly one de<proof>ad frame in the capture
+# and the shutdown marker.
 bochs_run() { # label elf v
     local label="$1" elf="$2" v="$3"
     local p ph; p=$(host_proof "$v"); ph=$(printf '%02x' "$p")
     local W="$tmp/$label.b"; mkdir -p "$W"; local kelf; kelf="$(readlink -f "$elf")"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; return 1; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "s" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 64
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-log: bochs_log.txt
-BX
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 120 bochs -q -f bochsrc.txt" )
-    hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
-    local nf sd
-    nf=$(grep -o "de${ph}ad" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
-    sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null || echo 0)
-    if [[ "$nf" -eq 1 ]] && [[ "$sd" -ge 1 ]]; then return 0; fi
-    fail_test "$label Bochs: frames(de${ph}ad)=$nf shutdown=$sd"; return 1
+    local cfg; printf -v cfg 'set timeout=0\nset default=0\nmenuentry "s" {\n multiboot /boot/kernel.elf\n boot\n}\n'
+    l65_bochs_grade() { # rawlog label proofhex
+        local hex="${1%/*}/hex.txt" nf sd
+        hexdump -ve '1/1 "%02x"' "$1" > "$hex" 2>/dev/null
+        nf=$(grep -o "de${3}ad" "$hex" 2>/dev/null | wc -l | tr -d ' ')
+        sd=$(grep -ac 'shutdown requested' "$1" 2>/dev/null); sd="${sd:-0}"
+        if [[ "$nf" -eq 1 ]] && [[ "$sd" -ge 1 ]]; then return 0; fi
+        fail_test "$2 Bochs: frames(de${3}ad)=$nf shutdown=$sd"; return 1
+    }
+    f2_bochs_leg "$label Bochs" l65_bochs_grade "$W/bochs_out.txt" "$cfg" 120 64 "$kelf:boot/kernel.elf" -- "$label" "$ph"
 }
 
 # ===================== run =====================
@@ -587,6 +570,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]] && have_qemu; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link65 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link65 / gyre / 49th kernel-arc link: TAIL-CALL OPTIMIZATION on the sovereign x86-64 freestanding target -- eligible tail calls (equal argument words, non-main) reuse the frame and E9-jump to the callee entry, so the language's only iteration form runs at CONSTANT STACK: 1,000,000-deep self / mutual+differing-frame / SWAP (parallel-move) / THREE-CYCLE / 14-arg-boundary tail recursions all COMPLETE and grade hand-derived bytes (distinct-bytes panel), each with a shallow completing twin; $pass checks: full-image golden hash + static + SITE-AWARE white-box (worklist decode: exact tail-window bytes incl. per-arg disp8 copy pairs + reclamation window, every E9/E8 accounted with decoded machine addresses + entry targets, main-exclusion pin, no far/indirect calls, guard-PD + 2-MiB stack-size pin) per accepted probe, frame-zero bare-E9 + frameful-to-frame-zero coverage, non-tail deep recursion STILL diverges (guard survives TCO) + unequal-arity tail-shaped call stays E8, QEMU-TCG substrate + Bochs substrate ($BOCHS_PROBES) + KVM real-silicon leg (when /dev/kvm present; links 44..65 KVM-leg pattern); the pre-gyre seed differential was one-time authoring evidence -- the PERMANENT forcing proof is the M-notco/M-reclaim mutation pair; no C)"
 exit 0

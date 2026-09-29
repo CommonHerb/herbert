@@ -36,6 +36,7 @@ native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -218,25 +219,27 @@ if have_bochs; then
     echo "  SEED SEED=$SEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
     STREAM="$(python3 "$LB" stream "$SEED")"
     kelf="$(readlink -f "$MKELF")"; drv="$(readlink -f "$DRIVER")"
-    d="$work/b.d"; kernel_test_cleanup "$d"; mkdir -p "$d"
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
     pkill -9 -f "${work:?}" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
-    ( cd "$d"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp "$drv" mnt/boot/driver.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/driver.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP" )
-    cat > "$d/bochsrc.txt" <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
+    printf -v bx_cfg 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/driver.bin\n boot\n}\n'
+    # F2 sweep (2026-07-04): the existing retry re-rolls on a missing/truncated trace (is_struct_flake). Add the EXPLICIT
+    # harness detectors from the link60 reference so a harness failure re-rolls instead of grading a confounded trace:
+    # the feeder must LISTEN (bind) + deliver (SENT -> Bochs connected COM1) + the kernel must run THROUGH its shutdown()
+    # tail ('shutdown requested' -> shutdown() writes "Shutdown" to Bochs port 0x8900). Any missing => a re-rollable
+    # emulator/feeder failure, NEVER a false kernel RED.
+    bochs_emit=""; bochs_harness_fail=1; BOCHS_HARNESS_ERR=""
+    for try in 1 2 3; do
+        # a FRESH disk in a fresh directory for every try, built by the shared harness's CHECKED build (red-run
+        # sweep 2026-09-29): this disk used to be built ONCE before the loop, unchecked (mkfs's errors discarded),
+        # so one host mkfs/mount race made every try reboot the same broken disk (link57, GitHub run 36493751576).
+        # A failed build is a harness failure like the others below: re-rolled, never graded.
+        d="$(mktemp -d "$work/b.try$try.XXXXXX")" || { BOCHS_HARNESS_ERR="the boot directory could not be created"; echo "  HARNESS ERROR (Bochs cross-page witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; }
+        f2__bios_find || { BOCHS_HARNESS_ERR="the Bochs BIOS images are missing (DISK-BUILD(bios-images-missing))"; echo "  HARNESS ERROR (Bochs cross-page witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; }
+        if ! bcls="$(f2__disk_build_class "$d" "$bx_cfg" "$kelf:boot/kernel.elf" "$drv:boot/driver.bin")"; then
+            BOCHS_HARNESS_ERR="the checked disk build failed: $bcls"; echo "  HARNESS ERROR (Bochs cross-page witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue
+        fi
+        cat > "$d/bochsrc.txt" <<BX
+romimage: file=$F2_BXSHARE/BIOS-bochs-legacy
+vgaromimage: file=$F2_VGABIOS
 megs: 64
 ata0-master: type=disk, path=disk.img, mode=flat, cylinders=256, heads=16, spt=32
 boot: disk
@@ -246,13 +249,6 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-    # F2 sweep (2026-07-04): the existing retry re-rolls on a missing/truncated trace (is_struct_flake). Add the EXPLICIT
-    # harness detectors from the link60 reference so a harness failure re-rolls instead of grading a confounded trace:
-    # the feeder must LISTEN (bind) + deliver (SENT -> Bochs connected COM1) + the kernel must run THROUGH its shutdown()
-    # tail ('shutdown requested' -> shutdown() writes "Shutdown" to Bochs port 0x8900). Any missing => a re-rollable
-    # emulator/feeder failure, NEVER a false kernel RED.
-    bochs_emit=""; bochs_harness_fail=1; BOCHS_HARNESS_ERR=""
-    for try in 1 2 3; do
         port=$(free_port)
         python3 "$feeder" "$port" $STREAM --hold 150 > "$d/feed.log" 2>&1 & fp=$!
         _ok_listen=1; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && { _ok_listen=0; break; }; sleep 0.1; done

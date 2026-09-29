@@ -76,6 +76,7 @@ native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -710,24 +711,26 @@ bochs_two_boot_query() { # putstream(space-bytes) querystream(space-bytes) b2out
     local putstream="$1" qstream="$2" b2out="$3"
     local kelf; kelf="$(readlink -f "$MKELF")"
     local pu; pu="$(readlink -f "$PUTTER")"; local ge; ge="$(readlink -f "$GETTER")"
-    local d="$work/b.d"; kernel_test_cleanup "$d"; mkdir -p "$d"
+    local d="$work/b.d"
+    # Never rm -rf a boot directory whose disk is still mounted or loop-attached (the shared harness's LEAKED
+    # rule, bochs_f2_harness.sh): leave it in place and stop this attempt as a harness failure.
+    if mountpoint -q "$d/mnt" 2>/dev/null || [[ -n "$(losetup -j "$d/disk.img" 2>/dev/null)" ]]; then
+        BOCHS_HARNESS_ERR="the previous attempt's disk in $d is still mounted or loop-attached; left in place (LEAKED), not rebuilt"; return 1
+    fi
+    kernel_test_cleanup "$d"; mkdir -p "$d"
     local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
     pkill -9 -f "${work:?}" 2>/dev/null || true   # scoped to THIS gate (own process), not system-wide (would kill a concurrent gate's Bochs)
     rm -f "$d/disk.img.lock" 2>/dev/null || true
-    ( cd "$d"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf
-      sudo cp "$pu" mnt/boot/putter.bin; sudo cp "$ge" mnt/boot/getter.bin
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/putter.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP" )
+    # The shared harness's CHECKED build (bochs_f2_harness.sh; red-run sweep 2026-09-29): every step checked, mount
+    # and loop cleaned up on every path, mkfs's errors kept. Same files in the same order, the same BOOT-1 grub.cfg.
+    # This site used to run unchecked (mkfs's errors discarded): a failed mkfs or mount let BOOT-1 boot an unbootable
+    # disk until its 150 s timeout. A failed build now ends this attempt at once as a harness failure (re-rolled).
+    local bx_cfg bcls
+    printf -v bx_cfg 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/putter.bin\n boot\n}\n'
+    if ! bcls="$(f2__disk_build_class "$d" "$bx_cfg" "$kelf:boot/kernel.elf" "$pu:boot/putter.bin" "$ge:boot/getter.bin")"; then
+        BOCHS_HARNESS_ERR="the checked disk build failed: $bcls -- a host harness failure (never booted, never graded), not a kernel miscompile"; return 1
+    fi
     cat > "$d/bochsrc.txt" <<BX
 romimage: file=$BXSHARE/BIOS-bochs-legacy
 vgaromimage: file=$VGABIOS

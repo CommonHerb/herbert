@@ -39,6 +39,7 @@ native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -126,47 +127,26 @@ else
 fi
 
 # ---- Bochs (2nd substrate via GRUB; N `module` lines) ----
-bochs_run() { # e9out
-    local e9="$1"
-    local kelf; kelf="$(readlink -f "$MKELF")"
-    local d="$work/b.d"; mkdir -p "$d"
-    local BXSHARE; BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    local VGABIOS; VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    local i; local cfg=" multiboot /boot/kernel.elf"
-    for i in $(seq 0 $((N-1))); do cp "$work/tw$i.bin" "$d/w$i.bin"; cfg="$cfg
- module /boot/w$i.bin"; done
-    ( cd "$d"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf
-      for i in $(seq 0 $((N-1))); do sudo cp "w$i.bin" "mnt/boot/w$i.bin"; done
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n%s\n boot\n}\n' "$cfg" | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 32
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-log: bochs_log.txt
-BX
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" )
-    python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$e9"
+# On the shared F2 harness (bochs_f2_harness.sh; red-run sweep 2026-09-29): the disk build is checked and every
+# attempt gets a fresh disk; a failed build, a boot with no output or no shutdown, or an emulator that died of a
+# signal is re-rolled (3 attempts) and then fails closed as HARNESS-ERROR, never as a kernel grade. This leg used
+# to build once, unchecked (mkfs's errors discarded), and grade whatever booted, with no retry, so one host
+# mkfs/mount race became a kernel RED. Extraction and the gradeten grade are unchanged; only a COMPLETED boot is
+# graded.
+bochs_grade() { # rawlog  (the f2_bochs_leg contract: 0 GREEN; RED reported through fail_test)
+    if ! python3 "$script_dir/debugcon_frames.py" extract "$1" "$work/b"; then
+        fail_test "(C) Bochs N=$N extraction failed (completed boot; no kernel verdict)"; return 1
+    fi
+    if python3 "$REF" gradeten "$work/b" "$KEND" "$N" "$M" >/dev/null 2>&1; then ok "(C) Bochs N=$N M=$M: the reclamation is byte-identical on the 2nd substrate ($N programs inside $M physical pages; GRUB delivers $N module lines)"; return 0; fi
+    fail_test "(C) Bochs N=$N -> $(python3 "$REF" gradeten "$work/b" "$KEND" "$N" "$M" 2>&1 | tr '\n' ';')"; return 1
 }
 if have_bochs; then
     emu_ran=1
-    bochs_run "$work/b"
-    if python3 "$REF" gradeten "$work/b" "$KEND" "$N" "$M" >/dev/null 2>&1; then ok "(C) Bochs N=$N M=$M: the reclamation is byte-identical on the 2nd substrate ($N programs inside $M physical pages; GRUB delivers $N module lines)"
-    else fail_test "(C) Bochs N=$N -> $(python3 "$REF" gradeten "$work/b" "$KEND" "$N" "$M" 2>&1 | tr '\n' ';')"; fi
+    bx_files=("$(readlink -f "$MKELF"):boot/kernel.elf"); bx_cfg=" multiboot /boot/kernel.elf"
+    for i in $(seq 0 $((N-1))); do bx_files+=("$work/tw$i.bin:boot/w$i.bin"); bx_cfg="$bx_cfg
+ module /boot/w$i.bin"; done
+    printf -v bx_cfg 'set timeout=0\nset default=0\nmenuentry "c" {\n%s\n boot\n}\n' "$bx_cfg"
+    f2_bochs_leg "(C) Bochs N=$N" bochs_grade "$work/b.bochs_out.txt" "$bx_cfg" 150 32 "${bx_files[@]}"
 else
     if [[ "$REQUIRE_EMU" == "1" ]]; then fail_test "Bochs required but not available"; else echo "  SKIP: bochs toolchain not available"; fi
 fi
@@ -175,6 +155,7 @@ if [[ "$REQUIRE_EMU" != "1" && "$emu_ran" -eq 0 ]]; then
     echo "  NOTE: no emulator ran; byte-pin + white-box gates only (set KERNEL_CODEGEN_REQUIRE_EMU=1 for the silicon gate)"
 fi
 
+f2_harness_summary || exit 1
 echo "native-codegen link47 (tenement / MEMORY RECLAMATION): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link47 tenement / MEMORY RECLAMATION -- $N programs reuse $M physical pages; byte-pinned to tenement_ref.build_elf, white-box reclamation machinery, QEMU+KVM+Bochs GREEN, frozen-rollcall differential RED, additive on rollcall/tickover)"

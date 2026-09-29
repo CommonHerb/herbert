@@ -36,7 +36,8 @@
 #               code, so a dead or timed-out QEMU is never scored as a bite. Then the gate's qemu_run must
 #               accept the base and refuse the forge on that same divergent frame, and, where Bochs runs,
 #               the gate's bochs_run must accept the base and refuse the forge after a completed boot
-#               (shutdown seen, the divergent frame in its capture).
+#               (shutdown seen, the divergent frame in its capture). bochs_run boots through the shared
+#               F2 harness (bochs_f2_harness.sh), which this file sources; only a completed boot is graded.
 #   M-twin      a compiler wrapper rewrites the twin's `return nt(4) end` to nt(3)  -> guard_faults' twin leg refuses
 #   M-deep      a compiler wrapper rewrites `return nt(1000000) end` to nt(4)       -> guard_faults' deep leg refuses
 #               (control: guard_faults with the real compiler passes both legs; each wrapper must report
@@ -65,6 +66,10 @@ tmp="$(mktemp -d)"; trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: link62-mutation ($1)"; fail=$((fail + 1)); }
+# The gate's bochs_run, lifted below, boots through the shared F2 harness (red-run sweep 2026-09-29: checked
+# disk build, fresh disk per attempt, harness classes re-rolled and never graded). The harness is shared code,
+# sourced here from the tree exactly as the gate sources it, not lifted.
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: link62-mutation (cannot source bochs_f2_harness.sh)"; exit 1; }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 if ! have_qemu; then echo "NOTE: no QEMU; link62-mutation skipped locally (authoritative in CI)."; [[ "$REQUIRE_EMU" == "1" ]] && { echo "FAIL: REQUIRE_EMU=1 but no QEMU"; exit 1; }; exit 0; fi
 [[ -f "$gate" ]] || { echo "FAIL: link62-mutation (the gate $gate is missing)"; exit 1; }

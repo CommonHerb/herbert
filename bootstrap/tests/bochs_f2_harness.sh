@@ -101,7 +101,7 @@ f2__disk_build_class() { # W grubcfg src:dest...  -> echoes "" on success, else 
       parted -s disk.img set 1 boot on >/dev/null || { echo "parted-setboot"; exit 1; }
       LOOP="$(sudo losetup -fP --show disk.img)" || { LOOP=""; echo "losetup"; exit 1; }
       [[ -n "$LOOP" && -e "${LOOP}p1" ]] || { echo "losetup-part"; exit 1; }
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1 || { echo "mkfs"; exit 1; }
+      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null || { echo "mkfs"; exit 1; }   # banner dropped, errors kept on stderr (the gate log): the next host race records why
       mkdir -p mnt || { echo "mkdir-mnt"; exit 1; }
       sudo mount "${LOOP}p1" mnt || { echo "mount"; exit 1; }
       MOUNTED=1

@@ -52,6 +52,7 @@ trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
@@ -170,58 +171,28 @@ qemu_run_byte() { # label elf byte [kvm]
     fail_test "$label QEMU$kvm byte=$byte: exit=$rc(want $ex) e9=$got want=de${ph}ad nframes=$nf"; return 1
 }
 
+# Bochs on the shared F2 feed harness (bochs_f2_harness.sh; red-run sweep 2026-09-29): the disk build is checked,
+# every attempt gets a fresh disk and a fresh COM1 feeder (launched after the build), and a failed build, a feeder
+# that never LISTENs or never SENDs, a boot with no output or no shutdown, or an emulator that died of a signal is
+# re-rolled (3 attempts) and then fails closed as HARNESS-ERROR (f2_harness_summary below), never as a kernel
+# grade. This leg used to build once, unchecked (mkfs's errors discarded), never re-roll, and print its own
+# HARNESS-ERROR without failing the gate (it returned 1 under REQUIRE_EMU=1, which only skipped the pass count).
+# The grade is unchanged and runs on a COMPLETED boot only: exactly one de<proof>ad frame and the shutdown marker.
 bochs_run_byte() { # label elf byte
     local label="$1" elf="$2" byte="$3"
     local p ph; p=$(host_proof "$byte"); ph=$(printf '%02x' "$p")
     local W="$tmp/$label.b.$byte"; mkdir -p "$W"
-    local BXSHARE VGABIOS
-    BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
-    VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
-    if [[ -z "$BXSHARE" || -z "$VGABIOS" ]]; then fail_test "$label Bochs: BIOS/VGABIOS missing"; return 1; fi
-    ( cd "$W"
-      dd if=/dev/zero of=disk.img bs=1M count=64 status=none
-      parted -s disk.img mklabel msdos >/dev/null
-      parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
-      parted -s disk.img set 1 boot on >/dev/null
-      LOOP="$(sudo losetup -fP --show disk.img)"
-      sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
-      sudo mkdir -p mnt/boot/grub; sudo cp "$elf" mnt/boot/kernel.elf
-      printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
-      sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP" )
-    local port; port=$(free_port)
-    python3 "$feeder" "$port" "$byte" --hold 30 > "$W/feed.log" 2>&1 &
-    local fp=$!; feeder_wait "$W/feed.log" || { fail_test "$label Bochs byte=$byte: feeder never LISTENING"; kill "$fp" 2>/dev/null; return 1; }
-    ( cd "$W"
-      cat > bochsrc.txt <<BX
-romimage: file=$BXSHARE/BIOS-bochs-legacy
-vgaromimage: file=$VGABIOS
-megs: 64
-ata0-master: type=disk, path=disk.img, mode=flat
-boot: disk
-com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port
-port_e9_hack: enabled=1
-display_library: x
-panic: action=report
-log: bochs_log.txt
-BX
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" )
-    wait "$fp" 2>/dev/null
-    hexdump -ve '1/1 "%02x"' "$W/bochs_out.txt" > "$W/hex.txt" 2>/dev/null
-    local nf shutdown listened
-    nf=$(grep -o "de${ph}ad" "$W/hex.txt" 2>/dev/null | wc -l | tr -d ' ')
-    shutdown=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null)
-    listened=$(grep -ac 'LISTENING' "$W/feed.log" 2>/dev/null)
-    # F2-class harness discrimination: a run that never LISTENED or never reached shutdown is a HARNESS
-    # failure, not a kernel RED (fail-closed only under REQUIRE_EMU=1).
-    if [[ "$nf" -eq 1 ]] && [[ "$shutdown" -ge 1 ]]; then return 0; fi
-    if [[ "$listened" -lt 1 || "$shutdown" -lt 1 ]]; then
-        echo "HARNESS-ERROR: $label Bochs byte=$byte (listened=$listened shutdown=$shutdown nframes=$nf) -- emulator/feeder, not a kernel grade"
-        [[ "$REQUIRE_EMU" == "1" ]] && return 1
-        return 0
-    fi
-    fail_test "$label Bochs byte=$byte: frames(de${ph}ad)=$nf shutdown=$shutdown"; return 1
+    local cfg; printf -v cfg 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n boot\n}\n'
+    l63_bochs_grade() { # rawlog label byte proofhex
+        local hex="${1%/*}/hex.txt" nf shutdown
+        hexdump -ve '1/1 "%02x"' "$1" > "$hex" 2>/dev/null
+        nf=$(grep -o "de${4}ad" "$hex" 2>/dev/null | wc -l | tr -d ' ')
+        shutdown=$(grep -ac 'shutdown requested' "$1" 2>/dev/null); shutdown="${shutdown:-0}"
+        if [[ "$nf" -eq 1 ]] && [[ "$shutdown" -ge 1 ]]; then return 0; fi
+        fail_test "$2 Bochs byte=$3: frames(de${4}ad)=$nf shutdown=$shutdown"; return 1
+    }
+    f2_bochs_feed_leg "$label Bochs byte=$byte" l63_bochs_grade "$byte --hold 30" "$W/feed.log" "$W/bochs_out.txt" \
+        "$cfg" 90 64 "$elf:boot/kernel.elf" -- "$label" "$byte" "$ph"
 }
 
 reject_probe() { # label "<full source incl funcs>"
@@ -303,6 +274,7 @@ echo ""
 if [[ "$run_bochs" -eq 0 ]] && have_qemu; then
     echo "NOTE: Bochs leg skipped (no bochs/sudo locally); QEMU substrate + statics + white-box ran. Dual-substrate runs in the kernel-codegen CI workflow."
 fi
+f2_harness_summary || exit 1
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link63 sub-test(s) failed."; exit 1; fi
 echo "PASS: stack/native_compile_fragment.herb (native-codegen link63 / hearken / 47th kernel-arc link: the sovereign x86-64 long64 target's FIRST LATE-BOUND INPUT -- op 45 (input_byte: COM1 poll+read) in taproot's multi-function subset + a UART init emitted once at long_entry; a Herbert-compiled recursive program reads a late-bound COM1 byte b and its graded byte = (b(b+1)/2)&0xff, the far-axis oracle upgraded from a compile-time distinctness panel to genuine LATE-BOUND OUTPUT-FORCING; $pass checks: full-image golden hash + statics + INSTRUCTION-AWARE input white-box (exact 18-byte op-45 window once + exact 56-byte UART block once + objdump 'in al,dx' decode count == 2) + E8-only call whitelist + guard-PD white-box + BACKWARD-call value-pin per probe (hi input-in-main frameless, hc input-in-CALLEE + FRAMEFUL main), QEMU-TCG + KVM real-silicon + Bochs late-bound socket-COM1 substrate over 4 distinct bytes incl 0xFF (same image -> 4 distinct proof bytes: the anti-bake differential), no-input regression (uart ABSENT -> byte-identical taproot path), non-vacuity (single-function input REJECTED), rejects+twins; graded vs a hand-derived host oracle on the dual-substrate late-bound-input oracle, no C)"
 exit 0
