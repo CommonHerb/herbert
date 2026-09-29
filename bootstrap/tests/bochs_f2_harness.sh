@@ -8,13 +8,38 @@
 # What it guarantees (the F2 doctrine, tranche-1a-endorsed fail-closed form):
 #   - every disk-build command is CHECKED, with explicit mount/loop cleanup on every exit path
 #     (umount + lazy retry; never rm -rf over a possibly-live mount; no global `losetup -D`);
-#   - each boot attempt is CLASSIFIED: DISK-BUILD(step) / NO-OUTPUT / NO-SHUTDOWN / EXTRACT-FAILURE
-#     vs COMPLETED (completion witness = the boot ran THROUGH `shutdown requested`);
+#   - each boot attempt is CLASSIFIED: DISK-BUILD(step) / NO-OUTPUT / NO-SHUTDOWN / EMULATOR-CRASH /
+#     EXTRACT-FAILURE vs COMPLETED (completion witness = the boot ran THROUGH `shutdown requested`
+#     and the emulator pipeline then ended without a signal);
 #   - a harness failure re-rolls on a FRESH disk up to 3 attempts; exhaustion emits a greppable
 #     HARNESS-ERROR marker (never the `FAIL:` kernel-RED prefix) and FAILS CLOSED UNCONDITIONALLY
 #     (regardless of KERNEL_CODEGEN_REQUIRE_EMU -- a gate must not PASS with an attempted leg
 #     unadjudicated);
 #   - ONLY a COMPLETED boot is graded as a kernel verdict, by the gate's own grade function.
+#
+# EMULATOR-CRASH (red-run sweep 2026-09-29; FLAKE-LOG "Bochs crash at exit"): a boot that printed
+# the kernel's shutdown banner but whose `bash -c "yes c | timeout ... bochs ..."` pipeline then
+# ended by a signal -- f2__boot's status (kernel_xvfb_capture's, which is xvfb-run's, which is the
+# wrapped command's in both packaged xvfb-run versions) is 128+N for N in 1..64. GitHub run 36583224514:
+# Bochs 2.8 died of SIGSEGV after its exit banner, bash's job report for the pipeline landed in
+# the merged capture, and the strict frame grammar rightly refused it. The class is decided from
+# the exit status, never from the capture's text; the capture is never copied to OUTLOG, so it is
+# never graded; the attempt re-rolls on a fresh disk and three in a row exhaust to HARNESS-ERROR.
+# A timeout kill after the banner (status 137) is the same class. A signal death BEFORE the banner
+# stays NO-SHUTDOWN (link66's fault legs expect exactly that for a reset loop killed at its
+# timeout). A boot whose emulator exited on its own is graded exactly as before, so a malformed
+# capture from a normal exit is still a graded RED. Residual: when xvfb-run's own EXIT-trap
+# cleanup fails it exits 5 (or 1 under its set -e) in place of the command's status (F12), so a
+# crash that coincides with that is graded as before and fails closed on its trailer.
+# Each attempt records f2__boot's status in its boot directory as boot.status (evidence only).
+#
+# PER-ATTEMPT PARSE-ERROR SCOPE: an attempt's own cleanup (f2__attempt_cleanup) runs with the
+# gate-wide KERNEL_PARSE_ERROR_FILE set aside. Nothing inside an attempt parses a capture; grading
+# runs after the attempt returns and still writes the gate-wide file, so an uncaught TraceError
+# still fails the gate at its own fail_test / EXIT trap. Before this, a parse error graded on one
+# attempt made every later attempt's cleanup exit inside the caller's $(...) before its class was
+# printed: link39's re-rolls in run 36583224514 booted, were thrown away, and were logged with a
+# blank class and attempt 1's parse error printed again.
 #
 # Contract for a sourcing gate:
 #   - the gate defines fail_test() (its kernel-RED reporter) before sourcing;
@@ -24,8 +49,8 @@
 #     returns 0 for GREEN, nonzero for RED, and prints its own fail_test message on RED.
 #
 #   f2_bochs_attempt GRUBCFG TIMEOUT_S MEGS OUTLOG SRC:DEST...   (DEST is the in-disk path under mnt/)
-#       -> stdout: COMPLETED | DISK-BUILD(step) | NO-OUTPUT | NO-SHUTDOWN | EXTRACT-FAILURE
-#          on COMPLETED the raw bochs_out.txt has been copied to OUTLOG
+#       -> stdout: COMPLETED | DISK-BUILD(step) | NO-OUTPUT | NO-SHUTDOWN | EMULATOR-CRASH(...) |
+#          EXTRACT-FAILURE; on COMPLETED the raw bochs_out.txt has been copied to OUTLOG
 #   f2_bochs_leg LEG_LABEL GRADE_FN OUTLOG GRUBCFG TIMEOUT_S MEGS SRC:DEST... [-- GRADE_ARGS...]
 #       -> 0 = graded GREEN; 1 = graded RED (grade_fn reported) or harness-exhausted (marker emitted)
 #
@@ -39,7 +64,7 @@
 #   flake, adjudicated by the gate/FLAKE-LOG, never silently).
 #   f2_bochs_feed_attempt FEED_ARGS FEEDLOG GRUBCFG TIMEOUT_S MEGS OUTLOG SRC:DEST...
 #       -> stdout: COMPLETED | DISK-BUILD(step) | FEED-NO-LISTEN | NO-OUTPUT | NO-SHUTDOWN |
-#          FEED-NO-SENT | EXTRACT-FAILURE
+#          EMULATOR-CRASH(...) | FEED-NO-SENT | EXTRACT-FAILURE
 #   f2_bochs_feed_leg LEG_LABEL GRADE_FN FEED_ARGS FEEDLOG OUTLOG GRUBCFG TIMEOUT_S MEGS SRC:DEST... [-- GRADE_ARGS...]
 #       -> as f2_bochs_leg (fresh feeder + fresh disk per attempt)
 #   f2_harness_summary
@@ -120,49 +145,67 @@ BX
       kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt" )
 }
 
-f2__classify_boot() { # W outlog  -> echoes NO-OUTPUT | NO-SHUTDOWN | EXTRACT-FAILURE | COMPLETED
-    local W="$1" outlog="$2"
+f2__signal_death() { # STATUS -> rc 0, echoing N, iff STATUS is a shell's 128+N report of a death by signal N (1..64)
+    [[ "${1-}" =~ ^[0-9]{1,3}$ ]] && (( $1 > 128 && $1 <= 192 )) || return 1
+    echo $(( $1 - 128 ))
+}
+
+f2__classify_boot() { # W outlog [boot_status]  -> echoes NO-OUTPUT | NO-SHUTDOWN | EMULATOR-CRASH(...) | EXTRACT-FAILURE | COMPLETED
+    local W="$1" outlog="$2" bst="${3-}" sig
     if [[ ! -s "$W/bochs_out.txt" ]]; then echo "NO-OUTPUT"; return; fi
     local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"
     if [[ "$sd" -lt 1 ]]; then echo "NO-SHUTDOWN"; return; fi
+    # The kernel reached its shutdown, but the emulator pipeline then ended by a signal (see EMULATOR-CRASH in
+    # the header): not a finished boot, and never graded -- the capture is NOT copied to OUTLOG. Without a
+    # status (a direct caller that passes none) nothing changes.
+    if sig="$(f2__signal_death "$bst")"; then echo "EMULATOR-CRASH(status $bst = signal $sig after the shutdown banner)"; return; fi
     cp "$W/bochs_out.txt" "$outlog" || { echo "EXTRACT-FAILURE"; return; }
     echo "COMPLETED"
+}
+
+f2__attempt_cleanup() { # W -- an attempt's own cleanup, in the attempt's own parse-error scope (header)
+    local KERNEL_PARSE_ERROR_FILE=""
+    kernel_test_cleanup "$@"
 }
 
 f2_bochs_attempt() { # grubcfg timeout_s megs outlog src:dest...
     local grubcfg="$1" tmo="$2" megs="$3" outlog="$4"; shift 4
     : > "$outlog" 2>/dev/null || { echo "DISK-BUILD(log-init)"; return; }   # checked truncate: no stale output can ever be graded
     local W; W="$(mktemp -d)"
-    f2__bios_find || { kernel_test_cleanup "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
+    f2__bios_find || { f2__attempt_cleanup "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
     local bcls
-    bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || kernel_test_cleanup "$W"; echo "$bcls"; return; }
-    f2__boot "$W" "$tmo" "$megs" ""
-    local cls; cls="$(f2__classify_boot "$W" "$outlog")"
-    kernel_test_cleanup "$W"; echo "$cls"
+    bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || f2__attempt_cleanup "$W"; echo "$bcls"; return; }
+    local brc=0
+    f2__boot "$W" "$tmo" "$megs" "" || brc=$?
+    { printf '%s\n' "$brc" > "$W/boot.status"; } 2>/dev/null   # evidence only (retained with the attempt)
+    local cls; cls="$(f2__classify_boot "$W" "$outlog" "$brc")"
+    f2__attempt_cleanup "$W"; echo "$cls"
 }
 
 f2_bochs_feed_attempt() { # feed_args feedlog grubcfg timeout_s megs outlog src:dest...
     local feed_args="$1" feedlog="$2" grubcfg="$3" tmo="$4" megs="$5" outlog="$6"; shift 6
     { : > "$outlog" && : > "$feedlog"; } 2>/dev/null || { echo "DISK-BUILD(log-init)"; return; }   # checked: a stale feed log must never authenticate a dead feeder
     local W; W="$(mktemp -d)"
-    f2__bios_find || { kernel_test_cleanup "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
+    f2__bios_find || { f2__attempt_cleanup "$W"; echo "DISK-BUILD(bios-images-missing)"; return; }
     local bcls
-    bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || kernel_test_cleanup "$W"; echo "$bcls"; return; }
+    bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || f2__attempt_cleanup "$W"; echo "$bcls"; return; }
     # feeder AFTER the build, just before the boot (link31's accept-hold lesson)
     local port; port=$(free_port)
     # shellcheck disable=SC2086
     python3 "$feeder" "$port" $feed_args > "$feedlog" 2>&1 &
     local fp=$!
     local i ok=0; for i in $(seq 1 50); do grep -q LISTENING "$feedlog" 2>/dev/null && { ok=1; break; }; sleep 0.1; done
-    if [[ "$ok" -ne 1 ]]; then kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; kernel_test_cleanup "$W"; echo "FEED-NO-LISTEN"; return; fi
-    f2__boot "$W" "$tmo" "$megs" "com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port"
+    if [[ "$ok" -ne 1 ]]; then kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; f2__attempt_cleanup "$W"; echo "FEED-NO-LISTEN"; return; fi
+    local brc=0
+    f2__boot "$W" "$tmo" "$megs" "com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port" || brc=$?
+    { printf '%s\n' "$brc" > "$W/boot.status"; } 2>/dev/null   # evidence only (retained with the attempt)
     # bounded post-boot grace for the feeder-side SENT (a non-reading guest lets Bochs run the moment the TCP
     # connect completes, possibly before a starved feeder returns from accept()+sendall(); cross-model Codex,
     # tranche 1b): no wait at all on the normal path (SENT is already logged), at most 2s otherwise.
     for i in $(seq 1 20); do grep -q '^SENT' "$feedlog" 2>/dev/null && break; sleep 0.1; done
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
-    local cls; cls="$(f2__classify_boot "$W" "$outlog")"
-    kernel_test_cleanup "$W"
+    local cls; cls="$(f2__classify_boot "$W" "$outlog" "$brc")"
+    f2__attempt_cleanup "$W"
     if [[ "$cls" == "COMPLETED" ]] && ! grep -q '^SENT' "$feedlog" 2>/dev/null; then echo "FEED-NO-SENT"; return; fi
     echo "$cls"
 }
@@ -220,9 +263,10 @@ f2_harness_summary() {
 #     hedged FLAKE-DISCRIMINATED marker (NOT proof against an intermittent same-input race and NOT
 #     a receipt proof; F4/F7 load-correlated Bochs stalls are exactly what a replay cannot
 #     separate -- run quiet);
-#   - harness classes never consume the replay budget; the 3rd harness failure exhausts the leg:
-#     with a pending completed RED -> UNADJUDICATED, fail_test'd (fail-closed unconditionally);
-#     without one -> the HARNESS-ERROR marker (fail-closed via f2_harness_summary);
+#   - harness classes (EMULATOR-CRASH included) never consume the replay budget; the 3rd harness
+#     failure exhausts the leg: with a pending completed RED -> UNADJUDICATED, fail_test'd
+#     (fail-closed unconditionally); without one -> the HARNESS-ERROR marker (fail-closed via
+#     f2_harness_summary);
 #   - a replay GREEN may clear a RED ONLY against identical artifact bytes (hash-freeze; a mismatch
 #     fail_tests and never clears).
 #   GRADE_FN contract for these variants DIFFERS from f2_bochs_leg: it must NOT call fail_test (only

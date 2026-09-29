@@ -41,6 +41,7 @@ verification-helpers:
 	@python3 bootstrap/tests/check_debugcon_frames.py
 	@python3 bootstrap/tests/check_link44_attempts.py
 	@python3 bootstrap/tests/check_bochs_xvfb_capture.py
+	@python3 bootstrap/tests/check_bochs_emulator_crash.py
 
 # Real descriptor error/EOF checks; no ptrace, emulator, or partition change.
 stdin-contract:
