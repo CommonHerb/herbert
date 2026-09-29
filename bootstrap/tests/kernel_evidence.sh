@@ -84,9 +84,10 @@ kernel_test_cleanup() {
 # read-only capture in a read-only directory, keeps its bytes. Callers act on
 # neither status 2 nor that line: they classify and grade whatever capture
 # they find, so they would grade those bytes as this boot. No current
-# caller is refused: all 29 call sites pass CAPTURE -a bash -c ..., and each
+# caller is refused: all 25 call sites pass CAPTURE -a bash -c ..., and each
 # capture lies in a directory its gate or the harness made during the same
-# run, under its own mktemp -d directory.
+# run, under its own mktemp -d directory. (29 until 2026-09-29, when links 47,
+# 62, 63 and 65 moved onto the shared harness's own call.)
 # Keep this file self-contained: helper tests copy it alone into fixtures.
 kernel_xvfb_capture() { # CAPTURE [-a|--auto-servernum]... COMMAND [ARG]...  -> xvfb-run's own exit status
     local capture="${1-}" side here pid pids="" text rc=0 got options=()
