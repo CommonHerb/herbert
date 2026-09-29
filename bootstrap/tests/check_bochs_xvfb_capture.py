@@ -104,15 +104,15 @@ WRONG_ANSWER = 'answer de01ad != de00ad'
 # and is followed by
 #   - blanks and the start of an argument word: a letter, digit, '_', quote,
 #     '$', '/', '.', '~', '{', '\', '`' or '-' (after a quoted name, not the
-#     Python words and, or, not, in, is, if, else, for, which no wrapper call
-#     has as its command); this covers the scope's pre-registered predicate,
+#     Python words and, or, not, in, is, if, else, for; this exclusion also
+#     hides a real command word such as in or in.sh); this covers the scope's pre-registered predicate,
 #     \bNAME\s+-;
 #   - a redirection, with or without blanks: NAME > CAP 2>&1 -a ...,
 #     NAME>CAP ..., NAME < /dev/null ..., NAME &> CAP ...;
 #   - a backslash that continues the line: NAME \, NAME\, "NAME" \;
 # or, in Python, it is 3. one argv element followed on the same line by an
-# option: ['NAME', '-a', ...]. Whatever comes before the name is irrelevant,
-# so assignments, env, command, exec, timeout, sudo, leading redirections, a
+# option: ['NAME', '-a', ...]. Subject to the exclusions and bypasses noted
+# here, what comes before the name does not matter, so assignments, env, command, exec, timeout, sudo, leading redirections, a
 # subshell, a brace group, a pipeline or a command substitution around the
 # call do not hide it. A pipe, list operator, parenthesis or comment right
 # after the name is not an argument: a bare name has no command to run.
@@ -121,7 +121,13 @@ WRONG_ANSWER = 'answer de01ad != de00ad'
 # time ("$(command -v NAME)"); a name split or glued by quoting or by a line
 # continuation inside it; a Python argv whose next element is not an option
 # or that is split across lines; a name built by concatenation (as this file
-# builds it); a file that is not tracked; or a Markdown document. Each shell
+# builds it); a file that is not tracked; or a Markdown document. Review also
+# showed literal bypasses it does not catch: a call glued to an availability
+# probe on the same line (command -v true;/usr/bin/NAME ...), which the probe
+# exclusion swallows; a quoted name followed by a command word the Python-word
+# exclusion matches ("NAME" in ..., "NAME" in.sh ...); and, after a bare or
+# quoted name, a command word starting with a glob (NAME [b]ash ...).
+# It is a guard against copying the old pattern back, not a proof of absence. Each shell
 # shape in CENSUS_SHAPES is run once against a stub wrapper, so it is known to
 # invoke it, and planted in a scratch copy of a real gate file, where the
 # census must name it (row J-census-planted). A real-Bochs matrix's capture
