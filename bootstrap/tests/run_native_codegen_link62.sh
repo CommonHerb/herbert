@@ -232,9 +232,9 @@ if mode=='callwhitelist':
                                # the fixed grading-tail/halt epilogue + every callee body,
                                # contiguous real code with no interleaved data (the GDT and
                                # page tables live strictly after gdt_start).
-    open('/tmp/wb62_cw.bin','wb').write(code[start:end])
+    open(sys.argv[1]+'.cw.bin','wb').write(code[start:end])
     out=subprocess.run(['objdump','-D','-b','binary','-m','i386:x86-64','-M','intel',
-                        f'--adjust-vma={start}','/tmp/wb62_cw.bin'],capture_output=True,text=True).stdout
+                        f'--adjust-vma={start}',sys.argv[1]+'.cw.bin'],capture_output=True,text=True).stdout
     ins=[]
     for ln in out.splitlines():
         # objdump wraps instructions >7 opcode bytes (e.g. a 10-byte movabs rax,imm64 push-
