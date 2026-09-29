@@ -722,7 +722,8 @@ done
 # The hash is deliberately NOT in circuit for any other leg. `SCOPE-R3` draft 1 had six rows
 # "golden-disabled" and seven under the hash, which is backwards: rows that move the image would
 # trip the hash first and their named discriminator would never run. The landed scripts
-# (`link62_mutation.sh:173`, `link65_mutation.sh:139`) call each targeted leg directly and reserve
+# (`link62_mutation.sh`, whose forges each go to the lifted gate leg they target while only
+# `gate_golden` hashes; `link65_mutation.sh:139`) call each targeted leg directly and reserve
 # the hash for `M-golden` alone. These four legs are that hash, and nothing else consults it.
 goldens_dir="$script_dir/link66_goldens"
 

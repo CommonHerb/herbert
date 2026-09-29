@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Mutation proof for native-codegen link 66 (longbuf): every gate leg that guards RUNTIME-INDEXED
-# MEMORY must BITE (go RED) when the capability, its geometry, or its seed channel is broken.
+# Mutation proof for native-codegen link 66 (longbuf): each row breaks the capability, its geometry,
+# or its seed channel and requires a NAMED gate leg to go RED. Which rows run the gate's own code and
+# which run this file's restatement of it is listed under WHO GRADES WHAT below.
 #
 # THE GRADING CONVENTION IS THE LANDED ONE, and it is the opposite of the design's first draft.
-# `link65_mutation.sh:139` and `link62_mutation.sh:173` call each mutant's TARGETED leg directly and
+# `link65_mutation.sh:139` and `link62_mutation.sh` (each forge through the lifted gate leg it
+# targets; only `gate_golden` consults the hash) call each mutant's TARGETED leg directly and
 # reserve the full-image hash for `M-golden` alone. Rows 1, 2, 5, 9, 10 and 15 all MOVE the image, so
 # a hash in circuit would fire first and the named discriminator would never run. Here too: every row
 # is graded on its own leg with the hash out of circuit; `M-golden` is the only row the hash grades,
@@ -17,6 +19,48 @@
 # attribution is the gate's own leg names and a leg cannot drift from the gate it grades. The same is
 # done for the forcing source, the no-buf-op reject probe, the boundary probe generator and the A1
 # seed-channel block: every subject is lifted out of the production gate, never retyped.
+#
+# WHO GRADES WHAT AT RUN TIME (C33 D4a, 2026-09-29). The gate's QEMU graders are lifted the same way:
+# `check_capture`, `derive`, `fault_attribution`, `qemu_draw`, `qemu_boundary`, the `free_port` and
+# `feeder_wait` helpers they call, and the body of the gate's guard-address derivation (`<<'FEOF'`,
+# run here on this file's base forcing image to get the gate's CR2_OVER/CR2_UNDER). Each lifted grader
+# runs in a subshell (`gate_rt`), because the gate's one-argument `derive` would replace this file's
+# four-argument one and the gate's ok()/bad() must not move this file's ledger; there they print
+# `GATE-OK`/`GATE-BAD`. A gate verdict counts only as rc 0 with one GATE-OK, or rc 1 with one
+# GATE-BAD; anything else is a harness failure, not a bite. These rows are graded by that lifted code,
+# each on the verdict AND the exact GATE-BAD message of the check it targets:
+#   gate-control-draw   base image, production harness, fresh draw: qemu_draw ACCEPTS (the control)
+#   M-seedpin-late      row 23's harness: qemu_draw refuses on `transcript/emulator-record (CAPTURE
+#                       bytes differ ...)`, i.e. check_capture on QEMU's own wire record
+#   gate-seedecho       row 21's pinned harness, in a session that booted and graded (row 23's
+#                       preconditions): qemu_draw refuses on its `seed-echo` check
+#   M-guardmiss         row 35: qemu_draw refuses on `guard-witness (a completion frame ...)`
+#   M-guardlo-draw      row 36: qemu_draw refuses on `fault-attribution` (CR2 at guard_lo, not guard_hi)
+#   M-underindex-qemu,  rows 5, 6, 7 on QEMU: qemu_boundary, given the gate's own expectation for the
+#   M-noguardlo-qemu,   unmutated probe (edge `answer`; under `fault` at guard_lo; over `fault` at
+#   M-scale4-qemu       guard_hi), refuses on the check the mutation reaches; the row's own
+#                       attribution runs on the artifacts that same session left
+# STILL MODELLED (this file's code, not the gate's): every other QEMU session runs on this file's
+# `qsession` and predicates -- control-qemu, the seed-freshness pairs, rows 3, 4, 9, 10, 19 and 20's
+# baked program. The ok=0 rows stay there on purpose: the gate's qemu_draw has no early kill, so a
+# guest graded ok=0 would sit blocked until its 120 s timeout. Every Bochs leg (control-bochs, rows
+# 5-7 on Bochs, row 32) is still this file's `bochs_probe` or its own comparison, not the gate's
+# `bochs_draw`, `bochs_boundary_fault`, `bochs_boundary` or `grade_bochs_boundary` (C33 D4b).
+# NOT GUARDED even inside the lifted functions: in qemu_draw, its cap.bin comparisons (cmp against the
+# wire record, check_capture on cap.bin), the feeder's ok=1/answers, the byte count, the witness byte,
+# the feeder exit and the qemu exit status have no row that needs them, and the KVM branch never runs;
+# in check_capture, row 23 needs the byte comparison only (its positional-parse comparison cannot fire
+# while the bytes equal the derivation, which is parsed the same way);
+# in fault_attribution, row 36 needs the CR2 comparison only (its empty-trace and #PF-to-#DF
+# escalation checks have no row that needs them);
+# in qemu_boundary, the feeder-exit, marker, fault-shape (cap length, e9) and fault_attribution checks
+# and the edge probe's completion-frame check have none. Nor is the gate's main loop (which images it
+# grades with which expectation), its ok()/bad() reporting (shimmed here), any gate definition of a
+# command the lifted code calls (cmp, xxd, timeout, python3), or a gate write to FAULT_ADDRS, CR2_OVER
+# or CR2_UNDER other than a literal `NAME=` (the address check below lists them). The values the
+# lifted code reads -- MARKER, SENTHEX, EDGE_PROOF/EDGE_EXIT, N, Q, QEMU_BIN and the spec path -- are
+# this file's, restated from the gate. The healthy-session preconditions on the rerouted rows are this
+# file's, read from the gate's artifacts.
 #
 # ANCHORING (the slice-1 fence, herbert ecf42cb). Every fragment patcher anchors on the ENTITY it
 # mutates -- the named function, then the arm inside it -- never on the surrounding table shape. The
@@ -95,7 +139,16 @@
 #                                                                              2026-09-03, after a blind
 #                                                                              refutation leg built the
 #                                                                              shape and found no chartered
-#                                                                              row covering it
+#                                                                              row covering it. Since D4a
+#                                                                              the gate's own qemu_draw
+#                                                                              grades it (check_capture)
+#
+#   35   M-guardmiss         image    the forcing image's guard access         the gate's qemu_draw
+#                                     262144 -> 262143 (size-preserving):     `guard-witness`: a
+#                                     it lands in the buffer's last slot      completion frame appears
+#   36   M-guardlo-draw      image    the same immediate -> 2^64-1, so the     the gate's qemu_draw
+#                                     graded draw faults in guard_lo, not     `fault-attribution`: the
+#                                     guard_hi                                #PF CR2 is guard_lo's
 #
 # ROW 13 IS GRADED ON THE BOUNDARY PROBE, NOT ON THE FORCING PROGRAM, AND THE REASON IS MEASURED.
 # A3.1 put `bufget(b, 262144)` -- an op 50 -- into the forcing program's MAIN, and main's block-length
@@ -294,6 +347,172 @@ source "$tmp/boundary_src.sh" || { echo "FAIL: link66-mutation (cannot source th
 lift through "$tmp/seedchan.sh"      "the A1 seed channel"                "eq:# ---------------------------------------------------------------- A1: the seed channel"  "sw:echo \"LINK66_SEED="
 grep -q 'LINK66_SEED is set' "$tmp/seedchan.sh" || { echo "FAIL: link66-mutation (extract the A1 seed channel: refusal not found)"; exit 1; }
 grep -q 'echo "LINK66_SEED=' "$tmp/seedchan.sh" || { echo "FAIL: link66-mutation (extract the A1 seed channel: no printed line)"; exit 1; }
+
+# The gate's QEMU runtime graders (C33 D4a). Each function is lifted whole, by its canonical opener to
+# the first line that is exactly `}`; the two helpers are one-liners, lifted as that one line. None
+# of it is sourced at top level: it runs only inside gate_rt's subshell (the booting section).
+#
+# A unique canonical `name() {` line is not enough on its own: bash also accepts `name ()`,
+# `function name`, `function name()`, indented forms and more, and a second definition in any spelling
+# replaces the lifted one when the gate runs (link62_mutation's review R1). So every function lifted
+# here must be defined exactly once in the gate text, counting every spelling defs.py knows, as written
+# and with backslash-newlines joined; a control first plants each spelling for each name and requires
+# the count to see it. The count is textual: comments and heredoc data are scanned too (a mention
+# spelled like a definition fails this file closed), and a definition made at run time (eval of a
+# built string, a sourced file) is invisible to it. defs.py is link62_mutation's, byte for byte.
+gate_rt_functions=(check_capture derive fault_attribution qemu_draw qemu_boundary free_port feeder_wait)
+cat > "$tmp/defs.py" <<'DEFEOF'
+import sys
+# Regex-free, like extract.py (FLAKE-LOG F10). A definition of NAME is NAME as a whole word followed by
+# blanks, "(", blanks and ")", or the whole word `function`, blanks, then NAME. Counted on the text as
+# written and again with every backslash-newline removed: bash drops those before it reads a word (a
+# name may be split by one), but not in a comment, whose backslash cannot hide the next line. Both
+# counts must be exactly 1.
+WORD = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
+BLANK = " \t"
+def skip(text, k):
+    while k < len(text) and text[k] in BLANK: k += 1
+    return k
+def count(text, name):
+    n, i = 0, text.find(name)
+    while i >= 0:
+        j = i + len(name)
+        if (i == 0 or text[i - 1] not in WORD) and (j == len(text) or text[j] not in WORD):
+            k = skip(text, j)
+            paren = text[k:k + 1] == "(" and text[skip(text, k + 1):][:1] == ")"
+            k = i
+            while k > 0 and text[k - 1] in BLANK: k -= 1
+            keyword = k < i and k >= 8 and text[k - 8:k] == "function" and (k == 8 or text[k - 9] not in WORD)
+            n += paren or keyword
+        i = text.find(name, j)
+    return n
+def counts(text, name):
+    return count(text, name), count(text.replace("\\\n", ""), name)
+# Control: each spelling, planted once more for each lifted name, must raise a count; each clean use must not.
+PLANTED = ["function NAME { return 0; }",            # review R1's reproducer
+           "function NAME() { return 0; }", "function  NAME ( ) { return 0; }", "function\tNAME\n{ return 0; }",
+           "NAME () { return 0; }", "NAME( ) { return 0; }", "    NAME() { return 0; }", "\tNAME\t(\t)\t{ return 0; }",
+           "true; NAME() { return 0; }", "if true; then NAME() { return 0; }; fi", "{ NAME() { return 0; }; }",
+           "NAME()\n{ return 0; }", "NAME() ( exit 0 )", "NAME\\\n() { return 0; }",
+           "SPLIT() { return 0; }",               # the name itself split by a backslash-newline
+           "# a comment ending in a backslash\\\nNAME() { return 0; }"]   # only the as-written count sees it
+CLEAN = ['NAME "$elf" guard && pass=$((pass + 1))', 'out="$(NAME "$2" "$3" 2>&1)"', "NAME_x() { return 0; }",
+         "x_NAME() { return 0; }", "my_function NAME"]
+mode, src, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+if mode not in ("check", "control") or not names: raise SystemExit("defs.py: usage: check|control FILE NAME...")
+text = open(src).read()
+bad = []
+for name in names:
+    have = counts(text, name)
+    if mode == "check":
+        if have != (1, 1):
+            bad.append("%s is defined %d times as written and %d with backslash-newlines joined, want 1"
+                       % (name, have[0], have[1]))
+        continue
+    for line in PLANTED + CLEAN:
+        planted = line.replace("SPLIT", name[:3] + "\\\n" + name[3:]).replace("NAME", name)
+        got = counts(text + "\n" + planted + "\n", name)
+        raised = got[0] > have[0] or got[1] > have[1]
+        if raised != (line in PLANTED):
+            bad.append("%r %s" % (planted, "was not counted as a definition" if line in PLANTED
+                                  else "was counted as a definition"))
+print("; ".join(bad))
+sys.exit(1 if bad else 0)
+DEFEOF
+_msg="$(python3 -I "$tmp/defs.py" control "$gate" "${gate_rt_functions[@]}")" \
+    || { echo "FAIL: link66-mutation (uniqueness control: ${_msg:-defs.py failed})"; exit 1; }
+_msg="$(python3 -I "$tmp/defs.py" check "$gate" "${gate_rt_functions[@]}")" \
+    || { echo "FAIL: link66-mutation (uniqueness: ${_msg:-defs.py failed})"; exit 1; }
+: > "$tmp/gate_rt.sh"
+for _fn in check_capture derive fault_attribution qemu_draw qemu_boundary; do
+    lift through "$tmp/gate_rt.$_fn.sh" "$_fn" "sw:$_fn() {" "eq:}"
+    cat "$tmp/gate_rt.$_fn.sh" >> "$tmp/gate_rt.sh"
+done
+for _fn in free_port feeder_wait; do
+    lift through "$tmp/gate_rt.$_fn.sh" "$_fn" "sw:$_fn() {" "ew:; }"
+    cat "$tmp/gate_rt.$_fn.sh" >> "$tmp/gate_rt.sh"
+done
+lift_has() { # file why text -> the lifted text must contain TEXT (a truncated lift fails here, closed)
+    grep -qF -- "$3" "$1" || { echo "FAIL: link66-mutation (extract $2: the lifted text lacks '$3')"; exit 1; }
+}
+lift_has "$tmp/gate_rt.qemu_draw.sh"     qemu_draw     'cw="$(check_capture "$W/wire.log" "$d" 2>&1)"'
+lift_has "$tmp/gate_rt.qemu_draw.sh"     qemu_draw     'fault_attribution "$label" "$W/qemu.log" "$CR2_OVER" || return 1'
+lift_has "$tmp/gate_rt.qemu_boundary.sh" qemu_boundary 'fault_attribution "$label" "$W/qemu.log" "$want_cr2" || return 1'
+lift_has "$tmp/gate_rt.check_capture.sh" check_capture 'L.parse_positional(got[:n + 3 * q], n, q)'
+bash -n "$tmp/gate_rt.sh" 2>"$tmp/gate_rt.syntax" \
+    || { echo "FAIL: link66-mutation (the lifted runtime graders do not parse: $(head -1 "$tmp/gate_rt.syntax"))"; exit 1; }
+_undef="$( ok() { :; }; bad() { :; }; source "$tmp/gate_rt.sh" >/dev/null 2>&1 || { echo SOURCE; exit 0; }
+           for _fn in "${gate_rt_functions[@]}"; do declare -F "$_fn" >/dev/null || echo "$_fn"; done )"
+[[ -z "$_undef" ]] || { echo "FAIL: link66-mutation (the lifted runtime graders do not define:" $_undef ")"; exit 1; }
+# The gate's guard-address derivation, the heredoc BODY only; run below on this file's base forcing
+# image, as the gate runs it on its own. Its opener and the parse line after it are required verbatim,
+# and each of FAULT_ADDRS=, CR2_OVER= and CR2_UNDER= may appear on one gate line only, so the gate
+# cannot feed the body another image, parse its output another way, or assign either address a second
+# time with a plain `NAME=` without this file failing closed. That check is textual, like the others.
+lift between "$tmp/gate_feof.py" "the gate's guard-address derivation" \
+    "eq:FAULT_ADDRS=\"\$(python3 -I - \"\$spec\" \"\$tmp/forcing.d/a.out\" <<'FEOF'" "eq:FEOF"
+for _spec_why in \
+    "has:FAULT_ADDRS=|the guard-address assignment" \
+    "eq:CR2_OVER=\"\${FAULT_ADDRS%% *}\"; CR2_UNDER=\"\${FAULT_ADDRS##* }\"|the guard-address parse" \
+    "has:CR2_OVER=|the guard_hi address" \
+    "has:CR2_UNDER=|the guard_lo address" \
+    ; do
+    assert_unique "${_spec_why%%|*}" "${_spec_why#*|}"
+done
+# The line counts above read the text as written; bash does not. It drops a backslash-newline before it
+# reads a word, so `CR2_OV\` on one line and `ER="$CR2_UNDER"` on the next is a second, ordinary
+# assignment to CR2_OVER that no gate line holds (review R1, 2026-09-29): the real gate then expected
+# guard_lo while this file went on grading its own parsed guard_hi, and the full proof still passed.
+# So assigns.py counts each `NAME=` again, the way defs.py counts definitions: as written and with every
+# backslash-newline removed, both exactly 1. It counts a plain substring, with no word boundary, so the
+# joined count also sees a split name that follows a comment ending in a backslash (bash does not
+# continue the comment; the join glues the comment's last word to the name, and `NAME=` still appears).
+# Its control first plants, for each name, a second assignment in each spelling it lists -- the name
+# split at every position among them -- and requires the count to see it.
+# STILL TEXTUAL, AND IT CLAIMS NOTHING ABOUT A WRITE THAT IS NOT A LITERAL `NAME=` IN THE GATE'S TEXT:
+# `NAME+=`, `NAME[i]=`, a for-loop variable, read, mapfile, printf -v, arithmetic, a nameref, a
+# declaration builtin given a quoted or escaped name or `=` (`declare CR2_OVER\=x` assigns), eval,
+# sourced code or environment-dependent setup. Any of those can change the gate's address unseen here.
+cat > "$tmp/assigns.py" <<'ASGEOF'
+import sys
+# Regex-free, like extract.py and defs.py (FLAKE-LOG F10): `NAME=` counted in the text as written and
+# again with every backslash-newline removed. Both counts must be exactly 1.
+def counts(text, name):
+    return text.count(name + "="), text.replace("\\\n", "").count(name + "=")
+# Control: each spelling, planted once more for each name, must raise a count; each clean use must not.
+# SPLIT is the name split by one backslash-newline, planted at every position; review R1's reproducer
+# is `CR2_OV` + backslash-newline + `ER="$CR2_UNDER"`.
+PLANTED = ["NAME=0", "SPLIT=0", 'SPLIT="$CR2_UNDER"', "NAME\\\n=0", "declare -g NAME=0", "local NAME=0",
+           "export NAME=0", "readonly NAME=0", "true; NAME=0", "{ NAME=0; }",
+           "# a comment ending in a backslash\\\nNAME=0", "# a comment ending in a backslash\\\nSPLIT=0"]
+CLEAN = ['echo "$NAME"', 'x="${NAME%% *}"; y="${NAME##* }"', "n=${#NAME}", "NAME_x=0", "# NAME is derived above",
+         'fault_attribution "$label" "$W/qemu.log" "$NAME" || return 1']
+mode, src, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+if mode not in ("check", "control") or not names: raise SystemExit("assigns.py: usage: check|control FILE NAME...")
+text = open(src).read()
+bad = []
+for name in names:
+    have = counts(text, name)
+    if mode == "check":
+        if have != (1, 1):
+            bad.append("%s= appears %d times as written and %d with backslash-newlines joined, want 1"
+                       % (name, have[0], have[1]))
+        continue
+    for line in PLANTED + CLEAN:
+        for k in (range(1, len(name)) if "SPLIT" in line else [0]):
+            planted = line.replace("SPLIT", name[:k] + "\\\n" + name[k:]).replace("NAME", name)
+            got = counts(text + "\n" + planted + "\n", name)
+            raised = got[0] > have[0] or got[1] > have[1]
+            if raised != (line in PLANTED):
+                bad.append("%r %s" % (planted, "was not counted as an assignment" if line in PLANTED
+                                      else "was counted as an assignment"))
+print("; ".join(bad))
+sys.exit(1 if bad else 0)
+ASGEOF
+_msg="$(python3 -I "$tmp/assigns.py" control "$gate" FAULT_ADDRS CR2_OVER CR2_UNDER)" \
+    || { echo "FAIL: link66-mutation (address-assignment control: ${_msg:-assigns.py failed})"; exit 1; }
+_msg="$(python3 -I "$tmp/assigns.py" check "$gate" FAULT_ADDRS CR2_OVER CR2_UNDER)" \
+    || { echo "FAIL: link66-mutation (uniqueness: ${_msg:-assigns.py failed})"; exit 1; }
 
 # ---------------------------------------------------------------- compilers, probes, derivation
 native_codegen_ensure_compiler "$tmp/gen1" || { echo "FAIL: link66-mutation (cannot acquire the C-free gen-1 compiler)"; exit 1; }
@@ -569,38 +788,16 @@ session_green() { # label tag -> 0 iff every condition holds; echoes why not
     return 0
 }
 
-# ---------------------------------------------------------------- bare boundary boots
+# ---------------------------------------------------------------- boundary boots on QEMU
+# Rows 5, 6 and 7 boot their probe through the gate's own qemu_boundary (gate_boundary, in the booting
+# section), which replaced this file's bare boot driver. What stays this file's is each row's own
+# attribution, run on the artifacts the gate's session leaves; these hold what it read.
 B_CAP=""; B_E9=""; B_RC=0; B_FRC=0; B_LOG=""
-qbare() { # label elf
-    local label="$1" elf="$2"
-    # Separate statement, deliberately: bash expands every word of a `local` line BEFORE the
-    # assignments take effect, and `local` is DYNAMICALLY scoped, so `W="$tmp/$label.q"` on the
-    # same line silently reads the CALLER's `label` instead of this one -- which works right up
-    # until a caller names its variable something else.
-    local W; W="$tmp/$label.q"; kernel_test_cleanup "$W"; mkdir -p "$W"
-    local port; port=$(free_port)
-    python3 -I "$feeder" "$port" --cap "$W/cap.bin" --hold 12 > "$W/feed.log" 2>&1 &
-    local fp=$!
-    if ! feeder_wait "$W/feed.log"; then
-        kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; B_CAP="HARNESS-NO-LISTEN"; B_RC=-1; B_FRC=-1; return 1
-    fi
-    # `-d int,cpu_reset` is requested here for the same reason the gate requests it: a review leg was
-    # right that "marker, rc=0, no frame" accepts ANY post-marker triple fault, not the one the row is
-    # named for. TCG traces the exception; the address is then checked, not inferred from an absence.
-    timeout 120 "$QEMU_BIN" -kernel "$elf" -debugcon file:"$W/e9.bin" \
-        -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
-        -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off \
-        -serial chardev:s0 -monitor none -cpu qemu64 -m 64M -d int,cpu_reset -D "$W/qemu.log" >/dev/null 2>&1
-    B_RC=$?
-    wait "$fp" 2>/dev/null; B_FRC=$?
-    B_CAP="$(xxd -p "$W/cap.bin" 2>/dev/null | tr -d '\n')"
-    B_E9="$(xxd -p "$W/e9.bin" 2>/dev/null | tr -d '\n')"
-    B_LOG="$W/qemu.log"
-    return 0
-}
-# The gate's own fault-attribution rule, restated on this side of the fence: a PAGE FAULT (v=0e)
-# whose CR2 is the DERIVED address, escalating to a #DF. Anything else -- a fault somewhere else, a
-# handled fault, a hang -- is not this row's verdict.
+# The gate's fault-attribution rule, restated on this side of the fence. It stays as the boundary
+# rows' OWN attribution, run on the gate's artifacts; the gate's fault_attribution itself is lifted
+# and grades row 36 and the gate control. A PAGE FAULT (v=0e) whose CR2 is the DERIVED address,
+# escalating to a #DF. Anything else -- a fault somewhere else, a handled fault, a hang -- is not this
+# row's verdict.
 fault_at() { # label log want_cr2
     local pf
     if [[ ! -s "$2" ]]; then
@@ -665,6 +862,15 @@ elif mode == "underindex":
     hits = occ(movabs(262143))
     assert len(hits) == 1, "the 262143 immediate occurs %d times (want 1)" % len(hits)
     raw[CO + hits[0]:CO + hits[0] + 11] = movabs((1 << 64) - 1)
+elif mode in ("guardmiss", "guardlo"):
+    # The FORCING image's guard access, `bufget(b, 262144)` in main, whose eleven-byte PUSH_INT is the
+    # image's only 262144 immediate (the constidx mode relies on the same uniqueness). 262143 lands on
+    # the buffer's last slot, so main returns through its tail; 2^64-1 lands in guard_lo. Everything
+    # the graded draw sends is emitted before this access, so the transcript is unchanged.
+    hits = occ(movabs(262144))
+    if len(hits) != 1:
+        raise SystemExit("the 262144 immediate occurs %d times (want 1)" % len(hits))
+    raw[CO + hits[0]:CO + hits[0] + 11] = movabs(262143 if mode == "guardmiss" else (1 << 64) - 1)
 else:
     raise SystemExit("unknown forge %s" % mode)
 open(dst, "wb").write(bytes(raw))
@@ -1362,7 +1568,7 @@ fi
 
 # ---------------------------------------------------------------- the booting rows
 if [[ "$boot_legs" -ne 1 ]]; then
-    echo "  NOTE: the thirteen graded sessions and the six bare boundary boots did NOT run on this host."
+    echo "  NOTE: no booting row ran on this host: not this file's graded sessions, not the draws and boundary boots through the gate's own qemu_draw/qemu_boundary, and no Bochs leg."
 else
 echo "  -- graded sessions on QEMU-TCG (the black-box floor and the seed channel's cross-run half) --"
 
@@ -1391,6 +1597,68 @@ assert img.guard_lo <= under < img.buf_2m, (hex(under), hex(img.guard_lo), hex(i
 print("%016x" % under)
 GEOF
 )" || { echo "FAIL: link66-mutation (cannot derive the low-guard fault address)"; exit 1; }
+# The gate's own two guard addresses: its lifted derivation body, run on this file's base forcing
+# image exactly as the gate runs it on its own. Its guard_lo address must equal the one derived above
+# from the edge probe, or the probes do not share the forcing image's layout and the boundary rows
+# below would grade against the wrong address.
+GATE_FAULT_ADDRS="$(python3 -I - "$spec" "$tmp/base.forcing/a.out" < "$tmp/gate_feof.py")" \
+    || { echo "FAIL: link66-mutation (the gate's lifted guard-address derivation failed on the base forcing image)"; exit 1; }
+GATE_CR2_OVER="${GATE_FAULT_ADDRS%% *}"; GATE_CR2_UNDER="${GATE_FAULT_ADDRS##* }"
+if [[ ! "$GATE_CR2_OVER" =~ ^[0-9a-f]{16}$ || ! "$GATE_CR2_UNDER" =~ ^[0-9a-f]{16}$ ]]; then
+    echo "FAIL: link66-mutation (the gate's lifted guard-address derivation printed '$GATE_FAULT_ADDRS')"; exit 1
+fi
+if [[ "$GATE_CR2_UNDER" != "$CR2_UNDER" ]]; then
+    echo "FAIL: link66-mutation (the gate's guard_lo address $GATE_CR2_UNDER, from the forcing image, is not $CR2_UNDER, from the edge probe)"; exit 1
+fi
+
+# ---------------------------------------------------------------- the gate's own QEMU graders (D4a)
+# gate_rt runs ONE lifted gate grader in a subshell, with the gate's globals set for this call only:
+# a fresh per-call directory as the gate's $tmp (so its <label>.q session directory and its
+# exp.<draw>.bin never meet this file's), the harness under test as the gate's $feeder, the drawn
+# seed halves, N and Q as LINK66_N/LINK66_Q, and the gate's own CR2_OVER. Every draw here is draw 0,
+# so each call's derive writes and reads its own exp.0.bin before anything else runs.
+# The grader writes its lines, and its ok()/bad() as GATE-OK/GATE-BAD, to <dir>.out. It is run
+# directly, never inside $( ): the lifted code backgrounds the feeder and waits for it.
+GATE_OUT=""; GATE_RC=0; GATE_DIR=""; GATE_VERDICT=""; GATE_BAD=""
+gate_rt() { # label feederpath seed32 -- fn args... -> sets GATE_OUT/GATE_RC/GATE_DIR/GATE_VERDICT/GATE_BAD
+    local label="$1" fdr="$2" seed="$3"; shift 3
+    local rd="$tmp/gate.$label"
+    kernel_test_cleanup "$rd"; mkdir -p "$rd"
+    ( ok()  { echo "GATE-OK ${1:-}"; }
+      bad() { echo "GATE-BAD ${1:-}"; }
+      # shellcheck source=/dev/null
+      source "$tmp/gate_rt.sh" || exit 97
+      tmp="$rd"; feeder="$fdr"; DRIVER_PAY="${seed:0:16}"; DRIVER_QRY="${seed:16:16}"; DRIVER_SEED="$seed"
+      LINK66_N="$N"; LINK66_Q="$Q"; CR2_OVER="$GATE_CR2_OVER"
+      "$@" ) > "$rd.out" 2>&1 < /dev/null
+    GATE_RC=$?
+    GATE_OUT="$(cat "$rd.out")"
+    GATE_DIR="$rd/$label.q"
+    sed 's/^/    [gate] /' "$rd.out" | cut -c1-400
+    # A CRASH IS NOT A RED, here as in static_legs: a verdict is rc 0 with exactly one GATE-OK, or rc 1
+    # with exactly one GATE-BAD. Anything else -- an unset variable, a source failure, a lost line --
+    # is NONE, and no row scores on it.
+    local nok nbad; nok="$(grep -c '^GATE-OK ' "$rd.out")"; nbad="$(grep -c '^GATE-BAD ' "$rd.out")"
+    GATE_BAD="$(grep '^GATE-BAD ' "$rd.out" | head -1)"
+    if [[ "$GATE_RC" -eq 0 && "$nok" -eq 1 && "$nbad" -eq 0 ]]; then GATE_VERDICT=ACCEPT
+    elif [[ "$GATE_RC" -eq 1 && "$nbad" -eq 1 && "$nok" -eq 0 ]]; then GATE_VERDICT=REFUSE
+    else GATE_VERDICT=NONE; fi
+}
+# gate_refused label want-GATE-BAD-line -> 0 iff the gate refused with EXACTLY that line; else fail_test
+gate_refused() {
+    local label="$1" want="$2"
+    case "$GATE_VERDICT" in
+        ACCEPT) fail_test "$label: the gate's own grader ACCEPTED it -- the mutation did not bite ($(grep '^GATE-OK ' <<<"$GATE_OUT" | head -1))"; return 1 ;;
+        NONE)   fail_test "$label: the gate's grader reached no verdict (rc=$GATE_RC, GATE-OK/GATE-BAD lines: $(grep -c '^GATE-' <<<"$GATE_OUT")) -- a crash is not a RED"; return 1 ;;
+    esac
+    if [[ "$GATE_BAD" != "$want" ]]; then
+        fail_test "$label: the gate refused, but not on the check this row targets (got '${GATE_BAD}', want '$want')"; return 1
+    fi
+    return 0
+}
+gate_echo_has() { # label text -> 0 iff the gate's diagnostic echo for LABEL contains TEXT (fixed strings)
+    grep -F -- "    $1 LINK66_SEED=" <<<"$GATE_OUT" | tail -1 | grep -qF -- "$2"
+}
 
 run_session() { # label elf feederpath pay qry draw tag [drainmode]
     local label="$1" elf="$2" fdr="$3" pay="$4" qry="$5" d="$6" tag="$7" dm="${8:-eof}"
@@ -1705,35 +1973,165 @@ freshness_row M-seedpin-internal "$tmp/seedchan.sh" "$tmp/feed_pinned.py" 1 \
 freshness_row M-driverpin "$tmp/seedchan.pin.sh" "$feeder" 0 \
     "The harness is UNMUTATED and echoed faithfully, so \`seed-echo\` is GREEN here -- PROVEN above as M-driverpin-seedecho-green, not asserted. \`seed-freshness\` is the only leg that sees a pinned DRIVER, which is why the parent ordered this row."
 
-# --- THE ADDITION'S OWN BOOT: echo-faithful, generation-pinned. Both A1 legs are GREEN against this
+echo "  -- graded draws through the GATE'S OWN qemu_draw (lifted; C33 D4a) --"
+# Only sessions the feeder grades ok=1 go through the gate's qemu_draw: it has no early kill, so a
+# guest graded ok=0 would sit blocked on input until the gate's 120 s timeout. Each of these ends
+# promptly, in the guard fault or, for M-guardmiss, in a completion.
+#
+# --- CONTROL for the qemu_draw rows below: the unmutated forcing image, the production harness
+#     and a fresh draw are ACCEPTED by the gate's own qemu_draw. Without it a refusal below could be
+#     the grading path's, not the mutation's. The qemu_boundary rows further down have no such
+#     control: each is attributed by its exact GATE-BAD line and by its own checks on the session.
+GC="$(draw_seed "$tmp/seedchan.sh")"
+if [[ "${#GC}" -ne 32 ]]; then
+    fail_test "gate-control-draw: the driver did not draw"
+else
+    gate_rt gate-control-draw "$feeder" "$GC" qemu_draw gate-control-draw "$tmp/base.forcing/a.out" "$N" "$Q" 0
+    if [[ "$GATE_VERDICT" == ACCEPT && "$(grep '^GATE-OK ' <<<"$GATE_OUT")" == "GATE-OK gate-control-draw" ]]; then
+        echo "gate-control-draw: the gate's own qemu_draw ACCEPTS the unmutated forcing image with the production harness (every check, fault-attribution at guard_hi included)"
+        scored gate-control-draw
+    else
+        fail_test "gate-control-draw (the gate's own qemu_draw did not accept the unmutated image: verdict=$GATE_VERDICT rc=$GATE_RC ${GATE_BAD}) -- no gate-graded RED below is attributable"
+    fi
+fi
+
+# --- ROW 23, M-seedpin-late: echo-faithful, generation-pinned. Both A1 legs are GREEN against this
 #     harness by construction -- it prints the value it was handed, and two runs print two different
-#     handed values -- so if the driver's independent derivation did not bite, nothing would.
+#     handed values -- so if the gate's second derivation of the transcript did not bite, nothing
+#     would. Graded by the gate's own qemu_draw, and the refusal must be its check_capture on QEMU's
+#     wire record. THE MESSAGE IS PART OF THE VERDICT: this guest's accumulator comes from the pinned
+#     payload, so with check_capture disabled qemu_draw still refuses, at a later check, on the
+#     witness byte (255 draws in 256). "The gate returned 1" alone would not show check_capture bites.
 LATE_SEED="$(draw_seed "$tmp/seedchan.sh")"
 if [[ "${#LATE_SEED}" -ne 32 ]]; then
     fail_test "M-seedpin-late: the driver did not draw"
-elif run_session M-seedpin-late "$tmp/base.forcing/a.out" "$tmp/feed_late.py" "${LATE_SEED:0:16}" "${LATE_SEED:16:16}" 0 late; then
-    late_why="$(session_healthy)"
-    if [[ -n "$late_why" ]]; then
-        fail_test "M-seedpin-late: the session did not grade cleanly ($late_why) -- this row needs the mutated harness to report a HEALTHY GREEN, since that is the whole point"
-    elif [[ "$S_SEED" != "$LATE_SEED" ]]; then
-        fail_test "M-seedpin-late: the harness printed '${S_SEED:-<none>}', not the drawn '$LATE_SEED' -- this row's whole shape is a FAITHFUL echo, so the mutation did not take"
-    elif cmp -s "$S_CAP" "$tmp/exp.late.bin"; then
-        fail_test "M-seedpin-late: the capture EQUALS the driver's own derivation, so the generation pin did not take"
-    else
-        echo "M-seedpin-late bit RED on the DRIVER'S INDEPENDENT DERIVATION: the harness echoed the drawn seed VERBATIM ($S_SEED) and reported a clean ok=1 grade, so \`seed-echo\` and \`seed-freshness\` are BOTH green against it -- and the $WANT_RX-byte capture is NOT the transcript the driver derived from the seed it drew. This is the shape the gate's second derivation exists for, and no chartered row covered it."
+else
+    gate_rt M-seedpin-late "$tmp/feed_late.py" "$LATE_SEED" qemu_draw M-seedpin-late "$tmp/base.forcing/a.out" "$N" "$Q" 0
+    # THE HARNESS PRECONDITIONS, read from the gate's own session (no second boot): a clean ok=1
+    # grade, the exact byte count, a faithful echo, a clean feeder and a guard fault. Then the pin
+    # must have taken: QEMU's wire record differs from the gate's own derivation.
+    late_gl="$(grep -E '^GRADE ' "$GATE_DIR/feed.log" 2>/dev/null | tail -1)"
+    late_sl="$(sed -n 's/^LINK66_SEED=\([0-9a-f]*\).*/\1/p' "$GATE_DIR/feed.log" 2>/dev/null | tail -1)"
+    if [[ "$GATE_VERDICT" == NONE ]]; then
+        fail_test "M-seedpin-late: the gate's qemu_draw reached no verdict (rc=$GATE_RC) -- a crash is not a RED"
+    elif [[ "$late_gl" != *"ok=1"*"answers=$Q"* || "$late_gl" != *"rx=$WANT_RX expected_rx=$WANT_RX extra=0"* ]]; then
+        fail_test "M-seedpin-late: the harness did not report a clean ok=1 grade of exactly $WANT_RX bytes (${late_gl:-<no GRADE line>}) -- this row needs a HEALTHY GREEN from the harness, since that is the whole point"
+    elif [[ "$late_sl" != "$LATE_SEED" ]]; then
+        fail_test "M-seedpin-late: the harness printed '${late_sl:-<none>}', not the drawn '$LATE_SEED' -- this row's whole shape is a FAITHFUL echo, so the mutation did not take"
+    elif ! gate_echo_has M-seedpin-late " qemu-exit=0(want 0 = triple fault) feeder-exit=0 frame=EMPTY(want EMPTY) "; then
+        fail_test "M-seedpin-late: the session did not end in a clean feeder exit and a guard fault ($(grep -F '    M-seedpin-late LINK66_SEED=' <<<"$GATE_OUT" | tail -1))"
+    elif [[ ! -s "$GATE_DIR/wire.log" || ! -s "$tmp/gate.M-seedpin-late/exp.0.bin" ]] || cmp -s "$GATE_DIR/wire.log" "$tmp/gate.M-seedpin-late/exp.0.bin"; then
+        fail_test "M-seedpin-late: QEMU's wire record is missing or EQUALS the gate's own derivation, so the generation pin did not take"
+    elif gate_refused M-seedpin-late "GATE-BAD M-seedpin-late transcript/emulator-record (CAPTURE bytes differ from the derived stream (got $WANT_RX B, want $WANT_RX B))"; then
+        echo "M-seedpin-late bit RED on the GATE'S OWN check_capture, run by its lifted qemu_draw on QEMU's wire record: the harness echoed the drawn seed VERBATIM ($late_sl) and reported a clean ok=1 grade, so \`seed-echo\` and \`seed-freshness\` are BOTH green against it -- and the $WANT_RX-byte record is NOT the transcript the gate derived from the seed it was handed. This is the shape the gate's second derivation exists for, and no chartered row covered it."
         scored M-seedpin-late
     fi
 fi
 
-echo "  -- bare boundary boots: the three rows whose verdict is read off a RUNTIME fault (A2) --"
+# --- gate-seedecho: row 21's pinned harness (it prints and generates from its own constant) through
+#     the gate's qemu_draw. Its session grades ok=1 against its own stream, so it ends promptly, and
+#     the gate must refuse on the seed line before anything else.
+#     THE SESSION MUST HAVE HAPPENED, and the refusal alone does not show it: qemu_draw compares the
+#     seed line before it reads anything else of the session, so a harness that prints the pinned line
+#     and LISTENING and then exits 2 is refused on seed-echo even when QEMU failed to launch (status 1)
+#     or was killed (124). A review leg's R2 scored this row on exactly that, with no capture, no frame
+#     and no GRADE line. So row 23's healthy-session preconditions come first, read from the gate's own
+#     session, and QEMU's own wire record must hold exactly $WANT_RX bytes; without them the row FAILS.
+GS="$(draw_seed "$tmp/seedchan.sh")"
+if [[ "${#GS}" -ne 32 ]]; then
+    fail_test "gate-seedecho: the driver did not draw"
+elif [[ ! -s "$tmp/feed_pinned.py" ]]; then
+    fail_test "gate-seedecho: the pinned harness is missing"
+else
+    gate_rt gate-seedecho "$tmp/feed_pinned.py" "$GS" qemu_draw gate-seedecho "$tmp/base.forcing/a.out" "$N" "$Q" 0
+    se_gl="$(grep -E '^GRADE ' "$GATE_DIR/feed.log" 2>/dev/null | tail -1)"
+    se_wire=""; [[ -f "$GATE_DIR/wire.log" ]] && se_wire="$(wc -c < "$GATE_DIR/wire.log")"
+    if [[ "$GATE_VERDICT" == NONE ]]; then
+        fail_test "gate-seedecho: the gate's qemu_draw reached no verdict (rc=$GATE_RC) -- a crash is not a RED"
+    elif [[ "$se_gl" != *"ok=1"*"answers=$Q"* || "$se_gl" != *"rx=$WANT_RX expected_rx=$WANT_RX extra=0"* ]]; then
+        fail_test "gate-seedecho: the pinned harness did not report a clean ok=1 grade of exactly $WANT_RX bytes (${se_gl:-<no GRADE line>}) -- a seed line from a session that never graded is not a booted refusal"
+    elif ! gate_echo_has gate-seedecho " qemu-exit=0(want 0 = triple fault) feeder-exit=0 frame=EMPTY(want EMPTY) "; then
+        fail_test "gate-seedecho: the session did not end in a clean feeder exit and a guard fault ($(grep -F '    gate-seedecho LINK66_SEED=' <<<"$GATE_OUT" | tail -1))"
+    elif [[ -z "$se_wire" || "$se_wire" -ne "$WANT_RX" ]]; then
+        fail_test "gate-seedecho: QEMU's own wire record is not $WANT_RX bytes (${se_wire:-no wire.log}) -- the emulator did not carry this session"
+    elif gate_refused gate-seedecho "GATE-BAD gate-seedecho seed-echo (harness printed '11111111111111112222222222222222', driver drew '$GS')"; then
+        echo "M-seedpin-internal bit RED on the GATE'S OWN qemu_draw \`seed-echo\` check (gate-seedecho): a booted session whose harness printed its internal constant where the driver drew $GS"
+        scored gate-seedecho
+    fi
+fi
+
+# --- ROW 35, M-guardmiss: the forcing image's guard access moved from 262144 to 262143, the buffer's
+#     last slot. Size-preserving, and every byte the draw sends is emitted before that access, so
+#     the transcript and the witness byte stay right; only the guard witness can see it: main now
+#     returns through its tail, and a completion frame appears where the gate requires a fault.
+if forge guardmiss "$tmp/base.forcing/a.out" "$tmp/m_guardmiss.elf"; then
+    if cmp -s "$tmp/m_guardmiss.elf" "$tmp/base.forcing/a.out"; then
+        fail_test "M-guardmiss: the forge is inert (the image equals the base)"
+    else
+        S="$(draw_seed "$tmp/seedchan.sh")"
+        if [[ "${#S}" -ne 32 ]]; then
+            fail_test "M-guardmiss: the driver did not draw"
+        else
+            gate_rt M-guardmiss "$feeder" "$S" qemu_draw M-guardmiss "$tmp/m_guardmiss.elf" "$N" "$Q" 0
+            gm_e9="$(xxd -p "$GATE_DIR/e9.bin" 2>/dev/null | tr -d '\n')"
+            # The frame is read from the gate's own session and must be the one its message quotes.
+            if [[ -z "$gm_e9" ]]; then
+                fail_test "M-guardmiss: the gate's session recorded no completion frame, so the guest did not complete and the row's mutation did not take (verdict=$GATE_VERDICT ${GATE_BAD})"
+            elif gate_refused M-guardmiss "GATE-BAD M-guardmiss guard-witness (a completion frame '$gm_e9' was emitted -- the guest did NOT fault on the guard page at index 262144, so its storage is not the guarded buffer)"; then
+                echo "M-guardmiss bit RED on the GATE'S OWN qemu_draw \`guard-witness\`: with the guard access one slot short, the guest completed (frame $gm_e9) instead of faulting"
+                scored M-guardmiss
+            fi
+        fi
+    fi
+fi
+
+# --- ROW 36, M-guardlo-draw: the same immediate moved to 2^64-1, so the graded draw still faults
+#     cleanly -- transcript, witness and exit status all right -- but in guard_lo. Only the gate's
+#     fault attribution, which requires the #PF at guard_hi, can see it.
+if forge guardlo "$tmp/base.forcing/a.out" "$tmp/m_guardlo.elf"; then
+    if cmp -s "$tmp/m_guardlo.elf" "$tmp/base.forcing/a.out"; then
+        fail_test "M-guardlo-draw: the forge is inert (the image equals the base)"
+    else
+        S="$(draw_seed "$tmp/seedchan.sh")"
+        if [[ "${#S}" -ne 32 ]]; then
+            fail_test "M-guardlo-draw: the driver did not draw"
+        else
+            gate_rt M-guardlo-draw "$feeder" "$S" qemu_draw M-guardlo-draw "$tmp/m_guardlo.elf" "$N" "$Q" 0
+            if gate_refused M-guardlo-draw "GATE-BAD M-guardlo-draw fault-attribution (page-fault CR2 set is 'CR2=$GATE_CR2_UNDER', want exactly 'CR2=$GATE_CR2_OVER' -- the fault must be AT the derived guard address, not merely somewhere)"; then
+                echo "M-guardlo-draw bit RED on the GATE'S OWN fault_attribution, called by its qemu_draw: the draw faulted at guard_lo ($GATE_CR2_UNDER), not at guard_hi ($GATE_CR2_OVER)"
+                scored M-guardlo-draw
+            fi
+        fi
+    fi
+fi
+
+echo "  -- boundary boots through the GATE'S OWN qemu_boundary: the three rows whose verdict is read off a RUNTIME fault (A2) --"
 # A2 puts rows 5, 6 and 7-runtime on Bochs as well as QEMU, because a fault window is a
 # CPU/MMU-visible value and A11.1 requires such a value to be cross-checked on a second engine
 # before it is written anywhere. Row 16 is deliberately NOT here: the parent ruled on 2026-09-03
 # that its discriminator is the page-directory IMAGE, which no second engine reads differently.
-qfault_row() { # label elf want_cr2 note
-    local label="$1" elf="$2" want_cr2="$3" note="$4"
-    qbare "$label" "$elf" || { fail_test "$label: the feeder never reached LISTENING (HARNESS-ERROR)"; return 1; }
-    echo "    $label :: cap=${B_CAP:-EMPTY} e9=${B_E9:-EMPTY} rc=$B_RC feeder-exit=$B_FRC"
+# On QEMU each row boots its mutant probe ONCE, through the gate's lifted qemu_boundary called with
+# the gate's own expectation for the UNMUTATED probe, and that call must refuse on the check the
+# mutation reaches. The row's own attribution then reads the same session's artifacts (cap.bin,
+# e9.bin, qemu.log) and the gate's own `:: cap=.. e9=.. rc=.. feeder-exit=..` line, so it costs no
+# second boot. The artifacts are what make the refusal attributable: they show the mutant did the
+# named wrong thing, not that the gate or the harness broke.
+gate_boundary() { # label elf gate-expect gate-cr2 -> runs the gate's qemu_boundary; sets B_* from its session; 1 = no session
+    local label="$1" elf="$2" gexp="$3" gcr2="${4:-}"
+    gate_rt "$label" "$feeder" "" qemu_boundary "$label" "$elf" "$gexp" "$gcr2"
+    local sl; sl="$(grep -F -- "    $label :: cap=" <<<"$GATE_OUT" | tail -1)"
+    [[ -n "$sl" ]] || return 1
+    local rest="${sl##* rc=}"
+    B_RC="${rest%% *}"; B_FRC="${sl##* feeder-exit=}"
+    [[ "$B_RC" =~ ^-?[0-9]+$ && "$B_FRC" =~ ^-?[0-9]+$ ]] || return 1
+    B_CAP="$(xxd -p "$GATE_DIR/cap.bin" 2>/dev/null | tr -d '\n')"
+    B_E9="$(xxd -p "$GATE_DIR/e9.bin" 2>/dev/null | tr -d '\n')"
+    B_LOG="$GATE_DIR/qemu.log"
+    return 0
+}
+qfault_row() { # label elf want_cr2 gate-expect gate-cr2 want-GATE-BAD note
+    local label="$1" elf="$2" want_cr2="$3" gexp="$4" gcr2="$5" want_bad="$6" note="$7"
+    gate_boundary "$label" "$elf" "$gexp" "$gcr2" || { fail_test "$label: the gate's qemu_boundary left no session summary (HARNESS-ERROR, not a kernel verdict: ${GATE_BAD:-rc=$GATE_RC})"; return 1; }
     [[ "$B_FRC" -eq 0 ]] || { fail_test "$label: the feeder exited $B_FRC (HARNESS-ERROR, not a kernel verdict)"; return 1; }
     case "$B_CAP" in "$MARKER"*) : ;; *) fail_test "$label: the marker byte was NOT seen -- the probe never ran (cap=${B_CAP:-EMPTY})"; return 1 ;; esac
     # A TIMEOUT IS NOT A FAULT. Under -no-reboot a triple fault makes QEMU EXIT with rc 0 and the
@@ -1746,20 +2144,23 @@ qfault_row() { # label elf want_cr2 note
         fail_test "$label: expected marker-then-FAULT (no answer byte, no completion frame); cap=$B_CAP e9=${B_E9:-EMPTY}"; return 1
     fi
     fault_at "$label" "$B_LOG" "$want_cr2" || return 1
-    echo "$label bit RED: $note (marker seen, then no answer and no completion frame, at the DERIVED fault address, clean launch)"
+    gate_refused "$label" "$want_bad" || return 1
+    echo "$label bit RED through the GATE'S OWN qemu_boundary ($gexp expected): $note (marker seen, then no answer and no completion frame, at the DERIVED fault address, clean launch)"
     scored "$label"; return 0
 }
-qanswer_row() { # label elf note
-    local label="$1" elf="$2" note="$3"
-    qbare "$label" "$elf" || { fail_test "$label: the feeder never reached LISTENING (HARNESS-ERROR)"; return 1; }
+qanswer_row() { # label elf gate-cr2 note -- the gate expects `fault` at gate-cr2 for the unmutated probe
+    local label="$1" elf="$2" gcr2="$3" note="$4"
+    gate_boundary "$label" "$elf" fault "$gcr2" || { fail_test "$label: the gate's qemu_boundary left no session summary (HARNESS-ERROR, not a kernel verdict: ${GATE_BAD:-rc=$GATE_RC})"; return 1; }
     echo "    $label :: cap=${B_CAP:-EMPTY} e9=${B_E9:-EMPTY} rc=$B_RC feeder-exit=$B_FRC (want cap=${MARKER}${SENTHEX} e9=de${EDGE_PROOF}ad rc=$EDGE_EXIT)"
     [[ "$B_FRC" -eq 0 ]] || { fail_test "$label: the feeder exited $B_FRC (HARNESS-ERROR, not a kernel verdict)"; return 1; }
-    if [[ "$B_CAP" == "${MARKER}${SENTHEX}" && "$B_E9" == "de${EDGE_PROOF}ad" && "$B_RC" -eq "$EDGE_EXIT" ]]; then
-        echo "$label bit RED: $note -- the probe COMPLETED its sentinel round-trip through a slot that must be unmapped, and ran on through its own grading tail"
-        scored "$label"; return 0
+    if [[ "$B_CAP" != "${MARKER}${SENTHEX}" || "$B_E9" != "de${EDGE_PROOF}ad" || "$B_RC" -ne "$EDGE_EXIT" ]]; then
+        fail_test "$label: the probe did not COMPLETE where the mutation requires it to (cap=${B_CAP:-EMPTY} e9=${B_E9:-EMPTY} rc=$B_RC)"
+        return 1
     fi
-    fail_test "$label: the probe did not COMPLETE where the mutation requires it to (cap=${B_CAP:-EMPTY} e9=${B_E9:-EMPTY} rc=$B_RC)"
-    return 1
+    # The gate checks a fault probe's exit status first, so a completed probe is refused there.
+    gate_refused "$label" "GATE-BAD $label (qemu rc=$EDGE_EXIT, want 0 for a triple fault under -no-reboot)" || return 1
+    echo "$label bit RED through the GATE'S OWN qemu_boundary (fault expected): $note -- the probe COMPLETED its sentinel round-trip through a slot that must be unmapped, and ran on through its own grading tail"
+    scored "$label"; return 0
 }
 
 # --- ROW 5: M-underindex -- the EDGE image's baked index rewritten 262143 -> 2^64-1.
@@ -1781,7 +2182,8 @@ if forge underindex "$tmp/base.b_edge/a.out" "$tmp/m_underindex.elf"; then
         fail_test "M-underindex: the forged image is identical to the EDGE probe -- the forge did nothing"
     else
         echo "    M-underindex :: the forged image == the compiled under probe, byte for byte, and differs from the edge probe it was forged from (11 bytes of one immediate)"
-        qfault_row M-underindex-qemu "$tmp/m_underindex.elf" "$CR2_UNDER" \
+        qfault_row M-underindex-qemu "$tmp/m_underindex.elf" "$CR2_UNDER" answer "" \
+            "GATE-BAD M-underindex-qemu (expected marker-then-SENTINEL round-trip ${MARKER}${SENTHEX} at slot 262143; cap=${MARKER} rc=0)" \
             "the EDGE leg's marker-then-SENTINEL round-trip is VIOLATED: index 2^64-1 addresses buf_2m - 8, inside the LOW guard page, so the store faults before any answer"
     fi
 fi
@@ -1789,7 +2191,7 @@ fi
 if [[ -x "$tmp/cc.noguardlo" ]]; then
     compile_with "$tmp/cc.noguardlo" "$tmp/b_under.herb" "$tmp/m.nogl_under"
     if compiled_ok "$tmp/m.nogl_under"; then
-        qanswer_row M-noguardlo-qemu "$tmp/m.nogl_under/a.out" "the lower guard PDE is present, so index -1 lands in mapped memory"
+        qanswer_row M-noguardlo-qemu "$tmp/m.nogl_under/a.out" "$GATE_CR2_UNDER" "the lower guard PDE is present, so index -1 lands in mapped memory"
     else
         fail_test "M-noguardlo-qemu: the under probe did not compile under the mutant ($COMPILE_MSG)"
     fi
@@ -1798,7 +2200,7 @@ fi
 if [[ -x "$tmp/cc.scale4" ]]; then
     compile_with "$tmp/cc.scale4" "$tmp/b_over.herb" "$tmp/m.s4_over"
     if compiled_ok "$tmp/m.s4_over"; then
-        qanswer_row M-scale4-qemu "$tmp/m.s4_over/a.out" "at scale 4 the 262144 probe addresses base + 1 MiB, one page short of the guard it must reach"
+        qanswer_row M-scale4-qemu "$tmp/m.s4_over/a.out" "$GATE_CR2_OVER" "at scale 4 the 262144 probe addresses base + 1 MiB, one page short of the guard it must reach"
     else
         fail_test "M-scale4-qemu: the over probe did not compile under the mutant ($COMPILE_MSG)"
     fi
@@ -1890,12 +2292,13 @@ if have_bochs && declare -F f2_bochs_feed_attempt >/dev/null; then
     #     WHAT THIS ROW PROVES, NARROWED after two review lenses landed the same objection: it runs a
     #     REAL Bochs graded session against the pinned harness and shows the seed the harness prints
     #     there is NOT the one the driver drew -- the comparison `bochs_draw` makes at its own seed
-    #     check. It does NOT execute `bochs_draw` itself: that function is defined inside the gate's
-    #     `have_bochs` block over a closure of the gate's own locals, so it is not extractable the way
-    #     `golden_leg`, `frame_verdict`, `boundary_static` and the static battery are, and this row
-    #     therefore grades the SAME FACT through its own comparison. Said plainly rather than claimed
-    #     away: for the static legs this file grades the gate's OWN code; for the Bochs draw leg it
-    #     grades the same discrimination in a restatement.
+    #     check. It does NOT execute `bochs_draw` itself, and this row therefore grades the SAME FACT
+    #     through its own comparison. An earlier note here said `bochs_draw` is not extractable because
+    #     it is "a closure over the gate's locals". That was wrong: bash has no closures, the function
+    #     reads globals, and its indented opener is unique (C33 scope, D4). It is not lifted YET: that
+    #     is C33 D4b, left for its cost (Bochs sessions and the shared harness's failure counter).
+    #     Said plainly: for the static legs and the QEMU graders this file runs the gate's OWN code;
+    #     for the Bochs draw leg it grades the same discrimination in a restatement.
     #
     #     A wrong-ANSWER mutant was rejected for this leg deliberately, and the reason is Bochs-specific
     #     rather than general: on QEMU this file KILLS the guest once the verdict is recorded, which is
@@ -1935,7 +2338,7 @@ if have_bochs && declare -F f2_bochs_feed_attempt >/dev/null; then
             elif [[ "$_sl" == "$_bs" ]]; then
                 fail_test "M-seedpin-internal-bochs (the harness echoed the DRAWN seed on Bochs, so the pin did not take)"
             else
-                echo "M-seedpin-internal-bochs bit RED on \`draw1-bochs\`'s discrimination: a REAL Bochs graded session (class=NO-SHUTDOWN, ok=1, rx=$WANT_RX, extra=0) printed the harness's internal constant $_sl where the driver drew $_bs -- the comparison bochs_draw makes. STATED EXACTLY: this grades the same FACT through this file's own comparison, because bochs_draw is a closure over the gate's locals and is not extractable; it is NOT the gate's leg body executing"
+                echo "M-seedpin-internal-bochs bit RED on \`draw1-bochs\`'s discrimination: a REAL Bochs graded session (class=NO-SHUTDOWN, ok=1, rx=$WANT_RX, extra=0) printed the harness's internal constant $_sl where the driver drew $_bs -- the comparison bochs_draw makes. STATED EXACTLY: this grades the same FACT through this file's own comparison; bochs_draw is not lifted here (C33 D4b), so it is NOT the gate's leg body executing"
                 scored M-seedpin-internal-bochs
             fi
         fi
@@ -1981,8 +2384,12 @@ control-bochs seed-freshness bochs-harness M-driverpin-seedecho-green M-op51nore
 # Row 23, ACCEPTED by parent ruling 2026-09-03 after a blind refutation lens showed no chartered row
 # covers its shape. Kept in its own list so the ORIGINAL twenty-two stay auditable as a set.
 REQUIRED_ADDED="M-seedpin-late"
+# C33 D4a (2026-09-29): the rows NEW with the gate's lifted QEMU graders (row 23 and rows 5-7 on QEMU
+# moved onto them and keep their names above). None of these names begins another's, so row_ran's
+# prefix match cannot mistake one for another.
+REQUIRED_GATE_RT="gate-control-draw gate-seedecho M-guardmiss M-guardlo-draw"
 MISSING=""
-for _r in $REQUIRED_ROWS $REQUIRED_CONTROLS $REQUIRED_ADDED $REQUIRED_RESIDUAL; do row_ran "$_r" || MISSING="$MISSING $_r"; done
+for _r in $REQUIRED_ROWS $REQUIRED_CONTROLS $REQUIRED_ADDED $REQUIRED_RESIDUAL $REQUIRED_GATE_RT; do row_ran "$_r" || MISSING="$MISSING $_r"; done
 SUBSTRATES="static/compile-time only"
 if [[ "$boot_legs" -eq 1 ]]; then
     SUBSTRATES="QEMU-TCG"
@@ -2001,5 +2408,5 @@ if [[ -n "$MISSING" ]]; then
     fi
     exit 0
 fi
-echo "PASS: link66-mutation ($pass legs on $SUBSTRATES: controls GREEN -- control-static (the base image passes all 16 gate static legs), control-seed-refusal, control-seed-echo, control-qemu (base image graded GREEN on QEMU-TCG, answer stream == host table), control-bochs (base boundary probe graded GREEN on Bochs, marker seen, no completion frame), seed-freshness (two consecutive graded runs printed different seeds), M-noirgate's base-refuses control and M-golden's base-matches -- and each of the twenty-three chartered mutants bit RED on its OWN targeted leg with the committed hash out of circuit for all but M-golden: M-decorative (sites) + M-literal (rawdecode) + M-recursionstore/M-deadsib (the black-box floor alone; they answer a constant, so they are P_forge~0 forgers and NOT the design's priced chain forgery) + M-underindex (the EDGE leg's marker-then-SENTINEL round-trip is violated by a fault at the derived guard_lo address, QEMU and Bochs) + M-noguardlo (pd-guards; the -1 probe completes, QEMU and Bochs) + M-scale4 (rawdecode; the 262144 probe answers, QEMU and Bochs) + M-basebias (bufbase-eq; its runtime leg ON THE GRADED DRAW is GREEN by design and is not booted) + M-wrongidx/M-constidx (the answer stream) + M-memsz (pmemsz) + M-opsize-49/50/51 (ERR 610/611/611 at compile time) + M-golden (the committed hash with its base-matches control) + M-nopredicate (pd-guards AND bufbase-eq, static only by parent ruling) + M-noirgate (reject-nobufop: the no-buf-op probe compiles where the base compiler refuses it) + M-pops (ERR 605) + M-op51noret (the fill echo, and the byte-window pin too) + M-seedpin-env (seed-refusal, and a program storing no payload then grades GREEN on an attacker-chosen seed) + M-seedpin-internal (seed-echo AND seed-freshness) + M-driverpin (seed-freshness ONLY, with seed-echo PROVEN absent from its FAIL set rather than asserted) + M-seedpin-late (row 23: the harness echoes the DRAWN seed verbatim and generates from a constant, so BOTH A1 legs are green against it and only the driver's own independent derivation of the whole receive transcript catches it); and TEN MORE rows added in slice 6 to close the per-leg residual, each covering a gate leg no chartered row reached: M-golden-boundary (the three boundary hashes M-golden never touched) + M-elfheader (elf-header, the only leg that reads p_type) + M-sourceshape (source-shape, graded by longbuf_spec's own predicate) + M-parser (frame-cardinality) + M-parserpos (frame-terminal) + M-frameverdict (reject-twoframe -- LEDGER D26's own defect, restored deliberately, and the rule ACCEPTS a two-frame stream again) + M-irgate2 (accept-oneidx, the POSITIVE side of the IR boundary) + M-singlefunc (reject-singlefunc) + M-boundaryimages (boundary-images, the constant-collapse the decoder was written for) + M-seedpin-internal-bochs (draw1-bochs -- A2's GRADED-SESSION leg, which bochs_draw implements separately from qemu_draw, so no QEMU-side row covers it). COVERAGE, STATED EXACTLY RATHER THAN ROUNDED: the STATIC legs are graded through the gate's OWN extracted code (its 16-leg battery, golden_leg, boundary_static, frame_verdict), and after rows 24-34 every static leg has a row that REQUIRES it -- counts, windows, sib-exclusivity, pushints and displacements are required inside M-decorative and geometry inside M-noguardlo, rather than being counted from FAIL-set spill. The RUNTIME legs (draw1-qemu, draw2-qemu, draw1-bochs, draw2-bochs, draw1-kvm) are graded by THIS FILE'S session driver, which models the gate's rather than executing it: the booting rows prove the discriminations exist, not that the gate's own leg bodies run them. draw2-qemu, draw2-bochs and draw1-kvm additionally have no row of their own and are JUSTIFIED in SCOPE-BUILD.md as the same functions their draw-1 siblings exercise)"
+echo "PASS: link66-mutation ($pass legs on $SUBSTRATES: controls GREEN -- control-static (the base image passes all 16 gate static legs), control-seed-refusal, control-seed-echo, control-qemu (base image graded GREEN on QEMU-TCG by this file's session driver, answer stream == host table), gate-control-draw (the gate's OWN lifted qemu_draw accepts the base image), control-bochs (base boundary probe graded GREEN on Bochs, marker seen, no completion frame), seed-freshness (two consecutive graded runs printed different seeds), M-noirgate's base-refuses control and M-golden's base-matches -- and each of the twenty-three chartered mutants bit RED on its OWN targeted leg with the committed hash out of circuit for all but M-golden: M-decorative (sites) + M-literal (rawdecode) + M-recursionstore/M-deadsib (the black-box floor alone; they answer a constant, so they are P_forge~0 forgers and NOT the design's priced chain forgery) + M-underindex (the EDGE leg's marker-then-SENTINEL round-trip is violated by a fault at the derived guard_lo address, QEMU and Bochs) + M-noguardlo (pd-guards; the -1 probe completes, QEMU and Bochs) + M-scale4 (rawdecode; the 262144 probe answers, QEMU and Bochs) -- on QEMU all three are refused by the GATE'S OWN qemu_boundary + M-basebias (bufbase-eq; its runtime leg ON THE GRADED DRAW is GREEN by design and is not booted) + M-wrongidx/M-constidx (the answer stream) + M-memsz (pmemsz) + M-opsize-49/50/51 (ERR 610/611/611 at compile time) + M-golden (the committed hash with its base-matches control) + M-nopredicate (pd-guards AND bufbase-eq, static only by parent ruling) + M-noirgate (reject-nobufop: the no-buf-op probe compiles where the base compiler refuses it) + M-pops (ERR 605) + M-op51noret (the fill echo, and the byte-window pin too) + M-seedpin-env (seed-refusal, and a program storing no payload then grades GREEN on an attacker-chosen seed) + M-seedpin-internal (seed-echo AND seed-freshness) + M-driverpin (seed-freshness ONLY, with seed-echo PROVEN absent from its FAIL set rather than asserted) + M-seedpin-late (row 23: the harness echoes the DRAWN seed verbatim and generates from a constant, so BOTH A1 legs are green against it and only the driver's own independent derivation of the whole receive transcript catches it -- here the GATE'S OWN check_capture, run by its lifted qemu_draw on QEMU's wire record); and TEN MORE rows added in slice 6 to close the per-leg residual, each covering a gate leg no chartered row reached: M-golden-boundary (the three boundary hashes M-golden never touched) + M-elfheader (elf-header, the only leg that reads p_type) + M-sourceshape (source-shape, graded by longbuf_spec's own predicate) + M-parser (frame-cardinality) + M-parserpos (frame-terminal) + M-frameverdict (reject-twoframe -- LEDGER D26's own defect, restored deliberately, and the rule ACCEPTS a two-frame stream again) + M-irgate2 (accept-oneidx, the POSITIVE side of the IR boundary) + M-singlefunc (reject-singlefunc) + M-boundaryimages (boundary-images, the constant-collapse the decoder was written for) + M-seedpin-internal-bochs (draw1-bochs -- A2's GRADED-SESSION leg, which bochs_draw implements separately from qemu_draw, so no QEMU-side row covers it); and, through the gate's OWN lifted qemu_draw (C33 D4a), gate-seedecho (row 21's pinned harness, in a session that booted and graded, refused by qemu_draw's seed-echo check) + M-guardmiss (row 35: guard-witness, a completion frame where the guard access must fault) + M-guardlo-draw (row 36: fault-attribution, the #PF at guard_lo instead of guard_hi). COVERAGE, STATED EXACTLY RATHER THAN ROUNDED: the STATIC legs are graded through the gate's OWN extracted code (its 16-leg battery, golden_leg, boundary_static, frame_verdict), and after rows 24-34 every static leg has a row that REQUIRES it -- counts, windows, sib-exclusivity, pushints and displacements are required inside M-decorative and geometry inside M-noguardlo, rather than being counted from FAIL-set spill. The RUNTIME legs are split, and said so: on QEMU the gate's OWN check_capture, derive, fault_attribution, qemu_draw and qemu_boundary are lifted and run, and rows need these of their checks -- qemu_draw's seed-echo, wire-record transcript, completion-frame guard witness and fault-attribution (its CR2 comparison), and qemu_boundary's fault-probe exit status and edge round-trip; qemu_draw's cap.bin comparisons, feeder-verdict, byte-count, witness-byte, feeder-exit and exit-status checks, fault_attribution's empty-trace and escalation checks and qemu_boundary's other checks have no row that needs them. Every other QEMU session (control-qemu, the freshness pairs, the ok=0 rows, row 20's baked program) runs on THIS FILE'S session driver, which models the gate's; the Bochs legs (draw1-bochs, draw2-bochs and the three Bochs boundary legs) are still graded by this file's restatement, not the gate's code (C33 D4b); and qemu_draw's KVM branch (draw1-kvm) never runs here. draw2-qemu, draw2-bochs and draw1-kvm additionally have no row of their own and are JUSTIFIED in SCOPE-BUILD.md as the same functions their draw-1 siblings exercise)"
 exit 0
