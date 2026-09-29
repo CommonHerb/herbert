@@ -50,25 +50,49 @@ kernel_test_cleanup() {
     rm -rf -- "$@"
 }
 
-# Bochs boots run under xvfb-run, which sends the wrapped command's stdout AND
-# stderr to its own stdout ("$@" 2>&1, /usr/bin/xvfb-run:184 in xvfb
-# 2:21.1.12-1ubuntu1.8) and prints its OWN diagnostics on stderr (error(),
-# :35-37). One is "problem while cleaning up temporary directory" from its EXIT
-# trap, which then exits 5 before it kills its Xvfb server (:85-92). A graded
-# capture holds only the wrapped command's stream; the frame parser rightly
-# refuses anything else (FLAKE-LOG F12). The wrapper's own diagnostics are host
-# harness evidence: kept beside the capture as CAPTURE.xvfb-run.stderr, with
-# xvfb-run's status in CAPTURE.xvfb-run.exit (so KERNEL_EVIDENCE_DIR snapshots
-# retain both), and announced on stderr as a HARNESS-NOTE. They are never
-# graded and never change a class or a verdict. The return status is
-# xvfb-run's own, unchanged. An Xvfb still running from this boot directory is
-# named in the note and never signalled. Keep this file self-contained: helper
-# tests copy it alone into fixtures.
-kernel_xvfb_capture() { # CAPTURE XVFB_RUN_ARGS...  -> xvfb-run's own exit status
-    local capture="$1" side here pid pids="" text rc=0
-    shift
+# Bochs boots run under xvfb-run, which sends the wrapped command's stdout to
+# its own stdout. Where the command's stderr goes depends on the version: xvfb
+# 2:21.1.12-1ubuntu1.8 (Ubuntu 24.04) runs it as `"$@" 2>&1`
+# (/usr/bin/xvfb-run:184), merging it into xvfb-run's stdout, but xvfb
+# 2:21.1.22-1ubuntu1.2 (Ubuntu 26.04, GitHub's ubuntu-26.04 runner) runs it as
+# `"$@" 3>&-` (:200), leaving it on xvfb-run's stderr. Bochs writes its log
+# lines and its exit banner ("... shutdown requested") on stderr, so this
+# helper merges the command's stderr into its stdout itself and depends on
+# neither: a shim between xvfb-run's options and the command,
+# `sh -c 'exec "$@" 2>&1'`, which replaces itself with the command, so the
+# process left running has the caller's own argv (`bash -c "<inner>"`), as
+# scoped `pkill -f` patterns and bash's job reports expect. In both versions
+# xvfb-run prints its OWN diagnostics on stderr (error(), :35-37). One is
+# "problem while cleaning up temporary directory" from its EXIT trap, which
+# then exits 5 before it kills its Xvfb server (:84-92). A graded capture
+# holds only the wrapped command's stream; the frame parser rightly refuses
+# anything else (FLAKE-LOG F12). The wrapper's own diagnostics are host harness
+# evidence: kept beside the capture as CAPTURE.xvfb-run.stderr, with xvfb-run's
+# status in CAPTURE.xvfb-run.exit (so KERNEL_EVIDENCE_DIR snapshots retain
+# both), and announced on stderr as a HARNESS-NOTE. They are never graded and
+# never change a class or a verdict. The return status is xvfb-run's own,
+# unchanged. An Xvfb still running from this boot directory is named in the
+# note and never signalled. The shim can go only between options known to take
+# no argument and the command, so the only options accepted are -a and
+# --auto-servernum; any other argument shape is refused with a HARNESS-ERROR on
+# stderr and status 2, with the capture emptied and nothing run. Keep this file
+# self-contained: helper tests copy it alone into fixtures.
+kernel_xvfb_capture() { # CAPTURE [-a|--auto-servernum]... COMMAND [ARG]...  -> xvfb-run's own exit status
+    local capture="${1-}" side here pid pids="" text rc=0 got options=()
+    if (( $# )); then shift; fi
+    while (( $# )) && [[ "$1" == -a || "$1" == --auto-servernum ]]; do
+        options+=("$1")
+        shift
+    done
+    if [[ -z "$capture" || "$capture" == -* || $# -eq 0 || "$1" == -* ]]; then
+        # Emptied, not left alone: a stale capture must never be graded as this boot.
+        [[ -z "$capture" || "$capture" == -* ]] || : > "$capture"
+        printf -v got ' %q' "$capture" "${options[@]}" "$@"
+        echo "HARNESS-ERROR: ${0##*/}: kernel_xvfb_capture cannot place its stderr-merging shim in this argument list (want CAPTURE [-a|--auto-servernum]... COMMAND...); nothing was run; got:$got" >&2
+        return 2
+    fi
     side="$capture.xvfb-run.stderr"
-    xvfb-run "$@" > "$capture" 2> "$side" || rc=$?
+    xvfb-run "${options[@]}" sh -c 'exec "$@" 2>&1' kernel_xvfb_capture "$@" > "$capture" 2> "$side" || rc=$?
     if [[ ! -s "$side" ]]; then
         rm -f -- "${side:?}"
         return "$rc"
