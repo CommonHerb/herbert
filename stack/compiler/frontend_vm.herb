@@ -459,8 +459,14 @@ func plant_class_mix(tokens, pool, line):
 end
 
 func parse_bitwise(tokens, pos, pool):
-    let start = pos
-    let r = parse_or(tokens, pos, pool)
+    -- Retain the first primary's endpoint while completing the same classless
+    -- ladder. Re-parsing it duplicates every nested left bitwise subtree.
+    let primary = parse_not(tokens, pos, pool)
+    let r = parse_mul_loop(tokens, primary.1, pool, primary.0)
+    r = parse_add_loop(tokens, r.1, pool, r.0)
+    r = parse_cmp_loop(tokens, r.1, pool, r.0)
+    r = parse_and_loop(tokens, r.1, pool, r.0)
+    r = parse_or_loop(tokens, r.1, pool, r.0)
     let cls = 0
     if r.1 < count(tokens):
         cls = bit_class(get(tokens, r.1).1)
@@ -471,11 +477,8 @@ func parse_bitwise(tokens, pos, pool):
     if cls == 0:
         return r
     end
-    -- A bitwise/shift op follows. Verify the left operand is a single primary by
-    -- re-parsing one prefix-unary primary from `start`: if it ends where parse_or
-    -- stopped, parse_or added nothing (the operand is parenthesised/atomic);
-    -- otherwise parse_or consumed an unparenthesised classless op -> mix.
-    let primary = parse_not(tokens, start, pool)
+    -- A bitwise/shift op follows. A different endpoint means the ladder consumed
+    -- an unparenthesised classless operator after the primary -> mix.
     if primary.1 != r.1:
         return plant_class_mix(tokens, pool, get(tokens, r.1).2)
     end
