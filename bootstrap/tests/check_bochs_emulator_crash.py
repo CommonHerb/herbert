@@ -22,8 +22,14 @@ Only a positively identified emulator crash re-rolls (Astra R1): a death after t
 SIGABRT, SIGBUS, SIGFPE or SIGSEGV. Any other signal after the banner is KILLED-AFTER-BANNER, a kill (a
 timeout, or an external kill), which is terminal: never re-rolled, never graded, and its leg fails.
 
+The status is the boot pipeline's own, which its inner command writes to bochs_out.txt.pipeline-status
+before the wrapper's EXIT-trap cleanup can replace the wrapper's status (Astra R2); classification reads
+only that file, and a missing, empty or non-numeric one is NO-STATUS, a harness class.
+
 CLASS-TABLE: the harness's own classifier over every status 0..255: exactly 132, 134, 135, 136 and 139
 are EMULATOR-CRASH, every other 129..192 is terminal KILLED-AFTER-BANNER, and the rest are finished boots.
+STATUS-FILE-TABLE: the status file's reader: missing, empty, non-numeric, padded, out of range or
+multi-line content is NO-STATUS; a plain number is classified as CLASS-TABLE says.
 TREE rows (this tree's harness, under both routings):
   crash-then-ok     SIGSEGV after the banner on attempt 1: EMULATOR-CRASH (status 139) re-rolled on a
                     fresh disk, attempt 2 graded GREEN; the crashed capture is never graded
@@ -47,11 +53,23 @@ TREE rows (this tree's harness, under both routings):
                     gate still ends RED on the parse error, reported once
   ci-shape          link39's run 36583224514 shape: that gate, a crash on attempt 1, then clean
                     boots: EMULATOR-CRASH re-rolled, GREEN
+  overwrite-*       the wrapper's cleanup fails on every boot and exits 5 in place of the command's
+                    status (F12): a crash is still EMULATOR-CRASH from the pipeline's own status
+                    (re-rolled, never graded; three fail closed with zero grades), a kill is still
+                    terminal, and a normal wrong answer is still graded RED
+  nostatus-*        the pipeline's status file cannot be written: NO-STATUS, re-rolled, never graded;
+                    three fail closed
+  link62-overwrite  the REAL link62 bochs_run and its raw-frame grader (which ignores trailing text),
+                    lifted from the gate: a crash after a correct proof frame with the wrapper's status
+                    overwritten is re-rolled, and only the clean boot is graded (Astra's R2 case)
 Mutation columns, each the tree's harness with a pre-fix line restored:
   CRASHALL     kill-then-ok with every signal counted as a crash (the first cut, 29668b1): the kill is
                re-rolled and the leg passes GREEN, which is the loosening the TREE row refuses
-  NOSTATUS     crash-then-ok: the attempts classify without the boot status, so the crashed capture
-               is graded and is RED
+  NOSTATUS     crash-then-ok: the classifier ignores the status, so the crashed capture is graded
+               and is RED
+  WRAPPERSTATUS  the attempts classify from the wrapper's status file (the first cut's source): under
+               a cleanup overwrite the crashed capture is graded, RED on the frame parser and GREEN
+               on link62's raw-frame grader, which is the false GREEN of Astra's R2
   SHAREDSCOPE  poisoned-replay: the attempts clean up in the gate-wide parse-error scope, so the
                replay's class is lost (blank) and the parse error is printed again per attempt
   PREFIX       ci-shape with both restored: the CI log (a REPLAY on the crash's parse error, three
@@ -74,8 +92,12 @@ import check_bochs_xvfb_capture as xc  # noqa: E402  (its host-command stubs; it
 HARNESS = HERE / 'bochs_f2_harness.sh'
 ROUTINGS = xc.ROUTINGS
 PARSE_ERROR = 'holler malformed/truncated debugcon record at byte 0 of'
-CLASSIFY_CALL = 'cls="$(f2__classify_boot "$W" "$outlog" "$brc")"'
-CLASSIFY_PREFIX = 'cls="$(f2__classify_boot "$W" "$outlog")"'
+WRONG_ANSWER = xc.WRONG_ANSWER
+PIPELINE_STATUS = 'bochs_out.txt.pipeline-status'
+WRAPPER_STATUS = 'bochs_out.txt.wrapper-status'
+STATUS_CHECK = '    if ! cls="$(f2__status_class "$stfile")"; then echo "$cls"; return; fi\n'
+CLASSIFY_FROM = f'"$W/{PIPELINE_STATUS}")"'
+CLASSIFY_FROM_WRAPPER = f'"$W/{WRAPPER_STATUS}")"'
 CRASH_LIST = 'F2_CRASH_SIGNALS=(4 6 7 8 11)'
 CRASH_ALL = 'F2_CRASH_SIGNALS=($(seq 1 64))'
 CRASH_STATUSES = {132: 4, 134: 6, 135: 7, 136: 8, 139: 11}   # SIGILL SIGABRT SIGBUS SIGFPE SIGSEGV
@@ -107,6 +129,10 @@ def die(sig):
     signal.raise_signal(sig)
     sys.exit('bochs stand-in: survived a fatal signal')
 emit(err, b'controlled Bochs stand-in preamble\n')
+if action == 'nostatus':
+    # A directory where the inner command writes the pipeline's status: that write fails, so the boot
+    # leaves no readable status (the NO-STATUS class), whatever it prints.
+    Path('bochs_out.txt.pipeline-status').mkdir()
 if action == 'early-segv':
     die(signal.SIGSEGV)
 answer = '01' if action == 'wrongkill' else os.environ['GUEST_ANSWER']   # wrongkill: a WRONG answer, then the kill
@@ -160,6 +186,13 @@ case "$TEST_MODE" in
         f2_bochs_feed_leg_replay probe grade_replay "20 --hold 25" "$TEST_OUT/feed.log" "$TEST_OUT/probe.log" \
             "$TEST_CFG" 30 32 "${FILES[@]}" -- "$TEST_WANT"
         ;;
+    link62)   # run_native_codegen_link62.sh's own bochs_run and raw-frame grader, lifted from the gate
+        fail_test() { echo "FAIL: $1"; fail=$((fail + 1)); }
+        source "$TEST_LINK62" || exit 94
+        host_proof() { echo 42; }   # proof byte 2a: the stand-in's answer frame is de2aad
+        tmp="$TEST_OUT"
+        bochs_run probe "$TEST_FIX/kernel.elf" 0
+        ;;
     poisoned-replay)   # run_native_codegen_link39.sh's own shape (its lines 64-68)
         work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"
         trap 'kernel_test_cleanup "$work"' EXIT
@@ -194,15 +227,19 @@ class Bench(xc.Bench):
         self.crash_driver.write_text(DRIVER)
         self.env = {k: v for k, v in self.env.items() if k != 'PYTHONFAULTHANDLER'}
         self.env['TEST_FEEDER'] = str(root / 'feeder.py')
+        gate = (HERE / 'run_native_codegen_link62.sh').read_text()
+        start = gate.index('bochs_run() {')
+        (root / 'link62_bochs_run.sh').write_text(gate[start:gate.index('\n}\n', start) + 3])
+        self.env['TEST_LINK62'] = str(root / 'link62_bochs_run.sh')
 
-    def crash_run(self, label, harness, *, routing, mode, plan):
+    def crash_run(self, label, harness, *, routing, mode, plan, xvfb='clean', guest='00'):
         directory = self.root / label
         directory.mkdir()
         out, tmp, evidence = directory / 'out', directory / 'tmp', directory / 'evidence'
         out.mkdir()
         tmp.mkdir()
-        env = dict(self.env, TEST_HARNESS=str(harness), TEST_MODE=mode, TEST_OUT=str(out), XVFB_MODE='clean',
-                   XVFB_ROUTING=routing, GUEST_ANSWER='00', TMPDIR=str(tmp), KERNEL_EVIDENCE_DIR=str(evidence),
+        env = dict(self.env, TEST_HARNESS=str(harness), TEST_MODE=mode, TEST_OUT=str(out), XVFB_MODE=xvfb,
+                   XVFB_ROUTING=routing, GUEST_ANSWER=guest, TMPDIR=str(tmp), KERNEL_EVIDENCE_DIR=str(evidence),
                    CRASH_PLAN=plan, CRASH_COUNTER=str(directory / 'boots'))
         try:
             result = subprocess.run(['bash', str(self.crash_driver)], env=env, capture_output=True, timeout=180)
@@ -216,10 +253,10 @@ class Bench(xc.Bench):
             inventory = json.loads((capture / 'INVENTORY.json').read_text())
             paths = {row['path'] for row in inventory['files']}
             if 'bochsrc.txt' in paths:
-                attempts.append({p: (capture / p).read_bytes() for p in ('bochs_out.txt', 'boot.status')
+                attempts.append({p: (capture / p).read_bytes() for p in ('bochs_out.txt', PIPELINE_STATUS, WRAPPER_STATUS)
                                  if (capture / p).is_file()})
         boots = directory / 'boots'
-        probe = out / 'probe.log'
+        probe = out / 'probe.b' / 'bochs_out.txt' if mode == 'link62' else out / 'probe.log'
         return dict(label=label, rc=rc, out_lines=stdout.decode(errors='replace').splitlines(),
                     err_lines=stderr.decode(errors='replace').splitlines(), attempts=attempts,
                     boots=int(boots.read_text()) if boots.exists() else 0,
@@ -249,14 +286,18 @@ def check(r, *, rc, rerolls, fails=0, harness_errors=0, green, parser_errors=0):
     return ok
 
 
-def crash_then_clean(r, status):
-    """The crashed attempt's capture holds the banner and more (bash's job report); it was not graded."""
+def crash_then_clean(r, status, wrapper=None):
+    """The crashed attempt's capture holds the banner and more (bash's job report); it was not graded.
+
+    Its pipeline status file holds the crash's status; wrapper, when given, is the status the wrapper
+    returned on both boots (its cleanup's 5, which the classification never read)."""
     label = r['label']
     ok = expect(label, len(r['attempts']) == 2, f"{len(r['attempts'])} retained boot attempt(s), want 2")
     if ok:
         crashed, clean = r['attempts']
-        ok &= expect(label, crashed.get('boot.status') == f'{status}\n'.encode() and clean.get('boot.status') == b'1\n',
-                     f"boot.status {crashed.get('boot.status')!r} then {clean.get('boot.status')!r}, want {status} then 1")
+        got = [(a.get(PIPELINE_STATUS), a.get(WRAPPER_STATUS)) for a in (crashed, clean)]
+        want = [(f'{status}\n'.encode(), f'{wrapper or status}\n'.encode()), (b'1\n', f'{wrapper or 1}\n'.encode())]
+        ok &= expect(label, got == want, f'(pipeline, wrapper) status files {got!r}, want {want!r}')
         c, g = crashed.get('bochs_out.txt', b''), clean.get('bochs_out.txt', b'')
         ok &= expect(label, b'shutdown requested' in c and c.startswith(g) and len(c) > len(g),
                      'the crashed capture should be the clean capture plus a trailer (the job report)')
@@ -298,6 +339,41 @@ def class_table(bench, rows):
                  'terminal KILLED-AFTER-BANNER; every other status is a finished boot', ok))
 
 
+def status_file_table(bench, rows):
+    """f2__status_class, the pipeline status file's reader, over crafted files, in one bash run."""
+    label = 'STATUS-FILE-TABLE'
+    cases = {'missing': None, 'empty': b'', 'newline': b'\n', 'word': b'abc\n', 'suffix': b'12a\n',
+             'leading-space': b' 1\n', 'trailing-space': b'1 \n', 'over-255': b'256\n', 'negative': b'-1\n',
+             'leading-zero': b'01\n', 'two-lines': b'1\n2\n', 'directory': 'DIR',
+             'bochs-exit': b'1\n', 'zero-no-newline': b'0', 'wrapper-like-5': b'5\n',
+             'segv': b'139\n', 'kill-no-newline': b'137'}
+    box = bench.root / 'status-files'
+    box.mkdir()
+    for name, content in cases.items():
+        if content == 'DIR':
+            (box / name).mkdir()
+        elif content is not None:
+            (box / name).write_bytes(content)
+    probe = ('source "$1" || exit 97; shift; for f in "$@"; do cls="$(f2__status_class "$f")"; rc=$?; '
+             'printf "%s\t%s\t%s\n" "${f##*/}" "$rc" "$cls"; done; exit 0')
+    r = subprocess.run(['bash', '-c', probe, 'status-table', str(HARNESS), *(str(box / n) for n in cases)],
+                       env=bench.env, capture_output=True, timeout=60)
+    got = {name: (int(rc), cls) for name, rc, cls in (line.split('\t') for line in r.stdout.decode().splitlines())}
+    ok = expect(label, r.returncode == 0 and len(got) == len(cases), f'rc={r.returncode} {got} {r.stderr[-300:]!r}')
+    for name in cases:
+        rc, cls = got.get(name, (None, ''))
+        if name in ('bochs-exit', 'zero-no-newline', 'wrapper-like-5'):
+            ok &= expect(label, (rc, cls) == (0, ''), f'{name}: {(rc, cls)!r}, want a finished boot')
+        elif name == 'segv':
+            ok &= expect(label, rc == 1 and cls.startswith('EMULATOR-CRASH(status 139 = signal 11'), f'{name}: {(rc, cls)!r}')
+        elif name == 'kill-no-newline':
+            ok &= expect(label, rc == 2 and cls.startswith('KILLED-AFTER-BANNER(status 137 = signal 9'), f'{name}: {(rc, cls)!r}')
+        else:
+            ok &= expect(label, rc == 1 and cls.startswith('NO-STATUS(') and f'/{name}:' in cls,
+                         f'{name}: {(rc, cls)!r}, want NO-STATUS naming the file')
+    rows.append((f'{label}: {len(cases)} status files; only a plain number 0..255 is read, anything else is NO-STATUS', ok))
+
+
 def terminal(r, status, signal_number, *, boots=1):
     """One boot killed after the banner: the leg ended at once, nothing graded, and the marker says it was a kill."""
     label = r['label']
@@ -315,13 +391,16 @@ def main():
     with tempfile.TemporaryDirectory(prefix='herbert-emulator-crash-check-') as temporary:
         bench = Bench(Path(temporary))
         class_table(bench, rows)
+        status_file_table(bench, rows)
         source = HARNESS.read_text()
         mutants = {}
-        counts = {CLASSIFY_CALL: lambda n: n == 2, SCOPED_CLEANUP: lambda n: n >= 4, CRASH_LIST: lambda n: n == 1}
+        counts = {STATUS_CHECK: lambda n: n == 1, SCOPED_CLEANUP: lambda n: n >= 4, CRASH_LIST: lambda n: n == 1,
+                  CLASSIFY_FROM: lambda n: n == 2}
         for name, pairs in (('CRASHALL', [(CRASH_LIST, CRASH_ALL)]),
-                            ('NOSTATUS', [(CLASSIFY_CALL, CLASSIFY_PREFIX)]),
+                            ('NOSTATUS', [(STATUS_CHECK, '')]),
+                            ('WRAPPERSTATUS', [(CLASSIFY_FROM, CLASSIFY_FROM_WRAPPER)]),
                             ('SHAREDSCOPE', [(SCOPED_CLEANUP, SHARED_CLEANUP)]),
-                            ('PREFIX', [(CLASSIFY_CALL, CLASSIFY_PREFIX), (SCOPED_CLEANUP, SHARED_CLEANUP)])):
+                            ('PREFIX', [(STATUS_CHECK, ''), (SCOPED_CLEANUP, SHARED_CLEANUP)])):
             text = source
             for old, new in pairs:
                 count = text.count(old)
@@ -332,8 +411,8 @@ def main():
             path.write_text(text)
             mutants[name] = path
         for routing in ROUTINGS:
-            run = lambda row, mode, plan, harness=HARNESS, column='TREE': bench.crash_run(
-                f'{column}-{routing}-{row}', harness, routing=routing, mode=mode, plan=plan)
+            run = lambda row, mode, plan, harness=HARNESS, column='TREE', **extra: bench.crash_run(
+                f'{column}-{routing}-{row}', harness, routing=routing, mode=mode, plan=plan, **extra)
             r = run('crash-then-ok', 'plain', 'segv,ok')
             rows.append((r['label'], check(r, rc=0, rerolls=['EMULATOR-CRASH(status 139 = signal 11'], green=True)
                          & crash_then_clean(r, 139)))
@@ -384,6 +463,36 @@ def main():
             ok = check(r, rc=0, rerolls=['EMULATOR-CRASH(status 139'], green=True)
             ok &= expect(r['label'], not any('REPLAY' in line for line in r['err_lines']), 'a crash must not start a replay')
             rows.append((r['label'], ok))
+            # The wrapper's EXIT-trap cleanup fails on every boot and exits 5 in place of the command's status.
+            r = run('overwrite-crash-then-ok', 'plain', 'segv,ok', xvfb='cleanup-error')
+            rows.append((r['label'], check(r, rc=0, rerolls=['EMULATOR-CRASH(status 139 = signal 11'], green=True)
+                         & crash_then_clean(r, 139, wrapper=5)))
+            r = run('overwrite-crash-always', 'plain', 'segv', xvfb='cleanup-error')
+            ok = check(r, rc=1, rerolls=['EMULATOR-CRASH(status 139'] * 3, harness_errors=2, green=False)
+            ok &= expect(r['label'], r['boots'] == 3 and not r['probe'], 'three boots and nothing graded')
+            ok &= expect(r['label'], [a.get(WRAPPER_STATUS) for a in r['attempts']] == [b'5\n'] * 3,
+                         f"wrapper status files {[a.get(WRAPPER_STATUS) for a in r['attempts']]!r}, want 5 on each boot")
+            rows.append((r['label'], ok))
+            r = run('overwrite-kill-then-ok', 'plain', 'kill,ok', xvfb='cleanup-error')
+            rows.append((r['label'], check(r, rc=1, rerolls=[], harness_errors=2, green=False) & terminal(r, 137, 9)))
+            r = run('overwrite-wrong-answer', 'plain', 'ok', xvfb='cleanup-error', guest='01')
+            ok = check(r, rc=1, rerolls=[], fails=1, green=False)
+            ok &= expect(r['label'], all(WRONG_ANSWER in line for line in lines(r, 'FAIL: ', 'out_lines')),
+                         'a normal wrong answer under the overwrite must still be graded RED')
+            rows.append((r['label'], ok))
+            r = run('nostatus-then-ok', 'plain', 'nostatus,ok')
+            ok = check(r, rc=0, rerolls=['NO-STATUS('], green=True)
+            ok &= expect(r['label'], r['boots'] == 2 and len(r['attempts']) == 2 and PIPELINE_STATUS not in r['attempts'][0]
+                         and r['probe'] == r['attempts'][1].get('bochs_out.txt'),
+                         'the boot without a readable status is not graded; the next one is')
+            rows.append((r['label'], ok))
+            r = run('nostatus-always', 'plain', 'nostatus')
+            ok = check(r, rc=1, rerolls=['NO-STATUS('] * 3, harness_errors=2, green=False)
+            ok &= expect(r['label'], r['boots'] == 3 and not r['probe'], 'three boots and nothing graded')
+            rows.append((r['label'], ok))
+            r = run('link62-overwrite', 'link62', 'segv,ok', xvfb='cleanup-error', guest='2a')
+            ok = check(r, rc=0, rerolls=['EMULATOR-CRASH(status 139 = signal 11'], green=True) & crash_then_clean(r, 139, wrapper=5)
+            rows.append((r['label'], ok))
             if routing != 'no-merge':   # the mutation columns under GitHub's routing only
                 continue
             r = run('kill-then-ok', 'plain', 'kill,ok', mutants['CRASHALL'], 'CRASHALL')
@@ -394,6 +503,19 @@ def main():
             ok = check(r, rc=1, rerolls=[], fails=1, green=False)
             ok &= expect(r['label'], all(PARSE_ERROR in line for line in lines(r, 'FAIL: ', 'out_lines')),
                          'without the status the crashed capture is graded, and the parser refuses its trailer')
+            rows.append((r['label'], ok))
+            r = run('overwrite-crash-then-ok', 'plain', 'segv,ok', mutants['WRAPPERSTATUS'], 'WRAPPERSTATUS',
+                    xvfb='cleanup-error')
+            ok = check(r, rc=1, rerolls=[], fails=1, green=False)
+            ok &= expect(r['label'], r['boots'] == 1 and all(PARSE_ERROR in line for line in lines(r, 'FAIL: ', 'out_lines')),
+                         "from the wrapper's overwritten status the crashed capture is graded, and the parser refuses it")
+            rows.append((r['label'], ok))
+            r = run('link62-overwrite', 'link62', 'segv,ok', mutants['WRAPPERSTATUS'], 'WRAPPERSTATUS',
+                    xvfb='cleanup-error', guest='2a')
+            ok = check(r, rc=0, rerolls=[], green=True)
+            ok &= expect(r['label'], r['boots'] == 1 and r['probe'] and b'Segmentation fault' in r['probe'],
+                         "from the wrapper's overwritten status link62's raw-frame grader passes the crashed capture "
+                         'GREEN (the false GREEN the tree refuses)')
             rows.append((r['label'], ok))
             r = run('poisoned-replay', 'poisoned-replay', 'junk,ok', mutants['SHAREDSCOPE'], 'SHAREDSCOPE')
             ok = check(r, rc=1, rerolls=['', '', ''], green=False, parser_errors=4)

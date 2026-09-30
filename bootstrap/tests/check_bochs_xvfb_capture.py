@@ -61,10 +61,13 @@ HELPER = HERE / 'kernel_evidence.sh'
 # matches this file.
 WRAPPER = 'xvfb-' + 'run'
 ROUTINGS = ('merge', 'no-merge')
-TREE_LINE = ('      kernel_xvfb_capture bochs_out.txt -a bash -c '
-             '"yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt" )\n')
-LEGACY_LINE = ('      ' + WRAPPER + ' -a bash -c '
-               '"yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt" > bochs_out.txt 2>&1 )\n')
+# The boot's inner command, which records the pipeline's own status before the wrapper's cleanup can
+# replace the wrapper's (bochs_f2_harness.sh header, Astra R2). Both columns run it, so they differ only
+# in how the wrapper is called.
+INNER = ('"yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt; s=\\${PIPESTATUS[1]}; '
+         'echo \\$s > bochs_out.txt.pipeline-status; exit \\$s"')
+TREE_LINE = '      kernel_xvfb_capture bochs_out.txt -a bash -c ' + INNER + ' )\n'
+LEGACY_LINE = '      ' + WRAPPER + ' -a bash -c ' + INNER + ' > bochs_out.txt 2>&1 )\n'
 # The helper's wrapper call, and the same call with its exec shim removed
 # (9c7004f's helper, which left the merge to xvfb-run).
 SHIM_LINE = ('    ' + WRAPPER + ' "${options[@]}" sh -c \'exec "$@" 2>&1\' kernel_xvfb_capture "$@" '

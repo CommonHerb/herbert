@@ -8,9 +8,10 @@
 # What it guarantees (the F2 doctrine, tranche-1a-endorsed fail-closed form):
 #   - every disk-build command is CHECKED, with explicit mount/loop cleanup on every exit path
 #     (umount + lazy retry; never rm -rf over a possibly-live mount; no global `losetup -D`);
-#   - each boot attempt is CLASSIFIED: DISK-BUILD(step) / NO-OUTPUT / NO-SHUTDOWN / EMULATOR-CRASH /
-#     KILLED-AFTER-BANNER / EXTRACT-FAILURE vs COMPLETED (completion witness = the boot ran THROUGH
-#     `shutdown requested` and the emulator pipeline then ended without a signal);
+#   - each boot attempt is CLASSIFIED: DISK-BUILD(step) / NO-OUTPUT / NO-SHUTDOWN / NO-STATUS /
+#     EMULATOR-CRASH / KILLED-AFTER-BANNER / EXTRACT-FAILURE vs COMPLETED (completion witness = the
+#     boot ran THROUGH `shutdown requested` and the emulator pipeline's own recorded status then
+#     shows it ended without a signal);
 #   - a harness failure re-rolls on a FRESH disk up to 3 attempts; exhaustion emits a greppable
 #     HARNESS-ERROR marker (never the `FAIL:` kernel-RED prefix) and FAILS CLOSED UNCONDITIONALLY
 #     (regardless of KERNEL_CODEGEN_REQUIRE_EMU -- a gate must not PASS with an attempted leg
@@ -19,30 +20,33 @@
 #
 # EMULATOR-CRASH and KILLED-AFTER-BANNER (red-run sweep 2026-09-29; FLAKE-LOG F13): a boot that
 # printed the kernel's shutdown banner but whose `bash -c "yes c | timeout ... bochs ..."` pipeline
-# then ended by a signal -- f2__boot's status (kernel_xvfb_capture's, which is xvfb-run's, which is
-# the wrapped command's in both packaged xvfb-run versions) is 128+N for N in 1..64 -- is not a
-# finished boot and is never graded: its capture is never copied to OUTLOG. The class is decided
-# from the exit status, never from the capture's text. ONLY A POSITIVELY IDENTIFIED EMULATOR CRASH
-# RE-ROLLS (Astra R1): a death by SIGILL, SIGABRT, SIGBUS, SIGFPE or SIGSEGV (F2_CRASH_SIGNALS
-# below, the one copy of that list) is EMULATOR-CRASH(...), re-rolled on a fresh disk; three in a
-# row exhaust to HARNESS-ERROR. GitHub run 36583224514: Bochs 2.8 died of SIGSEGV after its exit
-# banner, bash's job report for the pipeline landed in the merged capture, and the strict frame
-# grammar rightly refused it. Any OTHER signal after the banner -- SIGKILL (status 137), SIGTERM,
-# anything else -- is KILLED-AFTER-BANNER(...): a kill
-# (a timeout, or an external kill), not an emulator crash. A kill says nothing about what the guest
-# did before it, and a re-roll could clear a wrong answer that preceded it, so the class is
-# TERMINAL: never re-rolled and never graded; its leg fails at once with a HARNESS-ERROR marker
-# (f2_harness_terminal), fail-closed. A signal death BEFORE the banner stays NO-SHUTDOWN (link66's
-# fault legs expect exactly that for a reset loop killed at its timeout). A boot whose emulator
-# exited on its own is graded exactly as before, so a malformed capture from a normal exit is still
-# a graded RED. When the boot's own `timeout -s KILL` fires, GNU timeout (kingdom) reports 137, which
-# is KILLED-AFTER-BANNER; uutils timeout 0.10.0, the ubuntu-26.04 runner's /usr/bin/timeout, reports
-# 124, a plain status, so there a timed-out boot is graded as a finished one, as it was before
-# 2026-09-29. A child's own death by signal N is 128+N under both. Residual: when xvfb-run's own
-# EXIT-trap cleanup fails it exits 5 (or 1 under its
-# set -e) in place of the command's status (F12), so a crash that coincides with that is graded as
-# before. Each attempt records f2__boot's status in its boot directory as boot.status (evidence
-# only).
+# then ended by a signal -- its status is 128+N for N in 1..64 -- is not a finished boot and is never
+# graded: its capture is never copied to OUTLOG. The class is decided from that status, never from
+# the capture's text. ONLY A POSITIVELY IDENTIFIED EMULATOR CRASH RE-ROLLS (Astra R1): a death by
+# SIGILL, SIGABRT, SIGBUS, SIGFPE or SIGSEGV (F2_CRASH_SIGNALS below, the one copy of that list) is
+# EMULATOR-CRASH(...), re-rolled on a fresh disk; three in a row exhaust to HARNESS-ERROR. GitHub run
+# 36583224514: Bochs 2.8 died of SIGSEGV after its exit banner, bash's job report for the pipeline
+# landed in the merged capture, and the strict frame grammar rightly refused it. Any OTHER signal
+# after the banner -- SIGKILL (status 137), SIGTERM, anything else -- is KILLED-AFTER-BANNER(...): a kill (a timeout, or an external kill), not an
+# emulator crash. A kill says nothing about what the guest did before it, and a re-roll could clear
+# a wrong answer that preceded it, so the class is TERMINAL: never re-rolled and never graded; its
+# leg fails at once with a HARNESS-ERROR marker (f2_harness_terminal), fail-closed. A signal death
+# BEFORE the banner stays NO-SHUTDOWN (link66's fault legs expect exactly that for a reset loop
+# killed at its timeout). A boot whose emulator exited on its own is graded exactly as before, so a
+# malformed capture from a normal exit is still a graded RED. When the boot's own `timeout -s KILL` fires,
+# GNU timeout (kingdom) reports 137, which is KILLED-AFTER-BANNER; uutils timeout 0.10.0, the ubuntu-26.04
+# runner's /usr/bin/timeout, reports 124, a plain status, so there a timed-out boot is graded as a finished one,
+# as it was before 2026-09-29. A child's own death by signal N is 128+N under both.
+#
+# THE STATUS IS THE PIPELINE'S OWN, AS ITS INNER COMMAND RECORDS IT (Astra R2): right after the
+# pipeline ends, inside the command xvfb-run runs, the inner `bash -c` writes the `timeout ... bochs`
+# element's status to bochs_out.txt.pipeline-status in the boot directory, then exits with it.
+# Classification reads only that file (f2__status_class). xvfb-run's own status cannot stand in for
+# it: when xvfb-run's EXIT-trap cleanup fails it exits 5 (or 1 under its set -e) in place of the
+# command's status (F12), and a crash graded under such a status reached the raw-frame graders. A
+# status file that is missing, empty or not a number is NO-STATUS(...), a harness class like the
+# others: never graded, re-rolled, and fail-closed after three. xvfb-run's status is still kept, as
+# bochs_out.txt.wrapper-status beside it, evidence only.
 #
 # PER-ATTEMPT PARSE-ERROR SCOPE: an attempt's own cleanup (f2__attempt_cleanup) runs with the
 # gate-wide KERNEL_PARSE_ERROR_FILE set aside. Nothing inside an attempt parses a capture; grading
@@ -60,9 +64,9 @@
 #     returns 0 for GREEN, nonzero for RED, and prints its own fail_test message on RED.
 #
 #   f2_bochs_attempt GRUBCFG TIMEOUT_S MEGS OUTLOG SRC:DEST...   (DEST is the in-disk path under mnt/)
-#       -> stdout: COMPLETED | DISK-BUILD(step) | NO-OUTPUT | NO-SHUTDOWN | EMULATOR-CRASH(...) |
-#          KILLED-AFTER-BANNER(...) | EXTRACT-FAILURE; on COMPLETED the raw bochs_out.txt has been
-#          copied to OUTLOG
+#       -> stdout: COMPLETED | DISK-BUILD(step) | NO-OUTPUT | NO-SHUTDOWN | NO-STATUS(...) |
+#          EMULATOR-CRASH(...) | KILLED-AFTER-BANNER(...) | EXTRACT-FAILURE; on COMPLETED the raw
+#          bochs_out.txt has been copied to OUTLOG
 #   f2_bochs_leg LEG_LABEL GRADE_FN OUTLOG GRUBCFG TIMEOUT_S MEGS SRC:DEST... [-- GRADE_ARGS...]
 #       -> 0 = graded GREEN; 1 = graded RED (grade_fn reported), harness-exhausted or terminal
 #          (marker emitted)
@@ -77,7 +81,7 @@
 #   flake, adjudicated by the gate/FLAKE-LOG, never silently).
 #   f2_bochs_feed_attempt FEED_ARGS FEEDLOG GRUBCFG TIMEOUT_S MEGS OUTLOG SRC:DEST...
 #       -> stdout: COMPLETED | DISK-BUILD(step) | FEED-NO-LISTEN | NO-OUTPUT | NO-SHUTDOWN |
-#          EMULATOR-CRASH(...) | KILLED-AFTER-BANNER(...) | FEED-NO-SENT | EXTRACT-FAILURE
+#          NO-STATUS(...) | EMULATOR-CRASH(...) | KILLED-AFTER-BANNER(...) | FEED-NO-SENT | EXTRACT-FAILURE
 #   f2_bochs_feed_leg LEG_LABEL GRADE_FN FEED_ARGS FEEDLOG OUTLOG GRUBCFG TIMEOUT_S MEGS SRC:DEST... [-- GRADE_ARGS...]
 #       -> as f2_bochs_leg (fresh feeder + fresh disk per attempt)
 #   f2_harness_summary
@@ -160,7 +164,10 @@ panic: action=report
 log: bochs_log.txt
 BX
       } > bochsrc.txt
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt" )
+      # The inner command records the pipeline's own status (the timeout-bochs element's) in the boot directory
+      # right after the pipeline ends, before xvfb-run's cleanup can replace xvfb-run's status, then exits with
+      # it (Astra R2; the header). f2__status_class reads only that file.
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL ${tmo} bochs -q -f bochsrc.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_out.txt.pipeline-status; exit \$s" )
 }
 
 f2__signal_death() { # STATUS -> rc 0, echoing N, iff STATUS is a shell's 128+N report of a death by signal N (1..64)
@@ -170,8 +177,8 @@ f2__signal_death() { # STATUS -> rc 0, echoing N, iff STATUS is a shell's 128+N 
 
 # The signals that positively identify an emulator crash after the shutdown banner (Astra R1): SIGILL,
 # SIGABRT, SIGBUS, SIGFPE and SIGSEGV (Linux numbers). This is the ONE copy of the list: callers ask
-# f2__post_banner_class for the class and f2__terminal_class for its terminal-ness, so nothing else holds
-# a list that could drift from it.
+# f2__status_class (or f2__post_banner_class) for the class and f2__terminal_class for its terminal-ness,
+# so nothing else holds a list that could drift from it.
 F2_CRASH_SIGNALS=(4 6 7 8 11)
 
 f2__post_banner_class() { # STATUS of a boot that printed the shutdown banner -> the class after the banner:
@@ -191,15 +198,28 @@ f2__terminal_class() { # CLASS -> rc 0 iff the class ends its leg at once: never
     [[ "${1-}" == KILLED-AFTER-BANNER\(* ]]
 }
 
-f2__classify_boot() { # W outlog [boot_status]  -> echoes NO-OUTPUT | NO-SHUTDOWN | EMULATOR-CRASH(...) | KILLED-AFTER-BANNER(...) | EXTRACT-FAILURE | COMPLETED
-    local W="$1" outlog="$2" bst="${3-}" cls
+f2__status_class() { # STATUS_FILE, the boot pipeline's own status as its inner command wrote it -> as
+    # f2__post_banner_class (rc 0 finished, 1 EMULATOR-CRASH, 2 KILLED-AFTER-BANNER), decided ONLY from that
+    # file (Astra R2); a file that is missing, empty or not a plain number 0..255 is NO-STATUS(...), rc 1: a
+    # harness class, never graded, re-rolled like the others
+    local file="${1-}" st
+    st="$(cat -- "$file" 2>/dev/null)" || st=""
+    if [[ ! "$st" =~ ^(0|[1-9][0-9]{0,2})$ ]] || (( st > 255 )); then
+        echo "NO-STATUS(no readable pipeline status in ${file:-<no file named>}: missing, empty or not a number)"
+        return 1
+    fi
+    f2__post_banner_class "$st"
+}
+
+f2__classify_boot() { # W outlog status_file  -> echoes NO-OUTPUT | NO-SHUTDOWN | NO-STATUS(...) | EMULATOR-CRASH(...) | KILLED-AFTER-BANNER(...) | EXTRACT-FAILURE | COMPLETED
+    local W="$1" outlog="$2" stfile="${3-}" cls
     if [[ ! -s "$W/bochs_out.txt" ]]; then echo "NO-OUTPUT"; return; fi
     local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"
     if [[ "$sd" -lt 1 ]]; then echo "NO-SHUTDOWN"; return; fi
-    # The kernel reached its shutdown, but the emulator pipeline then ended by a signal (EMULATOR-CRASH and
-    # KILLED-AFTER-BANNER in the header): not a finished boot, and never graded -- the capture is NOT copied to
-    # OUTLOG. Without a status (a direct caller that passes none) nothing changes.
-    if ! cls="$(f2__post_banner_class "$bst")"; then echo "$cls"; return; fi
+    # The kernel reached its shutdown. Whether the emulator pipeline then finished is decided ONLY from the
+    # pipeline's own status file (NO-STATUS, EMULATOR-CRASH and KILLED-AFTER-BANNER in the header): anything but
+    # a finished boot is never graded -- the capture is NOT copied to OUTLOG.
+    if ! cls="$(f2__status_class "$stfile")"; then echo "$cls"; return; fi
     cp "$W/bochs_out.txt" "$outlog" || { echo "EXTRACT-FAILURE"; return; }
     echo "COMPLETED"
 }
@@ -218,8 +238,8 @@ f2_bochs_attempt() { # grubcfg timeout_s megs outlog src:dest...
     bcls="$(f2__disk_build_class "$W" "$grubcfg" "$@")" || { [[ "$bcls" == *LEAKED* ]] || f2__attempt_cleanup "$W"; echo "$bcls"; return; }
     local brc=0
     f2__boot "$W" "$tmo" "$megs" "" || brc=$?
-    { printf '%s\n' "$brc" > "$W/boot.status"; } 2>/dev/null   # evidence only (retained with the attempt)
-    local cls; cls="$(f2__classify_boot "$W" "$outlog" "$brc")"
+    { printf '%s\n' "$brc" > "$W/bochs_out.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
+    local cls; cls="$(f2__classify_boot "$W" "$outlog" "$W/bochs_out.txt.pipeline-status")"
     f2__attempt_cleanup "$W"; echo "$cls"
 }
 
@@ -239,13 +259,13 @@ f2_bochs_feed_attempt() { # feed_args feedlog grubcfg timeout_s megs outlog src:
     if [[ "$ok" -ne 1 ]]; then kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; f2__attempt_cleanup "$W"; echo "FEED-NO-LISTEN"; return; fi
     local brc=0
     f2__boot "$W" "$tmo" "$megs" "com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port" || brc=$?
-    { printf '%s\n' "$brc" > "$W/boot.status"; } 2>/dev/null   # evidence only (retained with the attempt)
+    { printf '%s\n' "$brc" > "$W/bochs_out.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     # bounded post-boot grace for the feeder-side SENT (a non-reading guest lets Bochs run the moment the TCP
     # connect completes, possibly before a starved feeder returns from accept()+sendall(); cross-model Codex,
     # tranche 1b): no wait at all on the normal path (SENT is already logged), at most 2s otherwise.
     for i in $(seq 1 20); do grep -q '^SENT' "$feedlog" 2>/dev/null && break; sleep 0.1; done
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
-    local cls; cls="$(f2__classify_boot "$W" "$outlog" "$brc")"
+    local cls; cls="$(f2__classify_boot "$W" "$outlog" "$W/bochs_out.txt.pipeline-status")"
     f2__attempt_cleanup "$W"
     if [[ "$cls" == "COMPLETED" ]] && ! grep -q '^SENT' "$feedlog" 2>/dev/null; then echo "FEED-NO-SENT"; return; fi
     echo "$cls"

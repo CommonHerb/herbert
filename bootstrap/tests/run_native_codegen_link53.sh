@@ -332,11 +332,14 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
+    # The inner command records the pipeline's own status before xvfb-run's cleanup can replace xvfb-run's, and
+    # the attempt is classified only from that file (Astra R2; bochs_f2_harness.sh header). xvfb-run's status is
+    # kept as bochs_out.txt.wrapper-status, evidence only.
     local brc=0
     ( cd "$d"
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt" ) || brc=$?   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
-    { printf '%s\n' "$brc" > "$d/boot.status"; } 2>/dev/null   # evidence only
-    local cls; cls="$(f2__classify_boot "$d" "$rawout" "$brc")"
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $to bochs -q -f $d/bochsrc.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_out.txt.pipeline-status; exit \$s" ) || brc=$?   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+    { printf '%s\n' "$brc" > "$d/bochs_out.txt.wrapper-status"; } 2>/dev/null   # evidence only, never classified
+    local cls; cls="$(f2__classify_boot "$d" "$rawout" "$d/bochs_out.txt.pipeline-status")"
     [[ "$cls" == COMPLETED ]] || { BOCHS_HARNESS_ERR="$cls"; return 1; }
 }
 if have_bochs; then

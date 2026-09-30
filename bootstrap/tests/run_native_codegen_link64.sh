@@ -262,7 +262,7 @@ menuentry "c" {
     fi
     f2__boot "$W" 120 64 "com1: enabled=1, mode=socket-client, dev=127.0.0.1:$port"
     local boot_rc=$?
-    printf '%s\n' "$boot_rc" > "$W/boot.status"
+    printf '%s\n' "$boot_rc" > "$W/bochs_out.txt.wrapper-status"   # xvfb-run's status: evidence only, never classified
     # drain-before-kill (completeness-critic catch): the feeder writes cap.bin only after its recv loop
     # ends (peer-close/hold); killing it first could vaporize a COMPLETED run's capture -> a false RED
     # the taxonomy forbids re-rolling. Bochs has exited here, so the socket is closed -- give the feeder
@@ -277,12 +277,12 @@ menuentry "c" {
         bochs_finish_attempt "$W" "$BOCHS_HARNESS_ERR" || return 1
         return 2
     fi
-    # The shared harness's classes after the banner (bochs_f2_harness.sh header): the kernel reached its
-    # shutdown but the emulator pipeline then died of a signal, so this capture is not graded. A positively
-    # identified crash (EMULATOR-CRASH) re-rolls; any other signal (KILLED-AFTER-BANNER, a kill) is terminal:
-    # return 3, never re-rolled (Astra R1).
+    # The shared harness's classes after the banner (bochs_f2_harness.sh header), decided only from the
+    # pipeline's own status file that f2__boot's inner command wrote (Astra R2): a missing or unreadable one
+    # (NO-STATUS) and a positively identified crash (EMULATOR-CRASH) re-roll, never graded; any other signal
+    # (KILLED-AFTER-BANNER, a kill) is terminal: return 3, never re-rolled (Astra R1).
     local pcls prc=0
-    pcls="$(f2__post_banner_class "$boot_rc")" || prc=$?
+    pcls="$(f2__status_class "$W/bochs_out.txt.pipeline-status")" || prc=$?
     if [[ "$prc" -ne 0 ]]; then
         BOCHS_HARNESS_ERR="$pcls -- emulator, not a kernel grade"
         bochs_finish_attempt "$W" "$BOCHS_HARNESS_ERR" || return 1
