@@ -38,7 +38,9 @@ TREE rows (this tree's harness, under both routings):
                     (status 137), terminal: one boot, never re-rolled, never graded, exit 1, no GREEN
   wrong-kill-then-ok  a WRONG answer, the banner, then SIGKILL, followed by a clean boot: still RED, one
                     boot; the clean boot is never reached (Astra's R1 reproduction)
-  term-then-ok      SIGTERM after the banner: KILLED-AFTER-BANNER (status 143), terminal, RED
+  term-then-ok      status 143 after the banner, what a death by SIGTERM gives where timeout passes it on:
+                    KILLED-AFTER-BANNER, terminal, RED. The stand-in exits 143 rather than dying of SIGTERM,
+                    because one GitHub runner image's timeout reports that death as a plain number
   crash-always      every attempt crashes: three EMULATOR-CRASH re-rolls, HARNESS-ERROR, exit 1, no
                     kernel-RED line, never GREEN
   early-crash       SIGSEGV before the banner stays NO-SHUTDOWN (link66's fault legs rely on that)
@@ -167,7 +169,7 @@ if action == 'abort':
 if action in ('kill', 'wrongkill'):
     die(signal.SIGKILL)
 if action == 'term':
-    die(signal.SIGTERM)
+    sys.exit(143)   # 128 + SIGTERM, as the pipeline reports that death where timeout passes it on (docstring)
 if action == 'junk':
     emit(out, b'bochs: unexpected diagnostic\n')
 sys.exit(1)   # real Bochs exits 1 after "shutdown requested"
