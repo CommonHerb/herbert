@@ -1596,18 +1596,25 @@ func nc_tuple_depth_loop(pool, t, i, depths):
     return nc_tuple_depth_loop(pool, t, i + 1, depths)
 end
 
--- A caller can supply tuple levels absent from a callee's own syntax. Record
--- the deepest pushed return before unification, even if it is still partial.
--- Parameters are already fixed by the fully known specialization key.
-func nc_tuple_note_push(pool, funcs, inst, want):
+-- Record the supplier of a structural return constraint, not its current depth:
+-- that type can contain the same recursion whose growth we are checking.
+func nc_tuple_note_push(funcs, inst, caller, want):
     if want < nc_type_struct_base():
         return 0
     end
-    let d = nc_tuple_depth_loop(pool, want, 0, new_array(int))
-    if d > nc_tuple_push_depth(funcs.2, inst, 0, count(funcs.2), 0):
-        do add(funcs.2, (inst, d))
+    return nc_tuple_note_push_loop(funcs.2, inst, caller, 0, count(funcs.2))
+end
+
+func nc_tuple_note_push_loop(pushes, inst, caller, i, n):
+    if i >= n:
+        do add(pushes, (inst, caller))
+        return 0
     end
-    return d
+    let p = get(pushes, i)
+    if p.0 == inst and p.1 == caller:
+        return 0
+    end
+    return nc_tuple_note_push_loop(pushes, inst, caller, i + 1, n)
 end
 
 func nc_tuple_sites_node(nodes, idx, acc):
@@ -1665,28 +1672,27 @@ func nc_tuple_depth_vec(depths, vec, i, n, best):
     return nc_tuple_depth_vec(depths, vec, i + 1, n, best)
 end
 
-func nc_tuple_push_depth(pushes, inst, i, n, best):
+func nc_tuple_add_pushers(pushes, inst, i, n, order):
     if i >= n:
-        return best
+        return 0
     end
     let p = get(pushes, i)
     if p.0 == inst:
-        if p.1 > best:
-            best = p.1
+        if not nc_tuple_int_array_has(order, p.1, 0, count(order)):
+            do add(order, p.1)
         end
     end
-    return nc_tuple_push_depth(pushes, inst, i + 1, n, best)
+    return nc_tuple_add_pushers(pushes, inst, i + 1, n, order)
 end
 
 -- A finite return path gains levels only at tuple literals, tuple type
--- expressions and stdin_read, or from parameter/pushed-return types entering
--- these instances. Merge adds no level; arrays and projections add none.
--- Count each constructor site once per reachable specialization, plus the
--- deepest entering type. Revisiting a constructor on a type path would require
--- infinite depth. Recorded call targets include every callee used so far.
--- Unrelated callers and functions cannot raise this bound.
--- Breadth-first over the instances reachable from the growing one; stop as
--- soon as the budget reaches the checked depth, since that cannot reject.
+-- expressions and stdin_read, or from fully known specialization parameters.
+-- Merge, arrays and projections add no level. Walk callees AND suppliers of
+-- pushed return constraints, counting each instance's constructors only once.
+-- A push can carry recursive growth; following its supplier keeps the budget
+-- finite instead of adding that growth to the budget on every round.
+-- A supplier's other syntax and callees can raise this conservative bound.
+-- Stop once the budget reaches the checked depth, since that cannot reject.
 func nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos, sites, edge, depth):
     if sites + edge >= depth:
         return sites + edge
@@ -1698,7 +1704,7 @@ func nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos, sites, ed
     let inst = get(funcs.0, cur)
     let here = nc_tuple_sites_node(nodes, get(fn_nodes, inst.0), 0)
     let e = nc_tuple_depth_vec(depths, inst.1, 0, count(inst.1), edge)
-    e = nc_tuple_push_depth(funcs.2, cur, 0, count(funcs.2), e)
+    let supplied = nc_tuple_add_pushers(funcs.2, cur, 0, count(funcs.2), order)
     let added = nc_tuple_add_callees(funcs.1, cur, 0, count(funcs.1), order)
     return nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos + 1, sites + here, e, depth)
 end
@@ -1916,7 +1922,7 @@ func nc_poly_constrain_user_call(pool, nodes, prog_idx, call_idx, env, want, sig
     if nc_func_never_returns(nodes, prog_idx, callee.1):
         return (0, ar.2, gi.2, changed)
     end
-    let pushed = nc_tuple_note_push(pool, funcs, gi.1, want)
+    let pushed = nc_tuple_note_push(funcs, gi.1, fn_idx, want)
     let su = nc_sig_unify_ret(pool, gi.2, gi.1, want, node.3, nodes, prog_idx, funcs)
     if su.0 != 0:
         return (su.0, ar.2, gi.2, changed)

@@ -2183,6 +2183,18 @@
       "profile": "reject",
       "source": "func p():\n    return true\nend\nfunc main():\n    let x = 0\n    x = p()\n    if x:\n        let y = 0\n        y = \"bad\"\n    end\n    return 0\nend\n",
       "diagnostic": "line 7: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "recursive-tuple-return-push-self",
+      "profile": "reject",
+      "source": "func node():\n    let kids = node()\n    do add(node(), (kids, 0))\n    return kids\nend\nfunc main():\n    let t = node()\n    return 0\nend\n",
+      "diagnostic": "line 3: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "recursive-tuple-return-push-from-main",
+      "profile": "reject",
+      "source": "func g():\n    return g()\nend\nfunc f():\n    let a = f()\n    let q = g()\n    return (a, 1)\nend\nfunc main():\n    let p = f()\n    do add(g(), p)\n    return 0\nend\n",
+      "diagnostic": "line 7: native-subset: structural type conflict (ERR 430)"
     }
   ]
 }
