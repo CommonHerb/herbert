@@ -186,6 +186,7 @@ bochs_run() { # out fbyte delay timeout [expect_full=1]  -> nonzero (sets BOCHS_
         BOCHS_HARNESS_ERR="the checked disk build failed: $bcls -- a host harness failure (never booted, never graded), not a kernel miscompile"
         kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null; return 1
     fi
+    local brc=0
     ( cd "$d"
       cat > bochsrc.txt <<BX
 romimage: file=$BXSHARE/BIOS-bochs-legacy
@@ -199,13 +200,18 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $to bochs -q -f bochsrc.txt" )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL $to bochs -q -f bochsrc.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_out.txt.pipeline-status; exit \$s" ) || brc=$?
+    { printf '%s\n' "$brc" > "$d/bochs_out.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     kill "$bfp" 2>/dev/null; wait "$bfp" 2>/dev/null
     # RUN-1 (expect_full=0) DELIBERATELY withholds the byte (--delay > timeout): the reader PARKS, so there is NO SENT
     # by design and the boot is timeout-killed (never reaches shutdown()). Applying SENT/shutdown there would false-fail
     # the legitimate park test -- so only LISTENING is checked for it. RUN-2 (expect_full=1) delivers + shuts down normally.
+    # The crash class needs that shutdown banner too, so it is RUN-2's alone: RUN-1 ends by its timeout's kill by design.
     if [[ "$expect_full" == "1" ]]; then
         _bochs_ran_ok "$d/bochs_out.txt" "prober(BOOT)" || return 1
+        # The boot's own pipeline status decides (bochs_f2_harness.sh, f2_boot_status_check): NO-STATUS and
+        # EMULATOR-CRASH re-roll, KILLED-AFTER-BANNER ends the leg; none is ever graded (FLAKE-LOG F13).
+        f2_boot_status_check "$d/bochs_out.txt.pipeline-status" "booting prober(BOOT) (log: $d/bochs_out.txt)" || return 1
         _feed_delivered "$d/feed.log" "prober(BOOT)" || return 1
     fi
     python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$out"
@@ -225,8 +231,10 @@ if have_bochs; then
     # RUN-2 (delivers the byte -> the reader wakes + the kernel shuts down: full harness checks apply)
     b2_done=0
     for attempt in 1 2 3; do
-        BOCHS_HARNESS_ERR=""
+        BOCHS_HARNESS_ERR=""; BOCHS_HARNESS_TERMINAL=""
         if ! bochs_run "$work/b2" "$FBYTE" 3 150; then
+            # a kill after the shutdown banner is terminal: never re-rolled, never graded; the leg fails (Astra R1)
+            if [[ -n "$BOCHS_HARNESS_TERMINAL" ]]; then f2_harness_terminal "(C-Bochs RUN-2)" "$attempt" "$BOCHS_HARNESS_ERR"; fail=$((fail + 1)); b2_done=1; break; fi
             echo "  HARNESS ERROR (Bochs RUN-2 attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue
         fi
         if python3 "$REF" gradefurl "$work/b2" "$KEND" "$K" run2 "$FBYTE" >/dev/null 2>&1; then ok "(C) Bochs RUN-2: block/wake is byte-identical on the 2nd substrate (GRUB delivers A,B,C)"

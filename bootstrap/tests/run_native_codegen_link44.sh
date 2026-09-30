@@ -48,6 +48,7 @@ native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 ok() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "  PASS: $1"; pass=$((pass + 1)); }
 fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_kvm() { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -285,6 +286,7 @@ BX
           yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt
           statuses=("${PIPESTATUS[@]}")
           printf "yes_exit=%s\ntimeout_bochs_exit=%s\n" "${statuses[0]}" "${statuses[1]}" > emulator-pipeline-status.txt
+          printf "%s\n" "${statuses[1]}" > bochs_out.txt.pipeline-status
           exit "${statuses[1]}"
       '
     )
@@ -295,6 +297,14 @@ BX
     # remain authoritative. An unfinished boot alone does not identify its cause.
     if ! grep -qa 'shutdown requested' "$d/bochs_out.txt"; then
         _bochs_failure "Bochs did not reach a kernel shutdown tail (process status $status; cause requires raw-log investigation)"
+        return 1
+    fi
+    # The kernel reached its shutdown; whether the emulator pipeline then finished is decided only from the status
+    # file the inner command wrote above (the shared harness's classes, bochs_f2_harness.sh; FLAKE-LOG F13), never
+    # from xvfb-run's $status, which its cleanup can replace (F12) and which is recorded above as evidence only.
+    # NO-STATUS and EMULATOR-CRASH re-roll like the failures above; KILLED-AFTER-BANNER ends the leg; none is graded.
+    if ! f2_boot_status_check "$d/bochs_out.txt.pipeline-status" "(pipeline statuses: $d/emulator-pipeline-status.txt)"; then
+        _bochs_failure "$BOCHS_HARNESS_ERR"
         return 1
     fi
     if ! grep -q '^SENT' "$d/feed.log"; then
@@ -314,8 +324,10 @@ if have_bochs; then
     emu_ran=1
     bochs_done=0
     for attempt in 1 2 3; do
-        BOCHS_HARNESS_ERR=""
+        BOCHS_HARNESS_ERR=""; BOCHS_HARNESS_TERMINAL=""
         if ! bochs_run gx "$attempt"; then
+            # a kill after the shutdown banner is terminal: never re-rolled, never graded; the leg fails (Astra R1)
+            if [[ -n "$BOCHS_HARNESS_TERMINAL" ]]; then f2_harness_terminal "(C-Bochs)" "$attempt" "$BOCHS_HARNESS_ERR"; fail=$((fail + 1)); bochs_done=1; break; fi
             echo "  HARNESS ERROR (Bochs attempt $attempt/3): $BOCHS_HARNESS_ERR" >&2
             continue
         fi

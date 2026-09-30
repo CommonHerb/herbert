@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Exercise Link 44's actual Bochs retry block with controlled host-command stubs.
 
-This checks attempt isolation and evidence retention, not kernel behavior. No
+This checks attempt isolation and evidence retention, not kernel behavior, and
+how a boot that printed the kernel's shutdown banner is classed from its
+pipeline's own status file (FLAKE-LOG F13): a crash (status 139) is re-rolled
+and never graded, also when the wrapper's cleanup replaces the wrapper's status
+with 5; a kill (status 137) ends the leg at once, never graded; and a boot whose
+status file cannot be written (NO-STATUS) is re-rolled, never graded. No
 emulator, disk mount, privileged command or compiler is executed. The real
 required-substrate gate must still run separately. Every scenario runs under
 both routings of the wrapped command's stderr that the wrapper's versions use. One
@@ -71,7 +76,7 @@ case "$XVFB_ROUTING" in
     *) echo "wrapper stub: unknown XVFB_ROUTING '$XVFB_ROUTING'" >&2; exit 98 ;;
 esac
 rc=$?
-if [[ "$SCENARIO" == xvfb-cleanup-error ]]; then
+if [[ "$SCENARIO" == xvfb-cleanup-error || "$SCENARIO" == crash-cleanup-error ]]; then
     echo {CLEANUP_ERROR.strip()!r} >&2
     exit 5
 fi
@@ -97,10 +102,16 @@ if os.environ["SCENARIO"] == "all-fail" or (
         log.write("injected first-attempt disk lock / failure\\n")
     print("injected unfinished boot", flush=True)
     sys.exit(139)
+if os.environ["SCENARIO"] == "no-status" and count == 1:
+    Path("bochs_out.txt.pipeline-status").mkdir()   # the inner command cannot write its status: NO-STATUS
 for stream, data in ((sys.stderr, b"emulator preamble\\n"), (sys.stdout, b"\\x9cCONTROLLED-WITNESS\\n"),
                      (sys.stderr, b"shutdown requested\\n")):
     stream.buffer.write(data)
     stream.buffer.flush()
+if os.environ["SCENARIO"] in ("crash-after-banner", "crash-cleanup-error") and count == 1:
+    sys.exit(139)   # the status bash reports for a boot pipeline killed by SIGSEGV after the banner
+if os.environ["SCENARIO"] == "kill-after-banner" and count == 1:
+    sys.exit(137)   # the status bash reports for a boot pipeline killed by SIGKILL after the banner
 ''')
     feeder = directory / "feeder.py"
     feeder.write_text('print("LISTENING", flush=True)\nprint("SENT 1 2", flush=True)\n')
@@ -130,6 +141,7 @@ free_port() { echo 54321; }
 ok() { echo "PASS: $1"; pass=$((pass + 1)); }
 fail_test() { echo "FAIL: $1"; fail=$((fail + 1)); }
 source "$TEST_HELPER" || exit 1
+source "$TEST_SCRIPTS/bochs_f2_harness.sh" || exit 1
 ''' + block)
     env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
                SCENARIO=scenario, XVFB_ROUTING=routing, TEST_WORK=str(work), TEST_SCRIPTS=str(HERE),
@@ -137,11 +149,13 @@ source "$TEST_HELPER" || exit 1
     result = subprocess.run(["bash", str(driver)], env=env, capture_output=True, timeout=20)
     (directory / "driver.stdout").write_bytes(result.stdout)
     (directory / "driver.stderr").write_bytes(result.stderr)
-    expected_status = 1 if scenario in ("all-fail", "grade-failure", "cleanup-failure", "unshimmed-helper") else 0
+    expected_status = 1 if scenario in ("all-fail", "grade-failure", "cleanup-failure", "unshimmed-helper",
+                                        "kill-after-banner") else 0
     assert result.returncode == expected_status, (routing, scenario, result.returncode, result.stdout, result.stderr)
     attempts = sorted(work.glob("b.gx.attempt-*"))
     expected_attempts = {"first-fails": 2, "all-fail": 3, "grade-failure": 1, "setup-failure": 2, "cleanup-failure": 1,
-                         "xvfb-cleanup-error": 1, "unshimmed-helper": 3}[scenario]
+                         "xvfb-cleanup-error": 1, "unshimmed-helper": 3, "crash-after-banner": 2,
+                         "kill-after-banner": 1, "crash-cleanup-error": 2, "no-status": 2}[scenario]
     assert len(attempts) == expected_attempts, (scenario, attempts)
     notes = [line for line in result.stderr.splitlines() if line.startswith(b"HARNESS-NOTE:")]
     for index, attempt in enumerate(attempts, 1):
@@ -169,30 +183,58 @@ source "$TEST_HELPER" || exit 1
             assert side.read_bytes() == b"emulator preamble\nshutdown requested\n", side.read_bytes()
             assert "xvfb_run_exit=0\n" in status and not (attempt / "grade.log").exists()
             continue
-        if scenario == "xvfb-cleanup-error":
-            # The wrapper's own line stays out of the graded capture; the
-            # completed boot is graded once, on guest bytes, and passes.
+        if scenario in ("xvfb-cleanup-error", "crash-cleanup-error"):
+            # The wrapper's own line stays out of the graded capture; its
+            # status (5) is evidence only and never classifies the boot.
             assert b"xvfb-run" not in capture
-            assert "xvfb_run_exit=5\n" in status and "grade_exit=0\n" in status
+            assert "xvfb_run_exit=5\n" in status
             assert side.read_text() == CLEANUP_ERROR
             assert (attempt / "bochs_out.txt.xvfb-run.exit").read_text() == "5\n"
-            assert notes and str(side.resolve()) in notes[0].decode()
+            assert notes and str(side.resolve()) in notes[index - 1].decode()
+            if scenario == "xvfb-cleanup-error":   # the completed boot is graded once, on guest bytes, and passes
+                assert "grade_exit=0\n" in status
         else:
             assert not side.exists() and not (attempt / "bochs_out.txt.xvfb-run.exit").exists()
         pipeline = (attempt / "emulator-pipeline-status.txt").read_text()
         assert "yes_exit=" in pipeline
         failed = scenario == "all-fail" or (scenario == "first-fails" and index == 1)
-        assert f"timeout_bochs_exit={139 if failed else 0}\n" in pipeline
+        crashed = scenario in ("crash-after-banner", "crash-cleanup-error") and index == 1
+        killed = scenario == "kill-after-banner" and index == 1
+        unrecorded = scenario == "no-status" and index == 1
+        own = 139 if failed or crashed else 137 if killed else 0
+        assert f"timeout_bochs_exit={own}\n" in pipeline
+        # The pipeline's own status, which alone classifies a boot that printed the banner.
+        recorded = attempt / "bochs_out.txt.pipeline-status"
+        assert recorded.is_dir() if unrecorded else recorded.read_text() == f"{own}\n", (scenario, index)
         assert (attempt / "disk.img.lock").exists() == failed
         if failed:
             assert not (attempt / "grade.log").exists()
+        elif crashed or killed or unrecorded:
+            # The kernel's banner is in the capture, but the pipeline's own status
+            # says the boot did not finish: never graded. A crash and a missing
+            # status re-roll; a kill ends the leg (the attempt count above).
+            # (The unwritable status file makes the inner bash report an error, which the capture merges.)
+            banner = b"emulator preamble\n\x9cCONTROLLED-WITNESS\nshutdown requested\n"
+            assert capture.startswith(banner) if unrecorded else capture == banner, (routing, capture)
+            assert not (attempt / "grade.log").exists()
+            if crashed:
+                want = "EMULATOR-CRASH(status 139 = signal 11 after the shutdown banner)"
+            elif killed:
+                want = "KILLED-AFTER-BANNER(status 137 = signal 9: a kill after the shutdown banner"
+            else:
+                want = "NO-STATUS("
+            assert want in (attempt / "attempt-result.txt").read_text(), (scenario, (attempt / "attempt-result.txt").read_text())
         else:
             # The emulator's stderr, banner included, is in the capture in
             # write order, whichever routing the wrapper uses.
             assert capture == b"emulator preamble\n\x9cCONTROLLED-WITNESS\nshutdown requested\n", (routing, capture)
             assert "grade_exit=" in status and (attempt / "grade.log").is_file()
     # The wrapper's diagnostics reach stderr as one note, never stdout.
-    assert len(notes) == {"xvfb-cleanup-error": 1, "unshimmed-helper": 3}.get(scenario, 0), (scenario, notes)
+    assert len(notes) == {"xvfb-cleanup-error": 1, "unshimmed-helper": 3, "crash-cleanup-error": 2}.get(scenario, 0), (scenario, notes)
+    if scenario == "kill-after-banner":   # one terminal marker, never a re-roll line, never a behavior grade
+        errors = [line for line in result.stdout.splitlines() if line.startswith(b"HARNESS-ERROR:")]
+        assert len(errors) == 1 and b"KILLED-AFTER-BANNER(status 137" in errors[0] and b"not re-rolled" in errors[0], errors
+        assert b"HARNESS ERROR (Bochs attempt" not in result.stderr and b"PASS: (C) Bochs" not in result.stdout
     assert b"HARNESS-NOTE" not in result.stdout
     # Exercise the production capture path too: every attempt's status/logs and
     # the first lock must survive cleanup's ordinary inventory rules.
@@ -216,7 +258,8 @@ def main():
         root = Path(temporary)
         for routing in ROUTINGS:
             for scenario in ("first-fails", "all-fail", "grade-failure", "setup-failure", "cleanup-failure",
-                             "xvfb-cleanup-error"):
+                             "xvfb-cleanup-error", "crash-after-banner", "kill-after-banner", "crash-cleanup-error",
+                             "no-status"):
                 run_case(root / f"{routing}-{scenario}", scenario, routing)
         source = (HERE / "kernel_evidence.sh").read_text()
         assert source.count(WRAPPER_LINE) == 1, "kernel_evidence.sh: the shimmed xvfb-" "run line is not there exactly once"

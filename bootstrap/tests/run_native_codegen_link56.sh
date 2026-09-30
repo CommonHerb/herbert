@@ -329,7 +329,7 @@ if have_bochs; then
     # trace: the feeder must LISTEN (bind) + deliver (SENT -> Bochs connected COM1) + the kernel must run THROUGH its
     # shutdown() tail ('shutdown requested' -> shutdown() writes "Shutdown" to Bochs port 0x8900). Any of these missing =>
     # a re-rollable emulator/feeder failure, NEVER a false kernel RED.
-    bochs_emit=""; bochs_harness_fail=1; BOCHS_HARNESS_ERR=""
+    bochs_emit=""; bochs_harness_fail=1; BOCHS_HARNESS_ERR=""; bochs_terminal=0
     for try in 1 2 3; do
         # a FRESH disk in a fresh directory for every try, built by the shared harness's CHECKED build (red-run
         # sweep 2026-09-29): this disk used to be built ONCE before the loop, unchecked (mkfs's errors discarded),
@@ -357,10 +357,20 @@ BX
         _ok_listen=1; for i in $(seq 1 50); do grep -q LISTENING "$d/feed.log" && { _ok_listen=0; break; }; sleep 0.1; done
         if [[ $_ok_listen -ne 0 ]]; then BOCHS_HARNESS_ERR="the COM1 feeder never reached LISTENING"; kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; echo "  HARNESS ERROR (Bochs larder witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi
         sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b.txt"
-        ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+        bst=0
+        ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs.txt.pipeline-status; exit \$s" ) || bst=$?   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+        { printf '%s\n' "$bst" > "$d/bochs.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
         if ! grep -q '^SENT' "$d/feed.log" 2>/dev/null; then BOCHS_HARNESS_ERR="the COM1 feeder never delivered its payload (no SENT / NOCONN -- Bochs did not connect COM1, the kernel got no input)"; echo "  HARNESS ERROR (Bochs larder witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi
         if ! grep -qa 'shutdown requested' "$d/bochs.txt" 2>/dev/null; then BOCHS_HARNESS_ERR="Bochs did NOT run through to the kernel shutdown tail (no 'shutdown requested' -- killed or hung mid-run)"; echo "  HARNESS ERROR (Bochs larder witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue; fi
+        # The boot's own pipeline status decides (bochs_f2_harness.sh, f2_boot_status_check; FLAKE-LOG F13): NO-STATUS
+        # and EMULATOR-CRASH re-roll, never graded; a kill after the banner (KILLED-AFTER-BANNER) ends the leg at
+        # once, never graded and never re-rolled (Astra R1).
+        BOCHS_HARNESS_TERMINAL=""
+        if ! f2_boot_status_check "$d/bochs.txt.pipeline-status" "(log: $d/bochs.txt)"; then
+            if [[ -n "$BOCHS_HARNESS_TERMINAL" ]]; then f2_harness_terminal "(C-Bochs) larder witness" "$try" "$BOCHS_HARNESS_ERR"; fail=$((fail + 1)); bochs_terminal=1; break; fi
+            echo "  HARNESS ERROR (Bochs larder witness try $try/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2; continue
+        fi
         # This attempt passed LISTENING+SENT+shutdown -> the harness SUCCEEDED, so from here the grade is a GENUINE
         # kernel verdict, NOT a harness failure. Set the flag NOW (not only on a definitive grade) so that a grade
         # which merely LOOKS like a struct-flake but is actually a real value-RED (e.g. larder's 'missing 0xE2 ...
@@ -372,7 +382,9 @@ BX
         bochs_emit="$(python3 "$LB" grade "$d/out" "$SEED" 2>&1)"
         is_struct_flake "$bochs_emit" || break   # a definitive grade (GREEN or a real value-RED) -> stop retrying
     done
-    if [[ $bochs_harness_fail -ne 0 ]]; then
+    if [[ $bochs_terminal -eq 1 ]]; then
+        :   # a kill after the banner: reported by f2_harness_terminal and failed in the loop, never graded
+    elif [[ $bochs_harness_fail -ne 0 ]]; then
         # 3 consecutive HARNESS failures (feeder/emulator, never the kernel). Distinct greppable marker (NOT the kernel-RED
         # FAIL: prefix); fatal only when the Bochs substrate is REQUIRED (REQUIRE_EMU=1).
         if [[ "$REQUIRE_EMU" == "1" ]]; then echo "HARNESS-ERROR: (C-Bochs) the REQUIRED Bochs substrate failed 3 consecutive harness attempts -- ${BOCHS_HARNESS_ERR:-missing/truncated trace} (re-rollable emulator/feeder failure, NOT a kernel miscompile; the gate is RED only because KERNEL_CODEGEN_REQUIRE_EMU=1)"; fail=$((fail + 1))

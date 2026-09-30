@@ -211,6 +211,20 @@ f2__status_class() { # STATUS_FILE, the boot pipeline's own status as its inner 
     f2__post_banner_class "$st"
 }
 
+f2_boot_status_check() { # STATUS_FILE CONTEXT -- for a gate that boots Bochs inline (its own boot line, its own
+    # retry loop): after the gate's own no-output and shutdown checks, and before anything is extracted or graded,
+    # class the boot from its pipeline's own status file (f2__status_class; the header). rc 0: a finished boot,
+    # grade it. rc 1: not a finished boot, never graded; BOCHS_HARNESS_ERR names the class. The gate re-rolls it,
+    # unless BOCHS_HARNESS_TERMINAL is now 1 (KILLED-AFTER-BANNER): then its loop must stop, report
+    # f2_harness_terminal and fail the leg. The caller clears BOCHS_HARNESS_TERMINAL before each attempt.
+    local cls rc=0
+    cls="$(f2__status_class "$1")" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then return 0; fi
+    BOCHS_HARNESS_ERR="$cls $2 -- not a finished boot, so this capture is not graded; not a kernel miscompile"
+    if [[ "$rc" -eq 2 ]]; then BOCHS_HARNESS_TERMINAL=1; fi
+    return 1
+}
+
 f2__classify_boot() { # W outlog status_file  -> echoes NO-OUTPUT | NO-SHUTDOWN | NO-STATUS(...) | EMULATOR-CRASH(...) | KILLED-AFTER-BANNER(...) | EXTRACT-FAILURE | COMPLETED
     local W="$1" outlog="$2" stfile="${3-}" cls
     if [[ ! -s "$W/bochs_out.txt" ]]; then echo "NO-OUTPUT"; return; fi

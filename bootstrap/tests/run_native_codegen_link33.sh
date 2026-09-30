@@ -60,6 +60,7 @@ trap 'kernel_test_cleanup "$work"' EXIT
 native_codegen_ensure_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
+source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
 
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
@@ -167,7 +168,8 @@ qemu_run() { # elf mod mem outfile
 # attempt 1) was a HOST-side loop-mount race (`wrong fs type ... /dev/loop0p1`) that fed Bochs a
 # stale disk -> shutdown=0 -> mis-scored as a kernel RED. Now: every disk-build command is CHECKED
 # with explicit mount/loop cleanup on every exit path (no global `losetup -D`); a boot attempt is
-# CLASSIFIED (DISK-BUILD(step) / NO-OUTPUT / NO-SHUTDOWN vs COMPLETED); a harness failure re-rolls
+# CLASSIFIED (DISK-BUILD(step) / NO-OUTPUT / NO-SHUTDOWN / NO-STATUS / EMULATOR-CRASH vs COMPLETED; KILLED-AFTER-BANNER
+# ends the leg); a harness failure re-rolls
 # on a FRESH disk up to 3 attempts; exhaustion emits a greppable HARNESS-ERROR marker (never the
 # `FAIL:` kernel-RED prefix) and FAILS CLOSED UNCONDITIONALLY (the tranche-1a-endorsed tightening --
 # a gate must not PASS with an attempted leg unadjudicated, regardless of REQUIRE_EMU). Only a boot
@@ -178,7 +180,7 @@ harness_error() { # leg-label last-class
     harness_fail=$((harness_fail + 1))
 }
 
-bochs_attempt() { # elf mod outfile  -> stdout: COMPLETED | DISK-BUILD(step) | EXTRACT-FAILURE | NO-OUTPUT | NO-SHUTDOWN
+bochs_attempt() { # elf mod outfile  -> stdout: COMPLETED | DISK-BUILD(step) | EXTRACT-FAILURE | NO-OUTPUT | NO-SHUTDOWN | NO-STATUS(...) | EMULATOR-CRASH(...) | KILLED-AFTER-BANNER(...)
     local elf="$1" mod="$2" outfile="$3"
     : > "$outfile"   # truncate up front: no stale stream can ever be graded (Codex leg, change 1)
     local W; W="$(mktemp -d)"
@@ -214,6 +216,7 @@ bochs_attempt() { # elf mod outfile  -> stdout: COMPLETED | DISK-BUILD(step) | E
       exit 0
     ) || { # never rm -rf a tree that may still hold a live mount (Codex leg, change 2)
            if mountpoint -q "$W/mnt" 2>/dev/null; then echo "DISK-BUILD(cleanup-umount-stuck; tempdir $W LEAKED deliberately)"; else kernel_test_cleanup "$W"; echo "DISK-BUILD(${step:-unknown})"; fi; return; }
+    local brc=0
     ( cd "$W"
       cat > bochsrc.txt <<BX
 romimage: file=$BXSHARE/BIOS-bochs-legacy
@@ -226,10 +229,17 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt" )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 90 bochs -q -f bochsrc.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_out.txt.pipeline-status; exit \$s" ) || brc=$?
+    { printf '%s\n' "$brc" > "$W/bochs_out.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     if [[ ! -s "$W/bochs_out.txt" ]]; then kernel_test_cleanup "$W"; echo "NO-OUTPUT"; return; fi
     local sd; sd=$(grep -ac 'shutdown requested' "$W/bochs_out.txt" 2>/dev/null); sd="${sd:-0}"
     if [[ "$sd" -lt 1 ]]; then kernel_test_cleanup "$W"; echo "NO-SHUTDOWN"; return; fi
+    # The kernel reached its shutdown; whether the boot pipeline then finished is decided only from its own status file,
+    # the shared harness's classes (bochs_f2_harness.sh f2__status_class; FLAKE-LOG F13): NO-STATUS and EMULATOR-CRASH
+    # re-roll on a fresh disk like the classes above, KILLED-AFTER-BANNER ends the leg (bochs_leg); none is extracted
+    # or graded. (This extractor slices at the first DE..AD frame, so without this check a crashed boot's trailer never
+    # reached the grader: a crash after a correct frame was graded GREEN.)
+    local cls; if ! cls="$(f2__status_class "$W/bochs_out.txt.pipeline-status")"; then kernel_test_cleanup "$W"; echo "$cls"; return; fi
     # completed boot: extract the binary 0xE9 stream (first 0x9C entry tag through the DE??AD frame).
     # An extractor FAILURE is a harness event, never a gradeable completion (Codex leg, change 1).
     python3 - "$W/bochs_out.txt" "$outfile" <<'PY' || { kernel_test_cleanup "$W"; echo "EXTRACT-FAILURE"; return; }
@@ -250,6 +260,8 @@ bochs_leg() { # leg-label elf mod outfile kendhex goldenhex  -> 0 GREEN, 1 RED/h
             fail_test "$leg RED (completed Bochs boot, shutdown witnessed): $(python3 "$REF" grade "$outfile" "$khx" "$gb" - 2>&1 | tr '\n' ' ')"
             return 1
         fi
+        # a kill after the shutdown banner is terminal: never re-rolled, never graded; the leg fails (Astra R1)
+        if f2__terminal_class "$cls"; then f2_harness_terminal "$leg" "$attempt" "$cls"; harness_fail=$((harness_fail + 1)); return 1; fi
         echo "HARNESS re-roll: link33 $leg attempt $attempt = $cls (fresh disk retry)" >&2
     done
     harness_error "$leg" "$cls"

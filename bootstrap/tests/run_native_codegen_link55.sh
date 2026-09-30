@@ -770,10 +770,13 @@ BX
     python3 "$feeder" "$port" $putstream --hold 150 > "$d/feed1.log" 2>&1 & local fp=$!
     _feed_ok "$d/feed1.log" "putter.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
-    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b1.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+    local b1rc=0
+    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b1.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_b1.txt.pipeline-status; exit \$s" ) || b1rc=$?   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+    { printf '%s\n' "$b1rc" > "$d/bochs_b1.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b1.txt" "putter.bin(BOOT-1)" || return 1
+    f2_boot_status_check "$d/bochs_b1.txt.pipeline-status" "booting putter.bin(BOOT-1) (log: $d/bochs_b1.txt)" || return 1   # the boot's own pipeline status: NO-STATUS/EMULATOR-CRASH re-roll the attempt, KILLED-AFTER-BANNER ends the leg
     _feed_delivered "$d/feed1.log" "putter.bin(BOOT-1)" || return 1
     # REBOOT -> BOOT-2: swap GRUB's config to the getter (GUARDED), serve the query over com1, re-run.
     port=$(free_port)
@@ -792,10 +795,13 @@ BX
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1
     fi
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b2.txt"
-    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b2.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b2.txt" )   # absolute bochsrc path (scoped-kill: $work in the cmdline)
+    local b2rc=0
+    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b2.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b2.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_b2.txt.pipeline-status; exit \$s" ) || b2rc=$?   # absolute bochsrc path (scoped-kill: $work in the cmdline)
+    { printf '%s\n' "$b2rc" > "$d/bochs_b2.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b2.txt" "getter.bin(BOOT-2)" || return 1
+    f2_boot_status_check "$d/bochs_b2.txt.pipeline-status" "booting getter.bin(BOOT-2) (log: $d/bochs_b2.txt)" || return 1   # the boot's own pipeline status: NO-STATUS/EMULATOR-CRASH re-roll the attempt, KILLED-AFTER-BANNER ends the leg
     _feed_delivered "$d/feed2.log" "getter.bin(BOOT-2)" || return 1
     python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_b2.txt" "$b2out"
 }
@@ -812,7 +818,7 @@ if have_bochs; then
     completed_red=0
     B_A1=""
     for attempt in 1 2 3 4; do
-        BOCHS_HARNESS_ERR=""
+        BOCHS_HARNESS_ERR=""; BOCHS_HARNESS_TERMINAL=""
         if [[ "$completed_red" -eq 0 ]]; then
             BSEED="${CAIRN_BOCHS_SEED:-$(python3 -c 'import os;print(os.urandom(8).hex())')}"
             [[ "$BSEED" =~ ^[0-9a-fA-F]{16}$ ]] || { echo "FAIL: CAIRN_BOCHS_SEED must be 16 hexadecimal digits" >&2; exit 1; }
@@ -822,6 +828,16 @@ if have_bochs; then
             BQD="$(python3 "$LB" querystream "$BDN")"     # query the DECOY on Bochs (the harder, returnfirst-killing query)
         fi
         if ! bochs_two_boot_query "$BPUT" "$BQD" "$work/b.b2"; then
+            # a kill after the shutdown banner is terminal: never re-rolled, never graded (Astra R1). During the
+            # same-seed replay it leaves the completed RED unadjudicated, which fails closed as at exhaustion.
+            if [[ -n "$BOCHS_HARNESS_TERMINAL" ]]; then
+                if [[ "$completed_red" -eq 1 ]]; then
+                    fail_test "(C-Bochs) two-boot DECOY completed RED (emitted=${B_A1:-EMPTY} want=$BDP) but its same-seed replay ended $BOCHS_HARNESS_ERR -- UNADJUDICATED completed RED, FAILED CLOSED (never cleared, never re-rolled)"
+                else
+                    f2_harness_terminal "(C-Bochs)" "$attempt" "$BOCHS_HARNESS_ERR"; fail=$((fail + 1))
+                fi
+                bochs_done=1; break
+            fi
             [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1
             echo "  HARNESS ERROR (Bochs two-boot attempt $attempt/4): $BOCHS_HARNESS_ERR -- re-rolling the two-boot (setup/no-completion failure, NOT a kernel grade; does not consume the same-seed replay budget)" >&2
             continue

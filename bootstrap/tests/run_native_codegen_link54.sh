@@ -335,10 +335,13 @@ BX
     python3 "$feeder" "$port" "$x" --hold 150 > "$d/feed.log" 2>&1 & local fp=$!
     _feed_ok "$d/feed.log" "writer.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
-    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b1.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+    local b1rc=0
+    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b1.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_b1.txt.pipeline-status; exit \$s" ) || b1rc=$?   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+    { printf '%s\n' "$b1rc" > "$d/bochs_b1.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b1.txt" "writer.bin(BOOT-1)" || return 1
+    f2_boot_status_check "$d/bochs_b1.txt.pipeline-status" "booting writer.bin(BOOT-1) (log: $d/bochs_b1.txt)" || return 1   # the boot's own pipeline status: NO-STATUS/EMULATOR-CRASH re-roll the attempt, KILLED-AFTER-BANNER ends the leg
     _feed_delivered "$d/feed.log" "writer.bin(BOOT-1)" || return 1
     # REBOOT -> BOOT-2: swap GRUB's config to the reader (GUARDED), then re-run. The reader reads the durable byte from
     # DISK (not COM1) -> NO feeder, no SENT check; the config-swap guard + the shutdown-completion sentinel apply. A
@@ -354,18 +357,23 @@ BX
         BOCHS_HARNESS_ERR="the GRUB config swap to reader.bin FAILED (losetup/mount/tee/umount) -- Bochs would boot the STALE writer; harness failure, not a kernel miscompile"
         return 1
     fi
-    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b2.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc.txt" )   # BOOT-2 reader: no COM1 feeder; absolute bochsrc path (scoped-kill: $work in the cmdline)
+    local b2rc=0
+    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b2.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_b2.txt.pipeline-status; exit \$s" ) || b2rc=$?   # BOOT-2 reader: no COM1 feeder; absolute bochsrc path (scoped-kill: $work in the cmdline)
+    { printf '%s\n' "$b2rc" > "$d/bochs_b2.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b2.txt" "reader.bin(BOOT-2)" || return 1
+    f2_boot_status_check "$d/bochs_b2.txt.pipeline-status" "booting reader.bin(BOOT-2) (log: $d/bochs_b2.txt)" || return 1   # the boot's own pipeline status: NO-STATUS/EMULATOR-CRASH re-roll the attempt, KILLED-AFTER-BANNER ends the leg
     python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_b2.txt" "$b2out"
 }
 if have_bochs; then
     emu_ran=1
     bochs_done=0
     for attempt in 1 2 3; do
-        BOCHS_HARNESS_ERR=""
+        BOCHS_HARNESS_ERR=""; BOCHS_HARNESS_TERMINAL=""
         BX=$(( (RANDOM % 255) + 1 )); BXHEX=$(printf '0x%02x' "$BX")
         if ! bochs_two_boot "$BX" "$work/b.b2"; then
+            # a kill after the shutdown banner is terminal: never re-rolled, never graded; the leg fails (Astra R1)
+            if [[ -n "$BOCHS_HARNESS_TERMINAL" ]]; then f2_harness_terminal "(C-Bochs)" "$attempt" "$BOCHS_HARNESS_ERR"; fail=$((fail + 1)); bochs_done=1; break; fi
             echo "  HARNESS ERROR (Bochs two-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the two-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
             continue
         fi

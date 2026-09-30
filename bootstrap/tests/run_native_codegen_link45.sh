@@ -183,6 +183,7 @@ bochs_run() { # kind e9out  -> nonzero (sets BOCHS_HARNESS_ERR) on a harness fai
         BOCHS_HARNESS_ERR="the checked disk build failed: $bcls -- a host harness failure (never booted, never graded), not a kernel miscompile"
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1
     fi
+    local brc=0
     ( cd "$d"
       cat > bochsrc.txt <<BX
 romimage: file=$BXSHARE/BIOS-bochs-legacy
@@ -196,9 +197,13 @@ display_library: x
 panic: action=report
 log: bochs_log.txt
 BX
-      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt" )
+      kernel_xvfb_capture bochs_out.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f bochsrc.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_out.txt.pipeline-status; exit \$s" ) || brc=$?
+    { printf '%s\n' "$brc" > "$d/bochs_out.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     _bochs_ran_ok "$d/bochs_out.txt" "$kind" || return 1
+    # The boot's own pipeline status decides (bochs_f2_harness.sh, f2_boot_status_check): NO-STATUS and
+    # EMULATOR-CRASH re-roll, KILLED-AFTER-BANNER ends the leg; none is ever graded (FLAKE-LOG F13).
+    f2_boot_status_check "$d/bochs_out.txt.pipeline-status" "booting $kind (log: $d/bochs_out.txt)" || return 1
     _feed_delivered "$d/feed.log" "$kind" || return 1
     python3 "$script_dir/debugcon_frames.py" extract "$d/bochs_out.txt" "$e9"
 }
@@ -206,8 +211,10 @@ if have_bochs; then
     emu_ran=1
     bochs_done=0
     for attempt in 1 2 3; do
-        BOCHS_HARNESS_ERR=""
+        BOCHS_HARNESS_ERR=""; BOCHS_HARNESS_TERMINAL=""
         if ! bochs_run gx "$work/b.gx"; then
+            # a kill after the shutdown banner is terminal: never re-rolled, never graded; the leg fails (Astra R1)
+            if [[ -n "$BOCHS_HARNESS_TERMINAL" ]]; then f2_harness_terminal "(C-Bochs)" "$attempt" "$BOCHS_HARNESS_ERR"; fail=$((fail + 1)); bochs_done=1; break; fi
             echo "  HARNESS ERROR (Bochs attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (transient emulator/feeder failure, NOT a kernel RED)" >&2
             continue
         fi

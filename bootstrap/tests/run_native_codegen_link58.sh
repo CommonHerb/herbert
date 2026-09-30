@@ -423,10 +423,13 @@ BX
             kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1
         fi
         sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_run.txt"
-        ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture "$logf" -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_run.txt" )   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+        local prc=0
+        ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture "$logf" -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_run.txt; s=\${PIPESTATUS[1]}; echo \$s > $logf.pipeline-status; exit \$s" ) || prc=$?   # absolute bochsrc path -> $work in the cmdline for the scoped `pkill -f "${work:?}"`
+        { printf '%s\n' "$prc" > "$logf.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
         kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
         rm -f "$d/disk.img.lock"
         _bochs_ran_ok "$logf" "$mod" || return 1
+        f2_boot_status_check "$logf.pipeline-status" "booting $mod (log: $logf)" || return 1   # the boot's own pipeline status: NO-STATUS/EMULATOR-CRASH re-roll the attempt, KILLED-AFTER-BANNER ends the leg
         _feed_delivered "$d/feed.log" "$mod" || return 1
     }
     # BOOT-1 already has putter.bin in grub.cfg (set at install); feed the put-stream.
@@ -434,10 +437,13 @@ BX
     python3 "$feeder" "$port" $putstream --hold 150 > "$d/feed1.log" 2>&1 & local fp=$!
     _feed_ok "$d/feed1.log" "putter.bin(BOOT-1)" || { kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null; return 1; }
     sed "s#__PORT__#$port#" "$d/bochsrc.txt" > "$d/bochsrc_b1.txt"
-    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b1.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt" )   # absolute bochsrc path (scoped-kill: $work in the cmdline)
+    local b1rc=0
+    ( cd "$d"; rm -f disk.img.lock; kernel_xvfb_capture bochs_b1.txt -a bash -c "yes c | timeout -s KILL 150 bochs -q -f $d/bochsrc_b1.txt; s=\${PIPESTATUS[1]}; echo \$s > bochs_b1.txt.pipeline-status; exit \$s" ) || b1rc=$?   # absolute bochsrc path (scoped-kill: $work in the cmdline)
+    { printf '%s\n' "$b1rc" > "$d/bochs_b1.txt.wrapper-status"; } 2>/dev/null   # xvfb-run's status: evidence only, never classified
     kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
     rm -f "$d/disk.img.lock"
     _bochs_ran_ok "$d/bochs_b1.txt" "putter.bin(BOOT-1)" || return 1
+    f2_boot_status_check "$d/bochs_b1.txt.pipeline-status" "booting putter.bin(BOOT-1) (log: $d/bochs_b1.txt)" || return 1   # the boot's own pipeline status: NO-STATUS/EMULATOR-CRASH re-roll the attempt, KILLED-AFTER-BANNER ends the leg
     _feed_delivered "$d/feed1.log" "putter.bin(BOOT-1)" || return 1
     bochs_phase deleter.bin "$delstream" "$d/bochs_b2.txt" || return 1      # BOOT-2: DEL the decoy
     bochs_phase foundprobe.bin "$getstream" "$d/bochs_b3.txt" || return 1   # BOOT-3: FOUND-probe the decoy -> must be found==0 (deleted)
@@ -447,7 +453,7 @@ if have_bochs; then
     emu_ran=1
     bochs_done=0
     for attempt in 1 2 3; do
-        BOCHS_HARNESS_ERR=""
+        BOCHS_HARNESS_ERR=""; BOCHS_HARNESS_TERMINAL=""
         BSEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
         echo "  SEED BSEED=$BSEED" >&2   # seed rider 2026-09-04: STDERR -- four of these sit inside functions whose STDOUT is the return value
         read -r BTN BTP BDN BDP < <(python3 "$LB" records "$BSEED")
@@ -455,6 +461,8 @@ if have_bochs; then
         BDEL="$(python3 "$LB" querystream "$BDN")"     # delete the DECOY
         BGET="$(python3 "$LB" querystream "$BDN")"     # then GET the DECOY -> must be empty (deleted)
         if ! bochs_three_boot_delete "$BPUT" "$BDEL" "$BGET" "$work/b.b3"; then
+            # a kill after the shutdown banner is terminal: never re-rolled, never graded; the leg fails (Astra R1)
+            if [[ -n "$BOCHS_HARNESS_TERMINAL" ]]; then f2_harness_terminal "(C-Bochs)" "$attempt" "$BOCHS_HARNESS_ERR"; fail=$((fail + 1)); bochs_done=1; break; fi
             echo "  HARNESS ERROR (Bochs 3-boot attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling the 3-boot (transient emulator/feeder failure, NOT a kernel RED)" >&2
             continue
         fi
