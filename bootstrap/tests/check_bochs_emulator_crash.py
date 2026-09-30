@@ -63,7 +63,7 @@ TREE rows (this tree's harness, under both routings):
                     lifted from the gate: a crash after a correct proof frame with the wrapper's status
                     overwritten is re-rolled, and only the clean boot is graded (Astra's R2 case)
 Mutation columns, each the tree's harness with a pre-fix line restored:
-  CRASHALL     kill-then-ok with every signal counted as a crash (the first cut, 29668b1): the kill is
+  CRASHALL     kill-then-ok with every signal counted as a crash (the first cut, 1699359): the kill is
                re-rolled and the leg passes GREEN, which is the loosening the TREE row refuses
   NOSTATUS     crash-then-ok: the classifier ignores the status, so the crashed capture is graded
                and is RED
