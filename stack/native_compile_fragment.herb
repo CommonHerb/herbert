@@ -1941,7 +1941,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "process_exit"):
         return fault("void builtin in expression")
     end
-    return emit_instr(ir, op_call(), nc_poly_lowered_call_target(poly, caller_inst_idx, call_node_idx), count(kids))
+    return emit_instr(ir, op_call(), nc_poly_lowered_call_target(type_pool, poly, caller_inst_idx, call_node_idx), count(kids))
 end
 
 func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -4721,6 +4721,34 @@ func nc_infer_fail(pool, code, line, payload):
     return 1
 end
 
+-- After a successful retry the first attempt's diagnostic is still in the
+-- pool: phase entry i - 1, the one before phase 2, indexes it.
+func nc_retry_before_index(phases, i, n):
+    if i >= n:
+        return 0 - 1
+    end
+    if get(phases, i).0 == 2 and i > 0:
+        return i - 1
+    end
+    return nc_retry_before_index(phases, i + 1, n)
+end
+
+func nc_retry_used(pool):
+    return nc_retry_before_index(pool.1, 0, count(pool.1)) != 0 - 1
+end
+
+func nc_retry_diag_fail(pool, code, line, payload):
+    let before = nc_retry_before_index(pool.1, 0, count(pool.1))
+    if before != 0 - 1:
+        let entered = get(pool.1, before)
+        if entered.1 < count(pool.2):
+            let original = get(pool.2, entered.1)
+            return nc_fail(original.0, original.1, original.2)
+        end
+    end
+    return nc_fail(code, line, payload)
+end
+
 func nc_type_kind(pool, t):
     if t < nc_type_struct_base():
         return 0
@@ -5605,10 +5633,18 @@ func nc_poly_record_call_target(pool, poly, caller_inst_idx, call_node_idx, call
     return 0
 end
 
-func nc_poly_lowered_call_target(poly, caller_inst_idx, call_node_idx):
+func nc_poly_lowered_call_target(pool, poly, caller_inst_idx, call_node_idx):
     let targets = poly.1
     let existing = nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx)
     if existing == 0 - 1:
+        -- A call can lack a target when an argument stayed unknown, as a
+        -- never-returning helper's result does. Without a retry this is the
+        -- known compiler fault. After a successful retry it reports the first
+        -- attempt's retained diagnostic instead, whatever local the call
+        -- concerns; that diagnostic need not describe this call.
+        if nc_retry_used(pool):
+            return nc_retry_diag_fail(pool, 430, 0, "")
+        end
         return fault("missing polymorphic call target")
     end
     return get(targets, existing).2

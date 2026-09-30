@@ -2195,6 +2195,30 @@
       "profile": "reject",
       "source": "func g():\n    return g()\nend\nfunc f():\n    let a = f()\n    let q = g()\n    return (a, 1)\nend\nfunc main():\n    let p = f()\n    do add(g(), p)\n    return 0\nend\n",
       "diagnostic": "line 7: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "c03-retry-indirect-never-returning",
+      "profile": "reject",
+      "source": "func boom():\n    let a = new_array(int)\n    return get(a, 0)\nend\nfunc h(v):\n    return v\nend\nfunc main():\n    let x = 5\n    let t = boom()\n    x = t\n    if x:\n        return 1\n    end\n    let z = h(x)\n    return 2\nend\n",
+      "diagnostic": "line 12: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "c03-retry-helper-call-target",
+      "profile": "reject",
+      "source": "func boom():\n    let a = new_array(int)\n    return get(a, 0)\nend\nfunc id(v):\n    return v\nend\nfunc odd(n):\n    return n % 2 == 1\nend\nfunc main():\n    let x = 7\n    if count(new_array(int)) == 1:\n        x = id(boom())\n    else:\n        x = id(2)\n    end\n    x = odd(x * 2)\n    return not x\nend\n",
+      "diagnostic": "line 19: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "c03-retry-unrelated-missing-return",
+      "profile": "reject",
+      "source": "func g(n):\n    return n == 3\nend\nfunc main():\n    let y = 5\n    y = g(3)\n    if y:\n        return bad(1)\n    end\n    return 0\nend\nfunc bad(n):\n    if n > 0:\n        return 1\n    end\n    let z = 2\nend\n",
+      "diagnostic": "program: native-subset: stack depth mismatch or underflow (ERR 416)"
+    },
+    {
+      "id": "c03-retry-unrelated-helper-array-element",
+      "profile": "reject",
+      "source": "func boom():\n    let a = new_array(int)\n    return get(a, 0)\nend\nfunc helper():\n    let arr = new_array(int)\n    if count(new_array(int)) == 1:\n        arr = boom()\n    end\n    return new_array(bool)\nend\nfunc main():\n    let x = yes()\n    x = cnt(not x)\n    let a = helper()\n    return x + 1\nend\nfunc yes():\n    return true\nend\nfunc cnt(b):\n    if b:\n        return 10\n    end\n    return 20\nend\n",
+      "diagnostic": "program: native-subset: array element type mismatch (ERR 436)"
     }
   ]
 }
