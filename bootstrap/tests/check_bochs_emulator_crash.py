@@ -18,15 +18,29 @@ requested", or dies of a genuine SIGSEGV or SIGKILL with core dumps disabled fir
 file or crash report is written), or prints unknown text and exits normally. The boot runs through
 the harness's own `bash -c "yes c | timeout -s KILL ... bochs ..."` line.
 
+Only a positively identified emulator crash re-rolls (Astra R1): a death after the banner by SIGILL,
+SIGABRT, SIGBUS, SIGFPE or SIGSEGV. Any other signal after the banner is KILLED-AFTER-BANNER, a kill (a
+timeout, or an external kill), which is terminal: never re-rolled, never graded, and its leg fails.
+
+CLASS-TABLE: the harness's own classifier over every status 0..255: exactly 132, 134, 135, 136 and 139
+are EMULATOR-CRASH, every other 129..192 is terminal KILLED-AFTER-BANNER, and the rest are finished boots.
 TREE rows (this tree's harness, under both routings):
   crash-then-ok     SIGSEGV after the banner on attempt 1: EMULATOR-CRASH (status 139) re-rolled on a
                     fresh disk, attempt 2 graded GREEN; the crashed capture is never graded
-  kill-then-ok      SIGKILL after the banner (a teardown hang killed at its timeout): status 137, same
+  abort-then-ok     SIGABRT after the banner: EMULATOR-CRASH (status 134), the same
+  kill-then-ok      SIGKILL after the banner (a kill; GNU timeout reports its own kill the same way): KILLED-AFTER-BANNER
+                    (status 137), terminal: one boot, never re-rolled, never graded, exit 1, no GREEN
+  wrong-kill-then-ok  a WRONG answer, the banner, then SIGKILL, followed by a clean boot: still RED, one
+                    boot; the clean boot is never reached (Astra's R1 reproduction)
+  term-then-ok      SIGTERM after the banner: KILLED-AFTER-BANNER (status 143), terminal, RED
   crash-always      every attempt crashes: three EMULATOR-CRASH re-rolls, HARNESS-ERROR, exit 1, no
                     kernel-RED line, never GREEN
   early-crash       SIGSEGV before the banner stays NO-SHUTDOWN (link66's fault legs rely on that)
   malformed-normal  unknown text after the banner and a normal exit: graded once, RED
   feed-replay       link39's path, f2_bochs_feed_leg_replay: crash then clean, GREEN, no REPLAY
+  kill-replay       the same path, a kill after the banner: terminal, one boot, no REPLAY, RED
+  replay-then-kill  a completed RED whose same-input replay is killed after the banner: UNADJUDICATED,
+                    fail_test'd, two boots, RED (never re-rolled past the kill)
   poisoned-replay   a gate shaped like link39 (a parse-error file that its fail_test and EXIT trap
                     exit 1 on): attempt 1 exits normally with a malformed capture and is graded RED;
                     its replay boots clean and its real result is logged (FLAKE-DISCRIMINATED); the
@@ -34,6 +48,8 @@ TREE rows (this tree's harness, under both routings):
   ci-shape          link39's run 36583224514 shape: that gate, a crash on attempt 1, then clean
                     boots: EMULATOR-CRASH re-rolled, GREEN
 Mutation columns, each the tree's harness with a pre-fix line restored:
+  CRASHALL     kill-then-ok with every signal counted as a crash (the first cut, 29668b1): the kill is
+               re-rolled and the leg passes GREEN, which is the loosening the TREE row refuses
   NOSTATUS     crash-then-ok: the attempts classify without the boot status, so the crashed capture
                is graded and is RED
   SHAREDSCOPE  poisoned-replay: the attempts clean up in the gate-wide parse-error scope, so the
@@ -60,6 +76,9 @@ ROUTINGS = xc.ROUTINGS
 PARSE_ERROR = 'holler malformed/truncated debugcon record at byte 0 of'
 CLASSIFY_CALL = 'cls="$(f2__classify_boot "$W" "$outlog" "$brc")"'
 CLASSIFY_PREFIX = 'cls="$(f2__classify_boot "$W" "$outlog")"'
+CRASH_LIST = 'F2_CRASH_SIGNALS=(4 6 7 8 11)'
+CRASH_ALL = 'F2_CRASH_SIGNALS=($(seq 1 64))'
+CRASH_STATUSES = {132: 4, 134: 6, 135: 7, 136: 8, 139: 11}   # SIGILL SIGABRT SIGBUS SIGFPE SIGSEGV
 SCOPED_CLEANUP = 'f2__attempt_cleanup "$W"'
 SHARED_CLEANUP = 'kernel_test_cleanup "$W"'
 
@@ -90,12 +109,17 @@ def die(sig):
 emit(err, b'controlled Bochs stand-in preamble\n')
 if action == 'early-segv':
     die(signal.SIGSEGV)
-emit(out, b'\x9c\xde' + bytes.fromhex(os.environ['GUEST_ANSWER']) + b'\xad')
+answer = '01' if action == 'wrongkill' else os.environ['GUEST_ANSWER']   # wrongkill: a WRONG answer, then the kill
+emit(out, b'\x9c\xde' + bytes.fromhex(answer) + b'\xad')
 emit(err, BOCHS_TAIL_BYTES)
 if action == 'segv':
     die(signal.SIGSEGV)
-if action == 'kill':
+if action == 'abort':
+    die(signal.SIGABRT)
+if action in ('kill', 'wrongkill'):
     die(signal.SIGKILL)
+if action == 'term':
+    die(signal.SIGTERM)
 if action == 'junk':
     emit(out, b'bochs: unexpected diagnostic\n')
 sys.exit(1)   # real Bochs exits 1 after "shutdown requested"
@@ -240,20 +264,68 @@ def crash_then_clean(r, status):
     return ok
 
 
+def class_table(bench, rows):
+    """The harness's own post-banner classifier over every status 0..255, in one bash run."""
+    label = 'CLASS-TABLE'
+    probe = ('source "$1" || exit 97; for st in $(seq 0 255) "" abc; do '
+             'cls="$(f2__post_banner_class "$st")"; rc=$?; term=0; f2__terminal_class "$cls" && term=1; '
+             'printf "%s\\t%s\\t%s\\t%s\\n" "$st" "$rc" "$term" "$cls"; done; '
+             'for cls in COMPLETED NO-OUTPUT NO-SHUTDOWN "EMULATOR-CRASH(status 139 = signal 11 after the shutdown banner)" '
+             '"DISK-BUILD(mkfs)"; do f2__terminal_class "$cls" && echo "TERMINAL $cls"; done; exit 0')
+    r = subprocess.run(['bash', '-c', probe, 'class-table', str(HARNESS)], env=bench.env, capture_output=True, timeout=60)
+    got = {}
+    for line in r.stdout.decode().splitlines():
+        if line.startswith('TERMINAL '):
+            expect(label, False, f'f2__terminal_class accepts a non-terminal class: {line}')
+            continue
+        st, rc, term, cls = line.split('\t')
+        got[st] = (int(rc), term == '1', cls)
+    ok = expect(label, r.returncode == 0 and len(got) == 258, f'rc={r.returncode} rows={len(got)} {r.stderr[-300:]!r}')
+    for st in range(256):
+        rc, term, cls = got.get(str(st), (None, None, None))
+        if st in CRASH_STATUSES:
+            want = (1, False, f'EMULATOR-CRASH(status {st} = signal {CRASH_STATUSES[st]} after the shutdown banner)')
+            ok &= expect(label, (rc, term, cls) == want, f'status {st}: {(rc, term, cls)!r}, want {want!r}')
+        elif 128 < st <= 192:
+            ok &= expect(label, rc == 2 and term and cls.startswith(f'KILLED-AFTER-BANNER(status {st} = signal {st - 128}: ')
+                         and '(a timeout, or an external kill), not an emulator crash' in cls,
+                         f'status {st}: {(rc, term, cls)!r}, want a terminal KILLED-AFTER-BANNER naming a kill')
+        else:
+            ok &= expect(label, (rc, term, cls) == (0, False, ''), f'status {st}: {(rc, term, cls)!r}, want a finished boot')
+    for st in ('', 'abc'):
+        ok &= expect(label, got.get(st) == (0, False, ''), f'status {st!r}: {got.get(st)!r}, want no class')
+    rows.append((f'{label}: exactly 132/134/135/136/139 re-roll as EMULATOR-CRASH; every other 129..192 is a '
+                 'terminal KILLED-AFTER-BANNER; every other status is a finished boot', ok))
+
+
+def terminal(r, status, signal_number, *, boots=1):
+    """One boot killed after the banner: the leg ended at once, nothing graded, and the marker says it was a kill."""
+    label = r['label']
+    errors = lines(r, 'HARNESS-ERROR', 'out_lines')
+    want = f'= KILLED-AFTER-BANNER(status {status} = signal {signal_number}: a kill after the shutdown banner'
+    ok = expect(label, r['boots'] == boots, f"{r['boots']} boot(s), want {boots}: a terminal class is never re-rolled")
+    ok &= expect(label, not r['probe'], f"the graded log holds {r['probe']!r}; a killed boot is never graded")
+    ok &= expect(label, errors and want in errors[0] and 'not an emulator crash' in errors[0] and 'not re-rolled' in errors[0]
+                 and 'not graded' in errors[0], f'terminal marker {errors[:1]!r}, want one naming {want!r}')
+    return ok
+
+
 def main():
     rows = []
     with tempfile.TemporaryDirectory(prefix='herbert-emulator-crash-check-') as temporary:
         bench = Bench(Path(temporary))
+        class_table(bench, rows)
         source = HARNESS.read_text()
         mutants = {}
-        for name, pairs in (('NOSTATUS', [(CLASSIFY_CALL, CLASSIFY_PREFIX)]),
+        counts = {CLASSIFY_CALL: lambda n: n == 2, SCOPED_CLEANUP: lambda n: n >= 4, CRASH_LIST: lambda n: n == 1}
+        for name, pairs in (('CRASHALL', [(CRASH_LIST, CRASH_ALL)]),
+                            ('NOSTATUS', [(CLASSIFY_CALL, CLASSIFY_PREFIX)]),
                             ('SHAREDSCOPE', [(SCOPED_CLEANUP, SHARED_CLEANUP)]),
                             ('PREFIX', [(CLASSIFY_CALL, CLASSIFY_PREFIX), (SCOPED_CLEANUP, SHARED_CLEANUP)])):
             text = source
             for old, new in pairs:
                 count = text.count(old)
-                expect(f'{name}-copy', (old == CLASSIFY_CALL and count == 2) or (old == SCOPED_CLEANUP and count >= 4),
-                       f'{count} occurrence(s) of {old!r} in {HARNESS.name}')
+                expect(f'{name}-copy', counts[old](count), f'{count} occurrence(s) of {old!r} in {HARNESS.name}')
                 text = text.replace(old, new)
             path = bench.root / name.lower() / HARNESS.name
             path.parent.mkdir()
@@ -265,9 +337,15 @@ def main():
             r = run('crash-then-ok', 'plain', 'segv,ok')
             rows.append((r['label'], check(r, rc=0, rerolls=['EMULATOR-CRASH(status 139 = signal 11'], green=True)
                          & crash_then_clean(r, 139)))
+            r = run('abort-then-ok', 'plain', 'abort,ok')
+            rows.append((r['label'], check(r, rc=0, rerolls=['EMULATOR-CRASH(status 134 = signal 6'], green=True)
+                         & crash_then_clean(r, 134)))
             r = run('kill-then-ok', 'plain', 'kill,ok')
-            rows.append((r['label'], check(r, rc=0, rerolls=['EMULATOR-CRASH(status 137 = signal 9'], green=True)
-                         & crash_then_clean(r, 137)))
+            rows.append((r['label'], check(r, rc=1, rerolls=[], harness_errors=2, green=False) & terminal(r, 137, 9)))
+            r = run('wrong-kill-then-ok', 'plain', 'wrongkill,ok')
+            rows.append((r['label'], check(r, rc=1, rerolls=[], harness_errors=2, green=False) & terminal(r, 137, 9)))
+            r = run('term-then-ok', 'plain', 'term,ok')
+            rows.append((r['label'], check(r, rc=1, rerolls=[], harness_errors=2, green=False) & terminal(r, 143, 15)))
             r = run('crash-always', 'plain', 'segv')
             ok = check(r, rc=1, rerolls=['EMULATOR-CRASH(status 139'] * 3, harness_errors=2, green=False)
             ok &= expect(r['label'], r['boots'] == 3 and not r['probe'], 'three boots and nothing graded')
@@ -283,6 +361,18 @@ def main():
             ok = check(r, rc=0, rerolls=['EMULATOR-CRASH(status 139'], green=True)
             ok &= expect(r['label'], not any('REPLAY' in line for line in r['err_lines']), 'a crash must not start a replay')
             rows.append((r['label'], ok))
+            r = run('kill-replay', 'feed-replay', 'kill,ok')
+            ok = check(r, rc=1, rerolls=[], harness_errors=2, green=False) & terminal(r, 137, 9)
+            ok &= expect(r['label'], not any('REPLAY' in line for line in r['err_lines']), 'a kill must not start a replay')
+            rows.append((r['label'], ok))
+            r = run('replay-then-kill', 'feed-replay', 'junk,kill')
+            ok = check(r, rc=1, rerolls=[], fails=1, green=False)
+            ok &= expect(r['label'], r['boots'] == 2 and len(lines(r, '  REPLAY probe:')) == 1,
+                         f"{r['boots']} boot(s), want 2: the completed RED and its replay, killed and not re-rolled")
+            ok &= expect(r['label'], all('UNADJUDICATED' in line and 'KILLED-AFTER-BANNER(status 137' in line
+                                         for line in lines(r, 'FAIL: ', 'out_lines')),
+                         'the killed replay must leave the completed RED unadjudicated, fail_test\'d')
+            rows.append((r['label'], ok))
             r = run('poisoned-replay', 'poisoned-replay', 'junk,ok')
             ok = check(r, rc=1, rerolls=[], green=False, parser_errors=1)
             ok &= expect(r['label'], len(lines(r, '  REPLAY probe:')) == 1
@@ -296,6 +386,10 @@ def main():
             rows.append((r['label'], ok))
             if routing != 'no-merge':   # the mutation columns under GitHub's routing only
                 continue
+            r = run('kill-then-ok', 'plain', 'kill,ok', mutants['CRASHALL'], 'CRASHALL')
+            ok = check(r, rc=0, rerolls=['EMULATOR-CRASH(status 137 = signal 9'], green=True)
+            ok &= expect(r['label'], r['boots'] == 2, 'with every signal counted as a crash the kill is re-rolled into a pass')
+            rows.append((r['label'], ok))
             r = run('crash-then-ok', 'plain', 'segv,ok', mutants['NOSTATUS'], 'NOSTATUS')
             ok = check(r, rc=1, rerolls=[], fails=1, green=False)
             ok &= expect(r['label'], all(PARSE_ERROR in line for line in lines(r, 'FAIL: ', 'out_lines')),
@@ -316,9 +410,10 @@ def main():
     if FAILURES:
         print(f'FAIL bochs emulator crash: {len(FAILURES)} check(s) failed')
         sys.exit(1)
-    print(f'PASS bochs emulator crash: {len(rows)} rows; a boot whose emulator died of a signal after its '
-          'banner is re-rolled and never graded, a malformed capture from a normal exit is still RED, and each '
-          "attempt's real result is logged (controlled commands; no emulator qualification)")
+    print(f'PASS bochs emulator crash: {len(rows)} rows; only a positively identified emulator crash after the '
+          'banner is re-rolled, a kill after it ends its leg at once and is never graded, a malformed capture from '
+          "a normal exit is still RED, and each attempt's real result is logged (controlled commands; no emulator "
+          'qualification)')
 
 
 if __name__ == '__main__':

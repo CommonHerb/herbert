@@ -277,12 +277,16 @@ menuentry "c" {
         bochs_finish_attempt "$W" "$BOCHS_HARNESS_ERR" || return 1
         return 2
     fi
-    # The shared harness's EMULATOR-CRASH class (bochs_f2_harness.sh header): the kernel reached its shutdown
-    # but the emulator pipeline then died of a signal, so this capture is not graded; the attempt re-rolls.
-    local sig
-    if sig="$(f2__signal_death "$boot_rc")"; then
-        BOCHS_HARNESS_ERR="EMULATOR-CRASH(status $boot_rc = signal $sig after the shutdown banner) -- emulator, not a kernel grade"
+    # The shared harness's classes after the banner (bochs_f2_harness.sh header): the kernel reached its
+    # shutdown but the emulator pipeline then died of a signal, so this capture is not graded. A positively
+    # identified crash (EMULATOR-CRASH) re-rolls; any other signal (KILLED-AFTER-BANNER, a kill) is terminal:
+    # return 3, never re-rolled (Astra R1).
+    local pcls prc=0
+    pcls="$(f2__post_banner_class "$boot_rc")" || prc=$?
+    if [[ "$prc" -ne 0 ]]; then
+        BOCHS_HARNESS_ERR="$pcls -- emulator, not a kernel grade"
         bochs_finish_attempt "$W" "$BOCHS_HARNESS_ERR" || return 1
+        if [[ "$prc" -eq 2 ]]; then return 3; fi
         return 2
     fi
     # feeder SENT + boot ran THROUGH shutdown -> the output capture (cap.bin) + frame count are graded from here
@@ -392,6 +396,10 @@ if [[ "$run_bochs" -eq 1 && -n "${ELF[ro]:-}" ]]; then
         BOCHS_HARNESS_ERR=""
         bochs_run_duplex "ro.bochs.9" "${ELF[ro]}" 9 "$wcap" "$we9"
         rcb=$?
+        if [[ "$rcb" -eq 3 ]]; then   # terminal (a kill after the banner): never re-rolled; the summary fails the gate
+            f2_harness_terminal "ro.bochs.9" "$attempt" "$BOCHS_HARNESS_ERR"
+            bochs_done=1; break
+        fi
         if [[ "$rcb" -eq 2 ]]; then
             echo "  HARNESS ERROR (Bochs attempt $attempt/3): $BOCHS_HARNESS_ERR -- re-rolling (setup, no-completion or emulator crash only; a completed wrong grade is never re-rolled)" >&2
             continue

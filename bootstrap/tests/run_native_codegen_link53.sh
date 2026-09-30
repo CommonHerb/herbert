@@ -290,8 +290,9 @@ fi
 # Each attempt builds a FRESH disk in its own directory with the shared harness's CHECKED build
 # (bochs_f2_harness.sh f2__disk_build_class; red-run sweep 2026-09-29), then writes the chase bytes (checked),
 # boots, and is classified by the shared f2__classify_boot. A failed build or chase write, a boot with no output
-# or no shutdown, or an emulator that died of a signal is a harness class: re-rolled (3 attempts), then
-# HARNESS-ERROR, fail-closed (f2_harness_summary below), never graded. Only a COMPLETED boot is extracted and
+# or no shutdown, or an emulator that crashed after the banner (EMULATOR-CRASH) is a harness class: re-rolled
+# (3 attempts), then HARNESS-ERROR, fail-closed (f2_harness_summary below), never graded; a kill after the banner
+# (KILLED-AFTER-BANNER) is terminal: never re-rolled, never graded, fail-closed. Only a COMPLETED boot is extracted and
 # graded, exactly as before. This leg used to build once, unchecked (mkfs's errors discarded), and grade whatever
 # booted, with no retry, so one host mkfs/mount race became a kernel RED. The CHS geometry, the absolute bochsrc
 # path (for the scoped pkill) and the boot line are unchanged.
@@ -348,9 +349,13 @@ if have_bochs; then
     for attempt in 1 2 3; do
         BOCHS_HARNESS_ERR=""
         if bochs_attempt "$work/b.bochs_out.txt" 150 "$CHASEMAP"; then bochs_done=1; break; fi
+        # A kill after the banner (KILLED-AFTER-BANNER) is terminal: never re-rolled, never graded (Astra R1).
+        if f2__terminal_class "$BOCHS_HARNESS_ERR"; then f2_harness_terminal "(C) Bochs" "$attempt" "$BOCHS_HARNESS_ERR"; bochs_done=2; break; fi
         echo "HARNESS re-roll: ${F2_GATE} (C) Bochs attempt $attempt = $BOCHS_HARNESS_ERR (fresh disk retry; NOT a kernel grade)" >&2
     done
-    if [[ "$bochs_done" -eq 1 ]]; then
+    if [[ "$bochs_done" -eq 2 ]]; then
+        :   # terminal: f2_harness_terminal has marked the leg; f2_harness_summary fails the gate
+    elif [[ "$bochs_done" -eq 1 ]]; then
         python3 "$script_dir/debugcon_frames.py" extract "$work/b.bochs_out.txt" "$work/b"
         if python3 "$REF" gradedisk "$work/b" "$KEND" "$CHASEMAP" >/dev/null 2>&1; then ok "(C) Bochs: the addressed block-device chase is byte-identical on the 2nd substrate (GRUB delivers the kernel+prober; Bochs' ATA controller serves the per-run author-unknown sectors dd'd at the absolute window LBA; the emitted chain == disk_chase_expect(chasemap))"
         else fail_test "(C) Bochs -> $(python3 "$REF" gradedisk "$work/b" "$KEND" "$CHASEMAP" 2>&1 | tr '\n' ';')"; fi
