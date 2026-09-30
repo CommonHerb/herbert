@@ -698,6 +698,81 @@ qemu-system-x86_64'''
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn(b'REUSED', result.stdout)
 
+    def test_cleanup_keeps_a_tree_that_holds_a_live_mount_or_loop(self):
+        # Astra R3: kernel_test_cleanup must never rm -rf a target with a live mount at or below it or an
+        # attached loop device's backing file below it. Stub findmnt and losetup on PATH report them; nothing
+        # is mounted or attached. The stubs print nothing and exit 1 when told the host is clean, which the
+        # guard must survive under set -e and inside an EXIT trap: that is the normal case.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d).resolve(); stubs = p/'stubs'; stubs.mkdir()
+            (stubs/'findmnt').write_text('#!/bin/bash\n[[ -n "${FAKE_MOUNTS:-}" ]] || exit 1\n'
+                                         'printf "/\\n/proc\\n%b\\n" "$FAKE_MOUNTS"\n')
+            (stubs/'losetup').write_text('#!/bin/bash\n[[ -n "${FAKE_LOOPS:-}" ]] || exit 1\n'
+                                         'printf "/dev/loop0 /var/lib/snapd/snaps/core.snap\\n%b\\n" "$FAKE_LOOPS"\n')
+            for stub in stubs.iterdir():
+                stub.chmod(0o755)
+
+            def trees(*names):
+                made = []
+                for name in names:
+                    t = p/name; (t/'b.d'/'mnt').mkdir(parents=True); (t/'b.d'/'disk.img').write_bytes(b'disk')
+                    made.append(t)
+                return made
+
+            def run(code, *targets, mounts='', loops='', parse_error=None):
+                env = {k: v for k, v in os.environ.items() if k not in ('KERNEL_EVIDENCE_DIR', 'KERNEL_PARSE_ERROR_FILE')}
+                env.update(PATH=f'{stubs}{os.pathsep}{env["PATH"]}', FAKE_MOUNTS=mounts, FAKE_LOOPS=loops)
+                if parse_error is not None:
+                    env['KERNEL_PARSE_ERROR_FILE'] = str(parse_error)
+                return bash(code, TESTS/'kernel_evidence.sh', *targets, env=env)
+
+            call = 'set -euo pipefail; source "$1"; shift; kernel_test_cleanup "$@"; echo DONE'
+            # A live mount under one target and a loop backing file under another: those two are kept, each
+            # named in one loud line; the others are removed.
+            mounted, looped, clean, other = trees('mounted', 'looped', 'clean', 'other')
+            r = run(call, mounted, looped, clean, other, mounts=f'{mounted}/b.d/mnt',
+                    loops=f'/dev/loop7 {looped}/b.d/disk.img')
+            self.assertEqual((r.returncode, r.stdout), (0, b'DONE\n'), r.stderr)
+            self.assertTrue(mounted.is_dir() and (mounted/'b.d'/'disk.img').is_file())
+            self.assertTrue(looped.is_dir() and (looped/'b.d'/'disk.img').is_file())
+            self.assertFalse(clean.exists() or other.exists())
+            loud = [l for l in r.stderr.decode().splitlines() if l.startswith('LEAKED: ')]
+            self.assertEqual(len(loud), 2, r.stderr)
+            self.assertIn(f'did NOT remove {mounted} -- still live: mount {mounted}/b.d/mnt', loud[0])
+            self.assertIn(f'did NOT remove {looped} -- still live: loop /dev/loop7 backing {looped}/b.d/disk.img', loud[1])
+            self.assertTrue(all("the gate's exit status is unchanged" in l for l in loud))
+            # A mount AT the target, a deleted backing file, and a path findmnt escapes (\x20; the stub's
+            # printf %b turns the doubled backslash into the one findmnt -r prints): all kept.
+            spaced, = trees('with space')
+            r = run(call, mounted, looped, spaced, mounts=f'{mounted}\\n{str(spaced).replace(" ", chr(92) * 2 + "x20")}/b.d/mnt',
+                    loops=f'/dev/loop9 {looped}/b.d/disk.img (deleted)')
+            self.assertEqual((r.returncode, r.stdout), (0, b'DONE\n'), r.stderr)
+            self.assertTrue(mounted.is_dir() and looped.is_dir() and spaced.is_dir())
+            self.assertEqual(r.stderr.decode().count('LEAKED: '), 3, r.stderr)
+            # A clean host (the stubs find nothing and exit 1) under set -e: everything is removed.
+            r = run(call, mounted, looped, spaced)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (0, b'DONE\n', b''))
+            self.assertFalse(mounted.exists() or looped.exists() or spaced.exists())
+            # In an EXIT trap under set -e: a clean tree is removed, and a kept tree never changes the status.
+            for status in (0, 7):
+                kept, gone = trees(f'kept{status}', f'gone{status}')
+                trap = '''set -e; source "$1"; trap 'kernel_test_cleanup "$2" "$3"' EXIT; exit "$4"'''
+                r = run(trap, kept, gone, status, mounts=f'{kept}/b.d/mnt')
+                self.assertEqual(r.returncode, status, r.stderr)
+                self.assertTrue(kept.is_dir()); self.assertFalse(gone.exists())
+                r = run(trap, kept, gone, status)
+                self.assertEqual((r.returncode, r.stderr), (status, b''))
+                self.assertFalse(kept.exists())
+            # The parse-error path removes through the same guard, and still exits 1.
+            kept, gone = trees('kept-parse', 'gone-parse')
+            errors = p/'parser-errors.txt'; errors.write_text('holler malformed record\n')
+            r = run('set -e; source "$1"; shift; kernel_test_cleanup "$@"; echo NOT-REACHED', kept, gone,
+                    mounts=f'{kept}/b.d/mnt', parse_error=errors)
+            self.assertEqual(r.returncode, 1, r.stderr)
+            self.assertNotIn(b'NOT-REACHED', r.stdout)
+            self.assertIn(b'PARSER-ERROR', r.stderr)
+            self.assertTrue(kept.is_dir()); self.assertFalse(gone.exists())
+
     def test_group_keeps_running_after_failure(self):
         workflow = (ROOT/'.github/workflows/kernel-codegen-l1.yml').read_text()
         ranges = re.findall(r'\{lo: (\d+), hi: (\d+)\}', workflow)

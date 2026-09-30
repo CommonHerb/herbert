@@ -1,5 +1,6 @@
 # Test-only kernel evidence: cleanup with optional exact output retention (the
-# plain rm runs unless the caller selects an evidence path) and kernel_xvfb_capture.
+# plain rm runs unless the caller selects an evidence path; it never removes a tree
+# that still holds a live mount or loop backing file) and kernel_xvfb_capture.
 kernel_test_record_boot() {
     [[ -n "${KERNEL_EVIDENCE_DIR:-}" ]] || return 0
     local directory="$1" raw="$2" kernel="$3" module="$4" file failed=0
@@ -17,6 +18,48 @@ kernel_test_record_boot() {
         printf '%s\n' "$raw" >> "$KERNEL_EVIDENCE_DIR/CAPTURE-ERRORS.txt" || true
         exit 1
     fi
+}
+
+# Never recursively remove a tree that still holds a live mount or an attached loop device's backing
+# file (Astra R3, 2026-09-29). A Bochs disk build whose own cleanup failed leaves its boot directory in
+# place as LEAKED, and that promise has to hold at the gate's final cleanup too: rm -rf does not stop at
+# a mount point, and it unlinks an attached loop device's backing image. So before each recursive
+# removal this checks whether a mount sits at or below the target (findmnt) or whether any loop device's
+# backing file lies below it (losetup --list). Such a target is kept, one loud line on stderr names it
+# and what is still live, and the other targets are removed as before. The gate's exit status does not
+# change: a leaked mount from one attempt says nothing about the kernel, later attempts use fresh
+# directories, and the kept tree and the line are the evidence. findmnt and losetup can exit nonzero
+# when they find nothing, which is the normal case, and this runs in EXIT traps, some under set -e, so
+# only their output is tested, never their exit status.
+kernel_test_remove() { # TARGET... -- rm -rf each target, except one a live mount or loop backing file is in
+    local target abs line entry live mounts loops device file
+    mounts="$(findmnt -rn -o TARGET 2>/dev/null)" || mounts=""
+    loops="$(losetup --list --noheadings --raw --output NAME,BACK-FILE 2>/dev/null)" || loops=""
+    for target in "$@"; do
+        live=""
+        abs=""
+        if [[ -d "$target" && ! -L "$target" ]]; then
+            abs="$(unset CDPATH; cd -P -- "$target" 2>/dev/null && pwd -P)" || abs=""
+        fi
+        if [[ -n "$abs" ]]; then
+            while IFS= read -r line; do
+                if [[ -z "$line" ]]; then continue; fi
+                entry="$(printf '%b' "$line")" || entry="$line"   # findmnt -r hex-escapes unsafe characters (\x20)
+                if [[ "$entry" == "$abs" || "$entry" == "$abs"/* ]]; then live="$live mount $entry;"; fi
+            done <<< "$mounts"
+            while IFS=' ' read -r device file; do
+                if [[ -z "$file" ]]; then continue; fi
+                file="$(printf '%b' "$file")" || true
+                file="${file% (deleted)}"
+                if [[ "$file" == "$abs"/* ]]; then live="$live loop $device backing $file;"; fi
+            done <<< "$loops"
+        fi
+        if [[ -n "$live" ]]; then
+            echo "LEAKED: kernel_test_cleanup did NOT remove $target -- still live:${live%;} -- a disk build's mount or loop device outlived its attempt; the tree is kept as evidence, release it by hand before removing it (the gate's exit status is unchanged)" >&2
+            continue
+        fi
+        rm -rf -- "$target"
+    done
 }
 
 kernel_test_cleanup() {
@@ -44,10 +87,10 @@ kernel_test_cleanup() {
         cat "$KERNEL_PARSE_ERROR_FILE" >&2
         # This is also called from EXIT traps; force the gate red even when an
         # intentionally inverted mutation predicate consumed the Python failure.
-        rm -rf -- "$@"
+        kernel_test_remove "$@"
         exit 1
     fi
-    rm -rf -- "$@"
+    kernel_test_remove "$@"
 }
 
 # Bochs boots run under xvfb-run, which sends the wrapped command's stdout to
