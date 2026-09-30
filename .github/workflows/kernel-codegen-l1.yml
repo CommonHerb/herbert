@@ -176,6 +176,14 @@ jobs:
             echo "emulator pin: snapshot $EMU_SNAPSHOT serves $name $ver"
             files=("$dl/${name}_${ver//:/%3a}_"*.deb)
             [ "${#files[@]}" = 1 ] && [ -f "${files[0]}" ] || { echo "EMULATOR PIN: expected one downloaded .deb for $name $ver, found: ${files[*]}"; exit 1; }
+            # 2026-09-29 (Astra R4): the arch-specific qemu packages must arrive as the amd64v3 build that every
+            # accepted run unpacked (qemu-system-x86, qemu-system-common and ubuntu-virt as ..._amd64v3.deb).
+            # apt-get download names the file after the build it fetched, so the name is the check; the
+            # installed record's variant is not checked (no accepted log shows it). bochs has no v3 build.
+            case "$name" in
+              qemu-system-x86|qemu-system-common|ubuntu-virt)
+                [ "${files[0]##*_}" = amd64v3.deb ] || { echo "EMULATOR PIN: $name $ver arrived as ${files[0]##*/}, not the amd64v3 build it was validated as -- the runner's architecture variant changed; move the pin deliberately"; exit 1; } ;;
+            esac
             debs+=("${files[0]}")
           done
           sudo rm -f "$snapsrc"
