@@ -2238,6 +2238,7 @@ if have_bochs && declare -F f2_bochs_feed_attempt >/dev/null; then
         for attempt in 1 2 3; do
             cls="$(f2_bochs_feed_attempt "--cap $W/cap.bin --hold 20" "$W/feed.log" "$L66_GRUBCFG" 240 64 "$W/out.log" "$elf:boot/kernel.elf")"
             case "$cls" in NO-SHUTDOWN|COMPLETED) break ;; esac
+            if f2__terminal_class "$cls"; then f2_harness_terminal "$label" "$attempt" "$cls"; return 1; fi
             echo "HARNESS re-roll: link66-mutation $label attempt $attempt = $cls (fresh disk + fresh feeder retry)" >&2
             [[ "$attempt" -eq 3 ]] && f2_harness_error "$label" "$cls"
         done
@@ -2316,6 +2317,7 @@ if have_bochs && declare -F f2_bochs_feed_attempt >/dev/null; then
             for _attempt in 1 2 3; do
                 _cls="$(f2_bochs_feed_attempt "--grade $N:$Q --draw 0 --master-seed ${_bs:0:16} --query-seed ${_bs:16:16} --witness --drain-mode quiet --cap $_W/cap.bin" "$_W/feed.log" "$L66_GRUBCFG" 240 64 "$_W/out.log" "$tmp/base.forcing/a.out:boot/kernel.elf")"
                 case "$_cls" in NO-SHUTDOWN|COMPLETED) break ;; esac
+                if f2__terminal_class "$_cls"; then f2_harness_terminal M-seedpin-internal-bochs "$_attempt" "$_cls"; break; fi
                 echo "HARNESS re-roll: link66-mutation M-seedpin-internal-bochs attempt $_attempt = $_cls (fresh disk + fresh feeder retry)" >&2
                 [[ "$_attempt" -eq 3 ]] && f2_harness_error M-seedpin-internal-bochs "$_cls"
             done

@@ -62,6 +62,16 @@ TREE rows (this tree's harness, under both routings):
   link62-overwrite  the REAL link62 bochs_run and its raw-frame grader (which ignores trailing text),
                     lifted from the gate: a crash after a correct proof frame with the wrapper's status
                     overwritten is re-rolled, and only the clean boot is graded (Astra's R2 case)
+LINK66 rows: link66 drives f2_bochs_feed_attempt from its own retry loops (the gate's bochs_draw and
+bochs_boundary_fault, the mutation proof's bochs_probe and its seed-pin loop), so the shared legs' terminal
+stop does not reach them. Each loop is lifted from its script and run with f2_bochs_feed_attempt replaced by
+a fixture: attempt 1 writes a wrong completion (the marker, an answer byte, the banner) and the given
+pipeline status, every later attempt the clean fault the leg expects, and each then runs the real classifier.
+  *-kill, *-term    status 137 or 143 on attempt 1: KILLED-AFTER-BANNER ends the leg at once, one boot,
+                    nothing graded, the harness summary fails (main graded that completion RED)
+  boundary-crash    status 139: EMULATOR-CRASH re-rolled, the clean fault graded GREEN
+  boundary-timeout  status 124, what the runner's timeout reports when it fires: a finished boot, graded
+                    RED, one boot
 Mutation columns, each the tree's harness with a pre-fix line restored:
   CRASHALL     kill-then-ok with every signal counted as a crash (the first cut, 1699359): the kill is
                re-rolled and the leg passes GREEN, which is the loosening the TREE row refuses
@@ -74,6 +84,9 @@ Mutation columns, each the tree's harness with a pre-fix line restored:
                replay's class is lost (blank) and the parse error is printed again per attempt
   PREFIX       ci-shape with both restored: the CI log (a REPLAY on the crash's parse error, three
                blank-class re-rolls, the parse error printed four times), exit 1
+  NOTERMINAL   a LINK66 kill row with that loop's terminal-class stop removed (the loop as this stack
+               first carried it): the kill is re-rolled and the clean fault passes, the RED-to-GREEN of
+               Astra's R6 that the LINK66 row refuses
 """
 if not __debug__:
     raise SystemExit('verification requires Python assertions; remove -O/-OO and PYTHONOPTIMIZE')
@@ -84,6 +97,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import textwrap
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -103,6 +117,14 @@ CRASH_ALL = 'F2_CRASH_SIGNALS=($(seq 1 64))'
 CRASH_STATUSES = {132: 4, 134: 6, 135: 7, 136: 8, 139: 11}   # SIGILL SIGABRT SIGBUS SIGFPE SIGSEGV
 SCOPED_CLEANUP = 'f2__attempt_cleanup "$W"'
 SHARED_CLEANUP = 'kernel_test_cleanup "$W"'
+LINK66_GATE = HERE / 'run_native_codegen_link66.sh'
+LINK66_PROOF = HERE / 'run_native_codegen_link66_mutation.sh'
+LINK66_STOP = 'f2__terminal_class'   # the one line in each lifted loop that stops on a terminal class
+# (label, script, first line, end marker): each lifted loop runs exactly as its script has it
+LINK66_LOOPS = (('boundary', LINK66_GATE, '        bochs_boundary_fault() {', '\n        }\n'),
+                ('draw', LINK66_GATE, '        bochs_draw() {', '\n        }\n'),
+                ('probe', LINK66_PROOF, '    bochs_probe() {', '\n    }\n'),
+                ('seedpin', LINK66_PROOF, '            for _attempt in 1 2 3; do\n', '\n            done\n'))
 
 BOCHS = r'''#!/usr/bin/env python3
 # Bochs stand-in. CRASH_PLAN lists one action per boot (the last repeats); CRASH_COUNTER counts boots.
@@ -207,6 +229,51 @@ f2_harness_summary || exit 1
 [[ $rc -eq 0 && $fail -eq 0 && ! -s "${KERNEL_PARSE_ERROR_FILE:-/dev/null}" ]] || exit 1
 echo "GREEN probe"
 '''
+
+LINK66_DRIVER = r"""set -u
+unset CDPATH
+source "$TEST_SCRIPTS/kernel_evidence.sh" || exit 96
+source "$TEST_HARNESS" || exit 97
+tmp="$TEST_OUT"
+MARKER=41 L66_GRUBCFG=unused LINK66_N=1 LINK66_Q=1 DRIVER_PAY=0 DRIVER_QRY=0 N=1 Q=1
+_bs=0123456789abcdef0123456789abcdef
+pass=0; fail=0
+ok() { echo "PASS: $1"; pass=$((pass + 1)); }
+bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
+fail_test() { bad "$1"; }
+derive() { echo "ab cd"; }
+frame_count() { echo 0; }
+f2_bochs_feed_attempt() {   # fixture: attempt 1 is FIRST_STATUS on a wrong completion, later ones a clean fault
+    local n=0 feedlog="$2" outlog="$6" bootdir
+    [[ ! -f "$TEST_OUT/boots" ]] || read -r n < "$TEST_OUT/boots"
+    n=$((n + 1)); printf '%s\n' "$n" > "$TEST_OUT/boots"
+    bootdir="$TEST_OUT/boot-$n"; mkdir "$bootdir"
+    : > "$outlog"
+    printf 'LISTENING\nSENT\n' > "$feedlog"
+    if [[ "$n" == 1 ]]; then
+        printf '\x41\x00' > "${feedlog%/*}/cap.bin"
+        printf '\xde\x00\xad\n[UNMAP ] Shutdown port: shutdown requested\n' > "$bootdir/bochs_out.txt"
+        printf '%s\n' "$FIRST_STATUS" > "$bootdir/bochs_out.txt.pipeline-status"
+    else
+        printf '\x41' > "${feedlog%/*}/cap.bin"
+        printf 'booted; marker sent; no completion\n' > "$bootdir/bochs_out.txt"
+        printf '124\n' > "$bootdir/bochs_out.txt.pipeline-status"
+    fi
+    f2__classify_boot "$bootdir" "$outlog" "$bootdir/bochs_out.txt.pipeline-status"
+}
+case "$TEST_CALL" in
+    boundary) source "$TEST_LEG" || exit 98; bochs_boundary_fault boundary-over-bochs unused.elf ;;
+    draw)     source "$TEST_LEG" || exit 98; bochs_draw draw1-bochs unused.elf 0 ;;
+    probe)    source "$TEST_LEG" || exit 98; bochs_probe control-bochs unused.elf fault ;;
+    seedpin)  _W="$tmp/seedpin.b"; mkdir -p "$_W"; _cls=""
+              source "$TEST_LEG" || exit 98
+              [[ "$_cls" == NO-SHUTDOWN ]] ;;
+    *) exit 95 ;;
+esac
+leg_rc=$?
+summary_rc=0; f2_harness_summary > /dev/null || summary_rc=$?
+echo "RESULT: boots=$(cat "$TEST_OUT/boots") leg_rc=$leg_rc summary_rc=$summary_rc pass=$pass fail=$fail"
+"""
 
 FAILURES = []
 
@@ -386,6 +453,71 @@ def terminal(r, status, signal_number, *, boots=1):
     return ok
 
 
+def link66_rows(root, rows):
+    """The LINK66 rows and their NOTERMINAL column (the module docstring)."""
+    lifted = {}
+    for call, script, first, end in LINK66_LOOPS:
+        text = script.read_text()
+        ok = expect(f'LINK66-{call}-lift', text.count(first) == 1, f'{text.count(first)} copies of {first.strip()!r} in {script.name}')
+        start = text.index(first)
+        body = textwrap.dedent(text[start:text.index(end, start) + len(end)])
+        stops = [line for line in body.splitlines(keepends=True) if LINK66_STOP in line]
+        ok &= expect(f'LINK66-{call}-lift', len(stops) == 1, f'{len(stops)} terminal-class stop line(s) in the lifted {call} loop, want 1')
+        if ok:
+            lifted[call] = (body, body.replace(stops[0], ''))
+    driver = root / 'link66-driver.sh'
+    driver.write_text(LINK66_DRIVER)
+
+    def run(label, call, status, *, stop=True):
+        directory = root / label
+        directory.mkdir()
+        leg = directory / 'leg.sh'
+        leg.write_text(lifted[call][0 if stop else 1])
+        env = dict(os.environ, TEST_SCRIPTS=str(HERE), TEST_HARNESS=str(HARNESS), TEST_LEG=str(leg), TEST_CALL=call,
+                   TEST_OUT=str(directory), FIRST_STATUS=str(status), F2_GATE='link66', KERNEL_EVIDENCE_DIR='',
+                   KERNEL_PARSE_ERROR_FILE='')
+        r = subprocess.run(['bash', str(driver)], env=env, capture_output=True, timeout=60)
+        (directory / 'driver.stdout').write_bytes(r.stdout)
+        (directory / 'driver.stderr').write_bytes(r.stderr)
+        out, err = r.stdout.decode(errors='replace').splitlines(), r.stderr.decode(errors='replace').splitlines()
+        result = [line for line in out if line.startswith('RESULT: ')]
+        return label, out, err, result[-1] if result else f'no RESULT line (exit {r.returncode}): {err[-3:]}'
+
+    def terminal(label, out, err, result, status, signal_number, boots=1):
+        want = f'= KILLED-AFTER-BANNER(status {status} = signal {signal_number}: a kill after the shutdown banner'
+        errors = [line for line in out if line.startswith('HARNESS-ERROR')]
+        ok = expect(label, result == f'RESULT: boots={boots} leg_rc=1 summary_rc=1 pass=0 fail=0', result)
+        ok &= expect(label, len(errors) == 1 and 'attempt 1 ' + want in errors[0] and 'not re-rolled' in errors[0]
+                     and 'not graded' in errors[0], f'terminal marker {errors!r}, want one naming {want!r}')
+        ok &= expect(label, not [line for line in err if line.startswith('HARNESS re-roll:')], f'a terminal class was re-rolled: {err}')
+        return ok
+
+    if set(lifted) != {call for call, *_ in LINK66_LOOPS}:
+        rows.append(('LINK66 loops lifted', False))
+        return
+    for call, status, signal_number in (('boundary', 137, 9), ('boundary', 143, 15), ('draw', 137, 9), ('probe', 137, 9),
+                                        ('seedpin', 137, 9)):
+        label, out, err, result = run(f'LINK66-{call}-{"kill" if status == 137 else "term"}', call, status)
+        rows.append((label, terminal(label, out, err, result, status, signal_number)))
+    label, out, err, result = run('LINK66-boundary-crash', 'boundary', 139)
+    rerolls = [line for line in err if line.startswith('HARNESS re-roll:')]
+    ok = expect(label, result == 'RESULT: boots=2 leg_rc=0 summary_rc=0 pass=1 fail=0', result)
+    ok &= expect(label, len(rerolls) == 1 and 'EMULATOR-CRASH(status 139 = signal 11' in rerolls[0], f're-roll lines {rerolls}')
+    rows.append((label, ok))
+    label, out, err, result = run('LINK66-boundary-timeout', 'boundary', 124)
+    ok = expect(label, result == 'RESULT: boots=1 leg_rc=1 summary_rc=0 pass=0 fail=1', result)
+    ok &= expect(label, not [line for line in err if line.startswith('HARNESS re-roll:')], f'a finished boot was re-rolled: {err}')
+    rows.append((label, ok))
+    for call, green in (('boundary', 'RESULT: boots=2 leg_rc=0 summary_rc=0 pass=1 fail=0'),
+                        ('probe', 'RESULT: boots=2 leg_rc=0 summary_rc=0 pass=0 fail=0'),
+                        ('seedpin', 'RESULT: boots=2 leg_rc=0 summary_rc=0 pass=0 fail=0')):
+        label, out, err, result = run(f'NOTERMINAL-{call}-kill', call, 137, stop=False)
+        rerolls = [line for line in err if line.startswith('HARNESS re-roll:')]
+        ok = expect(label, result == green, f'{result}; without the stop the kill must re-roll into GREEN, want {green}')
+        ok &= expect(label, len(rerolls) == 1 and 'KILLED-AFTER-BANNER(status 137' in rerolls[0], f're-roll lines {rerolls}')
+        rows.append((label, ok))
+
+
 def main():
     rows = []
     with tempfile.TemporaryDirectory(prefix='herbert-emulator-crash-check-') as temporary:
@@ -527,6 +659,9 @@ def main():
             ok &= expect(r['label'], len(lines(r, '  REPLAY probe:')) == 1 and r['boots'] == 4,
                          f"want one REPLAY on the crash's parse error and four boots, got {r['boots']}")
             rows.append((r['label'], ok))
+        link66_dir = bench.root / 'link66'
+        link66_dir.mkdir()
+        link66_rows(link66_dir, rows)
     for label, ok in rows:
         print(f"{'PASS' if ok else 'FAIL'} {label}")
     if FAILURES:

@@ -1324,6 +1324,7 @@ if [[ "$boot_legs" -eq 1 ]]; then
             for attempt in 1 2 3; do
                 cls="$(f2_bochs_feed_attempt "--grade $LINK66_N:$LINK66_Q --draw $d --master-seed $DRIVER_PAY --query-seed $DRIVER_QRY --witness --drain-mode quiet --cap $W/cap.bin" "$W/feed.log" "$L66_GRUBCFG" 240 64 "$W/out.log" "$elf:boot/kernel.elf")"
                 case "$cls" in NO-SHUTDOWN|COMPLETED) break ;; esac
+                if f2__terminal_class "$cls"; then f2_harness_terminal "$label" "$attempt" "$cls"; return 1; fi
                 echo "HARNESS re-roll: link66 $label attempt $attempt = $cls (fresh disk + fresh feeder retry)" >&2
                 # Moving this leg off f2_bochs_feed_leg inherited the re-roll loop but NOT
                 # f2_harness_error, so F2_HARNESS_FAIL was never incremented here and the
@@ -1389,6 +1390,7 @@ if [[ "$boot_legs" -eq 1 ]]; then
                 case "$cls" in
                     NO-SHUTDOWN|COMPLETED) break ;;
                 esac
+                if f2__terminal_class "$cls"; then f2_harness_terminal "$label" "$attempt" "$cls"; return 1; fi
                 echo "HARNESS re-roll: link66 $label attempt $attempt = $cls (fresh disk + fresh feeder retry)" >&2
                 [[ "$attempt" -eq 3 ]] && f2_harness_error "$label" "$cls"
             done
