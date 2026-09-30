@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Focused link67 checks. Host expectations describe bytes/layout, not a guest interpreter.
 
-Each compile and boot has a fresh directory. Shell cleanup retains these through
-the existing kernel evidence collector; no attempt overwrites an earlier stream.
+Each compile, and each Bochs attempt, has a fresh directory. Shell cleanup retains
+these through the existing kernel evidence collector; no attempt overwrites an
+earlier stream.
 """
 import argparse
 from datetime import datetime, timezone
@@ -49,6 +50,18 @@ def refused(leg, message, action, witness=None):
     if witness:
         witness()
     print(f"PASS folio {leg} refused by the normal-mode oracle", flush=True)
+
+
+class HarnessError(Exception):
+    """A Bochs harness failure that ends the run: fail closed, never a kernel verdict.
+
+    Not an AssertionError, so refused() never takes it for an oracle's refusal.
+    """
+
+
+# The boot pipeline's own status, which the shared harness's boot line writes in the boot
+# directory before xvfb-run's cleanup can replace xvfb-run's status (bochs_f2_harness.sh).
+PIPELINE_STATUS = "bochs_out.txt.pipeline-status"
 
 
 def identity(path):
@@ -219,39 +232,129 @@ quit
     print(f"PASS folio {label}", flush=True)
 
 
-def bochs_boot(work, label, image, data, expected):
-    directory = work / label
+def bochs_attempt(work, helper, config, directory, image, data, expected):
+    """One Bochs attempt in its own fresh directory -> (class, terminal).
+
+    The shared harness (bochs_f2_harness.sh) builds the disk, checked, boots it,
+    and classifies the boot (f2__classify_boot): from its capture and, after the
+    shutdown banner, only from the boot pipeline's own status file. It also says
+    whether the class ends the leg at once (f2__terminal_class: a kill after the
+    banner), so this file holds no class or signal list of its own. Nothing here
+    grades: bochs_boot grades a COMPLETED attempt, and only that.
+    """
     directory.mkdir()
     shutil.copyfile(image, directory / "kernel.elf")
     (directory / "input.bin").write_bytes(data)
-    helper = ROOT / "bootstrap/tests/bochs_f2_harness.sh"
-    config = 'set timeout=0\nset default=0\nmenuentry "folio" {\n multiboot /boot/kernel.elf\n module --nounzip /boot/input.bin\n boot\n}\n'
     (directory / "grub.cfg").write_text(config)
     receipt = {"image": identity(directory / "kernel.elf"), "input": identity(directory / "input.bin"),
-               "expected_serial_hex": expected.hex(), "status": "incomplete"}
+               "expected_serial_hex": expected.hex(), "class": None}
     try:
-        # Remove this marker only after the checked builder reports full cleanup.
+        # link67's cleanup keeps the whole work tree while PRESERVE exists: a build
+        # that did not finish its cleanup may still own a mount or loop device.
+        # Remove the marker only after the checked builder reports full cleanup: a
+        # finished build, or a failed one whose class does not say LEAKED (its own
+        # cleanup ran and found no mount or attached loop left). A failed attempt's
+        # directory then stays for inspection and blocks neither the next attempt
+        # nor the final cleanup. Any other build failure keeps the marker and ends
+        # the run: another attempt would not make that tree safe to delete.
         (work / "PRESERVE").write_text(str(directory) + "\n")
         status = execute(["bash", "-c", 'unset CDPATH; source "$1" || exit 1; f2__disk_build_class "$2" "$3" "$2/kernel.elf:boot/kernel.elf" "$2/input.bin:boot/input.bin"',
                           "folio-disk", str(helper), str(directory), config], directory, 120, "disk-build", subprocess.DEVNULL)
-        require(status == 0 and not (directory / "disk-build.stdout").read_bytes(), "Bochs disk build failed")
+        built = (directory / "disk-build.stdout").read_text(errors="replace").strip()
+        if status != 0 or built:
+            if status != 1 or not built.startswith("DISK-BUILD(") or "LEAKED" in built:
+                raise HarnessError(f"HARNESS-ERROR: folio {directory}: the checked disk build did not report full cleanup "
+                                   f"(exit {status}, class {built or 'none'}); PRESERVE keeps the tree and no attempt "
+                                   "follows -- fail-closed")
+            (work / "PRESERVE").unlink()
+            receipt["class"] = built
+            return built, False
         (work / "PRESERVE").unlink()
         status = execute(["bash", "-c", 'unset CDPATH; source "$1" || exit 1; f2__bios_find || exit 1; f2__boot "$2" 120 64 "com1: enabled=1, mode=file, dev=serial.bin"',
                           "folio-bochs", str(helper), str(directory)], directory, 135, "boot", subprocess.DEVNULL)
-        raw = (directory / "bochs_out.txt").read_bytes()
-        before, found, after = raw.partition(GOOD)
-        text_only = lambda value: all(b in (9, 10, 13) or 32 <= b < 127 for b in value)
-        require(status == 1 and found and text_only(before) and text_only(after)
-                and b"shutdown requested" in after, "Bochs did not attest exactly one successful completion")
-        serial = directory / "serial.bin"
-        require((serial.read_bytes() if serial.exists() else b"") == expected, f"{label}: serial bytes differ")
-        receipt.update(status="success", boot_exit=status, serial_exists=serial.exists())
+        receipt["boot_exit"] = status   # xvfb-run's status: evidence only, never classified (FLAKE-LOG F12)
+        own = directory / PIPELINE_STATUS
+        receipt["pipeline_status"] = own.read_text(errors="replace") if own.is_file() else None
+        # The shared classifier: NO-OUTPUT, NO-SHUTDOWN, then, from the pipeline's own
+        # status file only, NO-STATUS(...), EMULATOR-CRASH(...) or KILLED-AFTER-BANNER(...)
+        # (FLAKE-LOG F13), or COMPLETED; a second line TERMINAL when the harness says the
+        # class ends the leg. Its copy of a completed capture goes to /dev/null: the grade
+        # reads this attempt's own bochs_out.txt.
+        execute(["bash", "-c", 'unset CDPATH; source "$1" || exit 1; cls="$(f2__classify_boot "$2" /dev/null "$2/$3")"; '
+                 'printf "%s\\n" "$cls"; if f2__terminal_class "$cls"; then echo TERMINAL; fi',
+                 "folio-classify", str(helper), str(directory), PIPELINE_STATUS], directory, 30, "classify", subprocess.DEVNULL)
+        lines = (directory / "classify.stdout").read_text(errors="replace").splitlines()
+        cls = lines[0].strip() if lines else ""
+        if not cls or lines[1:] not in ([], ["TERMINAL"]):
+            raise HarnessError(f"HARNESS-ERROR: folio {directory}: the shared classifier reported no class ({lines!r}) -- fail-closed")
+        receipt["class"] = cls
+        return cls, lines[1:] == ["TERMINAL"]
     except BaseException as error:
         receipt["error"] = f"{type(error).__name__}: {error}"
         raise
     finally:
         record(directory / "run.json", receipt)
+
+
+def bochs_boot(work, label, image, data, expected):
+    """Boot image under Bochs with data as its GRUB module; grade one COMPLETED attempt.
+
+    Attempts run the way the shared harness's f2_bochs_leg runs them: each in a
+    fresh directory, label/attempt-N (bochs_attempt). A harness class, such as
+    DISK-BUILD(step), NO-OUTPUT, NO-SHUTDOWN, NO-STATUS(...) or EMULATOR-CRASH(...),
+    is never graded and re-rolls, and a third in a row raises HarnessError (fail
+    closed). A terminal class (KILLED-AFTER-BANNER(...), a kill after the banner) is
+    never graded and never re-rolled: it raises HarnessError at once. The first
+    COMPLETED attempt is graded by the completion and serial checks below; the
+    completion witness reads the pipeline's own status, never xvfb-run's.
+    label/run.json names each attempt's class and the graded attempt.
+    """
+    base = work / label
+    base.mkdir()
+    helper = ROOT / "bootstrap/tests/bochs_f2_harness.sh"
+    config = 'set timeout=0\nset default=0\nmenuentry "folio" {\n multiboot /boot/kernel.elf\n module --nounzip /boot/input.bin\n boot\n}\n'
+    summary = {"attempts": [], "graded": None, "status": "incomplete"}
+    try:
+        for number in (1, 2, 3):
+            directory = base / f"attempt-{number}"
+            cls, terminal = bochs_attempt(work, helper, config, directory, image, data, expected)
+            summary["attempts"].append({"attempt": directory.name, "class": cls})
+            if cls == "COMPLETED":
+                break
+            if terminal:
+                raise HarnessError(f"HARNESS-ERROR: folio {label} attempt {number} = {cls} -- not re-rolled (only a "
+                                   "positively identified emulator crash re-rolls) and not graded; fail-closed")
+            print(f"HARNESS re-roll: folio {label} attempt {number} = {cls} (fresh disk retry; NOT a kernel grade; "
+                  f"evidence: {directory})", file=sys.stderr, flush=True)
+        else:
+            raise HarnessError(f"HARNESS-ERROR: folio {label} harness exhausted (3 fresh-disk attempts; last={cls}) -- "
+                               "an emulator/host harness failure, NOT adjudicated as a kernel verdict; fail-closed")
+        summary["graded"] = directory.name
+        raw = (directory / "bochs_out.txt").read_bytes()
+        before, found, after = raw.partition(GOOD)
+        text_only = lambda value: all(b in (9, 10, 13) or 32 <= b < 127 for b in value)
+        # Bochs exits 1 after "shutdown requested": read from the pipeline's own status,
+        # which a COMPLETED class has already proven readable. xvfb-run's status can be
+        # replaced by its cleanup (FLAKE-LOG F12) and is not a witness.
+        own = (directory / PIPELINE_STATUS).read_text().strip()
+        require(own == "1" and found and text_only(before) and text_only(after)
+                and b"shutdown requested" in after, "Bochs did not attest exactly one successful completion")
+        serial = directory / "serial.bin"
+        require((serial.read_bytes() if serial.exists() else b"") == expected, f"{label}: serial bytes differ")
+        summary.update(status="success", pipeline_status=int(own), serial_exists=serial.exists())
+    except BaseException as error:
+        summary["error"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        record(base / "run.json", summary)
     print(f"PASS folio {label}", flush=True)
+
+
+def graded_attempt(work, label):
+    """The attempt directory bochs_boot graded for label, as label/run.json names it."""
+    graded = json.loads((work / label / "run.json").read_text()).get("graded")
+    require(graded, f"{label}: no graded Bochs attempt recorded")
+    return work / label / graded
 
 
 def main():
@@ -365,7 +468,7 @@ def main():
             def captured_ff():
                 # The grader reads a missing serial.bin as empty bytes, which also
                 # differ from fe\n: require this boot's own capture to hold ff\n.
-                serial = work / "mutation-bochs-serial" / "serial.bin"
+                serial = graded_attempt(work, "mutation-bochs-serial") / "serial.bin"
                 require(serial.is_file() and serial.read_bytes() == b"ff\n",
                         "mutation-bochs-serial: capture not attributable to the 0xff control")
 
@@ -374,14 +477,15 @@ def main():
                     captured_ff)
             # A guest that completes with grade 1 frames de01ad, never GOOD.
             grade_one = compile_image(work, compiler, "grade-one", declaration + "func main(): return 4294967296 end\n")
-            completion = work / "mutation-bochs-completion"
 
             def completed_with_grade_one():
-                # The same message also covers a boot that did not finish, or a
-                # harness exit status (FLAKE-LOG F12): require this boot's
-                # evidence to show the guest ran to shutdown after framing grade 1.
+                # The same message also covers any other completed boot the grade
+                # refuses, such as one whose pipeline status is not Bochs's 1:
+                # require the graded attempt's evidence to show the guest ran to
+                # shutdown after framing grade 1, and Bochs then exited 1.
+                completion = graded_attempt(work, "mutation-bochs-completion")
                 capture = (completion / "bochs_out.txt").read_bytes()
-                require(json.loads((completion / "boot.json").read_text())["exit"] == 1
+                require((completion / PIPELINE_STATUS).read_text() == "1\n"
                         and capture.count(b"\xde\x01\xad") == 1 and b"shutdown requested" in capture,
                         "mutation-bochs-completion: refusal not attributable to a completed grade-1 boot")
 
@@ -480,6 +584,9 @@ func main(): return scan(0, 0) * 4294967296 end
 if __name__ == "__main__":
     try:
         main()
+    except HarnessError as error:
+        print(error, flush=True)
+        raise SystemExit(1)
     except (AssertionError, OSError, ProtocolError, subprocess.SubprocessError) as error:
         print(f"FAIL: folio: {error}", file=sys.stderr)
         raise SystemExit(1)
