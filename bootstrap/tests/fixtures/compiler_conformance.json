@@ -2219,6 +2219,30 @@
       "profile": "reject",
       "source": "func boom():\n    let a = new_array(int)\n    return get(a, 0)\nend\nfunc helper():\n    let arr = new_array(int)\n    if count(new_array(int)) == 1:\n        arr = boom()\n    end\n    return new_array(bool)\nend\nfunc main():\n    let x = yes()\n    x = cnt(not x)\n    let a = helper()\n    return x + 1\nend\nfunc yes():\n    return true\nend\nfunc cnt(b):\n    if b:\n        return 10\n    end\n    return 20\nend\n",
       "diagnostic": "program: native-subset: array element type mismatch (ERR 436)"
+    },
+    {
+      "id": "c02-arg-direct-pinned-return",
+      "profile": "reject",
+      "source": "func fault(msg):\n    let a = new_array(int)\n    return get(a, 0)\nend\nfunc helper(x):\n    return x + 1\nend\nfunc pick(n):\n    if n < 10:\n        return 1\n    end\n    return helper(fault(\"x\"))\nend\nfunc main():\n    return pick(3)\nend\n",
+      "diagnostic": "line 12: native-subset: ambiguous or unconstrained function signature (ERR 424)"
+    },
+    {
+      "id": "c02-arg-through-let",
+      "profile": "reject",
+      "source": "func fault(msg):\n    let a = new_array(int)\n    return get(a, 0)\nend\nfunc helper(x):\n    return x + 1\nend\nfunc pick(n):\n    if n < 10:\n        return 1\n    end\n    let v = fault(\"x\")\n    return helper(v)\nend\nfunc main():\n    return pick(3)\nend\n",
+      "diagnostic": "line 13: native-subset: ambiguous or unconstrained function signature (ERR 424)"
+    },
+    {
+      "id": "c02-genuine-helper-measured-into-local",
+      "profile": "reject",
+      "source": "func first():\n    let p = new_array(int)\n    return get(p, 0)\nend\nfunc measure(v):\n    return v + 1\nend\nfunc main():\n    let a = new_array(int)\n    do add(a, 41)\n    let n = 0\n    n = measure(first())\n    return n\nend\n",
+      "diagnostic": "line 12: native-subset: ambiguous or unconstrained function signature (ERR 424)"
+    },
+    {
+      "id": "c02-bufbase-user-call-arg",
+      "profile": "reject",
+      "source": "func f():\n    return 1\nend\nfunc main():\n    return bufbase(f())\nend\n",
+      "diagnostic": "line 5: native-subset: ambiguous or unconstrained function signature (ERR 424)"
     }
   ]
 }

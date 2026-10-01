@@ -1114,19 +1114,19 @@ func nc_poly_record_call_target(pool, poly, caller_inst_idx, call_node_idx, call
     return 0
 end
 
-func nc_poly_lowered_call_target(pool, poly, caller_inst_idx, call_node_idx):
+func nc_poly_lowered_call_target(pool, poly, caller_inst_idx, call_node_idx, call_line):
     let targets = poly.1
     let existing = nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx)
     if existing == 0 - 1:
         -- A call can lack a target when an argument stayed unknown, as a
-        -- never-returning helper's result does. Without a retry this is the
-        -- known compiler fault. After a successful retry it reports the first
+        -- never-returning helper's result does. Without a retry this is ERR 424
+        -- at the call's line. After a successful retry it reports the first
         -- attempt's retained diagnostic instead, whatever local the call
         -- concerns; that diagnostic need not describe this call.
         if nc_retry_used(pool):
             return nc_retry_diag_fail(pool, 430, 0, "")
         end
-        return fault("missing polymorphic call target")
+        return nc_fail(424, call_line, "")
     end
     return get(targets, existing).2
 end

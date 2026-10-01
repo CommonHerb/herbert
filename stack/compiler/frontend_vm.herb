@@ -1941,7 +1941,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "process_exit"):
         return fault("void builtin in expression")
     end
-    return emit_instr(ir, op_call(), nc_poly_lowered_call_target(type_pool, poly, caller_inst_idx, call_node_idx), count(kids))
+    return emit_instr(ir, op_call(), nc_poly_lowered_call_target(type_pool, poly, caller_inst_idx, call_node_idx, call_line), count(kids))
 end
 
 func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
