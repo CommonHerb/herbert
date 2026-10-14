@@ -3614,10 +3614,12 @@ func nc_record_kind_base():
     return 1000
 end
 
--- Value records are kinds 1000..1999; ref records (one heap word, fields
--- updated in place) are 2000 plus the declaration's node index.
+-- Value records are kind 1000 plus the declaration's node index, as in R1;
+-- ref records (one heap word, fields updated in place) are 2^32 + 1000 plus
+-- it, far above any node index, so the two ranges never meet however large
+-- the program (a boundary at 2000 misread a record declared after node 1000).
 func nc_ref_record_kind_base():
-    return 2000
+    return 4294968296
 end
 
 func nc_type_is_record(pool, t):
@@ -7141,8 +7143,14 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         if arr.0 != 0:
             return (arr.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        if not nc_type_is_array(pool, arr.2) or nc_type_width(pool, val.2) != instr.2:
+        if not nc_type_is_array(pool, arr.2):
             return (nc_fail(435, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        -- A value whose width is not the field's (a never-returning helper's
+        -- result, whose type inference left open) is the width change that the
+        -- same update of a value record reports.
+        if nc_type_width(pool, val.2) != instr.2:
+            return (nc_fail(433, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         stack = arr.1
     elif op == 33:

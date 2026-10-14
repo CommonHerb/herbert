@@ -738,8 +738,14 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         if arr.0 != 0:
             return (arr.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        if not nc_type_is_array(pool, arr.2) or nc_type_width(pool, val.2) != instr.2:
+        if not nc_type_is_array(pool, arr.2):
             return (nc_fail(435, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        -- A value whose width is not the field's (a never-returning helper's
+        -- result, whose type inference left open) is the width change that the
+        -- same update of a value record reports.
+        if nc_type_width(pool, val.2) != instr.2:
+            return (nc_fail(433, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         stack = arr.1
     elif op == 33:

@@ -276,10 +276,12 @@ func nc_record_kind_base():
     return 1000
 end
 
--- Value records are kinds 1000..1999; ref records (one heap word, fields
--- updated in place) are 2000 plus the declaration's node index.
+-- Value records are kind 1000 plus the declaration's node index, as in R1;
+-- ref records (one heap word, fields updated in place) are 2^32 + 1000 plus
+-- it, far above any node index, so the two ranges never meet however large
+-- the program (a boundary at 2000 misread a record declared after node 1000).
 func nc_ref_record_kind_base():
-    return 2000
+    return 4294968296
 end
 
 func nc_type_is_record(pool, t):
