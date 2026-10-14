@@ -213,6 +213,8 @@ into the tracked `stack/native_compile_fragment.herb`; see
 [compiler maintenance](docs/COMPILER.md). `make compiler-source` explicitly
 refreshes that artifact after stage edits. A stale or missing unit fails closed;
 checks do not rebuild it automatically. The split itself preserves every byte.
+`make check` likewise requires `stack/i386_oracle_fragment.herb` to equal its
+units (`make oracle-source`); the i386 kernel gates build their compiler from it.
 
 `make compiler-metadata` compiles and executes 2,000-operation CALL, tuple and
 heap cases, plus a 200-local/200-conditional case with returning arms and live

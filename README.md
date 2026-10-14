@@ -142,10 +142,14 @@ stdout without publishing `a.out`. It and every emit route that reads its
 input now run the checked lexer and parser first, so lexically or
 structurally malformed source gets the same located diagnostic as the hosted
 path; the tree they then build still comes from the unchecked parser.
-Rejections specific to an emit route (codes above 442) print that route's own
-message, for example `program: native-subset: multiboot32-long64: too many locals
-(max 15) (ERR 504)`, where they used to print `unknown error`. They carry no line
-number, and one code can name different checks on different routes.
+Rejections specific to an emit route (codes above 442) print the message of the
+check that fired, which names the route that owns it, for example
+`program: native-subset: multiboot32-long64: too many locals (max 15) (ERR 504)`,
+where they used to print `unknown error`. They carry no line number, and one code
+can name different checks on different routes.
+The 45 i386 kernel routes are built by a separate oracle compiler, assembled into
+`stack/i386_oracle_fragment.herb` and compiled by the seed when their gates run.
+The production compiler rejects those route lines with ERR 443, naming the route.
 
 `fwriter(bytes)` now publishes through an exclusive `.herbert*.tmp` file in
 an opened current-directory descriptor. It obtains the unpredictable name from
