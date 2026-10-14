@@ -787,6 +787,7 @@ qemu-system-x86_64'''
             subprocess.run(['git', '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '--allow-empty', '-qm', 'fixture'], check=True)
             (root/'bootstrap/seed').mkdir(); (root/'bootstrap/seed/gen1.seed').write_bytes(b'seed')
             (root/'stack').mkdir(); (root/'stack/native_compile_fragment.herb').write_bytes(b'source')
+            (root/'stack/i386_oracle_fragment.herb').write_bytes(b'oracle source')
             driver = tests/'kernel_ci_group.sh'; driver.write_bytes((TESTS/driver.name).read_bytes())
             for name in ('qemu_prefix.sh', 'kernel_evidence.sh'):
                 (tests/name).write_bytes((TESTS/name).read_bytes())
