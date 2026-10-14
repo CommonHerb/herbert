@@ -53,7 +53,7 @@ Some inherited structural messages are imprecise: ERR 205 says `'do' must be fol
 
 ```
 program := (func | record)*
-record  := 'record' NAME ':' (NAME ':' TYPE)+ 'end'            -- at least two fields (else ERR 213)
+record  := 'ref'? 'record' NAME ':' (NAME ':' TYPE)+ 'end'     -- at least two fields (else ERR 213); 'ref': a heap record
 func    := 'func' NAME '(' params? ')' ':' body 'end'      -- body = 1+ statements (empty body = ERR 209)
 params  := NAME (',' NAME)*                                  -- 0 allowed; main() must take 0
 stmt    := 'let' NAME '=' expr        -- local binding; see current shadowing behavior below
@@ -104,6 +104,34 @@ end
 - `main` may return a record of renderable fields; it renders as the tuple it is, `(3, 4)`.
 - A record and a function, two records, or a record and a builtin may not share a name, and a record's field names are distinct (`ERR 447`, which names the problem); different records may reuse a field name. A malformed declaration is structural `ERR 213`. A record construction is not a statement: `do Point(1, 2)` is `ERR 448`.
 - Field syntax and record type names are available only in a program that declares a record; elsewhere they stay `ERR 206`, `ERR 211` and `ERR 212` as before. Records are not supported on the `multiboot32-long64` route (`ERR 449`).
+
+**Reference records.** `ref record NAME:` declares a record that lives on the heap and is shared, like an array or a buffer: `NAME(...)` allocates it and returns a reference, and `x.FIELD = e` stores into it in place, so every reference to it sees the change.
+
+```herbert
+ref record Counter:
+    total: int
+    steps: int
+end
+
+func bump(c, n):
+    c.total = c.total + n
+    c.steps = c.steps + 1
+    return 0
+end
+
+func main():
+    let c = Counter(0, 0)
+    let a = bump(c, 5)
+    let b = bump(c, 7)
+    return c.total * 10 + c.steps
+end
+```
+**stdout:** `122`
+
+- Declarations, construction, reads and the field rules are those of value records; `ref` is recognized only before `record` at the top level.
+- A reference record is one word wherever it goes (arguments, results, fields, array elements); copying it copies the reference. A value record may hold one, and one may hold another or a value record, but none may contain itself, directly or through other records (`ERR 447`).
+- It is not renderable (`main` returning one is `ERR 432`) and has no `==`.
+- Each construction allocates once on the heap, which does not reclaim memory during a run: build long-lived state once and update its fields, rather than constructing a new one per step. A field read copies the record's fields to the stack before taking one; a field write stores only that field.
 
 **Arrays / buffers / strings (the growable collections):**
 - `new_array(TYPE)` — the type arg is mandatory (`new_array()` = ERR 208). Grow with `do add(a, v)`; read `get(a, i)`; size `count(a)`.
