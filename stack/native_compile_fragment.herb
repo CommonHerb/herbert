@@ -922,6 +922,13 @@ end
 func parse_assign(tokens, pos, pool, line):
     let name_tok = get(tokens, pos)
     let name = name_tok.1
+    if tok_is_punct_text(tokens, pos + 1, "."):
+        let field_atoms = new_array(string)
+        do add(field_atoms, name)
+        do add(field_atoms, get(tokens, pos + 2).1)
+        let fr = parse_expr(tokens, pos + 4, pool)
+        return (add_node(pool, "field-assign", field_atoms, kids1(fr.0), line), fr.1)
+    end
     let r = parse_expr(tokens, pos + 2, pool)
     return (add_node(pool, "assign", atoms1(name), kids1(r.0), line), r.1)
 end
@@ -981,23 +988,86 @@ end
 -- FUNCTIONS / PROGRAM
 -- ====================================================================
 
+-- The program node's kids are its functions; its atoms are the pool indices of
+-- its record declarations, in decimal (none in a program without records).
 func parse_program(tokens, pos, pool):
     let kids = new_array(int)
-    pos = parse_funcs(tokens, pos, pool, kids)
+    let recs = new_array(string)
+    pos = parse_funcs(tokens, pos, pool, kids, recs)
     let line = 0
     if count(tokens) > 0:
         line = get(tokens, 0).2
     end
-    return (add_node(pool, "program", atoms0(), kids, line), pos)
+    return (add_node(pool, "program", recs, kids, line), pos)
 end
 
-func parse_funcs(tokens, pos, pool, kids):
+func parse_funcs(tokens, pos, pool, kids, recs):
     if pos >= count(tokens):
         return pos
     end
+    if err_is_record_head(tokens, pos):
+        let rr = parse_recorddef(tokens, pos, pool)
+        do add(recs, int_to_str(rr.0))
+        return parse_funcs(tokens, rr.1, pool, kids, recs)
+    end
     let r = parse_funcdef(tokens, pos, pool)
     do add(kids, r.0)
-    return parse_funcs(tokens, r.1, pool, kids)
+    return parse_funcs(tokens, r.1, pool, kids, recs)
+end
+
+-- record NAME: FIELD: TYPE ... end -> ("record", [NAME, FIELD...], [type...])
+func parse_record_fields(tokens, pos, pool, atoms, kids):
+    if tok_is_ident_text(tokens, pos, "end"):
+        return pos + 1
+    end
+    do add(atoms, get(tokens, pos).1)
+    let r = parse_type(tokens, pos + 2, pool)
+    do add(kids, r.0)
+    return parse_record_fields(tokens, r.1, pool, atoms, kids)
+end
+
+func parse_recorddef(tokens, pos, pool):
+    let line = get(tokens, pos).2
+    let atoms = new_array(string)
+    do add(atoms, get(tokens, pos + 1).1)
+    let kids = new_array(int)
+    pos = parse_record_fields(tokens, pos + 3, pool, atoms, kids)
+    return (add_node(pool, "record", atoms, kids, line), pos)
+end
+
+-- Constructors parse as calls. In a program that declares records, every call
+-- whose callee is a record becomes "record-new", so no call walker sees one.
+func record_decl_names_loop(nodes, recs, i, names):
+    if i >= count(recs):
+        return names
+    end
+    let decl = get(nodes, parse_decimal(get(recs, i)))
+    do add(names, get(decl.1, 0))
+    return record_decl_names_loop(nodes, recs, i + 1, names)
+end
+
+func record_decl_names(nodes, prog_idx):
+    return record_decl_names_loop(nodes, get(nodes, prog_idx).1, 0, new_array(string))
+end
+
+func retag_record_calls_loop(nodes, names, out, i):
+    if i >= count(nodes):
+        return out
+    end
+    let node = get(nodes, i)
+    if equal(node.0, "call") and err_name_seen(names, get(node.1, 0)):
+        do add(out, ("record-new", node.1, node.2, node.3))
+        return retag_record_calls_loop(nodes, names, out, i + 1)
+    end
+    do add(out, node)
+    return retag_record_calls_loop(nodes, names, out, i + 1)
+end
+
+func retag_record_calls(nodes, prog_idx):
+    if count(get(nodes, prog_idx).1) == 0:
+        return nodes
+    end
+    return retag_record_calls_loop(nodes, record_decl_names(nodes, prog_idx), pool_new(), 0)
 end
 
 func parse_funcdef(tokens, pos, pool):
@@ -1134,8 +1204,9 @@ end
 func nc_emit_ast_dump_program(source):
     let checked = nc_check_source(source)
     let tokens = lex_source(source)
-    let nodes = pool_new()
-    let parsed = parse_program(tokens, 0, nodes)
+    let parsed_nodes = pool_new()
+    let parsed = parse_program(tokens, 0, parsed_nodes)
+    let nodes = retag_record_calls(parsed_nodes, parsed.0)
     let buf = new_buffer()
     buf = ser_dump(buf, nodes, parsed.0)
     do flogger(freeze(buf))
@@ -1736,7 +1807,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         if elem.0 != 0:
             return fault("bad new_array meta")
         end
-        return emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_intern_array(type_pool, elem.1))
+        return emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_intern_array(type_pool, nc_type_erase(type_pool, elem.1)))
     end
     ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     if equal(name, "linux_syscall6"):
@@ -1878,8 +1949,15 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, op_make_tuple(), count(kids), 0)
     end
+    if equal(tag, "record-new"):
+        ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr(ir, op_make_tuple(), count(kids), 0)
+    end
     if equal(tag, "dot"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        if not is_digit(index(get(atoms, 0), 0)):
+            return emit_instr(ir, op_tuple_get(), lowered_field(poly, caller_inst_idx, node_idx, node).2, 0)
+        end
         return emit_instr(ir, op_tuple_get(), parse_decimal(get(atoms, 0)), 0)
     end
     if equal(tag, "call"):
@@ -2009,6 +2087,30 @@ func emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_ins
     return env
 end
 
+-- Inference records each field's position per instance; a missing entry
+-- means the value's type stayed unknown there.
+func lowered_field(poly, inst_idx, node_idx, node):
+    let i = nc_poly_field_find_loop(poly.3, inst_idx, node_idx, 0)
+    if i == 0 - 1:
+        let failed = nc_fail(446, node.3, get(node.1, count(node.1) - 1))
+        return (inst_idx, node_idx, 0, 0)
+    end
+    return get(poly.3, i)
+end
+
+func emit_field_update(k, n, i, slot, value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    if i >= n:
+        return ir
+    end
+    if i == k:
+        ir = emit_expr(value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_field_update(k, n, i + 1, slot, value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    end
+    ir = emit_instr(ir, op_load_local(), slot, 0)
+    ir = emit_instr(ir, op_tuple_get(), i, 0)
+    return emit_field_update(k, n, i + 1, slot, value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+end
+
 func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
     let stmt = get(nodes, stmt_idx)
     let tag = stmt.0
@@ -2022,6 +2124,15 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     if equal(tag, "assign"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_instr(ir, op_store_local(), env_lookup(env, get(atoms, 0)), 0)
+        return env
+    end
+    if equal(tag, "field-assign"):
+        -- The same code as x = (x.0, ..., e, ..., x.n-1) for a tuple.
+        let shape = lowered_field(poly, caller_inst_idx, stmt_idx, stmt)
+        let slot = env_lookup(env, get(atoms, 0))
+        ir = emit_field_update(shape.2, shape.3, 0, slot, get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_instr(ir, op_make_tuple(), shape.3, 0)
+        ir = emit_instr(ir, op_store_local(), slot, 0)
         return env
     end
     if equal(tag, "return"):
@@ -2174,6 +2285,9 @@ func diagnostic_message(code, payload):
     if code == 212:
         return "invalid assignment or name"
     end
+    if code == 213:
+        return "invalid record declaration"
+    end
     if code == 301:
         return diagnostic_with_payload("duplicate let '", payload, "' in this scope")
     end
@@ -2281,16 +2395,16 @@ func err_parse_fail_payload(code, line, payload):
     return err_parse_fail(err_diag(code, line, payload))
 end
 
-func err_token_line(tokens, pos, eof_line):
+func err_token_line(tokens, pos, ctx):
     if pos >= count(tokens):
-        return eof_line
+        return ctx.0
     end
     let t = get(tokens, pos)
     return t.2
 end
 
-func err_parse_fail_current(code, tokens, pos, eof_line):
-    return err_parse_fail_at(code, err_token_line(tokens, pos, eof_line))
+func err_parse_fail_current(code, tokens, pos, ctx):
+    return err_parse_fail_at(code, err_token_line(tokens, pos, ctx))
 end
 
 func err_expr_other():
@@ -2492,8 +2606,8 @@ func err_name_seen(names, name):
     return err_name_seen_loop(names, 0, count(names), name)
 end
 
-func err_parse_type(tokens, pos, eof_line):
-    let line = err_token_line(tokens, pos, eof_line)
+func err_parse_type(tokens, pos, ctx):
+    let line = err_token_line(tokens, pos, ctx)
     if pos >= count(tokens):
         return err_parse_fail_at(211, line)
     end
@@ -2502,41 +2616,44 @@ func err_parse_type(tokens, pos, eof_line):
         if equal(t.1, "int") or equal(t.1, "bool") or equal(t.1, "string") or equal(t.1, "buffer"):
             return err_parse_ok(pos + 1)
         end
+        if err_is_record_name(ctx, t.1):
+            return err_parse_ok(pos + 1)
+        end
         if equal(t.1, "array"):
             if not tok_is_punct_text(tokens, pos + 1, "("):
-                return err_parse_fail_current(211, tokens, pos + 1, eof_line)
+                return err_parse_fail_current(211, tokens, pos + 1, ctx)
             end
-            let r = err_parse_type(tokens, pos + 2, eof_line)
+            let r = err_parse_type(tokens, pos + 2, ctx)
             if r.0 == err_err_tag():
                 return r
             end
             if not tok_is_punct_text(tokens, r.2, ")"):
-                return err_parse_fail_current(211, tokens, r.2, eof_line)
+                return err_parse_fail_current(211, tokens, r.2, ctx)
             end
             return err_parse_ok(r.2 + 1)
         end
         return err_parse_fail_at(211, line)
     end
     if tok_is_punct_text(tokens, pos, "("):
-        let r = err_parse_type(tokens, pos + 1, eof_line)
+        let r = err_parse_type(tokens, pos + 1, ctx)
         if r.0 == err_err_tag():
             return r
         end
-        return err_parse_type_tuple_tail(tokens, r.2, eof_line, 1, line)
+        return err_parse_type_tuple_tail(tokens, r.2, ctx, 1, line)
     end
     return err_parse_fail_at(211, line)
 end
 
-func err_parse_type_tuple_tail(tokens, pos, eof_line, n_items, tuple_line):
+func err_parse_type_tuple_tail(tokens, pos, ctx, n_items, tuple_line):
     if tok_is_punct_text(tokens, pos, ","):
-        let r = err_parse_type(tokens, pos + 1, eof_line)
+        let r = err_parse_type(tokens, pos + 1, ctx)
         if r.0 == err_err_tag():
             return r
         end
-        return err_parse_type_tuple_tail(tokens, r.2, eof_line, n_items + 1, tuple_line)
+        return err_parse_type_tuple_tail(tokens, r.2, ctx, n_items + 1, tuple_line)
     end
     if not tok_is_punct_text(tokens, pos, ")"):
-        return err_parse_fail_current(211, tokens, pos, eof_line)
+        return err_parse_fail_current(211, tokens, pos, ctx)
     end
     if n_items < 2:
         return err_parse_fail_at(211, tuple_line)
@@ -2549,60 +2666,63 @@ end
 -- to that parser. A flat operand/operator chain avoids a second precedence
 -- ladder drifting behind the language. Groups/calls still recurse structurally.
 -- The root kind records only whether the complete expression is a call, for do.
-func err_parse_expr(tokens, pos, eof_line):
-    let r = err_parse_not(tokens, pos, eof_line)
+func err_parse_expr(tokens, pos, ctx):
+    let r = err_parse_not(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
-    return err_parse_expr_tail(tokens, r.2, eof_line, r.3)
+    return err_parse_expr_tail(tokens, r.2, ctx, r.3)
 end
 
-func err_parse_expr_tail(tokens, pos, eof_line, root_kind):
+func err_parse_expr_tail(tokens, pos, ctx, root_kind):
     if bin_op_class(tokens, pos) == 0:
         return err_parse_ok_extra(pos, root_kind)
     end
-    let r = err_parse_not(tokens, pos + 1, eof_line)
+    let r = err_parse_not(tokens, pos + 1, ctx)
     if r.0 == err_err_tag():
         return r
     end
-    return err_parse_expr_tail(tokens, r.2, eof_line, err_expr_other())
+    return err_parse_expr_tail(tokens, r.2, ctx, err_expr_other())
 end
 
-func err_parse_not(tokens, pos, eof_line):
+func err_parse_not(tokens, pos, ctx):
     if tok_is_ident_text(tokens, pos, "not") or tok_is_op_text(tokens, pos, "~"):
-        let r = err_parse_not(tokens, pos + 1, eof_line)
+        let r = err_parse_not(tokens, pos + 1, ctx)
         if r.0 == err_err_tag():
             return r
         end
         return err_parse_ok_extra(r.2, err_expr_other())
     end
-    return err_parse_dot(tokens, pos, eof_line)
+    return err_parse_dot(tokens, pos, ctx)
 end
 
-func err_parse_dot(tokens, pos, eof_line):
-    let r = err_parse_atom(tokens, pos, eof_line)
+func err_parse_dot(tokens, pos, ctx):
+    let r = err_parse_atom(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
-    return err_parse_dot_loop(tokens, r.2, eof_line, r.3)
+    return err_parse_dot_loop(tokens, r.2, ctx, r.3)
 end
 
-func err_parse_dot_loop(tokens, pos, eof_line, root_kind):
+func err_parse_dot_loop(tokens, pos, ctx, root_kind):
     if tok_is_punct_text(tokens, pos, "."):
         if pos + 1 >= count(tokens):
-            return err_parse_fail_current(206, tokens, pos + 1, eof_line)
+            return err_parse_fail_current(206, tokens, pos + 1, ctx)
         end
         let idx_tok = get(tokens, pos + 1)
+        if idx_tok.0 == 0 and err_has_records(ctx) and err_is_valid_name_token(tokens, pos + 1):
+            return err_parse_dot_loop(tokens, pos + 2, ctx, err_expr_other())
+        end
         if idx_tok.0 != 1:
             return err_parse_fail_at(206, idx_tok.2)
         end
-        return err_parse_dot_loop(tokens, pos + 2, eof_line, err_expr_other())
+        return err_parse_dot_loop(tokens, pos + 2, ctx, err_expr_other())
     end
     return err_parse_ok_extra(pos, root_kind)
 end
 
-func err_parse_atom(tokens, pos, eof_line):
-    let line = err_token_line(tokens, pos, eof_line)
+func err_parse_atom(tokens, pos, ctx):
+    let line = err_token_line(tokens, pos, ctx)
     if pos >= count(tokens):
         return err_parse_fail_at(204, line)
     end
@@ -2620,17 +2740,17 @@ func err_parse_atom(tokens, pos, eof_line):
             return err_parse_fail_at(204, line)
         end
         if tok_is_punct_text(tokens, pos + 1, "("):
-            return err_parse_call(tokens, pos, eof_line)
+            return err_parse_call(tokens, pos, ctx)
         end
         return err_parse_ok_extra(pos + 1, err_expr_other())
     end
     if tok_is_punct_text(tokens, pos, "("):
-        return err_parse_group_or_tuple(tokens, pos + 1, eof_line)
+        return err_parse_group_or_tuple(tokens, pos + 1, ctx)
     end
     return err_parse_fail_at(204, line)
 end
 
-func err_parse_call(tokens, pos, eof_line):
+func err_parse_call(tokens, pos, ctx):
     let name_tok = get(tokens, pos)
     let name = name_tok.1
     let line = name_tok.2
@@ -2639,84 +2759,84 @@ func err_parse_call(tokens, pos, eof_line):
         if tok_is_punct_text(tokens, pos, ")"):
             return err_parse_fail_at(208, line)
         end
-        let r = err_parse_type(tokens, pos, eof_line)
+        let r = err_parse_type(tokens, pos, ctx)
         if r.0 == err_err_tag():
             return r
         end
         if not tok_is_punct_text(tokens, r.2, ")"):
-            return err_parse_fail_current(208, tokens, r.2, eof_line)
+            return err_parse_fail_current(208, tokens, r.2, ctx)
         end
         return err_parse_ok_extra(r.2 + 1, err_expr_new_array())
     end
     if tok_is_punct_text(tokens, pos, ")"):
         return err_parse_ok_extra(pos + 1, err_expr_call())
     end
-    let r = err_parse_args_loop(tokens, pos, eof_line)
+    let r = err_parse_args_loop(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
     if not tok_is_punct_text(tokens, r.2, ")"):
-        return err_parse_fail_current(207, tokens, r.2, eof_line)
+        return err_parse_fail_current(207, tokens, r.2, ctx)
     end
     return err_parse_ok_extra(r.2 + 1, err_expr_call())
 end
 
-func err_parse_args_loop(tokens, pos, eof_line):
-    let r = err_parse_expr(tokens, pos, eof_line)
+func err_parse_args_loop(tokens, pos, ctx):
+    let r = err_parse_expr(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
     if tok_is_punct_text(tokens, r.2, ","):
-        return err_parse_args_loop(tokens, r.2 + 1, eof_line)
+        return err_parse_args_loop(tokens, r.2 + 1, ctx)
     end
     return err_parse_ok(r.2)
 end
 
-func err_parse_group_or_tuple(tokens, pos, eof_line):
-    let r = err_parse_expr(tokens, pos, eof_line)
+func err_parse_group_or_tuple(tokens, pos, ctx):
+    let r = err_parse_expr(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
     if tok_is_punct_text(tokens, r.2, ","):
-        let tr = err_parse_tuple_tail(tokens, r.2 + 1, eof_line)
+        let tr = err_parse_tuple_tail(tokens, r.2 + 1, ctx)
         if tr.0 == err_err_tag():
             return tr
         end
         if not tok_is_punct_text(tokens, tr.2, ")"):
-            return err_parse_fail_current(207, tokens, tr.2, eof_line)
+            return err_parse_fail_current(207, tokens, tr.2, ctx)
         end
         return err_parse_ok_extra(tr.2 + 1, err_expr_other())
     end
     if not tok_is_punct_text(tokens, r.2, ")"):
-        return err_parse_fail_current(207, tokens, r.2, eof_line)
+        return err_parse_fail_current(207, tokens, r.2, ctx)
     end
     return err_parse_ok_extra(r.2 + 1, r.3)
 end
 
-func err_parse_tuple_tail(tokens, pos, eof_line):
-    let r = err_parse_expr(tokens, pos, eof_line)
+func err_parse_tuple_tail(tokens, pos, ctx):
+    let r = err_parse_expr(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
     if tok_is_punct_text(tokens, r.2, ","):
-        return err_parse_tuple_tail(tokens, r.2 + 1, eof_line)
+        return err_parse_tuple_tail(tokens, r.2 + 1, ctx)
     end
     return err_parse_ok(r.2)
 end
 
-func err_parse_body(tokens, pos, eof_line, seen_count):
+func err_parse_body(tokens, pos, ctx, seen_count):
     if is_body_terminator(tokens, pos):
         return err_parse_ok_extra(pos, seen_count)
     end
-    let r = err_parse_stmt(tokens, pos, eof_line)
+    let r = err_parse_stmt(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
-    return err_parse_body(tokens, r.2, eof_line, seen_count + 1)
+    return err_parse_body(tokens, r.2, ctx, seen_count + 1)
 end
 
-func err_parse_stmt(tokens, pos, eof_line):
-    let line = err_token_line(tokens, pos, eof_line)
+func err_parse_stmt(tokens, pos, ctx):
+    let line = err_token_line(tokens, pos, ctx)
     if pos >= count(tokens):
         return err_parse_fail_at(205, line)
     end
@@ -2726,57 +2846,64 @@ func err_parse_stmt(tokens, pos, eof_line):
     end
     let text = t.1
     if equal(text, "let"):
-        return err_parse_let(tokens, pos + 1, eof_line)
+        return err_parse_let(tokens, pos + 1, ctx)
     end
     if equal(text, "return"):
-        let r = err_parse_expr(tokens, pos + 1, eof_line)
+        let r = err_parse_expr(tokens, pos + 1, ctx)
         if r.0 == err_err_tag():
             return r
         end
         return err_parse_ok(r.2)
     end
     if equal(text, "do"):
-        return err_parse_do(tokens, pos + 1, eof_line, line)
+        return err_parse_do(tokens, pos + 1, ctx, line)
     end
     if equal(text, "if"):
-        return err_parse_if(tokens, pos + 1, eof_line, line)
+        return err_parse_if(tokens, pos + 1, ctx, line)
     end
     if err_is_reserved_word(text):
         return err_parse_fail_at(205, line)
     end
-    return err_parse_assign(tokens, pos, eof_line)
+    return err_parse_assign(tokens, pos, ctx)
 end
 
-func err_parse_let(tokens, pos, eof_line):
+func err_parse_let(tokens, pos, ctx):
     if not err_is_valid_name_token(tokens, pos):
-        return err_parse_fail_current(212, tokens, pos, eof_line)
+        return err_parse_fail_current(212, tokens, pos, ctx)
     end
     if not tok_is_op_text(tokens, pos + 1, "="):
-        return err_parse_fail_current(212, tokens, pos + 1, eof_line)
+        return err_parse_fail_current(212, tokens, pos + 1, ctx)
     end
-    let r = err_parse_expr(tokens, pos + 2, eof_line)
+    let r = err_parse_expr(tokens, pos + 2, ctx)
     if r.0 == err_err_tag():
         return r
     end
     return err_parse_ok(r.2)
 end
 
-func err_parse_assign(tokens, pos, eof_line):
+func err_parse_assign(tokens, pos, ctx):
     if not err_is_valid_name_token(tokens, pos):
-        return err_parse_fail_current(212, tokens, pos, eof_line)
+        return err_parse_fail_current(212, tokens, pos, ctx)
+    end
+    if err_has_records(ctx) and tok_is_punct_text(tokens, pos + 1, ".") and err_is_valid_name_token(tokens, pos + 2) and tok_is_op_text(tokens, pos + 3, "="):
+        let fr = err_parse_expr(tokens, pos + 4, ctx)
+        if fr.0 == err_err_tag():
+            return fr
+        end
+        return err_parse_ok(fr.2)
     end
     if not tok_is_op_text(tokens, pos + 1, "="):
-        return err_parse_fail_current(212, tokens, pos, eof_line)
+        return err_parse_fail_current(212, tokens, pos, ctx)
     end
-    let r = err_parse_expr(tokens, pos + 2, eof_line)
+    let r = err_parse_expr(tokens, pos + 2, ctx)
     if r.0 == err_err_tag():
         return r
     end
     return err_parse_ok(r.2)
 end
 
-func err_parse_do(tokens, pos, eof_line, do_line):
-    let r = err_parse_expr(tokens, pos, eof_line)
+func err_parse_do(tokens, pos, ctx, do_line):
+    let r = err_parse_expr(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
@@ -2788,65 +2915,65 @@ func err_parse_do(tokens, pos, eof_line, do_line):
     return err_parse_ok(r.2)
 end
 
-func err_parse_if(tokens, pos, eof_line, if_line):
-    let cr = err_parse_expr(tokens, pos, eof_line)
+func err_parse_if(tokens, pos, ctx, if_line):
+    let cr = err_parse_expr(tokens, pos, ctx)
     if cr.0 == err_err_tag():
         return cr
     end
     if not tok_is_punct_text(tokens, cr.2, ":"):
-        return err_parse_fail_current(204, tokens, cr.2, eof_line)
+        return err_parse_fail_current(204, tokens, cr.2, ctx)
     end
-    let br = err_parse_body(tokens, cr.2 + 1, eof_line, 0)
+    let br = err_parse_body(tokens, cr.2 + 1, ctx, 0)
     if br.0 == err_err_tag():
         return br
     end
     if br.3 == 0:
         return err_parse_fail_at(210, if_line)
     end
-    let ar = err_parse_elifs(tokens, br.2, eof_line, if_line)
+    let ar = err_parse_elifs(tokens, br.2, ctx, if_line)
     if ar.0 == err_err_tag():
         return ar
     end
     pos = ar.2
     if tok_is_ident_text(tokens, pos, "else"):
-        let er = err_parse_else(tokens, pos + 1, eof_line, if_line)
+        let er = err_parse_else(tokens, pos + 1, ctx, if_line)
         if er.0 == err_err_tag():
             return er
         end
         pos = er.2
     end
     if not tok_is_ident_text(tokens, pos, "end"):
-        return err_parse_fail_current(203, tokens, pos, eof_line)
+        return err_parse_fail_current(203, tokens, pos, ctx)
     end
     return err_parse_ok(pos + 1)
 end
 
-func err_parse_elifs(tokens, pos, eof_line, if_line):
+func err_parse_elifs(tokens, pos, ctx, if_line):
     if tok_is_ident_text(tokens, pos, "elif"):
-        let cr = err_parse_expr(tokens, pos + 1, eof_line)
+        let cr = err_parse_expr(tokens, pos + 1, ctx)
         if cr.0 == err_err_tag():
             return cr
         end
         if not tok_is_punct_text(tokens, cr.2, ":"):
-            return err_parse_fail_current(204, tokens, cr.2, eof_line)
+            return err_parse_fail_current(204, tokens, cr.2, ctx)
         end
-        let br = err_parse_body(tokens, cr.2 + 1, eof_line, 0)
+        let br = err_parse_body(tokens, cr.2 + 1, ctx, 0)
         if br.0 == err_err_tag():
             return br
         end
         if br.3 == 0:
             return err_parse_fail_at(210, if_line)
         end
-        return err_parse_elifs(tokens, br.2, eof_line, if_line)
+        return err_parse_elifs(tokens, br.2, ctx, if_line)
     end
     return err_parse_ok(pos)
 end
 
-func err_parse_else(tokens, pos, eof_line, if_line):
+func err_parse_else(tokens, pos, ctx, if_line):
     if not tok_is_punct_text(tokens, pos, ":"):
-        return err_parse_fail_current(203, tokens, pos, eof_line)
+        return err_parse_fail_current(203, tokens, pos, ctx)
     end
-    let br = err_parse_body(tokens, pos + 1, eof_line, 0)
+    let br = err_parse_body(tokens, pos + 1, ctx, 0)
     if br.0 == err_err_tag():
         return br
     end
@@ -2856,9 +2983,9 @@ func err_parse_else(tokens, pos, eof_line, if_line):
     return err_parse_ok(br.2)
 end
 
-func err_parse_param_loop(tokens, pos, eof_line, params):
+func err_parse_param_loop(tokens, pos, ctx, params):
     if not err_is_valid_name_token(tokens, pos):
-        return err_parse_fail_current(202, tokens, pos, eof_line)
+        return err_parse_fail_current(202, tokens, pos, ctx)
     end
     let param_tok = get(tokens, pos)
     let name = param_tok.1
@@ -2867,38 +2994,38 @@ func err_parse_param_loop(tokens, pos, eof_line, params):
     end
     do add(params, name)
     if tok_is_punct_text(tokens, pos + 1, ","):
-        return err_parse_param_loop(tokens, pos + 2, eof_line, params)
+        return err_parse_param_loop(tokens, pos + 2, ctx, params)
     end
     return err_parse_ok_extra(pos + 1, count(params))
 end
 
-func err_parse_param_list(tokens, pos, eof_line):
+func err_parse_param_list(tokens, pos, ctx):
     let params = new_array(string)
     if tok_is_punct_text(tokens, pos, ")"):
         return err_parse_ok_extra(pos, 0)
     end
-    return err_parse_param_loop(tokens, pos, eof_line, params)
+    return err_parse_param_loop(tokens, pos, ctx, params)
 end
 
-func err_parse_func(tokens, pos, eof_line):
-    let line = err_token_line(tokens, pos, eof_line)
+func err_parse_func(tokens, pos, ctx):
+    let line = err_token_line(tokens, pos, ctx)
     if not err_is_valid_name_token(tokens, pos + 1):
-        return err_parse_fail_current(202, tokens, pos + 1, eof_line)
+        return err_parse_fail_current(202, tokens, pos + 1, ctx)
     end
     if not tok_is_punct_text(tokens, pos + 2, "("):
-        return err_parse_fail_current(202, tokens, pos + 2, eof_line)
+        return err_parse_fail_current(202, tokens, pos + 2, ctx)
     end
-    let pr = err_parse_param_list(tokens, pos + 3, eof_line)
+    let pr = err_parse_param_list(tokens, pos + 3, ctx)
     if pr.0 == err_err_tag():
         return pr
     end
     if not tok_is_punct_text(tokens, pr.2, ")"):
-        return err_parse_fail_current(202, tokens, pr.2, eof_line)
+        return err_parse_fail_current(202, tokens, pr.2, ctx)
     end
     if not tok_is_punct_text(tokens, pr.2 + 1, ":"):
-        return err_parse_fail_current(202, tokens, pr.2 + 1, eof_line)
+        return err_parse_fail_current(202, tokens, pr.2 + 1, ctx)
     end
-    let br = err_parse_body(tokens, pr.2 + 2, eof_line, 0)
+    let br = err_parse_body(tokens, pr.2 + 2, ctx, 0)
     if br.0 == err_err_tag():
         return br
     end
@@ -2906,27 +3033,97 @@ func err_parse_func(tokens, pos, eof_line):
         return err_parse_fail_at(209, line)
     end
     if not tok_is_ident_text(tokens, br.2, "end"):
-        return err_parse_fail_current(203, tokens, br.2, eof_line)
+        return err_parse_fail_current(203, tokens, br.2, ctx)
     end
     return err_parse_ok(br.2 + 1)
 end
 
-func err_parse_program_loop(tokens, pos, eof_line):
+func err_parse_program_loop(tokens, pos, ctx):
     if pos >= count(tokens):
         return err_parse_ok(pos)
     end
-    if not tok_is_ident_text(tokens, pos, "func"):
-        return err_parse_fail_current(201, tokens, pos, eof_line)
+    if err_is_record_head(tokens, pos):
+        let rr = err_parse_record(tokens, pos, ctx)
+        if rr.0 == err_err_tag():
+            return rr
+        end
+        return err_parse_program_loop(tokens, rr.2, ctx)
     end
-    let r = err_parse_func(tokens, pos, eof_line)
+    if not tok_is_ident_text(tokens, pos, "func"):
+        return err_parse_fail_current(201, tokens, pos, ctx)
+    end
+    let r = err_parse_func(tokens, pos, ctx)
     if r.0 == err_err_tag():
         return r
     end
-    return err_parse_program_loop(tokens, r.2, eof_line)
+    return err_parse_program_loop(tokens, r.2, ctx)
+end
+
+-- A program that declares records may use their names as types and may use
+-- field syntax (e.FIELD, x.FIELD = e). The names come from a token scan for
+-- `record NAME :`, which in a well-formed program occurs only as a declaration;
+-- without one, field syntax and named types stay structural errors (206, 211, 212).
+func err_is_record_head(tokens, pos):
+    if not tok_is_ident_text(tokens, pos, "record"):
+        return false
+    end
+    if not err_is_valid_name_token(tokens, pos + 1):
+        return false
+    end
+    return tok_is_punct_text(tokens, pos + 2, ":")
+end
+
+func err_record_names_scan(tokens, pos, names):
+    if pos >= count(tokens):
+        return names
+    end
+    if err_is_record_head(tokens, pos):
+        do add(names, get(tokens, pos + 1).1)
+    end
+    return err_record_names_scan(tokens, pos + 1, names)
+end
+
+func err_is_record_name(ctx, name):
+    return err_name_seen(ctx.1, name)
+end
+
+func err_has_records(ctx):
+    return count(ctx.1) > 0
+end
+
+-- record NAME: FIELD: TYPE ... end, with at least two fields (ERR 213).
+func err_parse_record_fields(tokens, pos, ctx, n_fields, record_line):
+    if tok_is_ident_text(tokens, pos, "end"):
+        if n_fields < 2:
+            return err_parse_fail_at(213, record_line)
+        end
+        return err_parse_ok(pos + 1)
+    end
+    if not err_is_valid_name_token(tokens, pos):
+        return err_parse_fail_at(213, err_token_line(tokens, pos, ctx))
+    end
+    if not tok_is_punct_text(tokens, pos + 1, ":"):
+        return err_parse_fail_at(213, err_token_line(tokens, pos + 1, ctx))
+    end
+    let t = err_parse_type(tokens, pos + 2, ctx)
+    if t.0 == err_err_tag():
+        return t
+    end
+    return err_parse_record_fields(tokens, t.2, ctx, n_fields + 1, record_line)
+end
+
+func err_parse_record(tokens, pos, ctx):
+    let line = err_token_line(tokens, pos, ctx)
+    let name = get(tokens, pos + 1).1
+    if equal(name, "record") or equal(name, "ref"):
+        return err_parse_fail_at(213, line)
+    end
+    return err_parse_record_fields(tokens, pos + 3, ctx, 0, line)
 end
 
 func err_parse_program(tokens, eof_line):
-    return err_parse_program_loop(tokens, 0, eof_line)
+    let names = err_record_names_scan(tokens, 0, new_array(string))
+    return err_parse_program_loop(tokens, 0, (eof_line, names))
 end
 
 func err_is_builtin_name(name):
@@ -3157,6 +3354,18 @@ func nc_diag_msg(code, payload):
     if code == 442:
         return "native-subset: bitwise/shift operator mixed with another operator class without parentheses"
     end
+    if code == 444:
+        return diagnostic_with_payload("native-subset: no field '", payload, "' in this record")
+    end
+    if code == 445:
+        return "native-subset: a record's fields are read by name, not by position"
+    end
+    if code == 446:
+        return diagnostic_with_payload("native-subset: field '", payload, "' used on a value that is not a record")
+    end
+    if code == 448:
+        return "native-subset: a record construction is not a statement"
+    end
     -- Kernel-route codes carry their own text, which names the route and the rule.
     if code > 442 and length(payload) > 0:
         return diagnostic_with_payload("native-subset: ", payload, "")
@@ -3293,6 +3502,21 @@ func nc_type_tuple_children(pool, t):
     return nc_type_children(pool, t)
 end
 
+-- A record's type is a pool entry whose kind is 1000 plus its declaration's
+-- node index and whose children are its field types: nominal to inference,
+-- laid out as the tuple of its fields everywhere else (see nc_type_erase).
+func nc_record_kind_base():
+    return 1000
+end
+
+func nc_type_is_record(pool, t):
+    return nc_type_kind(pool, t) >= nc_record_kind_base()
+end
+
+func nc_type_record_decl(pool, t):
+    return nc_type_kind(pool, t) - nc_record_kind_base()
+end
+
 func nc_type_array_elem(pool, t):
     return get(nc_type_children(pool, t), 0)
 end
@@ -3318,7 +3542,7 @@ func nc_type_renderable_rec(pool, t):
     if t == nc_type_int() or t == nc_type_bool() or t == nc_type_string():
         return true
     end
-    if nc_type_is_tuple(pool, t):
+    if nc_type_is_tuple(pool, t) or nc_type_is_record(pool, t):
         let kids = nc_type_tuple_children(pool, t)
         let n = count(kids)
         if n < 2:
@@ -3772,19 +3996,89 @@ func nc_type_is_int_bool(t):
     return t == nc_type_int() or t == nc_type_bool()
 end
 
-func nc_type_from_type_expr_children(pool, nodes, kids, i, n, out, line):
+func nc_type_from_type_expr_children(pool, nodes, kids, i, n, out, line, visiting):
     if i >= n:
         return (0, nc_type_intern_tuple(pool, out))
     end
-    let r = nc_type_from_type_expr(pool, nodes, get(kids, i))
+    let r = nc_type_from_type_expr_v(pool, nodes, get(kids, i), visiting)
     if r.0 != 0:
         return r
     end
     do add(out, r.1)
-    return nc_type_from_type_expr_children(pool, nodes, kids, i + 1, n, out, line)
+    return nc_type_from_type_expr_children(pool, nodes, kids, i + 1, n, out, line, visiting)
+end
+
+func nc_record_decl_scan(nodes, name, i):
+    if i >= count(nodes):
+        return 0 - 1
+    end
+    let node = get(nodes, i)
+    if equal(node.0, "record") and equal(get(node.1, 0), name):
+        return i
+    end
+    return nc_record_decl_scan(nodes, name, i + 1)
+end
+
+func nc_record_field_index_loop(atoms, field, i):
+    if i >= count(atoms):
+        return 0 - 1
+    end
+    if equal(get(atoms, i), field):
+        return i - 1
+    end
+    return nc_record_field_index_loop(atoms, field, i + 1)
+end
+
+-- The field's position, or -1. A record node's atoms are its name, then its fields.
+func nc_record_field_index(nodes, decl_idx, field):
+    return nc_record_field_index_loop(get(nodes, decl_idx).1, field, 1)
+end
+
+func nc_ints_copy_loop(a, i, out):
+    if i >= count(a):
+        return out
+    end
+    do add(out, get(a, i))
+    return nc_ints_copy_loop(a, i + 1, out)
+end
+
+func nc_ints_with(a, v):
+    let out = nc_ints_copy_loop(a, 0, new_array(int))
+    do add(out, v)
+    return out
+end
+
+func nc_record_field_types(pool, nodes, kids, i, out, visiting):
+    if i >= count(kids):
+        return (0, out)
+    end
+    let r = nc_type_from_type_expr_v(pool, nodes, get(kids, i), visiting)
+    if r.0 != 0:
+        return (r.0, out)
+    end
+    do add(out, r.1)
+    return nc_record_field_types(pool, nodes, kids, i + 1, out, visiting)
+end
+
+-- visiting holds the records being built on this path; meeting one again
+-- means a record contains itself, which would make it infinitely wide.
+func nc_record_type(pool, nodes, decl_idx, visiting):
+    let decl = get(nodes, decl_idx)
+    if nc_tuple_int_array_has(visiting, decl_idx, 0, count(visiting)):
+        return (nc_infer_fail(pool, 447, decl.3, diagnostic_with_payload("record '", get(decl.1, 0), "' contains itself")), 0)
+    end
+    let fields = nc_record_field_types(pool, nodes, decl.2, 0, new_array(int), nc_ints_with(visiting, decl_idx))
+    if fields.0 != 0:
+        return (fields.0, 0)
+    end
+    return (0, nc_type_intern_struct_loop(pool, nc_record_kind_base() + decl_idx, fields.1, 0, count(pool.0)))
 end
 
 func nc_type_from_type_expr(pool, nodes, type_idx):
+    return nc_type_from_type_expr_v(pool, nodes, type_idx, new_array(int))
+end
+
+func nc_type_from_type_expr_v(pool, nodes, type_idx, visiting):
     let node = get(nodes, type_idx)
     if equal(node.0, "type"):
         let name = get(node.1, 0)
@@ -3800,13 +4094,17 @@ func nc_type_from_type_expr(pool, nodes, type_idx):
         if equal(name, "buffer"):
             return (0, nc_type_buffer())
         end
+        let decl = nc_record_decl_scan(nodes, name, 0)
+        if decl != 0 - 1:
+            return nc_record_type(pool, nodes, decl, visiting)
+        end
         return (nc_infer_fail(pool, 434, node.3, ""), 0)
     end
     if equal(node.0, "type-array"):
         if count(node.2) != 1:
             return (nc_infer_fail(pool, 434, node.3, ""), 0)
         end
-        let elem = nc_type_from_type_expr(pool, nodes, get(node.2, 0))
+        let elem = nc_type_from_type_expr_v(pool, nodes, get(node.2, 0), visiting)
         if elem.0 != 0:
             return elem
         end
@@ -3816,7 +4114,7 @@ func nc_type_from_type_expr(pool, nodes, type_idx):
         if count(node.2) < 2:
             return (nc_infer_fail(pool, 434, node.3, ""), 0)
         end
-        return nc_type_from_type_expr_children(pool, nodes, node.2, 0, count(node.2), new_array(int), node.3)
+        return nc_type_from_type_expr_children(pool, nodes, node.2, 0, count(node.2), new_array(int), node.3, visiting)
     end
     return (nc_infer_fail(pool, 434, node.3, ""), 0)
 end
@@ -3859,7 +4157,7 @@ func nc_count_input_body(nodes, stmts, i, n, input_name):
     let tag = stmt.0
     let kids = stmt.2
     let here = 0
-    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return"):
+    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "field-assign"):
         here = nc_count_input_expr(nodes, get(kids, 0), input_name)
     elif equal(tag, "if"):
         here = nc_count_input_if_arms(nodes, kids, 0, count(kids), input_name)
@@ -4158,7 +4456,7 @@ func nc_poly_seed_main(nodes, prog_idx):
     do add(instances, nc_poly_make_instance(main_lookup.1, empty, nc_type_unknown(), 0, 0, 0 - 1))
     do add(params, empty)
     do add(returns, nc_type_unknown())
-    return ((params, returns), (instances, call_targets, pushes))
+    return ((params, returns), (instances, call_targets, pushes, new_array((int, int, int, int))))
 end
 
 func nc_poly_current_base(funcs, fn_idx):
@@ -4247,6 +4545,11 @@ func nc_body_count_name(nodes, stmts, i, n, name):
     let here = 0
     if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
         here = nc_expr_count_name(nodes, get(stmt.2, 0), name)
+    elif equal(tag, "field-assign"):
+        here = nc_expr_count_name(nodes, get(stmt.2, 0), name)
+        if equal(get(stmt.1, 0), name):
+            here = here + 1
+        end
     elif equal(tag, "if"):
         here = nc_if_count_name(nodes, stmt.2, 0, count(stmt.2), name)
     end
@@ -4276,7 +4579,7 @@ func nc_body_assigns_name(nodes, stmts, i, n, name):
     end
     let stmt = get(nodes, get(stmts, i))
     let tag = stmt.0
-    if equal(tag, "assign"):
+    if equal(tag, "assign") or equal(tag, "field-assign"):
         if equal(get(stmt.1, 0), name):
             return true
         end
@@ -4525,7 +4828,7 @@ end
 func nc_tuple_sites_node(nodes, idx, acc):
     let node = get(nodes, idx)
     let c = 0
-    if equal(node.0, "tuple") or equal(node.0, "type-tuple"):
+    if equal(node.0, "tuple") or equal(node.0, "type-tuple") or equal(node.0, "record-new") or equal(node.0, "field-assign"):
         c = 1
     end
     if equal(node.0, "call"):
@@ -4991,6 +5294,13 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         if r.1 == nc_type_unknown():
             return (0, nc_type_unknown(), r.2, r.3, r.4)
         end
+        let field = get(node.1, 0)
+        if not is_digit(index(field, 0)):
+            return nc_infer_field_read(pool, nodes, idx, node, field, r, funcs, fn_idx)
+        end
+        if nc_type_is_record(pool, r.1):
+            return (nc_infer_fail(pool, 445, node.3, ""), 0, r.2, r.3, r.4)
+        end
         if not nc_type_is_tuple(pool, r.1):
             return (nc_infer_fail(pool, 431, node.3, ""), 0, r.2, r.3, r.4)
         end
@@ -5008,6 +5318,9 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
             return (nc_infer_fail(pool, 404, node.3, "undefined-name"), 0, env, sig, 0)
         end
         return (0, li.2, env, sig, 0)
+    end
+    if equal(tag, "record-new"):
+        return nc_infer_record_new(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
     end
     if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
         -- Arithmetic and bitwise/shift binops are all int x int -> int: constrain
@@ -5317,6 +5630,90 @@ func nc_rhs_never_returns(nodes, prog_idx, idx):
     return nc_func_never_returns(nodes, prog_idx, callee.1)
 end
 
+func nc_infer_field_read(pool, nodes, idx, node, field, r, funcs, fn_idx):
+    if not nc_type_is_record(pool, r.1):
+        return (nc_infer_fail(pool, 446, node.3, field), 0, r.2, r.3, r.4)
+    end
+    let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, r.1), field)
+    if fi == 0 - 1:
+        return (nc_infer_fail(pool, 444, node.3, field), 0, r.2, r.3, r.4)
+    end
+    let noted = nc_poly_note_field(funcs, fn_idx, idx, fi, 0)
+    return (0, get(nc_type_children(pool, r.1), fi), r.2, r.3, r.4)
+end
+
+-- An argument or a new field value of the wrong type is ERR 430, as for tuples.
+func nc_record_value_ok(pool, want, got, line):
+    if got == nc_type_unknown():
+        return 0
+    end
+    if nc_type_equal(pool, want, got):
+        return 0
+    end
+    return nc_type_merge(pool, want, got, line).0
+end
+
+func nc_infer_record_args(pool, nodes, prog_idx, kids, fields, i, env, sig, fn_idx, funcs, n_params, changed, line):
+    if i >= count(kids):
+        return (0, env, sig, changed)
+    end
+    let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, i), env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, nc_or_changed(changed, r.4))
+    end
+    let ok = nc_record_value_ok(pool, get(fields, i), r.1, line)
+    if ok != 0:
+        return (ok, r.2, r.3, nc_or_changed(changed, r.4))
+    end
+    return nc_infer_record_args(pool, nodes, prog_idx, kids, fields, i + 1, r.2, r.3, fn_idx, funcs, n_params, nc_or_changed(changed, r.4), line)
+end
+
+func nc_infer_record_new(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, idx)
+    let name = get(node.1, 0)
+    let rt = nc_record_type(pool, nodes, nc_record_decl_scan(nodes, name, 0), new_array(int))
+    if rt.0 != 0:
+        return (rt.0, 0, env, sig, 0)
+    end
+    let fields = nc_type_children(pool, rt.1)
+    if count(node.2) != count(fields):
+        return (nc_infer_fail(pool, 420, node.3, name), 0, env, sig, 0)
+    end
+    let a = nc_infer_record_args(pool, nodes, prog_idx, node.2, fields, 0, env, sig, fn_idx, funcs, n_params, 0, node.3)
+    if a.0 != 0:
+        return (a.0, 0, a.1, a.2, a.3)
+    end
+    return (0, rt.1, a.1, a.2, a.3)
+end
+
+-- x.FIELD = e rebinds the local x to a copy with one field replaced.
+func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, stmt_idx)
+    let field = get(node.1, 1)
+    let li = nc_class_env_lookup_info(env, get(node.1, 0))
+    if li.0 == 0:
+        return (nc_infer_fail(pool, 404, node.3, "assign-undefined"), env, sig, 0, 0)
+    end
+    if not nc_type_is_record(pool, li.2):
+        return (nc_infer_fail(pool, 446, node.3, field), env, sig, 0, 0)
+    end
+    let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, li.2), field)
+    if fi == 0 - 1:
+        return (nc_infer_fail(pool, 444, node.3, field), env, sig, 0, 0)
+    end
+    let children = nc_type_children(pool, li.2)
+    let r = nc_infer_expr(pool, nodes, prog_idx, get(node.2, 0), env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4, 0)
+    end
+    let ok = nc_record_value_ok(pool, get(children, fi), r.1, node.3)
+    if ok != 0:
+        return (ok, r.2, r.3, r.4, 0)
+    end
+    let noted = nc_poly_note_field(funcs, fn_idx, stmt_idx, fi, count(children))
+    return (0, r.2, r.3, r.4, 0)
+end
+
 func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params):
     let node = get(nodes, stmt_idx)
     let tag = node.0
@@ -5328,6 +5725,9 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         end
         env = nc_class_env_add(r.2, get(node.1, 0), r.1)
         return (0, env, r.3, r.4, 0)
+    end
+    if equal(tag, "field-assign"):
+        return nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params)
     end
     if equal(tag, "assign"):
         let li = nc_class_env_lookup_info(env, get(node.1, 0))
@@ -5385,6 +5785,9 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
     end
     if equal(tag, "do"):
         let call_node = get(nodes, get(kids, 0))
+        if equal(call_node.0, "record-new"):
+            return (nc_infer_fail(pool, 448, call_node.3, ""), env, sig, 0, 0)
+        end
         if equal(call_node.0, "call"):
             let name = get(call_node.1, 0)
             let ckids = call_node.2
@@ -5693,6 +6096,112 @@ func nc_class_mix_line(nodes):
     return nc_class_mix_scan_loop(nodes, 0, count(nodes))
 end
 
+-- Downstream of inference a record is the tuple of its fields, so lowering,
+-- metadata and the emitter see exactly the program written with tuples.
+func nc_type_erase_list(pool, kids, i, out):
+    if i >= count(kids):
+        return out
+    end
+    do add(out, nc_type_erase(pool, get(kids, i)))
+    return nc_type_erase_list(pool, kids, i + 1, out)
+end
+
+func nc_type_erase(pool, t):
+    if t < nc_type_struct_base():
+        return t
+    end
+    if nc_type_is_array(pool, t):
+        return nc_type_intern_array(pool, nc_type_erase(pool, nc_type_array_elem(pool, t)))
+    end
+    return nc_type_intern_tuple(pool, nc_type_erase_list(pool, nc_type_children(pool, t), 0, new_array(int)))
+end
+
+func nc_erase_param_lists(pool, lists, i, out):
+    if i >= count(lists):
+        return out
+    end
+    do add(out, nc_type_erase_list(pool, get(lists, i), 0, new_array(int)))
+    return nc_erase_param_lists(pool, lists, i + 1, out)
+end
+
+func nc_erase_verified(pool, nodes, prog_idx, verified):
+    if count(get(nodes, prog_idx).1) == 0:
+        return verified
+    end
+    let sig = verified.1
+    let erased = (nc_erase_param_lists(pool, sig.0, 0, new_array(array(int))), nc_type_erase_list(pool, sig.1, 0, new_array(int)))
+    return (verified.0, erased, verified.2)
+end
+
+func nc_record_names_dup_loop(nodes, recs, name, i, seen):
+    if i >= count(recs):
+        return seen
+    end
+    if equal(get(get(nodes, parse_decimal(get(recs, i))).1, 0), name):
+        seen = seen + 1
+    end
+    return nc_record_names_dup_loop(nodes, recs, name, i + 1, seen)
+end
+
+func nc_record_fields_dup_loop(atoms, i):
+    if i >= count(atoms):
+        return ""
+    end
+    if nc_record_field_index_loop(atoms, get(atoms, i), 1) != i - 1:
+        return get(atoms, i)
+    end
+    return nc_record_fields_dup_loop(atoms, i + 1)
+end
+
+-- Declaration checks, before inference: a record's name is its own, its
+-- fields are distinct, and its field types exist and do not contain it (ERR 447,
+-- or 434 for an unknown type name).
+func nc_records_check(pool, nodes, prog_idx, recs, i):
+    if i >= count(recs):
+        return 0
+    end
+    let decl_idx = parse_decimal(get(recs, i))
+    let decl = get(nodes, decl_idx)
+    let name = get(decl.1, 0)
+    if nc_func_lookup(nodes, prog_idx, name).0 != 0:
+        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' has the name of a function"))
+    end
+    if err_is_builtin_name(name):
+        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' has the name of a builtin"))
+    end
+    if nc_record_names_dup_loop(nodes, recs, name, 0, 0) > 1:
+        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' is declared more than once"))
+    end
+    let dup = nc_record_fields_dup_loop(decl.1, 1)
+    if length(dup) > 0:
+        return nc_fail(447, decl.3, diagnostic_with_payload("field '", dup, "' is declared more than once"))
+    end
+    let rt = nc_record_type(pool, nodes, decl_idx, new_array(int))
+    if rt.0 != 0:
+        return rt.0
+    end
+    return nc_records_check(pool, nodes, prog_idx, recs, i + 1)
+end
+
+func nc_poly_field_find_loop(fields, inst, node, i):
+    if i >= count(fields):
+        return 0 - 1
+    end
+    let f = get(fields, i)
+    if f.0 == inst and f.1 == node:
+        return i
+    end
+    return nc_poly_field_find_loop(fields, inst, node, i + 1)
+end
+
+-- Field resolutions per instance: (instance, node, field index, field count).
+func nc_poly_note_field(poly, inst, node, field_index, field_count):
+    if nc_poly_field_find_loop(poly.3, inst, node, 0) == 0 - 1:
+        do add(poly.3, (inst, node, field_index, field_count))
+    end
+    return 0
+end
+
 func nc_verify_ast(nodes, prog_idx, pool):
     -- Reachability-independent class-mix rejection (matches C: a syntactic error in
     -- ANY function, reachable or not). This runs FIRST -- before the function-table
@@ -5707,13 +6216,19 @@ func nc_verify_ast(nodes, prog_idx, pool):
     if mix_line > 0:
         let mix_instances = new_array((int, array(int), int, int, int, int))
         let mix_targets = new_array((int, int, int))
-        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int))))
+        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int)), new_array((int, int, int, int))))
     end
     let tbl = nc_table_check(nodes, prog_idx)
     if tbl != 0:
         let empty_instances = new_array((int, array(int), int, int, int, int))
         let empty_targets = new_array((int, int, int))
-        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets, new_array((int, int))))
+        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets, new_array((int, int)), new_array((int, int, int, int))))
+    end
+    let rec_check = nc_records_check(pool, nodes, prog_idx, get(nodes, prog_idx).1, 0)
+    if rec_check != 0:
+        let rec_instances = new_array((int, array(int), int, int, int, int))
+        let rec_targets = new_array((int, int, int))
+        return (rec_check, nc_sig_init(nodes, prog_idx), (rec_instances, rec_targets, new_array((int, int)), new_array((int, int, int, int))))
     end
     -- Preserve successful inference and its instance/emission order. Only an
     -- ERR 430 after an unresolved scalar assignment needs a fresh inference.
@@ -5721,7 +6236,7 @@ func nc_verify_ast(nodes, prog_idx, pool):
     let first = nc_verify_inference(pool, nodes, prog_idx, nc_poly_seed_main(nodes, prog_idx))
     if first.0 == 0:
         do add(pool.1, (3, count(pool.2)))
-        return first
+        return nc_erase_verified(pool, nodes, prog_idx, first)
     end
     let phase = nc_infer_phase(pool)
     let original = get(pool.2, phase.1)
@@ -5730,7 +6245,7 @@ func nc_verify_ast(nodes, prog_idx, pool):
         let retry = nc_verify_inference(pool, nodes, prog_idx, nc_poly_seed_main(nodes, prog_idx))
         if retry.0 == 0:
             do add(pool.1, (3, count(pool.2)))
-            return retry
+            return nc_erase_verified(pool, nodes, prog_idx, retry)
         end
     end
     do add(pool.1, (3, count(pool.2)))
@@ -13537,6 +14052,11 @@ func nc_emit_multiboot32_long64_program(source):
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
+    let records = get(nodes, parsed.0).1
+    if count(records) > 0:
+        let first_record = get(nodes, parse_decimal(get(records, 0)))
+        return nc_fail(449, first_record.3, "multiboot32-long64: records are not supported on this route")
+    end
     let type_pool = nc_type_pool_new()
     let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
     if ast_result.0 != 0:
@@ -13836,8 +14356,9 @@ func nc_drive(source):
         do process_exit(1)
         return 0
     end
-    let nodes = pool_new()
-    let parsed = parse_program(tokens, 0, nodes)
+    let parsed_nodes = pool_new()
+    let parsed = parse_program(tokens, 0, parsed_nodes)
+    let nodes = retag_record_calls(parsed_nodes, parsed.0)
     let type_pool = nc_type_pool_new()
     let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
     if ast_result.0 != 0:

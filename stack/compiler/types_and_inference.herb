@@ -121,6 +121,18 @@ func nc_diag_msg(code, payload):
     if code == 442:
         return "native-subset: bitwise/shift operator mixed with another operator class without parentheses"
     end
+    if code == 444:
+        return diagnostic_with_payload("native-subset: no field '", payload, "' in this record")
+    end
+    if code == 445:
+        return "native-subset: a record's fields are read by name, not by position"
+    end
+    if code == 446:
+        return diagnostic_with_payload("native-subset: field '", payload, "' used on a value that is not a record")
+    end
+    if code == 448:
+        return "native-subset: a record construction is not a statement"
+    end
     -- Kernel-route codes carry their own text, which names the route and the rule.
     if code > 442 and length(payload) > 0:
         return diagnostic_with_payload("native-subset: ", payload, "")
@@ -257,6 +269,21 @@ func nc_type_tuple_children(pool, t):
     return nc_type_children(pool, t)
 end
 
+-- A record's type is a pool entry whose kind is 1000 plus its declaration's
+-- node index and whose children are its field types: nominal to inference,
+-- laid out as the tuple of its fields everywhere else (see nc_type_erase).
+func nc_record_kind_base():
+    return 1000
+end
+
+func nc_type_is_record(pool, t):
+    return nc_type_kind(pool, t) >= nc_record_kind_base()
+end
+
+func nc_type_record_decl(pool, t):
+    return nc_type_kind(pool, t) - nc_record_kind_base()
+end
+
 func nc_type_array_elem(pool, t):
     return get(nc_type_children(pool, t), 0)
 end
@@ -282,7 +309,7 @@ func nc_type_renderable_rec(pool, t):
     if t == nc_type_int() or t == nc_type_bool() or t == nc_type_string():
         return true
     end
-    if nc_type_is_tuple(pool, t):
+    if nc_type_is_tuple(pool, t) or nc_type_is_record(pool, t):
         let kids = nc_type_tuple_children(pool, t)
         let n = count(kids)
         if n < 2:
@@ -736,19 +763,89 @@ func nc_type_is_int_bool(t):
     return t == nc_type_int() or t == nc_type_bool()
 end
 
-func nc_type_from_type_expr_children(pool, nodes, kids, i, n, out, line):
+func nc_type_from_type_expr_children(pool, nodes, kids, i, n, out, line, visiting):
     if i >= n:
         return (0, nc_type_intern_tuple(pool, out))
     end
-    let r = nc_type_from_type_expr(pool, nodes, get(kids, i))
+    let r = nc_type_from_type_expr_v(pool, nodes, get(kids, i), visiting)
     if r.0 != 0:
         return r
     end
     do add(out, r.1)
-    return nc_type_from_type_expr_children(pool, nodes, kids, i + 1, n, out, line)
+    return nc_type_from_type_expr_children(pool, nodes, kids, i + 1, n, out, line, visiting)
+end
+
+func nc_record_decl_scan(nodes, name, i):
+    if i >= count(nodes):
+        return 0 - 1
+    end
+    let node = get(nodes, i)
+    if equal(node.0, "record") and equal(get(node.1, 0), name):
+        return i
+    end
+    return nc_record_decl_scan(nodes, name, i + 1)
+end
+
+func nc_record_field_index_loop(atoms, field, i):
+    if i >= count(atoms):
+        return 0 - 1
+    end
+    if equal(get(atoms, i), field):
+        return i - 1
+    end
+    return nc_record_field_index_loop(atoms, field, i + 1)
+end
+
+-- The field's position, or -1. A record node's atoms are its name, then its fields.
+func nc_record_field_index(nodes, decl_idx, field):
+    return nc_record_field_index_loop(get(nodes, decl_idx).1, field, 1)
+end
+
+func nc_ints_copy_loop(a, i, out):
+    if i >= count(a):
+        return out
+    end
+    do add(out, get(a, i))
+    return nc_ints_copy_loop(a, i + 1, out)
+end
+
+func nc_ints_with(a, v):
+    let out = nc_ints_copy_loop(a, 0, new_array(int))
+    do add(out, v)
+    return out
+end
+
+func nc_record_field_types(pool, nodes, kids, i, out, visiting):
+    if i >= count(kids):
+        return (0, out)
+    end
+    let r = nc_type_from_type_expr_v(pool, nodes, get(kids, i), visiting)
+    if r.0 != 0:
+        return (r.0, out)
+    end
+    do add(out, r.1)
+    return nc_record_field_types(pool, nodes, kids, i + 1, out, visiting)
+end
+
+-- visiting holds the records being built on this path; meeting one again
+-- means a record contains itself, which would make it infinitely wide.
+func nc_record_type(pool, nodes, decl_idx, visiting):
+    let decl = get(nodes, decl_idx)
+    if nc_tuple_int_array_has(visiting, decl_idx, 0, count(visiting)):
+        return (nc_infer_fail(pool, 447, decl.3, diagnostic_with_payload("record '", get(decl.1, 0), "' contains itself")), 0)
+    end
+    let fields = nc_record_field_types(pool, nodes, decl.2, 0, new_array(int), nc_ints_with(visiting, decl_idx))
+    if fields.0 != 0:
+        return (fields.0, 0)
+    end
+    return (0, nc_type_intern_struct_loop(pool, nc_record_kind_base() + decl_idx, fields.1, 0, count(pool.0)))
 end
 
 func nc_type_from_type_expr(pool, nodes, type_idx):
+    return nc_type_from_type_expr_v(pool, nodes, type_idx, new_array(int))
+end
+
+func nc_type_from_type_expr_v(pool, nodes, type_idx, visiting):
     let node = get(nodes, type_idx)
     if equal(node.0, "type"):
         let name = get(node.1, 0)
@@ -764,13 +861,17 @@ func nc_type_from_type_expr(pool, nodes, type_idx):
         if equal(name, "buffer"):
             return (0, nc_type_buffer())
         end
+        let decl = nc_record_decl_scan(nodes, name, 0)
+        if decl != 0 - 1:
+            return nc_record_type(pool, nodes, decl, visiting)
+        end
         return (nc_infer_fail(pool, 434, node.3, ""), 0)
     end
     if equal(node.0, "type-array"):
         if count(node.2) != 1:
             return (nc_infer_fail(pool, 434, node.3, ""), 0)
         end
-        let elem = nc_type_from_type_expr(pool, nodes, get(node.2, 0))
+        let elem = nc_type_from_type_expr_v(pool, nodes, get(node.2, 0), visiting)
         if elem.0 != 0:
             return elem
         end
@@ -780,7 +881,7 @@ func nc_type_from_type_expr(pool, nodes, type_idx):
         if count(node.2) < 2:
             return (nc_infer_fail(pool, 434, node.3, ""), 0)
         end
-        return nc_type_from_type_expr_children(pool, nodes, node.2, 0, count(node.2), new_array(int), node.3)
+        return nc_type_from_type_expr_children(pool, nodes, node.2, 0, count(node.2), new_array(int), node.3, visiting)
     end
     return (nc_infer_fail(pool, 434, node.3, ""), 0)
 end
@@ -823,7 +924,7 @@ func nc_count_input_body(nodes, stmts, i, n, input_name):
     let tag = stmt.0
     let kids = stmt.2
     let here = 0
-    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return"):
+    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "field-assign"):
         here = nc_count_input_expr(nodes, get(kids, 0), input_name)
     elif equal(tag, "if"):
         here = nc_count_input_if_arms(nodes, kids, 0, count(kids), input_name)
@@ -1122,7 +1223,7 @@ func nc_poly_seed_main(nodes, prog_idx):
     do add(instances, nc_poly_make_instance(main_lookup.1, empty, nc_type_unknown(), 0, 0, 0 - 1))
     do add(params, empty)
     do add(returns, nc_type_unknown())
-    return ((params, returns), (instances, call_targets, pushes))
+    return ((params, returns), (instances, call_targets, pushes, new_array((int, int, int, int))))
 end
 
 func nc_poly_current_base(funcs, fn_idx):
@@ -1211,6 +1312,11 @@ func nc_body_count_name(nodes, stmts, i, n, name):
     let here = 0
     if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
         here = nc_expr_count_name(nodes, get(stmt.2, 0), name)
+    elif equal(tag, "field-assign"):
+        here = nc_expr_count_name(nodes, get(stmt.2, 0), name)
+        if equal(get(stmt.1, 0), name):
+            here = here + 1
+        end
     elif equal(tag, "if"):
         here = nc_if_count_name(nodes, stmt.2, 0, count(stmt.2), name)
     end
@@ -1240,7 +1346,7 @@ func nc_body_assigns_name(nodes, stmts, i, n, name):
     end
     let stmt = get(nodes, get(stmts, i))
     let tag = stmt.0
-    if equal(tag, "assign"):
+    if equal(tag, "assign") or equal(tag, "field-assign"):
         if equal(get(stmt.1, 0), name):
             return true
         end
@@ -1489,7 +1595,7 @@ end
 func nc_tuple_sites_node(nodes, idx, acc):
     let node = get(nodes, idx)
     let c = 0
-    if equal(node.0, "tuple") or equal(node.0, "type-tuple"):
+    if equal(node.0, "tuple") or equal(node.0, "type-tuple") or equal(node.0, "record-new") or equal(node.0, "field-assign"):
         c = 1
     end
     if equal(node.0, "call"):
@@ -1955,6 +2061,13 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         if r.1 == nc_type_unknown():
             return (0, nc_type_unknown(), r.2, r.3, r.4)
         end
+        let field = get(node.1, 0)
+        if not is_digit(index(field, 0)):
+            return nc_infer_field_read(pool, nodes, idx, node, field, r, funcs, fn_idx)
+        end
+        if nc_type_is_record(pool, r.1):
+            return (nc_infer_fail(pool, 445, node.3, ""), 0, r.2, r.3, r.4)
+        end
         if not nc_type_is_tuple(pool, r.1):
             return (nc_infer_fail(pool, 431, node.3, ""), 0, r.2, r.3, r.4)
         end
@@ -1972,6 +2085,9 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
             return (nc_infer_fail(pool, 404, node.3, "undefined-name"), 0, env, sig, 0)
         end
         return (0, li.2, env, sig, 0)
+    end
+    if equal(tag, "record-new"):
+        return nc_infer_record_new(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params)
     end
     if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
         -- Arithmetic and bitwise/shift binops are all int x int -> int: constrain
@@ -2281,6 +2397,90 @@ func nc_rhs_never_returns(nodes, prog_idx, idx):
     return nc_func_never_returns(nodes, prog_idx, callee.1)
 end
 
+func nc_infer_field_read(pool, nodes, idx, node, field, r, funcs, fn_idx):
+    if not nc_type_is_record(pool, r.1):
+        return (nc_infer_fail(pool, 446, node.3, field), 0, r.2, r.3, r.4)
+    end
+    let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, r.1), field)
+    if fi == 0 - 1:
+        return (nc_infer_fail(pool, 444, node.3, field), 0, r.2, r.3, r.4)
+    end
+    let noted = nc_poly_note_field(funcs, fn_idx, idx, fi, 0)
+    return (0, get(nc_type_children(pool, r.1), fi), r.2, r.3, r.4)
+end
+
+-- An argument or a new field value of the wrong type is ERR 430, as for tuples.
+func nc_record_value_ok(pool, want, got, line):
+    if got == nc_type_unknown():
+        return 0
+    end
+    if nc_type_equal(pool, want, got):
+        return 0
+    end
+    return nc_type_merge(pool, want, got, line).0
+end
+
+func nc_infer_record_args(pool, nodes, prog_idx, kids, fields, i, env, sig, fn_idx, funcs, n_params, changed, line):
+    if i >= count(kids):
+        return (0, env, sig, changed)
+    end
+    let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, i), env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, nc_or_changed(changed, r.4))
+    end
+    let ok = nc_record_value_ok(pool, get(fields, i), r.1, line)
+    if ok != 0:
+        return (ok, r.2, r.3, nc_or_changed(changed, r.4))
+    end
+    return nc_infer_record_args(pool, nodes, prog_idx, kids, fields, i + 1, r.2, r.3, fn_idx, funcs, n_params, nc_or_changed(changed, r.4), line)
+end
+
+func nc_infer_record_new(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, idx)
+    let name = get(node.1, 0)
+    let rt = nc_record_type(pool, nodes, nc_record_decl_scan(nodes, name, 0), new_array(int))
+    if rt.0 != 0:
+        return (rt.0, 0, env, sig, 0)
+    end
+    let fields = nc_type_children(pool, rt.1)
+    if count(node.2) != count(fields):
+        return (nc_infer_fail(pool, 420, node.3, name), 0, env, sig, 0)
+    end
+    let a = nc_infer_record_args(pool, nodes, prog_idx, node.2, fields, 0, env, sig, fn_idx, funcs, n_params, 0, node.3)
+    if a.0 != 0:
+        return (a.0, 0, a.1, a.2, a.3)
+    end
+    return (0, rt.1, a.1, a.2, a.3)
+end
+
+-- x.FIELD = e rebinds the local x to a copy with one field replaced.
+func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params):
+    let node = get(nodes, stmt_idx)
+    let field = get(node.1, 1)
+    let li = nc_class_env_lookup_info(env, get(node.1, 0))
+    if li.0 == 0:
+        return (nc_infer_fail(pool, 404, node.3, "assign-undefined"), env, sig, 0, 0)
+    end
+    if not nc_type_is_record(pool, li.2):
+        return (nc_infer_fail(pool, 446, node.3, field), env, sig, 0, 0)
+    end
+    let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, li.2), field)
+    if fi == 0 - 1:
+        return (nc_infer_fail(pool, 444, node.3, field), env, sig, 0, 0)
+    end
+    let children = nc_type_children(pool, li.2)
+    let r = nc_infer_expr(pool, nodes, prog_idx, get(node.2, 0), env, sig, fn_idx, funcs, n_params)
+    if r.0 != 0:
+        return (r.0, r.2, r.3, r.4, 0)
+    end
+    let ok = nc_record_value_ok(pool, get(children, fi), r.1, node.3)
+    if ok != 0:
+        return (ok, r.2, r.3, r.4, 0)
+    end
+    let noted = nc_poly_note_field(funcs, fn_idx, stmt_idx, fi, count(children))
+    return (0, r.2, r.3, r.4, 0)
+end
+
 func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params):
     let node = get(nodes, stmt_idx)
     let tag = node.0
@@ -2292,6 +2492,9 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         end
         env = nc_class_env_add(r.2, get(node.1, 0), r.1)
         return (0, env, r.3, r.4, 0)
+    end
+    if equal(tag, "field-assign"):
+        return nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params)
     end
     if equal(tag, "assign"):
         let li = nc_class_env_lookup_info(env, get(node.1, 0))
@@ -2349,6 +2552,9 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
     end
     if equal(tag, "do"):
         let call_node = get(nodes, get(kids, 0))
+        if equal(call_node.0, "record-new"):
+            return (nc_infer_fail(pool, 448, call_node.3, ""), env, sig, 0, 0)
+        end
         if equal(call_node.0, "call"):
             let name = get(call_node.1, 0)
             let ckids = call_node.2
@@ -2657,6 +2863,112 @@ func nc_class_mix_line(nodes):
     return nc_class_mix_scan_loop(nodes, 0, count(nodes))
 end
 
+-- Downstream of inference a record is the tuple of its fields, so lowering,
+-- metadata and the emitter see exactly the program written with tuples.
+func nc_type_erase_list(pool, kids, i, out):
+    if i >= count(kids):
+        return out
+    end
+    do add(out, nc_type_erase(pool, get(kids, i)))
+    return nc_type_erase_list(pool, kids, i + 1, out)
+end
+
+func nc_type_erase(pool, t):
+    if t < nc_type_struct_base():
+        return t
+    end
+    if nc_type_is_array(pool, t):
+        return nc_type_intern_array(pool, nc_type_erase(pool, nc_type_array_elem(pool, t)))
+    end
+    return nc_type_intern_tuple(pool, nc_type_erase_list(pool, nc_type_children(pool, t), 0, new_array(int)))
+end
+
+func nc_erase_param_lists(pool, lists, i, out):
+    if i >= count(lists):
+        return out
+    end
+    do add(out, nc_type_erase_list(pool, get(lists, i), 0, new_array(int)))
+    return nc_erase_param_lists(pool, lists, i + 1, out)
+end
+
+func nc_erase_verified(pool, nodes, prog_idx, verified):
+    if count(get(nodes, prog_idx).1) == 0:
+        return verified
+    end
+    let sig = verified.1
+    let erased = (nc_erase_param_lists(pool, sig.0, 0, new_array(array(int))), nc_type_erase_list(pool, sig.1, 0, new_array(int)))
+    return (verified.0, erased, verified.2)
+end
+
+func nc_record_names_dup_loop(nodes, recs, name, i, seen):
+    if i >= count(recs):
+        return seen
+    end
+    if equal(get(get(nodes, parse_decimal(get(recs, i))).1, 0), name):
+        seen = seen + 1
+    end
+    return nc_record_names_dup_loop(nodes, recs, name, i + 1, seen)
+end
+
+func nc_record_fields_dup_loop(atoms, i):
+    if i >= count(atoms):
+        return ""
+    end
+    if nc_record_field_index_loop(atoms, get(atoms, i), 1) != i - 1:
+        return get(atoms, i)
+    end
+    return nc_record_fields_dup_loop(atoms, i + 1)
+end
+
+-- Declaration checks, before inference: a record's name is its own, its
+-- fields are distinct, and its field types exist and do not contain it (ERR 447,
+-- or 434 for an unknown type name).
+func nc_records_check(pool, nodes, prog_idx, recs, i):
+    if i >= count(recs):
+        return 0
+    end
+    let decl_idx = parse_decimal(get(recs, i))
+    let decl = get(nodes, decl_idx)
+    let name = get(decl.1, 0)
+    if nc_func_lookup(nodes, prog_idx, name).0 != 0:
+        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' has the name of a function"))
+    end
+    if err_is_builtin_name(name):
+        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' has the name of a builtin"))
+    end
+    if nc_record_names_dup_loop(nodes, recs, name, 0, 0) > 1:
+        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' is declared more than once"))
+    end
+    let dup = nc_record_fields_dup_loop(decl.1, 1)
+    if length(dup) > 0:
+        return nc_fail(447, decl.3, diagnostic_with_payload("field '", dup, "' is declared more than once"))
+    end
+    let rt = nc_record_type(pool, nodes, decl_idx, new_array(int))
+    if rt.0 != 0:
+        return rt.0
+    end
+    return nc_records_check(pool, nodes, prog_idx, recs, i + 1)
+end
+
+func nc_poly_field_find_loop(fields, inst, node, i):
+    if i >= count(fields):
+        return 0 - 1
+    end
+    let f = get(fields, i)
+    if f.0 == inst and f.1 == node:
+        return i
+    end
+    return nc_poly_field_find_loop(fields, inst, node, i + 1)
+end
+
+-- Field resolutions per instance: (instance, node, field index, field count).
+func nc_poly_note_field(poly, inst, node, field_index, field_count):
+    if nc_poly_field_find_loop(poly.3, inst, node, 0) == 0 - 1:
+        do add(poly.3, (inst, node, field_index, field_count))
+    end
+    return 0
+end
+
 func nc_verify_ast(nodes, prog_idx, pool):
     -- Reachability-independent class-mix rejection (matches C: a syntactic error in
     -- ANY function, reachable or not). This runs FIRST -- before the function-table
@@ -2671,13 +2983,19 @@ func nc_verify_ast(nodes, prog_idx, pool):
     if mix_line > 0:
         let mix_instances = new_array((int, array(int), int, int, int, int))
         let mix_targets = new_array((int, int, int))
-        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int))))
+        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int)), new_array((int, int, int, int))))
     end
     let tbl = nc_table_check(nodes, prog_idx)
     if tbl != 0:
         let empty_instances = new_array((int, array(int), int, int, int, int))
         let empty_targets = new_array((int, int, int))
-        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets, new_array((int, int))))
+        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets, new_array((int, int)), new_array((int, int, int, int))))
+    end
+    let rec_check = nc_records_check(pool, nodes, prog_idx, get(nodes, prog_idx).1, 0)
+    if rec_check != 0:
+        let rec_instances = new_array((int, array(int), int, int, int, int))
+        let rec_targets = new_array((int, int, int))
+        return (rec_check, nc_sig_init(nodes, prog_idx), (rec_instances, rec_targets, new_array((int, int)), new_array((int, int, int, int))))
     end
     -- Preserve successful inference and its instance/emission order. Only an
     -- ERR 430 after an unresolved scalar assignment needs a fresh inference.
@@ -2685,7 +3003,7 @@ func nc_verify_ast(nodes, prog_idx, pool):
     let first = nc_verify_inference(pool, nodes, prog_idx, nc_poly_seed_main(nodes, prog_idx))
     if first.0 == 0:
         do add(pool.1, (3, count(pool.2)))
-        return first
+        return nc_erase_verified(pool, nodes, prog_idx, first)
     end
     let phase = nc_infer_phase(pool)
     let original = get(pool.2, phase.1)
@@ -2694,7 +3012,7 @@ func nc_verify_ast(nodes, prog_idx, pool):
         let retry = nc_verify_inference(pool, nodes, prog_idx, nc_poly_seed_main(nodes, prog_idx))
         if retry.0 == 0:
             do add(pool.1, (3, count(pool.2)))
-            return retry
+            return nc_erase_verified(pool, nodes, prog_idx, retry)
         end
     end
     do add(pool.1, (3, count(pool.2)))

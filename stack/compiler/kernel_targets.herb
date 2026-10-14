@@ -2514,6 +2514,11 @@ func nc_emit_multiboot32_long64_program(source):
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
+    let records = get(nodes, parsed.0).1
+    if count(records) > 0:
+        let first_record = get(nodes, parse_decimal(get(records, 0)))
+        return nc_fail(449, first_record.3, "multiboot32-long64: records are not supported on this route")
+    end
     let type_pool = nc_type_pool_new()
     let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
     if ast_result.0 != 0:

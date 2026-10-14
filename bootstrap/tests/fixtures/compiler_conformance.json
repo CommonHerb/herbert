@@ -2303,6 +2303,201 @@
       "profile": "reject",
       "source": "func main():\n    return bufbase(1)\nend\n",
       "diagnostic": "line 2: native-subset: arity mismatch at call to 'bufbase' (ERR 420)"
+    },
+    {
+      "id": "record-construct-read", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(3, 4)\n    return p.x * 10 + p.y\nend\n",
+      "stdin": "", "stdout": "34\n", "status": 0
+    },
+    {
+      "id": "record-update", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(3, 4)\n    p.x = 7\n    return p.x * 10 + p.y\nend\n",
+      "stdin": "", "stdout": "74\n", "status": 0
+    },
+    {
+      "id": "record-nested", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nrecord Seg:\n    start: Point\n    stop: Point\nend\n\nfunc main():\n    let s = Seg(Point(1, 2), Point(5, 9))\n    return (s.stop.x - s.start.x) * 10 + s.stop.y - s.start.y\nend\n",
+      "stdin": "", "stdout": "47\n", "status": 0
+    },
+    {
+      "id": "record-strings", "profile": "run",
+      "source": "record Name:\n    first: string\n    last: string\nend\n\nfunc main():\n    let n = Name(\"ada\", \"lovelace\")\n    return length(n.first) * 100 + length(n.last)\nend\n",
+      "stdin": "", "stdout": "308\n", "status": 0
+    },
+    {
+      "id": "record-main-returns-record", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    return Point(1, 2)\nend\n",
+      "stdin": "", "stdout": "(1, 2)\n", "status": 0
+    },
+    {
+      "id": "record-polymorphic", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nrecord Rect:\n    w: int\n    h: int\nend\n\nfunc same(v):\n    return v\nend\n\nfunc main():\n    let p = same(Point(1, 2))\n    let r = same(Rect(3, 4))\n    return p.x + p.y + r.w + r.h\nend\n",
+      "stdin": "", "stdout": "10\n", "status": 0
+    },
+    {
+      "id": "record-tail-call", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc walk(p, i, n):\n    if i == n:\n        return p.x + p.y\n    end\n    return walk(Point(p.x + i, p.y + 1), i + 1, n)\nend\n\nfunc main():\n    return walk(Point(0, 0), 0, 100000)\nend\n",
+      "stdin": "", "stdout": "5000050000\n", "status": 0
+    },
+    {
+      "id": "record-update-in-helper", "profile": "run",
+      "source": "record Acc:\n    total: int\n    steps: int\nend\n\nfunc step(a, i, n):\n    if i == n:\n        return a.total * 1000 + a.steps\n    end\n    a.total = a.total + i\n    a.steps = a.steps + 1\n    return step(a, i + 1, n)\nend\n\nfunc main():\n    return step(Acc(0, 0), 0, 10)\nend\n",
+      "stdin": "", "stdout": "45010\n", "status": 0
+    },
+    {
+      "id": "record-array-field", "profile": "run",
+      "source": "record Bag:\n    items: array(int)\n    size: int\nend\n\nfunc main():\n    let b = Bag(new_array(int), 0)\n    do add(b.items, 5)\n    do add(b.items, 7)\n    b.size = count(b.items)\n    return get(b.items, 1) * 10 + b.size\nend\n",
+      "stdin": "", "stdout": "72\n", "status": 0
+    },
+    {
+      "id": "record-caller-unaffected", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc bump(p):\n    p.x = p.x + 1\n    return p.x\nend\n\nfunc main():\n    let p = Point(1, 2)\n    let a = bump(p)\n    return p.x * 10 + a\nend\n",
+      "stdin": "", "stdout": "12\n", "status": 0
+    },
+    {
+      "id": "record-render-strings", "profile": "run",
+      "source": "record Name:\n    first: string\n    last: string\nend\n\nfunc main():\n    return Name(\"ada\", \"lovelace\")\nend\n",
+      "stdin": "", "stdout": "(\"ada\", \"lovelace\")\n", "status": 0
+    },
+    {
+      "id": "record-replace-nested", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nrecord Seg:\n    start: Point\n    stop: Point\nend\n\nfunc main():\n    let s = Seg(Point(1, 2), Point(3, 4))\n    s.stop = Point(9, 8)\n    return s.stop.x * 10 + s.stop.y + s.start.x\nend\n",
+      "stdin": "", "stdout": "99\n", "status": 0
+    },
+    {
+      "id": "record-generic-field", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc getx(p):\n    return p.x\nend\n\nfunc main():\n    return getx(Point(5, 6)) + getx(Point(7, 8))\nend\n",
+      "stdin": "", "stdout": "12\n", "status": 0
+    },
+    {
+      "id": "record-reject-one-field", "profile": "reject",
+      "source": "record P:\n    a: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 1: invalid record declaration (ERR 213)"
+    },
+    {
+      "id": "record-reject-bad-field", "profile": "reject",
+      "source": "record P:\n    a int\n    b: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 2: invalid record declaration (ERR 213)"
+    },
+    {
+      "id": "record-reject-named-record", "profile": "reject",
+      "source": "record record:\n    a: int\n    b: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 1: invalid record declaration (ERR 213)"
+    },
+    {
+      "id": "record-reject-unknown-field", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(1, 2)\n    return p.z\nend\n",
+      "diagnostic": "line 8: native-subset: no field 'z' in this record (ERR 444)"
+    },
+    {
+      "id": "record-reject-positional", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(1, 2)\n    return p.0\nend\n",
+      "diagnostic": "line 8: native-subset: a record's fields are read by name, not by position (ERR 445)"
+    },
+    {
+      "id": "record-reject-field-on-tuple", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let t = (1, 2)\n    return t.x\nend\n",
+      "diagnostic": "line 8: native-subset: field 'x' used on a value that is not a record (ERR 446)"
+    },
+    {
+      "id": "record-reject-assign-non-record", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let t = 5\n    t.x = 1\n    return t\nend\n",
+      "diagnostic": "line 8: native-subset: field 'x' used on a value that is not a record (ERR 446)"
+    },
+    {
+      "id": "record-reject-assign-unknown-field", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(1, 2)\n    p.z = 1\n    return p.x\nend\n",
+      "diagnostic": "line 8: native-subset: no field 'z' in this record (ERR 444)"
+    },
+    {
+      "id": "record-reject-func-clash", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc Point():\n    return 1\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 1: native-subset: record 'Point' has the name of a function (ERR 447)"
+    },
+    {
+      "id": "record-reject-builtin-clash", "profile": "reject",
+      "source": "record length:\n    a: int\n    b: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 1: native-subset: record 'length' has the name of a builtin (ERR 447)"
+    },
+    {
+      "id": "record-reject-dup-record", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nrecord Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 1: native-subset: record 'Point' is declared more than once (ERR 447)"
+    },
+    {
+      "id": "record-reject-dup-field", "profile": "reject",
+      "source": "record P:\n    a: int\n    a: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 1: native-subset: field 'a' is declared more than once (ERR 447)"
+    },
+    {
+      "id": "record-reject-self", "profile": "reject",
+      "source": "record N:\n    a: N\n    b: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 1: native-subset: record 'N' contains itself (ERR 447)"
+    },
+    {
+      "id": "record-reject-mutual", "profile": "reject",
+      "source": "record A:\n    b: B\n    n: int\nend\n\nrecord B:\n    a: A\n    m: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 1: native-subset: record 'A' contains itself (ERR 447)"
+    },
+    {
+      "id": "record-reject-do-record", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    do Point(1, 2)\n    return 1\nend\n",
+      "diagnostic": "line 7: native-subset: a record construction is not a statement (ERR 448)"
+    },
+    {
+      "id": "record-reject-ctor-arity", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(1)\n    return p.x\nend\n",
+      "diagnostic": "line 7: native-subset: arity mismatch at call to 'Point' (ERR 420)"
+    },
+    {
+      "id": "record-reject-ctor-type", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(\"a\", 2)\n    return p.y\nend\n",
+      "diagnostic": "line 7: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "record-reject-assign-type", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(1, 2)\n    p.x = \"s\"\n    return p.y\nend\n",
+      "diagnostic": "line 8: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "record-reject-unknown-type", "profile": "reject",
+      "source": "record P:\n    a: Foo\n    b: int\nend\n\nfunc main():\n    return 1\nend\n",
+      "diagnostic": "line 2: invalid type expression (ERR 211)"
+    },
+    {
+      "id": "record-reject-tuple-into-record", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(1, 2)\n    p = (3, 4)\n    return p.x\nend\n",
+      "diagnostic": "line 8: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "record-reject-other-record", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nrecord Size:\n    w: int\n    h: int\nend\n\nfunc main():\n    let p = Point(1, 2)\n    p = Size(3, 4)\n    return p.x\nend\n",
+      "diagnostic": "line 13: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "record-reject-field-no-records", "profile": "reject",
+      "source": "func main():\n    let t = (1, 2)\n    return t.x\nend\n",
+      "diagnostic": "line 3: expected integer after '.' (ERR 206)"
+    },
+    {
+      "id": "record-reject-main-array-field", "profile": "reject",
+      "source": "record Bag:\n    items: array(int)\n    n: int\nend\n\nfunc main():\n    return Bag(new_array(int), 1)\nend\n",
+      "diagnostic": "line 6: native-subset: main must return int or bool (ERR 432)"
+    },
+    {
+      "id": "record-reject-nested-assign", "profile": "reject",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nrecord Seg:\n    a: Point\n    b: Point\nend\n\nfunc main():\n    let s = Seg(Point(1, 2), Point(3, 4))\n    s.a.x = 5\n    return 1\nend\n",
+      "diagnostic": "line 13: invalid assignment or name (ERR 212)"
+    },
+    {
+      "id": "record-reject-type-no-records", "profile": "reject",
+      "source": "func main():\n    let a = new_array(Foo)\n    return count(a)\nend\n",
+      "diagnostic": "line 2: invalid type expression (ERR 211)"
+    },
+    {
+      "id": "record-reject-assign-dot-no-records", "profile": "reject",
+      "source": "func main():\n    let t = (1, 2)\n    t.x = 1\n    return 1\nend\n",
+      "diagnostic": "line 3: invalid assignment or name (ERR 212)"
     }
   ]
 }
