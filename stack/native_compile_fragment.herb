@@ -3157,6 +3157,10 @@ func nc_diag_msg(code, payload):
     if code == 442:
         return "native-subset: bitwise/shift operator mixed with another operator class without parentheses"
     end
+    -- Kernel-route codes carry their own text, which names the route and the rule.
+    if code > 442 and length(payload) > 0:
+        return diagnostic_with_payload("native-subset: ", payload, "")
+    end
     return "native-subset: unknown error"
 end
 

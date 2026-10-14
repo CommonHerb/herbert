@@ -62,6 +62,23 @@ check_source_reject_code_once() {
     fi
 }
 
+# Kernel-route codes (above 442) print the message their site passes, never "unknown error".
+check_kernel_reject_message() {
+    local label="$1"
+    local code="$2"
+    local probe="$3"
+    local expected="$4"
+    total=$((total + 1))
+    local out="$tmp/kernel_${label}.out"
+    local err="$tmp/kernel_${label}.err"
+    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$out" "$err" "ERR $code" \
+        && [[ "$(cat "$err")" == "$expected" ]] && ! grep -q "unknown error" "$err"; then
+        pass=$((pass + 1))
+    else
+        fail_test "kernel reject $label: expected '$expected', stderr=$(head -1 "$err")"
+    fi
+}
+
 check_driver_reject_code() {
     local label="$1"
     local code="$2"
@@ -679,6 +696,114 @@ check_source_reject_code frontier_multi_clogger 411 "$tmp/r_multi_clogger.herb"
 check_source_reject_code frontier_helper_clogger 404 "$tmp/r_helper_clogger.herb"
 check_runtime_frontier_cap frontier_clogger_arena_cap "$tmp/frontier_cap.herb"
 
+cat > "$tmp/k_mb32_calls_other.herb" <<'HERB'
+-- emit: multiboot32
+func f():
+    return 1
+end
+func main():
+    return f()
+end
+HERB
+cat > "$tmp/k_mb32_too_many_locals.herb" <<'HERB'
+-- emit: multiboot32
+func main():
+    let v1 = 1
+    let v2 = 2
+    let v3 = 3
+    let v4 = 4
+    let v5 = 5
+    let v6 = 6
+    let v7 = 7
+    let v8 = 8
+    let v9 = 9
+    let v10 = 10
+    let v11 = 11
+    let v12 = 12
+    let v13 = 13
+    let v14 = 14
+    let v15 = 15
+    let v16 = 16
+    let v17 = 17
+    let v18 = 18
+    let v19 = 19
+    let v20 = 20
+    let v21 = 21
+    let v22 = 22
+    let v23 = 23
+    let v24 = 24
+    let v25 = 25
+    let v26 = 26
+    let v27 = 27
+    let v28 = 28
+    let v29 = 29
+    let v30 = 30
+    let v31 = 31
+    let v32 = 32
+    return v1
+end
+HERB
+cat > "$tmp/k_input_calls_other.herb" <<'HERB'
+-- emit: multiboot32-input
+func f():
+    return 1
+end
+func main():
+    return f()
+end
+HERB
+cat > "$tmp/k_input_no_read.herb" <<'HERB'
+-- emit: multiboot32-input
+func main():
+    return 1
+end
+HERB
+cat > "$tmp/k_long64_too_many_locals.herb" <<'HERB'
+-- emit: multiboot32-long64
+func main():
+    let a = 1
+    let b = 2
+    let c = 3
+    let d = 4
+    let e = 5
+    let f = 6
+    let g = 7
+    let h = 8
+    let i = 9
+    let j = 10
+    let k = 11
+    let l = 12
+    let m = 13
+    let n = 14
+    let o = 15
+    let p = 16
+    return a + p
+end
+HERB
+cat > "$tmp/k_long64_helper_string.herb" <<'HERB'
+-- emit: multiboot32-long64
+func f(x):
+    let s = "hi"
+    return x
+end
+func main():
+    return f(1)
+end
+HERB
+
+check_kernel_reject_message mb32_calls_other 450 "$tmp/k_mb32_calls_other.herb" \
+    "program: native-subset: multiboot32: main may not call other functions (ERR 450)"
+check_kernel_reject_message mb32_too_many_locals 453 "$tmp/k_mb32_too_many_locals.herb" \
+    "program: native-subset: multiboot32: too many locals (max 31) (ERR 453)"
+check_kernel_reject_message input_calls_other 506 "$tmp/k_input_calls_other.herb" \
+    "program: native-subset: multiboot32-input: main may not call other functions (ERR 506)"
+check_kernel_reject_message input_no_read 508 "$tmp/k_input_no_read.herb" \
+    "program: native-subset: multiboot32-input: main must read input_byte() exactly once (ERR 508)"
+check_kernel_reject_message long64_too_many_locals 504 "$tmp/k_long64_too_many_locals.herb" \
+    "program: native-subset: multiboot32-long64: too many locals (max 15) (ERR 504)"
+check_kernel_reject_message long64_helper_string 605 "$tmp/k_long64_helper_string.herb" \
+    "program: native-subset: multiboot32-long64: function body not in the call+recursion subset (ERR 605)"
+
 echo ""
 if [[ $fail -ne 0 ]]; then
     echo "$fail of $((pass + fail)) native-codegen-reject sub-test(s) failed."
@@ -687,5 +812,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), kanawha partial-aggregate single-diagnostic rails, plus frontier clogger limits)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), kanawha partial-aggregate single-diagnostic rails, kernel-route messages, plus frontier clogger limits)"
 exit 0
