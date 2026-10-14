@@ -2508,6 +2508,11 @@
       "id": "record-never-returning-read", "profile": "run",
       "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc fault():\n    let a = new_array(int)\n    return get(a, 0)\nend\n\nfunc helper(flag):\n    if flag:\n        return Point(1, 2)\n    end\n    let p = fault()\n    return Point(p.x, p.y)\nend\n\nfunc main():\n    let p = helper(true)\n    return p.x * 10 + p.y\nend\n",
       "stdin": "", "stdout": "12\n", "status": 0
+    },
+    {
+      "id": "record-reject-tokens-in-body-stay-record-free", "profile": "reject",
+      "source": "func main():\n    let t = (1, 2)\n    let v = t.x\n    record Foo:\n    return v\nend\n",
+      "diagnostic": "line 3: expected integer after '.' (ERR 206)"
     }
   ]
 }

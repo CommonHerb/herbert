@@ -3099,9 +3099,9 @@ func err_parse_program_loop(tokens, pos, ctx):
 end
 
 -- A program that declares records may use their names as types and may use
--- field syntax (e.FIELD, x.FIELD = e). The names come from a token scan for
--- `record NAME :`, which in a well-formed program occurs only as a declaration;
--- without one, field syntax and named types stay structural errors (206, 211, 212).
+-- field syntax (e.FIELD, x.FIELD = e). The names come from a token scan for a
+-- top-level `record NAME :`; without one, field syntax and named types stay
+-- structural errors (206, 211, 212).
 func err_is_record_head(tokens, pos):
     if not tok_is_ident_text(tokens, pos, "record"):
         return false
@@ -3112,14 +3112,24 @@ func err_is_record_head(tokens, pos):
     return tok_is_punct_text(tokens, pos + 2, ":")
 end
 
-func err_record_names_scan(tokens, pos, names):
+-- Only a declaration at the top level counts: the scan tracks block depth
+-- (func, if and a record head open a block, end closes one), so the same
+-- tokens inside a function body leave the program record-free.
+func err_record_names_scan(tokens, pos, names, depth):
     if pos >= count(tokens):
         return names
     end
-    if err_is_record_head(tokens, pos):
+    if depth == 0 and err_is_record_head(tokens, pos):
         do add(names, get(tokens, pos + 1).1)
+        return err_record_names_scan(tokens, pos + 3, names, 1)
     end
-    return err_record_names_scan(tokens, pos + 1, names)
+    if tok_is_ident_text(tokens, pos, "func") or tok_is_ident_text(tokens, pos, "if"):
+        return err_record_names_scan(tokens, pos + 1, names, depth + 1)
+    end
+    if depth > 0 and tok_is_ident_text(tokens, pos, "end"):
+        return err_record_names_scan(tokens, pos + 1, names, depth - 1)
+    end
+    return err_record_names_scan(tokens, pos + 1, names, depth)
 end
 
 func err_is_record_name(ctx, name):
@@ -3161,7 +3171,7 @@ func err_parse_record(tokens, pos, ctx):
 end
 
 func err_parse_program(tokens, eof_line):
-    let names = err_record_names_scan(tokens, 0, new_array(string))
+    let names = err_record_names_scan(tokens, 0, new_array(string), 0)
     return err_parse_program_loop(tokens, 0, (eof_line, names))
 end
 
