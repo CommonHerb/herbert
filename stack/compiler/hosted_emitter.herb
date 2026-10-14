@@ -1244,13 +1244,13 @@ func nc_emit_heap_alloc(buf):
 end
 
 func nc_emit_call_abs(buf, target):
-    let base = length(freeze(buf)) + 5
+    let base = buffer_length(buf) + 5
     do append(buf, 232)
     return nc_append_rel32(buf, target, base)
 end
 
 func nc_emit_jmp_abs(buf, target):
-    let base = length(freeze(buf)) + 5
+    let base = buffer_length(buf) + 5
     do append(buf, 233)
     return nc_append_rel32(buf, target, base)
 end
@@ -1265,7 +1265,7 @@ func nc_emit_fault_route(buf, line, target, base):
 end
 
 func nc_emit_fault_fragment(buf, ro_base, frag_off, frag_len, write_off):
-    let instr_off = length(freeze(buf))
+    let instr_off = buffer_length(buf)
     do append(buf, 72)
     do append(buf, 141)
     do append(buf, 53)
@@ -4179,7 +4179,7 @@ func nc_emit_heap_stub(buf):
 end
 
 func nc_emit_entry_check(start_len, buf, want, label):
-    let got = length(freeze(buf)) - start_len
+    let got = buffer_length(buf) - start_len
     if got != want:
         return nc_fail(418, 0, label)
     end
@@ -4188,7 +4188,7 @@ end
 
 func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, main_ret, code_len, strings, rplan):
     let layout = nc_entry_layout(has_heap, has_faultable, main_ret, rplan)
-    let start_len = length(freeze(buf))
+    let start_len = buffer_length(buf)
     if has_heap != 0:
         buf = nc_emit_heap_stub(buf)
     end

@@ -888,7 +888,7 @@ func nc_emit_multiboot32_input_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(511, 0, "multiboot32-input: body length invariant")
         return 0
@@ -2484,7 +2484,7 @@ func nc_emit_multiboot32_lodger_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(536, 0, "multiboot32-lodger: body length invariant")
         return 0
@@ -2618,7 +2618,7 @@ func nc_emit_multiboot32_trikon_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(546, 0, "multiboot32-trikon: body length invariant")
         return 0
@@ -2793,7 +2793,7 @@ func nc_emit_multiboot32_nokta_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(556, 0, "multiboot32-nokta: body length invariant")
         return 0
@@ -2957,7 +2957,7 @@ func nc_emit_multiboot32_sitopia_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(566, 0, "multiboot32-sitopia: body length invariant")
         return 0
@@ -3117,7 +3117,7 @@ func nc_emit_multiboot32_geeking_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(576, 0, "multiboot32-geeking: body length invariant")
         return 0
@@ -3253,7 +3253,7 @@ func nc_emit_multiboot32_holler_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(606, 0, "multiboot32-holler: body length invariant")
         return 0
@@ -3370,7 +3370,7 @@ func nc_emit_module_holler_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(619, 0, "module-holler: body length invariant")
         return 0
@@ -3475,7 +3475,7 @@ func nc_emit_multiboot32_coalgate_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(588, 0, "multiboot32-coalgate: body length invariant")
         return 0
@@ -5650,7 +5650,7 @@ func nc_emit_multiboot32_mumbani_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let fe = nc_fail(626, 0, "multiboot32-mumbani: body length invariant")
         return 0
@@ -5729,7 +5729,7 @@ func nc_emit_multiboot32_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let f5 = nc_fail(452, 0, "multiboot32: body length invariant")
         return 0
@@ -5926,7 +5926,7 @@ func nc_emit_multiboot32_idt_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(459, 0, "multiboot32-idt: body length invariant")
         return 0
@@ -6204,7 +6204,7 @@ func nc_emit_multiboot32_timer_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(485, 0, "multiboot32-timer: body length invariant")
         return 0
@@ -6305,7 +6305,7 @@ func nc_emit_multiboot32_tick_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(490, 0, "multiboot32-tick: body length invariant")
         return 0
@@ -6469,7 +6469,7 @@ func nc_emit_multiboot32_rizzing_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(496, 0, "multiboot32-rizzing: body length invariant")
         return 0
@@ -6671,7 +6671,7 @@ func nc_emit_multiboot32_bluefield_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(502, 0, "multiboot32-bluefield: body length invariant")
         return 0
@@ -6937,7 +6937,7 @@ func nc_emit_multiboot32_contigo_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(518, 0, "multiboot32-contigo: body length invariant")
         return 0
@@ -7230,7 +7230,7 @@ func nc_emit_multiboot32_cloggard_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(524, 0, "multiboot32-cloggard: body length invariant")
         return 0
@@ -7667,7 +7667,7 @@ func nc_emit_multiboot32_page_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(464, 0, "multiboot32-page: body length invariant")
         return 0
@@ -7702,7 +7702,7 @@ func nc_emit_multiboot32_page_program(source):
     cbuf = append_str(cbuf, freeze(bodybuf))
     cbuf = nc32_emit_epilogue(cbuf)
     cbuf = nc32_page_emit_tables(cbuf, gdt_vaddr, idt_vaddr, gate_vaddr)
-    let pre_pd_len = length(freeze(cbuf))
+    let pre_pd_len = buffer_length(cbuf)
     let pad_to_pd = pd_vaddr - 1048588 - pre_pd_len
     cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pd)
     cbuf = nc32_page_emit_pd(cbuf, pt_vaddr)
@@ -7896,7 +7896,7 @@ func nc_emit_multiboot32_store_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(471, 0, "multiboot32-store: body length invariant")
         return 0
@@ -7928,7 +7928,7 @@ func nc_emit_multiboot32_store_program(source):
     cbuf = append_str(cbuf, freeze(bodybuf))
     cbuf = nc32_emit_epilogue(cbuf)
     cbuf = nc32_store_emit_tables(cbuf, gdt_vaddr)
-    let pre_pd_len = length(freeze(cbuf))
+    let pre_pd_len = buffer_length(cbuf)
     let pad_to_pd = pd_vaddr - 1048588 - pre_pd_len
     cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pd)
     cbuf = nc32_page_emit_pd(cbuf, pt_vaddr)
@@ -8141,7 +8141,7 @@ func nc_emit_multiboot32_demand_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - ebp_prefix:
         let f5 = nc_fail(478, 0, "multiboot32-demand: body length invariant")
         return 0
@@ -8178,7 +8178,7 @@ func nc_emit_multiboot32_demand_program(source):
     cbuf = nc32_emit_epilogue(cbuf)
     cbuf = nc32_demand_emit_handler(cbuf, pt_vaddr, frame_pte)
     cbuf = nc32_page_emit_tables(cbuf, gdt_vaddr, idt_vaddr, handler_vaddr)
-    let pre_pd_len = length(freeze(cbuf))
+    let pre_pd_len = buffer_length(cbuf)
     let pad_to_pd = pd_vaddr - 1048588 - pre_pd_len
     cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pd)
     cbuf = nc32_page_emit_pd(cbuf, pt_vaddr)
@@ -8411,7 +8411,7 @@ func nc_emit_multiboot32_long_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc32_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let f5 = nc_fail(496, 0, "multiboot32-long: body length invariant")
         return 0
@@ -8448,7 +8448,7 @@ func nc_emit_multiboot32_long_program(source):
     cbuf = nc32_long_emit_observable(cbuf)
     cbuf = nc32_emit_epilogue(cbuf)
     cbuf = nc32_long_emit_gdt(cbuf, gdt_vaddr)
-    let pre_pml4_len = length(freeze(cbuf))
+    let pre_pml4_len = buffer_length(cbuf)
     let pad_to_pml4 = pml4_vaddr - v0 - pre_pml4_len
     cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pml4)
     cbuf = nc32_long_emit_pml4(cbuf, pdpt_vaddr)
@@ -9629,7 +9629,7 @@ end
 func nc_tap_boot_fail_branch(buf, cc, fail_off):
     do append(buf, 15)
     do append(buf, cc)
-    let endoff = length(freeze(buf)) + 4
+    let endoff = buffer_length(buf) + 4
     return nc_append_rel32(buf, fail_off, endoff)
 end
 
@@ -9671,14 +9671,14 @@ end
 -- R12/R13 become cursor/end only after complete descriptor validation. All
 -- currently admitted tap operations, callee frames and TCO preserve them.
 func nc_tap_boot_init(buf, esp_val):
-    let start = length(freeze(buf))
+    let start = buffer_length(buf)
     do append(buf, 137)  -- 89 F6 mov esi,esi (zero-extend saved magic)
     do append(buf, 246)
     do append(buf, 137)  -- 89 FF mov edi,edi (zero-extend saved MBI pointer)
     do append(buf, 255)
     do append(buf, 235)  -- EB 49 jump over the 73-byte failure stub
     do append(buf, 73)
-    let fail_off = length(freeze(buf))
+    let fail_off = buffer_length(buf)
     do append(buf, 102)  -- 66 BA E900 mov dx,0xE9
     do append(buf, 186)
     do append(buf, 233)
@@ -9738,7 +9738,7 @@ func nc_tap_boot_init(buf, esp_val):
     do append(buf, 253)
     buf = nc_append_le32(buf, 67108864)
     buf = nc_tap_boot_fail_branch(buf, 135, fail_off) -- ja
-    if length(freeze(buf)) != start + 259:
+    if buffer_length(buf) != start + 259:
         let failed = nc_fail(656, 0, "multiboot32-long64: boot initializer length invariant")
         return buf
     end
@@ -9926,7 +9926,7 @@ func nc_tap_emit_program(funcs, mainidx):
         do append(cbuf, 236)
         do append(cbuf, 8 * main_frame)
     end
-    if uses_boot and length(freeze(cbuf)) != main_body_base:
+    if uses_boot and buffer_length(cbuf) != main_body_base:
         let fboot = nc_fail(656, 0, "multiboot32-long64: boot prefix length invariant")
         return 0
     end
@@ -9937,17 +9937,17 @@ func nc_tap_emit_program(funcs, mainidx):
     do append(cbuf, 232)
     do append(cbuf, 32)
     cbuf = nc32_emit_epilogue(cbuf)
-    if length(freeze(cbuf)) != callee_block_start:
+    if buffer_length(cbuf) != callee_block_start:
         let f8 = nc_fail(610, 0, "multiboot32-long64: main block length invariant")
         return 0
     end
     cbuf = nc_tap_emit_callees(cbuf, funcs, 1, nf, bases, buf_2m)
-    if length(freeze(cbuf)) != gdt_off:
+    if buffer_length(cbuf) != gdt_off:
         let f9 = nc_fail(611, 0, "multiboot32-long64: callee block length invariant")
         return 0
     end
     cbuf = nc32_long_emit_gdt(cbuf, gdt_vaddr)
-    let pre_pml4_len = length(freeze(cbuf))
+    let pre_pml4_len = buffer_length(cbuf)
     let pad_to_pml4 = pml4_vaddr - v0 - pre_pml4_len
     cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pml4)
     cbuf = nc32_long_emit_pml4(cbuf, pdpt_vaddr)
@@ -10029,7 +10029,7 @@ func nc_emit_multiboot32_long64_program(source):
     let epi = lay.1
     let bodybuf = new_buffer()
     bodybuf = nc64_lower_loop(bodybuf, code, 0, n, offs, epi)
-    let bodylen = length(freeze(bodybuf))
+    let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
         let f5 = nc_fail(505, 0, "multiboot32-long64: body length invariant (a lowered op was dropped or mis-sized)")
         return 0
@@ -10071,7 +10071,7 @@ func nc_emit_multiboot32_long64_program(source):
     do append(cbuf, 32)
     cbuf = nc32_emit_epilogue(cbuf)
     cbuf = nc32_long_emit_gdt(cbuf, gdt_vaddr)
-    let pre_pml4_len = length(freeze(cbuf))
+    let pre_pml4_len = buffer_length(cbuf)
     let pad_to_pml4 = pml4_vaddr - v0 - pre_pml4_len
     cbuf = nc_emit_zeroes_loop(cbuf, pad_to_pml4)
     cbuf = nc32_long_emit_pml4(cbuf, pdpt_vaddr)
