@@ -1141,7 +1141,31 @@ func emit_kids_dump(buf, pool, kids, i, n):
     return emit_kids_dump(buf, pool, kids, i + 1, n)
 end
 
+-- Validate `source` with the checked lexer and parser before an emit route
+-- builds its tree with the unchecked ones (the hosted path in driver.herb does
+-- the same before parse_program). On failure, report the located diagnostic
+-- the hosted path reports and exit 1. On success the route lexes and parses
+-- exactly as before, so an accepted program's tree and image do not change.
+func nc_check_source(source):
+    let lexed = err_lex_source(source)
+    if lexed.0 == err_err_tag():
+        let reported = stderr_write(serialize_diagnostic(lexed.1))
+        let newline = stderr_write("\n")
+        do process_exit(1)
+        return 0
+    end
+    let structure = err_parse_program(lexed.2, lexed.3)
+    if structure.0 == err_err_tag():
+        let reported = stderr_write(serialize_diagnostic(structure.1))
+        let newline = stderr_write("\n")
+        do process_exit(1)
+        return 0
+    end
+    return 0
+end
+
 func nc_emit_ast_dump_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -13736,6 +13760,7 @@ end
 -- [+ 5 rbp frame]. Reuses nc32_layout/lower/epilogue verbatim (op 45 added to
 -- size/lower only) so all prior modes stay byte-identical.
 func nc_emit_multiboot32_input_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -15332,6 +15357,7 @@ end
 -- +5 if the body has an ebp frame). Reuses nc32_emit_ehdr/phdr/epilogue verbatim; the mbheader
 -- is the MEMINFO variant.
 func nc_emit_multiboot32_lodger_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -15466,6 +15492,7 @@ end
 -- straight-line module_byte() subset verbatim; the exit handler stores the module status into the
 -- answer cell, then jmps to the body (which reads it and the epilogue emits f(status)).
 func nc_emit_multiboot32_trikon_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -15641,6 +15668,7 @@ func nc_is_multiboot32_nokta(source):
 end
 
 func nc_emit_multiboot32_nokta_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -15805,6 +15833,7 @@ end
 -- is a PURE CONDUIT: module_byte() echoes [answer]); the NEW capability lives entirely in the prefix (the
 -- resumable SYS_READ/SYS_EXIT handler + COM1 UART init). So this driver == nokta's with the sitopia prefix.
 func nc_emit_multiboot32_sitopia_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -15965,6 +15994,7 @@ end
 -- subset / layout / epilogue as sitopia (the kernel body is a PURE CONDUIT). The NEW capability lives
 -- entirely in the prefix. So this driver == sitopia's with nc32_geeking_emit_prefix and the geeking marker.
 func nc_emit_multiboot32_geeking_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -16101,6 +16131,7 @@ end
 -- capability is the do_write arm in the prefix. So this driver == geeking's with nc32_holler_emit_prefix and
 -- the holler marker/fail-codes. Pairs with the `module-holler` emit mode (the compiled SYS_WRITE module).
 func nc_emit_multiboot32_holler_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -16206,6 +16237,7 @@ end
 -- bounds-checked int 0x30 eax=2). Reuses nc32_lower_loop wholesale; op 48 is admitted ONLY here, via
 -- nc32_holler_proxy (op 47 -> push; op 48 -> pop+push net 0). Proven byte-identical to holler_ref.target_module.
 func nc_emit_module_holler_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -16312,6 +16344,7 @@ end
 -- straight-line + locals subset (no branches), exactly one sys_read. The byte convention is the named ABI
 -- in audits/link22-coalgate/00-module-abi.md, proven byte-identical to coalgate_ref.target_module (STEP-0).
 func nc_emit_multiboot32_coalgate_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -16995,6 +17028,7 @@ func nc_ouro_all_funcs_ok(funcs, i, nf):
 end
 
 func nc_emit_multiboot32_ouroboros_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -17103,6 +17137,7 @@ func nc_is_module_mmj(source):
 end
 
 func nc_emit_module_mmj_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -17291,6 +17326,7 @@ func nc_is_module_chiefturbo(source):
 end
 
 func nc_emit_module_chiefturbo_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -17372,6 +17408,7 @@ end
 -- emit machinery. The genuinely-new capability is the KERNEL's multi-page region (multiboot32-mumbani), not the
 -- module ISA. Byte-identical to mumbani_ref.target_module().
 func nc_emit_module_mumbani_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -17463,6 +17500,7 @@ func nc_is_module_tandem(source):
 end
 
 func nc_emit_module_tandem_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -18498,6 +18536,7 @@ end
 -- the prefix. So this driver == holler's with nc32_mumbani_emit_prefix and the mumbani marker/fail-codes. Pairs
 -- with the `module-mumbani` emit mode (the compiled recursive-reverse module).
 func nc_emit_multiboot32_mumbani_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -18586,6 +18625,7 @@ func nc_emit_multiboot32_mumbani_program(source):
 end
 
 func nc_emit_multiboot32_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -18783,6 +18823,7 @@ end
 -- deferred later link). Reuses lingo's ehdr/phdr/mbheader and toakie's verifier +
 -- 2-pass layout/lowering + epilogue verbatim, so the existing modes are untouched.
 func nc_emit_multiboot32_idt_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -19061,6 +19102,7 @@ end
 -- shape + toakie's verifier/2-pass layout/lowering + the shared epilogue verbatim, so the
 -- six prior emit modes stay byte-identical (the self-host fixpoint gen2==gen1 is preserved).
 func nc_emit_multiboot32_timer_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -19162,6 +19204,7 @@ end
 -- COUNT, not wall-time (QEMU vs Bochs PIT rates differ; exit on esi==N is timing-independent).
 -- Pays D19's async-SURVIVAL half (EOI + iret-resume + periodicity) that talcott deferred.
 func nc_emit_multiboot32_tick_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -19326,6 +19369,7 @@ func nc32_rizz_emit_head(rbuf, gdtr_vaddr, esp_top, idtr_vaddr, tick_vaddr):
 end
 
 func nc_emit_multiboot32_rizzing_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -19528,6 +19572,7 @@ func nc32_bf_emit_head(bfh, gdtr_vaddr, esp_top, idtr_vaddr, cur_vaddr, tcb1_vad
 end
 
 func nc_emit_multiboot32_bluefield_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -19794,6 +19839,7 @@ func nc32_co_emit_head(coh, gdtr_vaddr, esp_top, idtr_vaddr, inq_vaddr):
 end
 
 func nc_emit_multiboot32_contigo_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -20087,6 +20133,7 @@ func nc32_clog_emit_head(clh, gdtr_vaddr, esp_top, idtr_vaddr, inq_vaddr, pos_va
 end
 
 func nc_emit_multiboot32_cloggard_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -20524,6 +20571,7 @@ end
 -- with the mapping unfixed; iret-resumption is a deferred later link). Reuses lingo's
 -- ehdr/phdr/mbheader and toakie's verifier + 2-pass layout/lowering + epilogue verbatim.
 func nc_emit_multiboot32_page_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -20753,6 +20801,7 @@ end
 -- nc32_page_emit_pd/pt_loop verbatim (the build-time hole is what the runtime store fills)
 -- and lingo's ehdr/phdr/mbheader + toakie's verifier + 2-pass layout/lowering + epilogue.
 func nc_emit_multiboot32_store_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -20998,6 +21047,7 @@ end
 -- hole) + the toakie verifier/2-pass layout/lowering + the shared epilogue + lingo's ehdr/phdr/
 -- mbheader. The frame is part of the loaded segment (filesz), so the seed survives to runtime.
 func nc_emit_multiboot32_demand_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -21268,6 +21318,7 @@ end
 -- Reuses lingo's ehdr/phdr/mbheader + toakie's verifier/2-pass-layout/lowering + the shared
 -- epilogue verbatim, so the eight prior modes are untouched (fixpoint preserved).
 func nc_emit_multiboot32_long_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -22887,6 +22938,7 @@ func nc_tap_emit_program(funcs, mainidx):
 end
 
 func nc_emit_multiboot32_long64_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)

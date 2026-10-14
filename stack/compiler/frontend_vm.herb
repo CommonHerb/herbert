@@ -1141,7 +1141,31 @@ func emit_kids_dump(buf, pool, kids, i, n):
     return emit_kids_dump(buf, pool, kids, i + 1, n)
 end
 
+-- Validate `source` with the checked lexer and parser before an emit route
+-- builds its tree with the unchecked ones (the hosted path in driver.herb does
+-- the same before parse_program). On failure, report the located diagnostic
+-- the hosted path reports and exit 1. On success the route lexes and parses
+-- exactly as before, so an accepted program's tree and image do not change.
+func nc_check_source(source):
+    let lexed = err_lex_source(source)
+    if lexed.0 == err_err_tag():
+        let reported = stderr_write(serialize_diagnostic(lexed.1))
+        let newline = stderr_write("\n")
+        do process_exit(1)
+        return 0
+    end
+    let structure = err_parse_program(lexed.2, lexed.3)
+    if structure.0 == err_err_tag():
+        let reported = stderr_write(serialize_diagnostic(structure.1))
+        let newline = stderr_write("\n")
+        do process_exit(1)
+        return 0
+    end
+    return 0
+end
+
 func nc_emit_ast_dump_program(source):
+    let checked = nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)

@@ -138,8 +138,10 @@ changes the old status-zero/stdout rejection convention, including shared native
 diagnostics in historical emit modes. Callers must check the compiler status
 before using `a.out`; a failed invocation preserves the previous artifact.
 The internal `-- emit: ast-dump` inspection route writes the parsed tree to
-stdout without publishing `a.out`. It still uses the unchecked lexer/parser
-and is outside the supported malformed-source diagnostic contract.
+stdout without publishing `a.out`. It and every emit route that reads its
+input now run the checked lexer and parser first, so lexically or
+structurally malformed source gets the same located diagnostic as the hosted
+path; the tree they then build still comes from the unchecked parser.
 
 `fwriter(bytes)` now publishes through an exclusive `.herbert*.tmp` file in
 an opened current-directory descriptor. It obtains the unpredictable name from
