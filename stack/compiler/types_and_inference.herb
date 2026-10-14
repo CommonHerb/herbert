@@ -2453,7 +2453,9 @@ func nc_infer_record_new(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_
     return (0, rt.1, a.1, a.2, a.3)
 end
 
--- x.FIELD = e rebinds the local x to a copy with one field replaced.
+-- x.FIELD = e rebinds the local x to a copy with one field replaced. While x's
+-- type is still unknown (a callee not yet inferred this round), defer the
+-- check to a later round, as a field read does.
 func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params):
     let node = get(nodes, stmt_idx)
     let field = get(node.1, 1)
@@ -2461,18 +2463,21 @@ func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, fu
     if li.0 == 0:
         return (nc_infer_fail(pool, 404, node.3, "assign-undefined"), env, sig, 0, 0)
     end
-    if not nc_type_is_record(pool, li.2):
-        return (nc_infer_fail(pool, 446, node.3, field), env, sig, 0, 0)
-    end
-    let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, li.2), field)
-    if fi == 0 - 1:
-        return (nc_infer_fail(pool, 444, node.3, field), env, sig, 0, 0)
-    end
-    let children = nc_type_children(pool, li.2)
     let r = nc_infer_expr(pool, nodes, prog_idx, get(node.2, 0), env, sig, fn_idx, funcs, n_params)
     if r.0 != 0:
         return (r.0, r.2, r.3, r.4, 0)
     end
+    if li.2 == nc_type_unknown():
+        return (0, r.2, r.3, r.4, 0)
+    end
+    if not nc_type_is_record(pool, li.2):
+        return (nc_infer_fail(pool, 446, node.3, field), r.2, r.3, r.4, 0)
+    end
+    let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, li.2), field)
+    if fi == 0 - 1:
+        return (nc_infer_fail(pool, 444, node.3, field), r.2, r.3, r.4, 0)
+    end
+    let children = nc_type_children(pool, li.2)
     let ok = nc_record_value_ok(pool, get(children, fi), r.1, node.3)
     if ok != 0:
         return (ok, r.2, r.3, r.4, 0)

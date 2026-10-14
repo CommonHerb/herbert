@@ -1161,12 +1161,25 @@ func ser_dump(buf, pool, idx):
     if equal(tag, "dot"):
         buf = emit_kids_dump(buf, pool, kids, 0, count(kids))
         buf = emit_atoms(buf, atoms, 0, count(atoms))
+    elif equal(tag, "program"):
+        buf = emit_record_dumps(buf, pool, atoms, 0)
+        buf = emit_kids_dump(buf, pool, kids, 0, count(kids))
     else:
         buf = emit_atoms(buf, atoms, 0, count(atoms))
         buf = emit_kids_dump(buf, pool, kids, 0, count(kids))
     end
     do append(buf, ')')
     return buf
+end
+
+-- The program node's atoms index its record declarations; dump them as trees.
+func emit_record_dumps(buf, pool, recs, i):
+    if i >= count(recs):
+        return buf
+    end
+    do append(buf, ' ')
+    buf = ser_dump(buf, pool, parse_decimal(get(recs, i)))
+    return emit_record_dumps(buf, pool, recs, i + 1)
 end
 
 func emit_kids_dump(buf, pool, kids, i, n):
@@ -1179,7 +1192,7 @@ func emit_kids_dump(buf, pool, kids, i, n):
 end
 
 -- Validate `source` with the checked lexer and parser before an emit route
--- builds its tree with the unchecked ones (the hosted path in driver.herb does
+-- builds its tree with the unchecked ones (the hosted path in routes.herb does
 -- the same before parse_program). On failure, report the located diagnostic
 -- the hosted path reports and exit 1. On success the route lexes and parses
 -- exactly as before, so an accepted program's tree and image do not change.
@@ -1956,7 +1969,7 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     if equal(tag, "dot"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         if not is_digit(index(get(atoms, 0), 0)):
-            return emit_instr(ir, op_tuple_get(), lowered_field(poly, caller_inst_idx, node_idx, node).2, 0)
+            return emit_instr(ir, op_tuple_get(), lowered_field(poly, nodes, caller_inst_idx, node_idx, node).2, 0)
         end
         return emit_instr(ir, op_tuple_get(), parse_decimal(get(atoms, 0)), 0)
     end
@@ -2087,13 +2100,39 @@ func emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_ins
     return env
 end
 
--- Inference records each field's position per instance; a missing entry
--- means the value's type stayed unknown there.
-func lowered_field(poly, inst_idx, node_idx, node):
+-- (position, field count) of FIELD in the one record that declares it, or
+-- (-1, 0) when no record or more than one does.
+func unique_record_field_loop(nodes, field, i, found):
+    if i >= count(nodes):
+        return found
+    end
+    let node = get(nodes, i)
+    if equal(node.0, "record"):
+        let fi = nc_record_field_index(nodes, i, field)
+        if fi != 0 - 1:
+            if found.0 != 0 - 1:
+                return (0 - 1, 0)
+            end
+            found = (fi, count(node.1) - 1)
+        end
+    end
+    return unique_record_field_loop(nodes, field, i + 1, found)
+end
+
+-- Inference records each field's position per instance. A missing entry means
+-- the value's type stayed unknown there, as after a never-returning helper,
+-- whose code the tuple form also compiles; resolve by the field's name when
+-- exactly one record declares it.
+func lowered_field(poly, nodes, inst_idx, node_idx, node):
     let i = nc_poly_field_find_loop(poly.3, inst_idx, node_idx, 0)
     if i == 0 - 1:
-        let failed = nc_fail(446, node.3, get(node.1, count(node.1) - 1))
-        return (inst_idx, node_idx, 0, 0)
+        let field = get(node.1, count(node.1) - 1)
+        let u = unique_record_field_loop(nodes, field, 0, (0 - 1, 0))
+        if u.0 == 0 - 1:
+            let failed = nc_fail(446, node.3, field)
+            return (inst_idx, node_idx, 0, 0)
+        end
+        return (inst_idx, node_idx, u.0, u.1)
     end
     return get(poly.3, i)
 end
@@ -2128,7 +2167,7 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     end
     if equal(tag, "field-assign"):
         -- The same code as x = (x.0, ..., e, ..., x.n-1) for a tuple.
-        let shape = lowered_field(poly, caller_inst_idx, stmt_idx, stmt)
+        let shape = lowered_field(poly, nodes, caller_inst_idx, stmt_idx, stmt)
         let slot = env_lookup(env, get(atoms, 0))
         ir = emit_field_update(shape.2, shape.3, 0, slot, get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_instr(ir, op_make_tuple(), shape.3, 0)
@@ -5686,7 +5725,9 @@ func nc_infer_record_new(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_
     return (0, rt.1, a.1, a.2, a.3)
 end
 
--- x.FIELD = e rebinds the local x to a copy with one field replaced.
+-- x.FIELD = e rebinds the local x to a copy with one field replaced. While x's
+-- type is still unknown (a callee not yet inferred this round), defer the
+-- check to a later round, as a field read does.
 func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_params):
     let node = get(nodes, stmt_idx)
     let field = get(node.1, 1)
@@ -5694,18 +5735,21 @@ func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, fu
     if li.0 == 0:
         return (nc_infer_fail(pool, 404, node.3, "assign-undefined"), env, sig, 0, 0)
     end
-    if not nc_type_is_record(pool, li.2):
-        return (nc_infer_fail(pool, 446, node.3, field), env, sig, 0, 0)
-    end
-    let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, li.2), field)
-    if fi == 0 - 1:
-        return (nc_infer_fail(pool, 444, node.3, field), env, sig, 0, 0)
-    end
-    let children = nc_type_children(pool, li.2)
     let r = nc_infer_expr(pool, nodes, prog_idx, get(node.2, 0), env, sig, fn_idx, funcs, n_params)
     if r.0 != 0:
         return (r.0, r.2, r.3, r.4, 0)
     end
+    if li.2 == nc_type_unknown():
+        return (0, r.2, r.3, r.4, 0)
+    end
+    if not nc_type_is_record(pool, li.2):
+        return (nc_infer_fail(pool, 446, node.3, field), r.2, r.3, r.4, 0)
+    end
+    let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, li.2), field)
+    if fi == 0 - 1:
+        return (nc_infer_fail(pool, 444, node.3, field), r.2, r.3, r.4, 0)
+    end
+    let children = nc_type_children(pool, li.2)
     let ok = nc_record_value_ok(pool, get(children, fi), r.1, node.3)
     if ok != 0:
         return (ok, r.2, r.3, r.4, 0)

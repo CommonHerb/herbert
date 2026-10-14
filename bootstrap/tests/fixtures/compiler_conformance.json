@@ -2498,6 +2498,16 @@
       "id": "record-reject-assign-dot-no-records", "profile": "reject",
       "source": "func main():\n    let t = (1, 2)\n    t.x = 1\n    return 1\nend\n",
       "diagnostic": "line 3: invalid assignment or name (ERR 212)"
+    },
+    {
+      "id": "record-update-from-call", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc make_point(a, b):\n    return Point(a, b)\nend\n\nfunc main():\n    let p = make_point(3, 4)\n    p.x = 7\n    return p.x * 10 + p.y\nend\n",
+      "stdin": "", "stdout": "74\n", "status": 0
+    },
+    {
+      "id": "record-never-returning-read", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc fault():\n    let a = new_array(int)\n    return get(a, 0)\nend\n\nfunc helper(flag):\n    if flag:\n        return Point(1, 2)\n    end\n    let p = fault()\n    return Point(p.x, p.y)\nend\n\nfunc main():\n    let p = helper(true)\n    return p.x * 10 + p.y\nend\n",
+      "stdin": "", "stdout": "12\n", "status": 0
     }
   ]
 }

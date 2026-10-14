@@ -41,7 +41,7 @@ Build sequences with `new_array(TYPE)` + `do add(a,x)` + `get(a,i)` + `count(a)`
 
 **Native rejection examples:** wrong user-call, hosted builtin or kernel-side builtin (`input_byte` `module_byte` `sys_read` `bufbase` `sys_write` `output_byte` `yield` `bufget` `bufset`) arity `420`; `slice` `438`; `freeze/append` on non-buffer `437`; `get/count` on non-array `435`; array element-type mismatch `436`; type mismatch e.g. `flogger` of a non-string `430`; a void builtin used as a value `440`; tuple `.N` out-of-range/on-non-tuple `431`; `main` returning an array or a tuple containing an array, or exceeding the render-word cap `432`; more than one input operation (`clogger`/`stdin_read` combined) `411`. Empty input or no `main` produces a **program-level** `ERR 429`, not a located line diagnostic; other uses of code 429 can be located. Unknown variable names and assignment to an undefined name currently use `ERR 404`. For supported ordinary calls, argument count is checked before inspecting the arguments; `new_array` type syntax has its separate structural rules. These examples do not promise every malformed builtin invocation has a clean diagnostic or override earlier whole-program checks.
 
-**Compiler rejection envelope:** checked lexical errors (`101`–`110`), checked structural errors (`201`–`212`, plus duplicate parameter `311`), and native rejections print one diagnostic to **stderr**, leave stdout empty, and exit with status **1**. They preserve an existing `a.out`; output existence alone is not success. Checked input failure prints `compiler: stdin read failed (errno N)\n`; output-publication failure prints `compiler: output publication failed\n`. Both use stderr, empty stdout and status 1, and preserve the previous output before publication. Whole-source lexical, structural and AST/operator-class checks precede reachability-based native inference. This does **not** promise the globally earliest source-position error. Uncalled functions and statements after a return are structurally checked, but do not receive uniform semantic checking.
+**Compiler rejection envelope:** checked lexical errors (`101`–`110`), checked structural errors (`201`–`213`, plus duplicate parameter `311`), and native rejections print one diagnostic to **stderr**, leave stdout empty, and exit with status **1**. They preserve an existing `a.out`; output existence alone is not success. Checked input failure prints `compiler: stdin read failed (errno N)\n`; output-publication failure prints `compiler: output publication failed\n`. Both use stderr, empty stdout and status 1, and preserve the previous output before publication. Whole-source lexical, structural and AST/operator-class checks precede reachability-based native inference. This does **not** promise the globally earliest source-position error. Uncalled functions and statements after a return are structurally checked, but do not receive uniform semantic checking.
 
 Distinguish the two processes when reading faults. If **the compiler** (`seedbin`) emits `herbert: line N: get: position ... out of range` on stderr while compiling, that is an internal compiler fault; `N` can refer to the compiler's own source. If **your compiled program** (`a.out`) emits the same-shaped message while running, it is an ordinary runtime bounds fault, with the line of your program's offending call. Report the former as a compiler defect; investigate your own indexing or appended byte value for the latter.
 
@@ -52,11 +52,13 @@ Some inherited structural messages are imprecise: ERR 205 says `'do' must be fol
 **The only function keyword is `func`. There is NO `fn`/`func` alternative and no `while/for/loop`.** 18 reserved words: `func let return do if elif else end and or not true false int bool string buffer array`. `record` is not reserved: it is recognized only as the first word of a top-level `record NAME:` declaration and is an ordinary name everywhere else.
 
 ```
-program := func*
+program := (func | record)*
+record  := 'record' NAME ':' (NAME ':' TYPE)+ 'end'            -- at least two fields (else ERR 213)
 func    := 'func' NAME '(' params? ')' ':' body 'end'      -- body = 1+ statements (empty body = ERR 209)
 params  := NAME (',' NAME)*                                  -- 0 allowed; main() must take 0
 stmt    := 'let' NAME '=' expr        -- local binding; see current shadowing behavior below
          | NAME '=' expr              -- rebind an EXISTING binding (undefined = ERR 404; changing width = ERR 433)
+         | NAME '.' FIELD '=' expr    -- replace one field of a local record (programs that declare records)
          | 'return' expr             -- exactly one value; write an explicit return on every path
          | 'do' call                 -- statement call to a VOID builtin only
          | 'if' expr ':' body ('elif' expr ':' body)* ('else' ':' body)? 'end'
@@ -69,7 +71,7 @@ The native compiler currently permits repeated `let` bindings in one scope and s
 **Comments:** `--` to end of line only. No block comments. A recognized leading `-- emit: ...` marker selects a specialized compiler route before ordinary hosted validation; those routes are outside this pack.
 
 **Expression precedence, loosest → tightest** (all binary tiers left-associative):
-`bitwise (& | ^ << >>)` < `or` < `and` < `cmp (== != < > <= >=)` < `add (+ -)` < `mul (* / %)` < `prefix (not, ~)` < `dot (.N)` < atom.
+`bitwise (& | ^ << >>)` < `or` < `and` < `cmp (== != < > <= >=)` < `add (+ -)` < `mul (* / %)` < `prefix (not, ~)` < `dot (.N, .FIELD)` < atom.
 - **There is NO unary minus.** Prefix unary is only `not` (boolean) and `~` (one's-complement int). Write negation-of-a-constant as modular subtraction: `0 - 1` is `18446744073709551615`, not `-1`.
 - **Bitwise/shift operands must be parenthesised/atomic and single-class.** Unparenthesised mixing like `a & b | c`, `a << 2 + 3`, `x & 1 == 0` is rejected `ERR 442`. Fully-parenthesised forms parse: `(a & b)`, `(x << 2)`.
 - **Atoms:** integer literal, char literal `'x'` (a byte value / int), string literal `"…"`, `true`, `false`, a bare NAME, a call `NAME(args)`, or a parenthesised group/tuple.
