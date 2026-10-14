@@ -791,16 +791,6 @@ func nc_assignment_type_ok(pool, old, got):
     return nc_type_is_int_bool(old) and nc_type_is_int_bool(got)
 end
 
-func nc_is_clogger_call(node):
-    if not equal(node.0, "call"):
-        return false
-    end
-    if not equal(get(node.1, 0), "clogger"):
-        return false
-    end
-    return count(node.2) == 0
-end
-
 func nc_count_input_expr(nodes, idx, input_name):
     let node = get(nodes, idx)
     let tag = node.0
@@ -874,20 +864,6 @@ func nc_check_input_scope(pool, nodes, fn_node):
         return nc_infer_fail(pool, 404, fn_node.3, "clogger")
     end
     return 0
-end
-
-func nc_find_handle_loop(nodes, stmts, i, n, found_name, found_count):
-    if i >= n:
-        return (found_name, found_count)
-    end
-    let stmt = get(nodes, get(stmts, i))
-    if equal(stmt.0, "let"):
-        let rhs = get(nodes, get(stmt.2, 0))
-        if nc_is_clogger_call(rhs):
-            return nc_find_handle_loop(nodes, stmts, i + 1, n, get(stmt.1, 0), found_count + 1)
-        end
-    end
-    return nc_find_handle_loop(nodes, stmts, i + 1, n, found_name, found_count)
 end
 
 func nc_class_env_new():
@@ -1204,153 +1180,6 @@ end
 func nc_table_check(nodes, prog_idx):
     let prog = get(nodes, prog_idx)
     return nc_table_check_loop(prog.2, 0, count(prog.2), new_array(string), nodes, 0, 0, 0)
-end
-
-func nc_expr_calls_name(nodes, idx, name):
-    let node = get(nodes, idx)
-    if equal(node.0, "call"):
-        if equal(get(node.1, 0), name):
-            return true
-        end
-    end
-    return nc_kids_call_name(nodes, node.2, 0, count(node.2), name)
-end
-
-func nc_kids_call_name(nodes, kids, i, n, name):
-    if i >= n:
-        return false
-    end
-    if nc_expr_calls_name(nodes, get(kids, i), name):
-        return true
-    end
-    return nc_kids_call_name(nodes, kids, i + 1, n, name)
-end
-
-func nc_body_calls_name(nodes, stmts, i, n, name):
-    if i >= n:
-        return false
-    end
-    let stmt = get(nodes, get(stmts, i))
-    let tag = stmt.0
-    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
-        if nc_expr_calls_name(nodes, get(stmt.2, 0), name):
-            return true
-        end
-    elif equal(tag, "if"):
-        if nc_if_calls_name(nodes, stmt.2, 0, count(stmt.2), name):
-            return true
-        end
-    end
-    return nc_body_calls_name(nodes, stmts, i + 1, n, name)
-end
-
-func nc_if_calls_name(nodes, kids, i, n, name):
-    if i >= n:
-        return false
-    end
-    let arm = get(nodes, get(kids, i))
-    let body_idx = 0
-    if equal(arm.0, "else"):
-        body_idx = get(arm.2, 0)
-    else:
-        if nc_expr_calls_name(nodes, get(arm.2, 0), name):
-            return true
-        end
-        body_idx = get(arm.2, 1)
-    end
-    let body = get(nodes, body_idx)
-    if nc_body_calls_name(nodes, body.2, 0, count(body.2), name):
-        return true
-    end
-    return nc_if_calls_name(nodes, kids, i + 1, n, name)
-end
-
-func nc_func_called_somewhere_loop(func_kids, i, n, nodes, name):
-    if i >= n:
-        return false
-    end
-    let fn = get(nodes, get(func_kids, i))
-    let body = get(nodes, get(fn.2, 1))
-    if nc_body_calls_name(nodes, body.2, 0, count(body.2), name):
-        return true
-    end
-    return nc_func_called_somewhere_loop(func_kids, i + 1, n, nodes, name)
-end
-
-func nc_unreachable_check_loop(func_kids, i, n, nodes):
-    if i >= n:
-        return 0
-    end
-    let fn = get(nodes, get(func_kids, i))
-    let name = get(fn.1, 0)
-    if not equal(name, "main"):
-        if not nc_func_called_somewhere_loop(func_kids, 0, n, nodes, name):
-            return nc_fail(424, fn.3, "")
-        end
-    end
-    return nc_unreachable_check_loop(func_kids, i + 1, n, nodes)
-end
-
-func nc_unreachable_check(nodes, prog_idx):
-    let prog = get(nodes, prog_idx)
-    return nc_unreachable_check_loop(prog.2, 0, count(prog.2), nodes)
-end
-
-func nc_expr_uses_name(nodes, idx, name):
-    let node = get(nodes, idx)
-    if equal(node.0, "name") and equal(get(node.1, 0), name):
-        return true
-    end
-    return nc_kids_uses_name(nodes, node.2, 0, count(node.2), name)
-end
-
-func nc_kids_uses_name(nodes, kids, i, n, name):
-    if i >= n:
-        return false
-    end
-    if nc_expr_uses_name(nodes, get(kids, i), name):
-        return true
-    end
-    return nc_kids_uses_name(nodes, kids, i + 1, n, name)
-end
-
-func nc_body_uses_name(nodes, stmts, i, n, name):
-    if i >= n:
-        return false
-    end
-    let stmt = get(nodes, get(stmts, i))
-    let tag = stmt.0
-    if equal(tag, "let") or equal(tag, "assign") or equal(tag, "return") or equal(tag, "do"):
-        if nc_expr_uses_name(nodes, get(stmt.2, 0), name):
-            return true
-        end
-    elif equal(tag, "if"):
-        if nc_if_uses_name(nodes, stmt.2, 0, count(stmt.2), name):
-            return true
-        end
-    end
-    return nc_body_uses_name(nodes, stmts, i + 1, n, name)
-end
-
-func nc_if_uses_name(nodes, kids, i, n, name):
-    if i >= n:
-        return false
-    end
-    let arm = get(nodes, get(kids, i))
-    let body_idx = 0
-    if equal(arm.0, "else"):
-        body_idx = get(arm.2, 0)
-    else:
-        if nc_expr_uses_name(nodes, get(arm.2, 0), name):
-            return true
-        end
-        body_idx = get(arm.2, 1)
-    end
-    let body = get(nodes, body_idx)
-    if nc_body_uses_name(nodes, body.2, 0, count(body.2), name):
-        return true
-    end
-    return nc_if_uses_name(nodes, kids, i + 1, n, name)
 end
 
 -- zelph: never-returning-function (type-bottom) recognition.
@@ -2031,38 +1860,6 @@ func nc_constrain_expr(pool, nodes, prog_idx, idx, env, want, sig, fn_idx, funcs
         return (chk, r.2, r.3, r.4)
     end
     return (0, r.2, r.3, r.4)
-end
-
-func nc_infer_call_args(pool, nodes, prog_idx, kids, i, n, callee_idx, env, sig, fn_idx, funcs, n_params, changed):
-    if i >= n:
-        return (0, env, sig, changed)
-    end
-    let arg_idx = get(kids, i)
-    let ar = nc_infer_expr(pool, nodes, prog_idx, arg_idx, env, sig, fn_idx, funcs, n_params)
-    if ar.0 != 0:
-        return (ar.0, ar.2, ar.3, nc_or_changed(changed, ar.4))
-    end
-    env = ar.2
-    sig = ar.3
-    changed = nc_or_changed(changed, ar.4)
-    let pcls = nc_sig_get_param(sig, callee_idx, i)
-    if ar.1 != 0:
-        let su = nc_sig_unify_param(pool, sig, callee_idx, i, ar.1, get(nodes, arg_idx).3)
-        if su.0 != 0:
-            return (su.0, env, sig, changed)
-        end
-        sig = su.1
-        changed = nc_or_changed(changed, su.2)
-    elif pcls != 0:
-        let cu = nc_constrain_expr(pool, nodes, prog_idx, arg_idx, env, pcls, sig, fn_idx, funcs, n_params)
-        if cu.0 != 0:
-            return (cu.0, cu.1, cu.2, changed)
-        end
-        env = cu.1
-        sig = cu.2
-        changed = nc_or_changed(changed, cu.3)
-    end
-    return nc_infer_call_args(pool, nodes, prog_idx, kids, i + 1, n, callee_idx, env, sig, fn_idx, funcs, n_params, changed)
 end
 
 func nc_tuple_type_from_exprs(pool, nodes, prog_idx, kids, i, n, env, sig, fn_idx, funcs, n_params, child_types, changed):
@@ -2751,31 +2548,6 @@ func nc_infer_if(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params,
     return (0, joined.1, arms.2, arms.3)
 end
 
-func nc_infer_func(pool, nodes, prog_idx, func_kids, fn_idx, sig):
-    let fn_node = get(nodes, get(func_kids, fn_idx))
-    let name = get(fn_node.1, 0)
-    let params_node = get(nodes, get(fn_node.2, 0))
-    let body_node = get(nodes, get(fn_node.2, 1))
-    let input_scope = nc_check_input_scope(pool, nodes, fn_node)
-    if input_scope != 0:
-        return (input_scope, sig, 0)
-    end
-    let env = nc_func_env_from_params(nodes, fn_node, sig, fn_idx)
-    let br = nc_infer_body(pool, nodes, prog_idx, body_node.2, 0, count(body_node.2), env, sig, fn_idx, func_kids, count(params_node.1), 0)
-    return (br.0, br.2, br.3)
-end
-
-func nc_infer_funcs_loop(pool, nodes, prog_idx, func_kids, i, n, sig, changed):
-    if i >= n:
-        return (0, sig, changed)
-    end
-    let r = nc_infer_func(pool, nodes, prog_idx, func_kids, i, sig)
-    if r.0 != 0:
-        return r
-    end
-    return nc_infer_funcs_loop(pool, nodes, prog_idx, func_kids, i + 1, n, r.1, nc_or_changed(changed, r.2))
-end
-
 func nc_poly_infer_instance(pool, nodes, prog_idx, funcs, inst_idx, sig):
     let prog = get(nodes, prog_idx)
     let inst = get(funcs.0, inst_idx)
@@ -2817,29 +2589,6 @@ func nc_poly_sig_solve_loop(pool, nodes, prog_idx, funcs, sig, remaining):
     return nc_poly_sig_solve_loop(pool, nodes, prog_idx, funcs, r.1, remaining - 1)
 end
 
-func nc_sig_var_count_params(func_kids, i, n, nodes, acc):
-    if i >= n:
-        return acc + n
-    end
-    let fn = get(nodes, get(func_kids, i))
-    let pn = get(nodes, get(fn.2, 0))
-    return nc_sig_var_count_params(func_kids, i + 1, n, nodes, acc + count(pn.1))
-end
-
-func nc_sig_solve_loop(pool, nodes, prog_idx, func_kids, sig, remaining):
-    let r = nc_infer_funcs_loop(pool, nodes, prog_idx, func_kids, 0, count(func_kids), sig, 0)
-    if r.0 != 0:
-        return r
-    end
-    if r.2 == 0:
-        return r
-    end
-    if remaining <= 0:
-        return (nc_infer_fail(pool, 424, 0, ""), r.1, 0)
-    end
-    return nc_sig_solve_loop(pool, nodes, prog_idx, func_kids, r.1, remaining - 1)
-end
-
 func nc_sig_check_params_loop(pool, sig, fn_idx, i, n):
     if i >= n:
         return 0
@@ -2852,54 +2601,6 @@ func nc_sig_check_params_loop(pool, sig, fn_idx, i, n):
         return nc_infer_fail(pool, 424, 0, "")
     end
     return nc_sig_check_params_loop(pool, sig, fn_idx, i + 1, n)
-end
-
-func nc_check_used_wide_params_loop(pool, nodes, body_node, params, sig, fn_idx, i, n):
-    if i >= n:
-        return 0
-    end
-    let t = nc_sig_get_param(sig, fn_idx, i)
-    if nc_type_width(pool, t) > 1:
-        if not nc_body_uses_name(nodes, body_node.2, 0, count(body_node.2), get(params, i)):
-            return nc_infer_fail(pool, 424, 0, "")
-        end
-    end
-    return nc_check_used_wide_params_loop(pool, nodes, body_node, params, sig, fn_idx, i + 1, n)
-end
-
-func nc_sig_check_concrete_loop(pool, func_kids, i, n, nodes, sig):
-    if i >= n:
-        return 0
-    end
-    let fn = get(nodes, get(func_kids, i))
-    let pn = get(nodes, get(fn.2, 0))
-    let body = get(nodes, get(fn.2, 1))
-    let pr = nc_sig_check_params_loop(pool, sig, i, 0, count(pn.1))
-    if pr != 0:
-        return pr
-    end
-    let nret = nc_func_never_returns_node(nodes, fn)
-    if not nret:
-        let used = nc_check_used_wide_params_loop(pool, nodes, body, pn.1, sig, i, 0, count(pn.1))
-        if used != 0:
-            return used
-        end
-    end
-    let ret = nc_sig_get_ret(sig, i)
-    if not nret:
-        if nc_type_has_array_unknown(pool, ret):
-            return nc_infer_fail(pool, 438, fn.3, "")
-        end
-        if nc_type_has_unknown(pool, ret):
-            return nc_infer_fail(pool, 424, fn.3, "")
-        end
-    end
-    if equal(get(fn.1, 0), "main"):
-        if ret != nc_type_int() and ret != nc_type_bool() and not nc_type_is_renderable_aggregate(pool, ret):
-            return nc_infer_fail(pool, 432, fn.3, "")
-        end
-    end
-    return nc_sig_check_concrete_loop(pool, func_kids, i + 1, n, nodes, sig)
 end
 
 func nc_poly_sig_check_concrete_loop(pool, nodes, prog_idx, funcs, i, sig):

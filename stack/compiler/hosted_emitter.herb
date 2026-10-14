@@ -163,33 +163,11 @@ func nc_round16_up(v):
     return v + 16 - m
 end
 
-func nc_mod8_loop(v):
-    if v < 8:
-        return v
-    end
-    return nc_mod8_loop(v - 8)
-end
-
-func nc_round8_up(v):
-    let m = nc_mod8_loop(v)
-    if m == 0:
-        return v
-    end
-    return v + 8 - m
-end
-
 func nc_disp_len_rbp(neg, mag):
     if nc_signed_fits8(neg, mag):
         return 4
     end
     return 7
-end
-
-func nc_disp_len_rbp_mzb(neg, mag):
-    if nc_signed_fits8(neg, mag):
-        return 5
-    end
-    return 8
 end
 
 func nc_disp_len_rsp(mag):
@@ -264,10 +242,6 @@ func nc_cleanup_len(nargs):
         return 4
     end
     return 7
-end
-
-func nc_call_len(nargs):
-    return 5 + nc_cleanup_len(nargs) + 1
 end
 
 func nc_local_mag(slot):
@@ -587,14 +561,6 @@ func nc_group_single_len(op):
         return 18
     end
     return 0
-end
-
-func nc_heap_trap_len():
-    return 12
-end
-
-func nc_heap_alloc_len():
-    return 25
 end
 
 func nc_get_loads_len(width, j, acc):
@@ -1036,29 +1002,6 @@ func nc_emit_disp_rbp_store_rax(buf, neg, mag):
         return nc_append_s8(buf, neg, mag)
     end
     do append(buf, 133)
-    return nc_append_s32(buf, neg, mag)
-end
-
-func nc_emit_disp_rbp_read_byte(buf, neg, mag):
-    do append(buf, 72)
-    do append(buf, 15)
-    do append(buf, 182)
-    if nc_signed_fits8(neg, mag):
-        do append(buf, 69)
-        return nc_append_s8(buf, neg, mag)
-    end
-    do append(buf, 133)
-    return nc_append_s32(buf, neg, mag)
-end
-
-func nc_emit_disp_rbp_lea_rsi(buf, neg, mag):
-    do append(buf, 72)
-    do append(buf, 141)
-    if nc_signed_fits8(neg, mag):
-        do append(buf, 117)
-        return nc_append_s8(buf, neg, mag)
-    end
-    do append(buf, 181)
     return nc_append_s32(buf, neg, mag)
 end
 

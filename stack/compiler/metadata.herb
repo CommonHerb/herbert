@@ -148,30 +148,6 @@ func nc_opcode_name_for_diag(op):
     return int_to_str(op)
 end
 
-func nc_count_clogger_bc_loop(code, i, n):
-    if i >= n:
-        return 0
-    end
-    let instr = get(code, i)
-    let c = 0
-    if instr.0 == 33:
-        c = 1
-    end
-    return c + nc_count_clogger_bc_loop(code, i + 1, n)
-end
-
-func nc_make_ints_loop(i, n, value, out):
-    if i >= n:
-        return out
-    end
-    do add(out, value)
-    return nc_make_ints_loop(i + 1, n, value, out)
-end
-
-func nc_make_ints(n, value):
-    return nc_make_ints_loop(0, n, value, new_array(int))
-end
-
 func nc_make_stacks_loop(i, n, out):
     if i >= n:
         return out
@@ -219,17 +195,6 @@ end
 
 func nc_stack_word_depth(pool, stack):
     return nc_stack_word_depth_loop(pool, stack, 0, count(stack), 0)
-end
-
-func nc_type_array_width_loop(pool, arr, i, n, acc):
-    if i >= n:
-        return acc
-    end
-    return nc_type_array_width_loop(pool, arr, i + 1, n, acc + nc_type_width(pool, get(arr, i)))
-end
-
-func nc_type_array_width(pool, arr):
-    return nc_type_array_width_loop(pool, arr, 0, count(arr), 0)
 end
 
 func nc_init_local_types_params(sig, fn_idx, i, n, out):

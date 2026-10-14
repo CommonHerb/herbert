@@ -2289,7 +2289,6 @@ func nc32_lodger_emit_head(buf, esp_top):
     return buf
 end
 
-
 -- Multiboot header REQUESTING memory info (flags bit1=MEMINFO): magic 1BADB002, flags 2,
 -- checksum 0xE4524FFC. A NEW function -- the shared nc32_emit_mbheader (flags=0) is untouched
 -- (fixpoint-safe). lodger consumes the mmap, so it requests it.
@@ -2660,8 +2659,6 @@ func nc_emit_multiboot32_trikon_program(source):
     return 0
 end
 
-
-
 -- nokta (link 19) compact prefix emitter (machine-generated from nokta_ref.py; do not hand-edit).
 -- HEAD-portion (head+handlers+GDT/IDT/TSS+align-pad) is hex-data with esp_top substitution; the
 -- PD+PT identity map is loop-generated (chosen's pattern). Output == nokta_ref.build_code prefix.
@@ -2835,10 +2832,6 @@ func nc_emit_multiboot32_nokta_program(source):
     do fwriter(freeze(img))
     return 0
 end
-
-
-
-
 
 -- sitopia (link 20) compact prefix emitter (machine-generated from sitopia_ref.py; do not hand-edit).
 -- HEAD-portion (head+handlers+GDT/IDT/TSS+align-pad) is hex-data with esp_top substitution; the
@@ -5137,7 +5130,6 @@ func nc_is_multiboot32_lethe(source):
     end
     return index(source, mlen) == 10
 end
-
 
 -- multiboot32-mumbani KERNEL emit mode: the holler kernel with the bump allocator widened to npages=4 (a 4-page
 -- contiguous User region) + the alloc_lo User-flip widened 1 PTE -> 4 PTEs. Machine-generated from
@@ -8679,17 +8671,6 @@ func nc64_op_size(op, is_last):
         return 6
     end
     return 0
-end
-
-func nc64_body_size_loop(code, i, n, acc):
-    if i >= n:
-        return acc
-    end
-    let il = 0
-    if i == n - 1:
-        il = 1
-    end
-    return nc64_body_size_loop(code, i + 1, n, acc + nc64_op_size(get(code, i).0, il))
 end
 
 -- PASS 1 layout (mirrors nc32_layout_loop at 64-bit width): byte offset of each instr from code start
