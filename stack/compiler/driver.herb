@@ -195,8 +195,9 @@ func main():
         let mb_done = nc_emit_multiboot32_program(source)
         return 0
     end
-    -- Use the existing checked lexer on the hosted production path. The
-    -- historical emit-directive routes above retain their own contracts.
+    -- Use the checked lexer on the hosted production path. The emit-directive
+    -- routes above that read their input run the same checked lexer and parser
+    -- through nc_check_source before their own lexing; the blob routes read nothing.
     let lexed = err_lex_source(source)
     if lexed.0 == err_err_tag():
         let reported = stderr_write(serialize_diagnostic(lexed.1))

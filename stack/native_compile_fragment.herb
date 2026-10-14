@@ -29,11 +29,11 @@
 -- names a value. The full set of decision points is small and local
 -- to each routine.
 --
--- Serializer. `ser` walks the pool and appends bytes to a shared
--- buffer (the buffer is mutated by reference; the caller threads its
--- handle through assignment). One special case: a `dot` node emits
--- kids before atoms (the spec writes `(dot EXPR N)`); every other
--- node emits atoms before kids.
+-- Serializer. `ser_dump` (the ast-dump route's) walks the pool and
+-- appends bytes to a shared buffer (the buffer is mutated by reference;
+-- the caller threads its handle through assignment). One special case:
+-- a `dot` node emits kids before atoms (the spec writes `(dot EXPR N)`);
+-- every other node emits atoms before kids.
 
 -- ====================================================================
 -- LEXER FUNCTIONS (verbatim from stack/lexer_fragment.herb)
@@ -1052,7 +1052,7 @@ end
 -- When the source's first line is the directive `-- emit: ast-dump`, the
 -- backend lexes and parses with the SAME production front end it compiles
 -- with (lex_source + parse_program), then serializes the raw parse tree
--- with the production `ser` and writes it to stdout. No verify, no lower,
+-- with `ser_dump` and writes it to stdout. No verify, no lower,
 -- no emit -- this is the parser's own tree, observable for the first time.
 -- It exists so an independent C AST-dumper (built from bootstrap/parse.c
 -- structs) can be diffed against the PRODUCTION parser over a corpus while
@@ -1072,8 +1072,7 @@ func nc_is_ast_dump(source):
     return index(source, mlen) == 10
 end
 
--- Dump serializer: identical to `ser` EXCEPT it canonicalizes the "char" tag
--- to "int". A Herbert char literal IS an int value (byte_codepoint); the C
+-- Dump serializer. It canonicalizes the "char" tag to "int". A Herbert char literal IS an int value (byte_codepoint); the C
 -- bootstrap's lexer stores char literals as TOK_INT_LIT, so parse.c yields an
 -- E_INT node with no char provenance. Canonicalizing only the TAG (never the
 -- value atom) makes the parser-structure comparison meaningful while STILL
@@ -1167,18 +1166,6 @@ end
 func parse_decimal(s):
     return parse_decimal_loop(s, 0, length(s), 0)
 end
-
--- ====================================================================
--- BUNDLE DEMUX (virtual-stdin source channel)
--- A bundle on stdin is, positionally:
---   0x00 'H' 'E' 'R' 'B' '1'  <ASCII decimal D>  0x0A  <D source bytes>  <runtime_input to EOF>
---   \________ 6-byte MAGIC ________/  \ len(src) /  \LF/
--- The leading NUL makes the 6-byte magic collision-proof (NUL never
--- appears in valid Herbert source). The split is positional: once D is
--- parsed, source = stdin[src_start, src_start+D), runtime_input =
--- stdin[src_start+D, EOF). Bodies are never scanned. No magic, or any
--- malformed header, falls back to (stdin, "") = today's behavior.
--- ====================================================================
 
 func op_push_int():
     return 0
@@ -3047,27 +3034,6 @@ func err_void_builtin_arity(name):
     end
     return 2
 end
-
--- ====================================================================
--- VM RUNTIME
--- ====================================================================
-
--- ====================================================================
--- VM STACK / FRAME HELPERS
--- ====================================================================
-
--- ====================================================================
--- VM EXECUTION
--- ====================================================================
-
--- ====================================================================
--- EMITTER-TO-VM ADAPTER
--- ====================================================================
-
--- ====================================================================
--- MAIN -- compile the embedded pipeline probe, adapt it, execute it in
--- the Herbert VM, and return the VM serialization as a string.
--- ====================================================================
 
 -- ====================================================================
 -- NATIVE CODEGEN LINK 4 BACK END
@@ -21357,8 +21323,9 @@ func main():
         let mb_done = nc_emit_multiboot32_program(source)
         return 0
     end
-    -- Use the existing checked lexer on the hosted production path. The
-    -- historical emit-directive routes above retain their own contracts.
+    -- Use the checked lexer on the hosted production path. The emit-directive
+    -- routes above that read their input run the same checked lexer and parser
+    -- through nc_check_source before their own lexing; the blob routes read nothing.
     let lexed = err_lex_source(source)
     if lexed.0 == err_err_tag():
         let reported = stderr_write(serialize_diagnostic(lexed.1))
