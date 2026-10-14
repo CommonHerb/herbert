@@ -14,7 +14,7 @@ unset CDPATH
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
-backend="$repo_root/stack/native_compile_fragment.herb"
+backend="$repo_root/stack/i386_oracle_fragment.herb"
 REF="$script_dir/coalgate_ref.py"
 GREF="$script_dir/geeking_ref.py"
 feeder="$script_dir/kernel_input_feed.py"
@@ -31,7 +31,7 @@ if [[ ! -f "$feeder" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mi
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead feeder/QEMU run trips this -> hard fail at end
-native_codegen_ensure_compiler "$work/gen1" || exit 1
+native_codegen_ensure_i386_compiler "$work/gen1" || exit 1
 pass=0; fail=0
 fail_test() { [[ ! -s "$KERNEL_PARSE_ERROR_FILE" ]] || exit 1; echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 have_qemu() { command -v qemu-system-x86_64 >/dev/null 2>&1; }

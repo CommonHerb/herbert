@@ -17,7 +17,7 @@ TRACKED := $(BUILD)/tracked.txt
 
 all: $(SCANNER)
 
-check: $(SCANNER) compiler-source-check
+check: $(SCANNER) compiler-source-check oracle-source-check
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
 	@bash bootstrap/tests/run_tests.sh --check-pinned
@@ -320,8 +320,15 @@ COMPILER_SOURCES := stack/compiler/frontend_vm.herb \
                     stack/compiler/metadata.herb \
                     stack/compiler/hosted_emitter.herb \
                     stack/compiler/kernel_targets.herb \
+                    stack/compiler/routes.herb \
                     stack/compiler/driver.herb
+# The i386 oracle compiler: every production unit but driver.herb, then the
+# oracle units. The kernel gates build it from stack/i386_oracle_fragment.herb.
+ORACLE_UNITS := stack/i386_oracle/i386_targets.herb \
+                stack/i386_oracle/driver.herb
+ORACLE_SOURCES := $(filter-out stack/compiler/driver.herb,$(COMPILER_SOURCES)) $(ORACLE_UNITS)
 .PHONY: compiler-source compiler-source-check compiler-source-membership compiler-metadata
+.PHONY: oracle-source oracle-source-check oracle-source-membership
 compiler-source-membership:
 	@set -eu; \
 	  work=$$(mktemp -d /tmp/herbert-source-check.XXXXXXXX); \
@@ -371,6 +378,38 @@ compiler-source: compiler-source-membership
 	    printf 'Assembled compiler; previous source retained in %s.\n' "$$work"; \
 	  else printf 'Assembled new compiler source; no previous file existed.\n'; fi; \
 	  printf 'Qualify and reseed after substantive changes.\n'
+
+oracle-source-membership:
+	@set -eu; \
+	  work=$$(mktemp -d /tmp/herbert-oracle-check.XXXXXXXX); \
+	  printf '%s\n' $(ORACLE_UNITS) | LC_ALL=C sort > "$$work/declared"; \
+	  find stack/i386_oracle \( -name '*.herb' -o -type l \) | LC_ALL=C sort > "$$work/present"; \
+	  if ! cmp -s "$$work/declared" "$$work/present"; then \
+	    printf 'Oracle unit membership differs (missing, duplicate or unlisted unit); inspect: %s\n' "$$work" >&2; exit 1; \
+	  fi; \
+	  for unit in $(ORACLE_UNITS); do \
+	    if test ! -f "$$unit" || test -L "$$unit"; then \
+	      printf 'Oracle unit must be a regular non-symlink file: %s; evidence: %s\n' "$$unit" "$$work" >&2; exit 1; \
+	    fi; \
+	  done; \
+	  rm -- "$$work/declared" "$$work/present"; rmdir "$$work"
+
+oracle-source-check: oracle-source-membership compiler-source-membership
+	@set -eu; \
+	  combined=$$(mktemp /tmp/herbert-oracle-check.XXXXXXXX); \
+	  cat $(ORACLE_SOURCES) > "$$combined"; \
+	  if ! cmp -s "$$combined" stack/i386_oracle_fragment.herb; then \
+	    printf 'Oracle composition differs from its units; run make oracle-source. Candidate: %s\n' "$$combined" >&2; exit 1; \
+	  fi; \
+	  rm -- "$$combined"; \
+	  printf 'PASS: i386 oracle source composition is byte-exact\n'
+
+oracle-source: oracle-source-membership compiler-source-membership
+	@set -eu; \
+	  cat $(ORACLE_SOURCES) > stack/.i386_oracle_fragment.tmp; \
+	  chmod 644 stack/.i386_oracle_fragment.tmp; \
+	  mv -T -- stack/.i386_oracle_fragment.tmp stack/i386_oracle_fragment.herb; \
+	  printf 'Assembled stack/i386_oracle_fragment.herb.\n'
 
 compiler-metadata:
 	@python3 bootstrap/tests/check_compiler_metadata.py

@@ -75,6 +75,11 @@ source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source nat
 tmp="$(mktemp -d)"
 trap 'kernel_test_cleanup "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
+# out_inputmode feeds multiboot32-input, an i386 route the oracle compiler builds.
+production_compiler="$NATIVE_CODEGEN_COMPILER"
+native_codegen_ensure_i386_compiler "$tmp/i386" || exit 1
+i386_compiler="$NATIVE_CODEGEN_COMPILER"
+export NATIVE_CODEGEN_COMPILER="$production_compiler"
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 source "$script_dir/bochs_f2_harness.sh" || { echo "FAIL: cannot source Bochs harness" >&2; exit 1; }
@@ -304,11 +309,11 @@ menuentry "c" {
     return 1
 }
 
-reject_probe() { # label "<full source incl funcs>" [emitline]
-    local label="$1" src="$2" emitline="${3:--- emit: multiboot32-long64}"
+reject_probe() { # label "<full source incl funcs>" [emitline] [compiler]
+    local label="$1" src="$2" emitline="${3:--- emit: multiboot32-long64}" compiler="${4:-$NATIVE_CODEGEN_COMPILER}"
     local cdir="$tmp/rej.$label.d"; kernel_test_cleanup "$cdir"; mkdir -p "$cdir"
     { printf -- '%s\n' "$emitline"; printf '%b\n' "$src"; } > "$cdir/r.herb"
-    ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < r.herb >/dev/null 2>/dev/null )
+    ( cd "$cdir" && "$compiler" < r.herb >/dev/null 2>/dev/null )
     if [[ -f "$cdir/a.out" ]]; then fail_test "$label reject: compiled but should be out-of-subset"; return 1; fi
     pass=$((pass + 1)); return 0
 }
@@ -416,7 +421,7 @@ fi
 reject_probe out_singlefunc 'func main(): return output_byte(65) * 4294967296 end'
 accept_twin  out_singlefunc_twin 'func main(): return 65 * 4294967296 end'
 reject_probe out_linuxdefault 'func main(): return output_byte(65) end' ''
-reject_probe out_inputmode 'func main(): return output_byte(65) end' '-- emit: multiboot32-input'
+reject_probe out_inputmode 'func main(): return output_byte(65) end' '-- emit: multiboot32-input' "$i386_compiler"
 reject_probe out_arity0 'func h(): return output_byte() end\nfunc main(): return h() * 4294967296 end'
 reject_probe out_arity2 'func h(): return output_byte(1, 2) end\nfunc main(): return h() * 4294967296 end'
 accept_twin  out_arity_twin 'func h(): return output_byte(3) end\nfunc main(): return h() * 4294967296 end'

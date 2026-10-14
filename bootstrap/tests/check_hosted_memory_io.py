@@ -55,12 +55,12 @@ def main():
     compiler.chmod(0o700)
     passed = 0
 
-    def compile_probe(label, source, reject_code=None):
+    def compile_probe(label, source, reject_code=None, with_compiler=None):
         nonlocal passed
         directory = work / label
         directory.mkdir()
         (directory / "source.herb").write_text(source)
-        result = subprocess.run([str(compiler)], input=source.encode(), cwd=directory,
+        result = subprocess.run([str(with_compiler or compiler)], input=source.encode(), cwd=directory,
                                 capture_output=True, timeout=30)
         (directory / "compiler.stdout").write_bytes(result.stdout)
         (directory / "compiler.stderr").write_bytes(result.stderr)
@@ -165,11 +165,21 @@ end
             compile_probe(name + "-void-use", f"func main():\n    do {name}({', '.join(valid_args)})\n    return 0\nend\n", 404)
             compile_probe(name + "-reserved", f"func {name}():\n    return 0\nend\nfunc main():\n    return 0\nend\n", 429)
 
-        for target, code in [("multiboot32", 451), ("multiboot32-long64", 502)]:
+        # The i386 routes are built by the oracle compiler, which this seed
+        # compiles from stack/i386_oracle_fragment.herb.
+        oracle_dir = work / "i386-oracle"
+        oracle_dir.mkdir()
+        with open(ROOT / "stack/i386_oracle_fragment.herb", "rb") as oracle_source:
+            built = subprocess.run([str(compiler)], stdin=oracle_source, cwd=oracle_dir,
+                                   capture_output=True, timeout=300)
+        require(process_result(built), (0, b"0\n", b""), "i386 oracle build")
+        oracle = oracle_dir / "a.out"
+        oracle.chmod(0o700)
+        for target, code, built_by in [("multiboot32", 451, oracle), ("multiboot32-long64", 502, None)]:
             # These targets have independent whitelist/depth paths. The scalar
             # syscall alone excludes rejection merely due to new_buffer.
             source = f"-- emit: {target}\nfunc main():\n    return linux_syscall6(39, 0, 0, 0, 0, 0, 0)\nend\n"
-            compile_probe("reject-target-" + target, source, code)
+            compile_probe("reject-target-" + target, source, code, built_by)
         compile_probe("reject-target-module-chiefturbo", """-- emit: module-chiefturbo
 func main():
     let input = sys_read()
@@ -177,7 +187,7 @@ func main():
     let read = bufget(bufbase(), 0)
     return linux_syscall6(39, 0, 0, 0, 0, 0, 0)
 end
-""", 595)
+""", 595, oracle)
 
         sustained = compile_probe("sustained-reuse", FILL + """func update(b, delay, i):
     if i == 2000000:

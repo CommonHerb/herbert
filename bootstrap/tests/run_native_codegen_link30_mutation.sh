@@ -22,7 +22,7 @@ unset CDPATH
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
-backend="$repo_root/stack/native_compile_fragment.herb"
+backend="$repo_root/stack/i386_oracle_fragment.herb"
 feeder="$script_dir/kernel_input_feed.py"
 source "$script_dir/native_codegen_oracle.sh" || { echo "FAIL: cannot source native-codegen oracle" >&2; exit 1; }
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
@@ -34,7 +34,7 @@ if ! have_qemu; then
 fi
 
 work="$(mktemp -d)"; trap 'kernel_test_cleanup "$work"' EXIT
-native_codegen_ensure_compiler "$work/gen1" || exit 1
+native_codegen_ensure_i386_compiler "$work/gen1" || exit 1
 fail=0; fail_test() { echo "FAIL: link30 mutation ($1)"; fail=$((fail + 1)); }
 
 # compile f3_inc (return input_byte()+7).

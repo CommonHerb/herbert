@@ -21,7 +21,7 @@ git rev-parse HEAD > "$evidence/GIT-HEAD.txt" || exit 1
 git status --short > "$evidence/GIT-STATUS.txt" || exit 1
 git ls-files --others --exclude-standard -z -- bootstrap stack tools | xargs -0 -r sha256sum > "$evidence/UNTRACKED-SHA256.txt" || exit 1
 git diff --binary HEAD > "$evidence/WORKTREE.patch" || exit 1
-sha256sum bootstrap/seed/gen1.seed stack/native_compile_fragment.herb > "$evidence/COMPILER-SHA256.txt" || exit 1
+sha256sum bootstrap/seed/gen1.seed stack/native_compile_fragment.herb stack/i386_oracle_fragment.herb > "$evidence/COMPILER-SHA256.txt" || exit 1
 {
     date -u +%Y-%m-%dT%H:%M:%SZ
     uname -a

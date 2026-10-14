@@ -66,7 +66,7 @@ unset CDPATH
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd)" || exit 1
 repo_root="$(cd "$script_dir/../.." && pwd)"
 HERBERT="${HERBERT:-$repo_root/build/herbert}"
-backend="$repo_root/stack/native_compile_fragment.herb"
+backend="$repo_root/stack/i386_oracle_fragment.herb"
 
 REQUIRE_EMU="${KERNEL_CODEGEN_REQUIRE_EMU:-0}"
 BOCHS_PROBES="${L3_BOCHS_PROBES:-idt_then idt_else}"
@@ -85,7 +85,7 @@ tmp="$(mktemp -d)"
 trap 'kernel_test_cleanup "$tmp"' EXIT
 # Reuse only the gen-1 mint (C out of the run path; the native compiler emits the
 # image). L3 is graded on the dual-substrate oracle, not against C.
-native_codegen_ensure_compiler "$tmp/gen1" || exit 1
+native_codegen_ensure_i386_compiler "$tmp/gen1" || exit 1
 pass=0; fail=0
 fail_test() { echo "FAIL: stack/native_compile_fragment.herb ($1)"; fail=$((fail + 1)); }
 

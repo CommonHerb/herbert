@@ -24,6 +24,11 @@ native_codegen_oracle_begin rejects || exit 1
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
+# Kernel-route messages on the i386 routes come from the oracle compiler.
+production_compiler="$NATIVE_CODEGEN_COMPILER"
+native_codegen_ensure_i386_compiler "$tmp/i386" || exit 1
+i386_compiler="$NATIVE_CODEGEN_COMPILER"
+export NATIVE_CODEGEN_COMPILER="$production_compiler"
 
 pass=0
 fail=0
@@ -68,10 +73,11 @@ check_kernel_reject_message() {
     local code="$2"
     local probe="$3"
     local expected="$4"
+    local compiler="${5:-$NATIVE_CODEGEN_COMPILER}"
     total=$((total + 1))
     local out="$tmp/kernel_${label}.out"
     local err="$tmp/kernel_${label}.err"
-    if native_codegen_expect_rejection "$NATIVE_CODEGEN_COMPILER" "$probe" "$out" "$err" "ERR $code" \
+    if native_codegen_expect_rejection "$compiler" "$probe" "$out" "$err" "ERR $code" \
         && [[ "$(cat "$err")" == "$expected" ]] && ! grep -q "unknown error" "$err"; then
         pass=$((pass + 1))
     else
@@ -792,17 +798,24 @@ end
 HERB
 
 check_kernel_reject_message mb32_calls_other 450 "$tmp/k_mb32_calls_other.herb" \
-    "program: native-subset: multiboot32: main may not call other functions (ERR 450)"
+    "program: native-subset: multiboot32: main may not call other functions (ERR 450)" "$i386_compiler"
 check_kernel_reject_message mb32_too_many_locals 453 "$tmp/k_mb32_too_many_locals.herb" \
-    "program: native-subset: multiboot32: too many locals (max 31) (ERR 453)"
+    "program: native-subset: multiboot32: too many locals (max 31) (ERR 453)" "$i386_compiler"
 check_kernel_reject_message input_calls_other 506 "$tmp/k_input_calls_other.herb" \
-    "program: native-subset: multiboot32-input: main may not call other functions (ERR 506)"
+    "program: native-subset: multiboot32-input: main may not call other functions (ERR 506)" "$i386_compiler"
 check_kernel_reject_message input_no_read 508 "$tmp/k_input_no_read.herb" \
-    "program: native-subset: multiboot32-input: main must read input_byte() exactly once (ERR 508)"
+    "program: native-subset: multiboot32-input: main must read input_byte() exactly once (ERR 508)" "$i386_compiler"
 check_kernel_reject_message long64_too_many_locals 504 "$tmp/k_long64_too_many_locals.herb" \
     "program: native-subset: multiboot32-long64: too many locals (max 15) (ERR 504)"
 check_kernel_reject_message long64_helper_string 605 "$tmp/k_long64_helper_string.herb" \
     "program: native-subset: multiboot32-long64: function body not in the call+recursion subset (ERR 605)"
+
+# The production compiler rejects the 45 i386 routes by name; the oracle compiler builds them.
+for route in multiboot32 multiboot32-cleave module-mmj; do
+    printf -- '-- emit: %s\nfunc main():\n    return 7\nend\n' "$route" > "$tmp/k_moved_$route.herb"
+    check_kernel_reject_message "moved_$route" 443 "$tmp/k_moved_$route.herb" \
+        "program: native-subset: emit route '$route' is built by the i386 oracle compiler (stack/i386_oracle_fragment.herb), not the production compiler (ERR 443)"
+done
 
 echo ""
 if [[ $fail -ne 0 ]]; then
@@ -812,5 +825,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), kanawha partial-aggregate single-diagnostic rails, kernel-route messages, plus frontier clogger limits)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), kanawha partial-aggregate single-diagnostic rails, kernel-route messages, i386 routes rejected by name, plus frontier clogger limits)"
 exit 0

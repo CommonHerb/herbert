@@ -1,0 +1,193 @@
+
+-- The i386 oracle compiler: the 45 frozen i386 routes, then everything the
+-- production compiler does.
+func main():
+    let incoming = stdin_read()
+    if incoming.0 != 0:
+        let message = diagnostic_with_payload("compiler: stdin read failed (errno ", int_to_str(incoming.0), ")\n")
+        let reported = stderr_write(message)
+        do process_exit(1)
+    end
+    let source = incoming.1
+    if nc_is_multiboot32_long(source):
+        let lm = nc_emit_multiboot32_long_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_bluefield(source):
+        let bf = nc_emit_multiboot32_bluefield_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_contigo(source):
+        let co = nc_emit_multiboot32_contigo_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_cloggard(source):
+        let cg = nc_emit_multiboot32_cloggard_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_rizzing(source):
+        let rz = nc_emit_multiboot32_rizzing_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tick(source):
+        let tk = nc_emit_multiboot32_tick_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_timer(source):
+        let tm = nc_emit_multiboot32_timer_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_demand(source):
+        let dm = nc_emit_multiboot32_demand_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_store(source):
+        let st = nc_emit_multiboot32_store_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_page(source):
+        let pg = nc_emit_multiboot32_page_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_idt(source):
+        let z = nc_emit_multiboot32_idt_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_trikon(source):
+        let tr = nc_emit_multiboot32_trikon_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_nokta(source):
+        let nk = nc_emit_multiboot32_nokta_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_sitopia(source):
+        let si = nc_emit_multiboot32_sitopia_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_geeking(source):
+        let gk = nc_emit_multiboot32_geeking_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_holler(source):
+        let hk = nc_emit_multiboot32_holler_program(source)
+        return 0
+    end
+    if nc_is_module_holler(source):
+        let hm = nc_emit_module_holler_program(source)
+        return 0
+    end
+    if nc_is_module_mmj(source):
+        let mj = nc_emit_module_mmj_program(source)
+        return 0
+    end
+    if nc_is_module_chiefturbo(source):
+        let ct = nc_emit_module_chiefturbo_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_mumbani(source):
+        let mbk = nc_emit_multiboot32_mumbani_program(source)
+        return 0
+    end
+    if nc_is_module_mumbani(source):
+        let mbm = nc_emit_module_mumbani_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tandem(source):
+        let tpk = nc_emit_multiboot32_tandem_program(source)
+        return 0
+    end
+    if nc_is_module_tandem(source):
+        let tpm = nc_emit_module_tandem_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tickover(source):
+        let tvk = nc_emit_multiboot32_tickover_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_rollcall(source):
+        let rck = nc_emit_multiboot32_rollcall_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tenement(source):
+        let tck = nc_emit_multiboot32_tenement_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_homestead(source):
+        let hsk = nc_emit_multiboot32_homestead_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_furlough(source):
+        let fsk = nc_emit_multiboot32_furlough_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tessera(source):
+        let tsk = nc_emit_multiboot32_tessera_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_cleave(source):
+        let clk = nc_emit_multiboot32_cleave_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_lethe(source):
+        let lhk = nc_emit_multiboot32_lethe_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_platter(source):
+        let plk = nc_emit_multiboot32_platter_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_durable(source):
+        let dbk = nc_emit_multiboot32_durable_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_cairn(source):
+        let crk = nc_emit_multiboot32_cairn_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_larder(source):
+        let lrk = nc_emit_multiboot32_larder_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_growheap(source):
+        let ghk = nc_emit_multiboot32_growheap_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_delete(source):
+        let dlk = nc_emit_multiboot32_delete_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_backfill(source):
+        let bfk = nc_emit_multiboot32_backfill_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_tract(source):
+        let trk = nc_emit_multiboot32_tract_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_highwater(source):
+        let hwk = nc_emit_multiboot32_highwater_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_coalgate(source):
+        let cg = nc_emit_multiboot32_coalgate_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_ouroboros(source):
+        let ob = nc_emit_multiboot32_ouroboros_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_lodger(source):
+        let lg = nc_emit_multiboot32_lodger_program(source)
+        return 0
+    end
+    if nc_is_multiboot32_input(source):
+        let mi = nc_emit_multiboot32_input_program(source)
+        return 0
+    end
+    if nc_is_multiboot32(source):
+        let mb_done = nc_emit_multiboot32_program(source)
+        return 0
+    end
+    return nc_drive(source)
+end
