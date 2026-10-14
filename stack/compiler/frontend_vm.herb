@@ -1005,8 +1005,13 @@ func parse_funcs(tokens, pos, pool, kids, recs):
     if pos >= count(tokens):
         return pos
     end
+    if err_is_ref_record_head(tokens, pos):
+        let rf = parse_recorddef(tokens, pos + 1, pool, "ref-record")
+        do add(recs, int_to_str(rf.0))
+        return parse_funcs(tokens, rf.1, pool, kids, recs)
+    end
     if err_is_record_head(tokens, pos):
-        let rr = parse_recorddef(tokens, pos, pool)
+        let rr = parse_recorddef(tokens, pos, pool, "record")
         do add(recs, int_to_str(rr.0))
         return parse_funcs(tokens, rr.1, pool, kids, recs)
     end
@@ -1015,7 +1020,8 @@ func parse_funcs(tokens, pos, pool, kids, recs):
     return parse_funcs(tokens, r.1, pool, kids, recs)
 end
 
--- record NAME: FIELD: TYPE ... end -> ("record", [NAME, FIELD...], [type...])
+-- record NAME: FIELD: TYPE ... end -> ("record", [NAME, FIELD...], [type...]);
+-- ref record NAME: ... end is the same node tagged "ref-record".
 func parse_record_fields(tokens, pos, pool, atoms, kids):
     if tok_is_ident_text(tokens, pos, "end"):
         return pos + 1
@@ -1026,13 +1032,17 @@ func parse_record_fields(tokens, pos, pool, atoms, kids):
     return parse_record_fields(tokens, r.1, pool, atoms, kids)
 end
 
-func parse_recorddef(tokens, pos, pool):
+func parse_recorddef(tokens, pos, pool, tag):
     let line = get(tokens, pos).2
     let atoms = new_array(string)
     do add(atoms, get(tokens, pos + 1).1)
     let kids = new_array(int)
     pos = parse_record_fields(tokens, pos + 3, pool, atoms, kids)
-    return (add_node(pool, "record", atoms, kids, line), pos)
+    return (add_node(pool, tag, atoms, kids, line), pos)
+end
+
+func is_record_decl_tag(tag):
+    return equal(tag, "record") or equal(tag, "ref-record")
 end
 
 -- Constructors parse as calls. In a program that declares records, every call
@@ -1365,6 +1375,15 @@ end
 
 func op_new_array():
     return 28
+end
+
+-- Ref records: add leaving the array on the stack, and a field store.
+func op_arr_add_keep():
+    return 63
+end
+
+func op_set_field():
+    return 64
 end
 
 func op_get():
@@ -1963,13 +1982,27 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         return emit_instr(ir, op_make_tuple(), count(kids), 0)
     end
     if equal(tag, "record-new"):
+        let decl_idx = nc_record_decl_scan(nodes, get(atoms, 0), 0)
+        if equal(get(nodes, decl_idx).0, "ref-record"):
+            -- A ref record is a one-element array of the tuple of its fields.
+            let rt = nc_record_type(type_pool, nodes, decl_idx, new_array(int))
+            ir = emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_erase(type_pool, rt.1))
+            ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+            ir = emit_instr(ir, op_make_tuple(), count(kids), 0)
+            return emit_instr(ir, op_arr_add_keep(), 0, 0)
+        end
         ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, op_make_tuple(), count(kids), 0)
     end
     if equal(tag, "dot"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         if not is_digit(index(get(atoms, 0), 0)):
-            return emit_instr(ir, op_tuple_get(), lowered_field(poly, nodes, caller_inst_idx, node_idx, node).2, 0)
+            let shape = lowered_field(poly, nodes, caller_inst_idx, node_idx, node)
+            if equal(get(nodes, shape.4).0, "ref-record"):
+                ir = emit_instr(ir, op_push_int(), 0, 0)
+                ir = emit_instr_line(ir, op_get(), 0, 0, node.3)
+            end
+            return emit_instr(ir, op_tuple_get(), shape.2, 0)
         end
         return emit_instr(ir, op_tuple_get(), parse_decimal(get(atoms, 0)), 0)
     end
@@ -2100,20 +2133,20 @@ func emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_ins
     return env
 end
 
--- (position, field count) of FIELD in the one record that declares it, or
--- (-1, 0) when no record or more than one does.
+-- (position, field count, declaration) of FIELD in the one record that
+-- declares it, or (-1, 0, 0) when no record or more than one does.
 func unique_record_field_loop(nodes, field, i, found):
     if i >= count(nodes):
         return found
     end
     let node = get(nodes, i)
-    if equal(node.0, "record"):
+    if is_record_decl_tag(node.0):
         let fi = nc_record_field_index(nodes, i, field)
         if fi != 0 - 1:
             if found.0 != 0 - 1:
-                return (0 - 1, 0)
+                return (0 - 1, 0, 0)
             end
-            found = (fi, count(node.1) - 1)
+            found = (fi, count(node.1) - 1, i)
         end
     end
     return unique_record_field_loop(nodes, field, i + 1, found)
@@ -2127,12 +2160,12 @@ func lowered_field(poly, nodes, inst_idx, node_idx, node):
     let i = nc_poly_field_find_loop(poly.3, inst_idx, node_idx, 0)
     if i == 0 - 1:
         let field = get(node.1, count(node.1) - 1)
-        let u = unique_record_field_loop(nodes, field, 0, (0 - 1, 0))
+        let u = unique_record_field_loop(nodes, field, 0, (0 - 1, 0, 0))
         if u.0 == 0 - 1:
             let failed = nc_fail(446, node.3, field)
-            return (inst_idx, node_idx, 0, 0)
+            return (inst_idx, node_idx, 0, 0, 0)
         end
-        return (inst_idx, node_idx, u.0, u.1)
+        return (inst_idx, node_idx, u.0, u.1, u.2)
     end
     return get(poly.3, i)
 end
@@ -2169,6 +2202,14 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         -- The same code as x = (x.0, ..., e, ..., x.n-1) for a tuple.
         let shape = lowered_field(poly, nodes, caller_inst_idx, stmt_idx, stmt)
         let slot = env_lookup(env, get(atoms, 0))
+        if equal(get(nodes, shape.4).0, "ref-record"):
+            -- In place: the field's words go into the record's one element.
+            let fields = nc_type_children(type_pool, nc_record_type(type_pool, nodes, shape.4, new_array(int)).1)
+            ir = emit_instr(ir, op_load_local(), slot, 0)
+            ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+            ir = emit_instr(ir, op_set_field(), nc_type_width_tuple(type_pool, fields, 0, shape.2, 0), nc_type_width(type_pool, get(fields, shape.2)))
+            return env
+        end
         ir = emit_field_update(shape.2, shape.3, 0, slot, get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_instr(ir, op_make_tuple(), shape.3, 0)
         ir = emit_instr(ir, op_store_local(), slot, 0)
@@ -3081,6 +3122,13 @@ func err_parse_program_loop(tokens, pos, ctx):
     if pos >= count(tokens):
         return err_parse_ok(pos)
     end
+    if err_is_ref_record_head(tokens, pos):
+        let rf = err_parse_record(tokens, pos + 1, ctx)
+        if rf.0 == err_err_tag():
+            return rf
+        end
+        return err_parse_program_loop(tokens, rf.2, ctx)
+    end
     if err_is_record_head(tokens, pos):
         let rr = err_parse_record(tokens, pos, ctx)
         if rr.0 == err_err_tag():
@@ -3115,9 +3163,17 @@ end
 -- Only a declaration at the top level counts: the scan tracks block depth
 -- (func, if and a record head open a block, end closes one), so the same
 -- tokens inside a function body leave the program record-free.
+func err_is_ref_record_head(tokens, pos):
+    return tok_is_ident_text(tokens, pos, "ref") and err_is_record_head(tokens, pos + 1)
+end
+
 func err_record_names_scan(tokens, pos, names, depth):
     if pos >= count(tokens):
         return names
+    end
+    if depth == 0 and err_is_ref_record_head(tokens, pos):
+        do add(names, get(tokens, pos + 2).1)
+        return err_record_names_scan(tokens, pos + 4, names, 1)
     end
     if depth == 0 and err_is_record_head(tokens, pos):
         do add(names, get(tokens, pos + 1).1)

@@ -584,6 +584,76 @@ func nc_arr_add_store_len(width, k, acc):
     return nc_arr_add_store_len(width, k - 1, acc + 1 + nc_disp_len_rsi(nc_mul8(k)))
 end
 
+-- SET_FIELD (op 64): [array, w value words] -> stores the words into the
+-- array's element at word offset off, then drops the array. Emitted only for a
+-- ref record, whose one element exists by construction, so there is no check.
+--   mov rax, [rsp + 8w]; mov rax, [rax + 16]; (pop rcx; mov [rax + 8(off + j)], rcx) for j = w-1..0; add rsp, 8
+func nc_emit_rax_field_store(buf, mag):
+    do append(buf, 72)
+    do append(buf, 137)
+    if mag <= 127:
+        do append(buf, 72)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 136)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_set_field_stores(buf, off, j):
+    if j == 0 - 1:
+        return buf
+    end
+    do append(buf, 89)
+    buf = nc_emit_rax_field_store(buf, nc_mul8(off + j))
+    return nc_emit_set_field_stores(buf, off, j - 1)
+end
+
+func nc_emit_set_field(buf, off, w):
+    do append(buf, 72)
+    do append(buf, 139)
+    let mag = nc_mul8(w)
+    if mag <= 127:
+        do append(buf, 68)
+        do append(buf, 36)
+        do append(buf, mag)
+    else:
+        do append(buf, 132)
+        do append(buf, 36)
+        buf = nc_append_le32(buf, mag)
+    end
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 64)
+    do append(buf, 16)
+    buf = nc_emit_set_field_stores(buf, off, w - 1)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    return buf
+end
+
+func nc_set_field_store_len(off, j, acc):
+    if j == 0 - 1:
+        return acc
+    end
+    let mag = nc_mul8(off + j)
+    let one = 7
+    if mag <= 127:
+        one = 4
+    end
+    return nc_set_field_store_len(off, j - 1, acc + 1 + one)
+end
+
+func nc_set_field_len(off, w):
+    let head = 8
+    if nc_mul8(w) <= 127:
+        head = 5
+    end
+    return head + 4 + nc_set_field_store_len(off, w - 1, 0) + 4
+end
+
 func nc_arr_add_len(width):
     return nc_disp_len_rsp_r8(nc_mul8(width)) + 177 + nc_arr_add_store_len(width, width - 1, 0)
 end
@@ -677,6 +747,12 @@ func nc_group(code, i, n, fn, funcs, meta, metas):
     end
     if op == 32:
         return (nc_arr_add_len(get(meta.14, i).1), i + 1)
+    end
+    if op == 63:
+        return (nc_arr_add_len(get(meta.14, i).1) - 4, i + 1)
+    end
+    if op == 64:
+        return (nc_set_field_len(instr.1, instr.2), i + 1)
     end
     if op == 20:
         let cm = get(meta.11, i)
@@ -3811,6 +3887,15 @@ func nc_emit_arr_add_stores(buf, k):
 end
 
 func nc_emit_arr_add(buf, width):
+    return nc_emit_arr_add_any(buf, width, 0)
+end
+
+-- ADD_KEEP (op 63) builds a ref record: add, leaving the array on the stack.
+func nc_emit_arr_add_keep(buf, width):
+    return nc_emit_arr_add_any(buf, width, 1)
+end
+
+func nc_emit_arr_add_any(buf, width, keep):
     buf = nc_emit_rsp_load_r8(buf, nc_mul8(width))
     do append(buf, 77)
     do append(buf, 139)
@@ -3900,10 +3985,12 @@ func nc_emit_arr_add(buf, width):
     do append(buf, 112)
     do append(buf, 16)
     buf = nc_emit_arr_add_stores(buf, width - 1)
-    do append(buf, 72)
-    do append(buf, 131)
-    do append(buf, 196)
-    do append(buf, 8)
+    if keep == 0:
+        do append(buf, 72)
+        do append(buf, 131)
+        do append(buf, 196)
+        do append(buf, 8)
+    end
     do append(buf, 73)
     do append(buf, 255)
     do append(buf, 193)
@@ -4326,6 +4413,10 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         buf = nc_emit_buf_append(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
     elif op == 32:
         buf = nc_emit_arr_add(buf, get(meta.14, i).1)
+    elif op == 63:
+        buf = nc_emit_arr_add_keep(buf, get(meta.14, i).1)
+    elif op == 64:
+        buf = nc_emit_set_field(buf, a, instr.2)
     elif op == 33:
         buf = nc_emit_clogger(buf)
     elif op == 34:

@@ -1005,8 +1005,13 @@ func parse_funcs(tokens, pos, pool, kids, recs):
     if pos >= count(tokens):
         return pos
     end
+    if err_is_ref_record_head(tokens, pos):
+        let rf = parse_recorddef(tokens, pos + 1, pool, "ref-record")
+        do add(recs, int_to_str(rf.0))
+        return parse_funcs(tokens, rf.1, pool, kids, recs)
+    end
     if err_is_record_head(tokens, pos):
-        let rr = parse_recorddef(tokens, pos, pool)
+        let rr = parse_recorddef(tokens, pos, pool, "record")
         do add(recs, int_to_str(rr.0))
         return parse_funcs(tokens, rr.1, pool, kids, recs)
     end
@@ -1015,7 +1020,8 @@ func parse_funcs(tokens, pos, pool, kids, recs):
     return parse_funcs(tokens, r.1, pool, kids, recs)
 end
 
--- record NAME: FIELD: TYPE ... end -> ("record", [NAME, FIELD...], [type...])
+-- record NAME: FIELD: TYPE ... end -> ("record", [NAME, FIELD...], [type...]);
+-- ref record NAME: ... end is the same node tagged "ref-record".
 func parse_record_fields(tokens, pos, pool, atoms, kids):
     if tok_is_ident_text(tokens, pos, "end"):
         return pos + 1
@@ -1026,13 +1032,17 @@ func parse_record_fields(tokens, pos, pool, atoms, kids):
     return parse_record_fields(tokens, r.1, pool, atoms, kids)
 end
 
-func parse_recorddef(tokens, pos, pool):
+func parse_recorddef(tokens, pos, pool, tag):
     let line = get(tokens, pos).2
     let atoms = new_array(string)
     do add(atoms, get(tokens, pos + 1).1)
     let kids = new_array(int)
     pos = parse_record_fields(tokens, pos + 3, pool, atoms, kids)
-    return (add_node(pool, "record", atoms, kids, line), pos)
+    return (add_node(pool, tag, atoms, kids, line), pos)
+end
+
+func is_record_decl_tag(tag):
+    return equal(tag, "record") or equal(tag, "ref-record")
 end
 
 -- Constructors parse as calls. In a program that declares records, every call
@@ -1365,6 +1375,15 @@ end
 
 func op_new_array():
     return 28
+end
+
+-- Ref records: add leaving the array on the stack, and a field store.
+func op_arr_add_keep():
+    return 63
+end
+
+func op_set_field():
+    return 64
 end
 
 func op_get():
@@ -1963,13 +1982,27 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         return emit_instr(ir, op_make_tuple(), count(kids), 0)
     end
     if equal(tag, "record-new"):
+        let decl_idx = nc_record_decl_scan(nodes, get(atoms, 0), 0)
+        if equal(get(nodes, decl_idx).0, "ref-record"):
+            -- A ref record is a one-element array of the tuple of its fields.
+            let rt = nc_record_type(type_pool, nodes, decl_idx, new_array(int))
+            ir = emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_erase(type_pool, rt.1))
+            ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+            ir = emit_instr(ir, op_make_tuple(), count(kids), 0)
+            return emit_instr(ir, op_arr_add_keep(), 0, 0)
+        end
         ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr(ir, op_make_tuple(), count(kids), 0)
     end
     if equal(tag, "dot"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         if not is_digit(index(get(atoms, 0), 0)):
-            return emit_instr(ir, op_tuple_get(), lowered_field(poly, nodes, caller_inst_idx, node_idx, node).2, 0)
+            let shape = lowered_field(poly, nodes, caller_inst_idx, node_idx, node)
+            if equal(get(nodes, shape.4).0, "ref-record"):
+                ir = emit_instr(ir, op_push_int(), 0, 0)
+                ir = emit_instr_line(ir, op_get(), 0, 0, node.3)
+            end
+            return emit_instr(ir, op_tuple_get(), shape.2, 0)
         end
         return emit_instr(ir, op_tuple_get(), parse_decimal(get(atoms, 0)), 0)
     end
@@ -2100,20 +2133,20 @@ func emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_ins
     return env
 end
 
--- (position, field count) of FIELD in the one record that declares it, or
--- (-1, 0) when no record or more than one does.
+-- (position, field count, declaration) of FIELD in the one record that
+-- declares it, or (-1, 0, 0) when no record or more than one does.
 func unique_record_field_loop(nodes, field, i, found):
     if i >= count(nodes):
         return found
     end
     let node = get(nodes, i)
-    if equal(node.0, "record"):
+    if is_record_decl_tag(node.0):
         let fi = nc_record_field_index(nodes, i, field)
         if fi != 0 - 1:
             if found.0 != 0 - 1:
-                return (0 - 1, 0)
+                return (0 - 1, 0, 0)
             end
-            found = (fi, count(node.1) - 1)
+            found = (fi, count(node.1) - 1, i)
         end
     end
     return unique_record_field_loop(nodes, field, i + 1, found)
@@ -2127,12 +2160,12 @@ func lowered_field(poly, nodes, inst_idx, node_idx, node):
     let i = nc_poly_field_find_loop(poly.3, inst_idx, node_idx, 0)
     if i == 0 - 1:
         let field = get(node.1, count(node.1) - 1)
-        let u = unique_record_field_loop(nodes, field, 0, (0 - 1, 0))
+        let u = unique_record_field_loop(nodes, field, 0, (0 - 1, 0, 0))
         if u.0 == 0 - 1:
             let failed = nc_fail(446, node.3, field)
-            return (inst_idx, node_idx, 0, 0)
+            return (inst_idx, node_idx, 0, 0, 0)
         end
-        return (inst_idx, node_idx, u.0, u.1)
+        return (inst_idx, node_idx, u.0, u.1, u.2)
     end
     return get(poly.3, i)
 end
@@ -2169,6 +2202,14 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         -- The same code as x = (x.0, ..., e, ..., x.n-1) for a tuple.
         let shape = lowered_field(poly, nodes, caller_inst_idx, stmt_idx, stmt)
         let slot = env_lookup(env, get(atoms, 0))
+        if equal(get(nodes, shape.4).0, "ref-record"):
+            -- In place: the field's words go into the record's one element.
+            let fields = nc_type_children(type_pool, nc_record_type(type_pool, nodes, shape.4, new_array(int)).1)
+            ir = emit_instr(ir, op_load_local(), slot, 0)
+            ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+            ir = emit_instr(ir, op_set_field(), nc_type_width_tuple(type_pool, fields, 0, shape.2, 0), nc_type_width(type_pool, get(fields, shape.2)))
+            return env
+        end
         ir = emit_field_update(shape.2, shape.3, 0, slot, get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_instr(ir, op_make_tuple(), shape.3, 0)
         ir = emit_instr(ir, op_store_local(), slot, 0)
@@ -3081,6 +3122,13 @@ func err_parse_program_loop(tokens, pos, ctx):
     if pos >= count(tokens):
         return err_parse_ok(pos)
     end
+    if err_is_ref_record_head(tokens, pos):
+        let rf = err_parse_record(tokens, pos + 1, ctx)
+        if rf.0 == err_err_tag():
+            return rf
+        end
+        return err_parse_program_loop(tokens, rf.2, ctx)
+    end
     if err_is_record_head(tokens, pos):
         let rr = err_parse_record(tokens, pos, ctx)
         if rr.0 == err_err_tag():
@@ -3115,9 +3163,17 @@ end
 -- Only a declaration at the top level counts: the scan tracks block depth
 -- (func, if and a record head open a block, end closes one), so the same
 -- tokens inside a function body leave the program record-free.
+func err_is_ref_record_head(tokens, pos):
+    return tok_is_ident_text(tokens, pos, "ref") and err_is_record_head(tokens, pos + 1)
+end
+
 func err_record_names_scan(tokens, pos, names, depth):
     if pos >= count(tokens):
         return names
+    end
+    if depth == 0 and err_is_ref_record_head(tokens, pos):
+        do add(names, get(tokens, pos + 2).1)
+        return err_record_names_scan(tokens, pos + 4, names, 1)
     end
     if depth == 0 and err_is_record_head(tokens, pos):
         do add(names, get(tokens, pos + 1).1)
@@ -3558,11 +3614,29 @@ func nc_record_kind_base():
     return 1000
 end
 
+-- Value records are kinds 1000..1999; ref records (one heap word, fields
+-- updated in place) are 2000 plus the declaration's node index.
+func nc_ref_record_kind_base():
+    return 2000
+end
+
 func nc_type_is_record(pool, t):
+    let k = nc_type_kind(pool, t)
+    return k >= nc_record_kind_base() and k < nc_ref_record_kind_base()
+end
+
+func nc_type_is_ref_record(pool, t):
+    return nc_type_kind(pool, t) >= nc_ref_record_kind_base()
+end
+
+func nc_type_any_record(pool, t):
     return nc_type_kind(pool, t) >= nc_record_kind_base()
 end
 
 func nc_type_record_decl(pool, t):
+    if nc_type_is_ref_record(pool, t):
+        return nc_type_kind(pool, t) - nc_ref_record_kind_base()
+    end
     return nc_type_kind(pool, t) - nc_record_kind_base()
 end
 
@@ -3772,7 +3846,7 @@ func nc_type_width(pool, t):
     if t == nc_type_buffer():
         return 1
     end
-    if nc_type_is_array(pool, t):
+    if nc_type_is_array(pool, t) or nc_type_is_ref_record(pool, t):
         return 1
     end
     let kids = nc_type_tuple_children(pool, t)
@@ -4062,7 +4136,7 @@ func nc_record_decl_scan(nodes, name, i):
         return 0 - 1
     end
     let node = get(nodes, i)
-    if equal(node.0, "record") and equal(get(node.1, 0), name):
+    if is_record_decl_tag(node.0) and equal(get(node.1, 0), name):
         return i
     end
     return nc_record_decl_scan(nodes, name, i + 1)
@@ -4120,7 +4194,11 @@ func nc_record_type(pool, nodes, decl_idx, visiting):
     if fields.0 != 0:
         return (fields.0, 0)
     end
-    return (0, nc_type_intern_struct_loop(pool, nc_record_kind_base() + decl_idx, fields.1, 0, count(pool.0)))
+    let base = nc_record_kind_base()
+    if equal(decl.0, "ref-record"):
+        base = nc_ref_record_kind_base()
+    end
+    return (0, nc_type_intern_struct_loop(pool, base + decl_idx, fields.1, 0, count(pool.0)))
 end
 
 func nc_type_from_type_expr(pool, nodes, type_idx):
@@ -4505,7 +4583,7 @@ func nc_poly_seed_main(nodes, prog_idx):
     do add(instances, nc_poly_make_instance(main_lookup.1, empty, nc_type_unknown(), 0, 0, 0 - 1))
     do add(params, empty)
     do add(returns, nc_type_unknown())
-    return ((params, returns), (instances, call_targets, pushes, new_array((int, int, int, int))))
+    return ((params, returns), (instances, call_targets, pushes, new_array((int, int, int, int, int))))
 end
 
 func nc_poly_current_base(funcs, fn_idx):
@@ -5347,7 +5425,7 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
         if not is_digit(index(field, 0)):
             return nc_infer_field_read(pool, nodes, idx, node, field, r, funcs, fn_idx)
         end
-        if nc_type_is_record(pool, r.1):
+        if nc_type_any_record(pool, r.1):
             return (nc_infer_fail(pool, 445, node.3, ""), 0, r.2, r.3, r.4)
         end
         if not nc_type_is_tuple(pool, r.1):
@@ -5680,14 +5758,14 @@ func nc_rhs_never_returns(nodes, prog_idx, idx):
 end
 
 func nc_infer_field_read(pool, nodes, idx, node, field, r, funcs, fn_idx):
-    if not nc_type_is_record(pool, r.1):
+    if not nc_type_any_record(pool, r.1):
         return (nc_infer_fail(pool, 446, node.3, field), 0, r.2, r.3, r.4)
     end
     let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, r.1), field)
     if fi == 0 - 1:
         return (nc_infer_fail(pool, 444, node.3, field), 0, r.2, r.3, r.4)
     end
-    let noted = nc_poly_note_field(funcs, fn_idx, idx, fi, 0)
+    let noted = nc_poly_note_field(funcs, fn_idx, idx, fi, 0, nc_type_record_decl(pool, r.1))
     return (0, get(nc_type_children(pool, r.1), fi), r.2, r.3, r.4)
 end
 
@@ -5752,7 +5830,7 @@ func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, fu
     if li.2 == nc_type_unknown():
         return (0, r.2, r.3, r.4, 0)
     end
-    if not nc_type_is_record(pool, li.2):
+    if not nc_type_any_record(pool, li.2):
         return (nc_infer_fail(pool, 446, node.3, field), r.2, r.3, r.4, 0)
     end
     let fi = nc_record_field_index(nodes, nc_type_record_decl(pool, li.2), field)
@@ -5764,7 +5842,7 @@ func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, fu
     if ok != 0:
         return (ok, r.2, r.3, r.4, 0)
     end
-    let noted = nc_poly_note_field(funcs, fn_idx, stmt_idx, fi, count(children))
+    let noted = nc_poly_note_field(funcs, fn_idx, stmt_idx, fi, count(children), nc_type_record_decl(pool, li.2))
     return (0, r.2, r.3, r.4, 0)
 end
 
@@ -6167,7 +6245,11 @@ func nc_type_erase(pool, t):
     if nc_type_is_array(pool, t):
         return nc_type_intern_array(pool, nc_type_erase(pool, nc_type_array_elem(pool, t)))
     end
-    return nc_type_intern_tuple(pool, nc_type_erase_list(pool, nc_type_children(pool, t), 0, new_array(int)))
+    let fields = nc_type_intern_tuple(pool, nc_type_erase_list(pool, nc_type_children(pool, t), 0, new_array(int)))
+    if nc_type_is_ref_record(pool, t):
+        return nc_type_intern_array(pool, fields)
+    end
+    return fields
 end
 
 func nc_erase_param_lists(pool, lists, i, out):
@@ -6248,10 +6330,11 @@ func nc_poly_field_find_loop(fields, inst, node, i):
     return nc_poly_field_find_loop(fields, inst, node, i + 1)
 end
 
--- Field resolutions per instance: (instance, node, field index, field count).
-func nc_poly_note_field(poly, inst, node, field_index, field_count):
+-- Field resolutions per instance: (instance, node, field index, field count,
+-- the record's declaration node, whose tag says value or ref).
+func nc_poly_note_field(poly, inst, node, field_index, field_count, decl_idx):
     if nc_poly_field_find_loop(poly.3, inst, node, 0) == 0 - 1:
-        do add(poly.3, (inst, node, field_index, field_count))
+        do add(poly.3, (inst, node, field_index, field_count, decl_idx))
     end
     return 0
 end
@@ -6270,19 +6353,19 @@ func nc_verify_ast(nodes, prog_idx, pool):
     if mix_line > 0:
         let mix_instances = new_array((int, array(int), int, int, int, int))
         let mix_targets = new_array((int, int, int))
-        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int)), new_array((int, int, int, int))))
+        return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int)), new_array((int, int, int, int, int))))
     end
     let tbl = nc_table_check(nodes, prog_idx)
     if tbl != 0:
         let empty_instances = new_array((int, array(int), int, int, int, int))
         let empty_targets = new_array((int, int, int))
-        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets, new_array((int, int)), new_array((int, int, int, int))))
+        return (tbl, nc_sig_init(nodes, prog_idx), (empty_instances, empty_targets, new_array((int, int)), new_array((int, int, int, int, int))))
     end
     let rec_check = nc_records_check(pool, nodes, prog_idx, get(nodes, prog_idx).1, 0)
     if rec_check != 0:
         let rec_instances = new_array((int, array(int), int, int, int, int))
         let rec_targets = new_array((int, int, int))
-        return (rec_check, nc_sig_init(nodes, prog_idx), (rec_instances, rec_targets, new_array((int, int)), new_array((int, int, int, int))))
+        return (rec_check, nc_sig_init(nodes, prog_idx), (rec_instances, rec_targets, new_array((int, int)), new_array((int, int, int, int, int))))
     end
     -- Preserve successful inference and its instance/emission order. Only an
     -- ERR 430 after an unresolved scalar assignment needs a fresh inference.
@@ -6368,6 +6451,12 @@ func nc_opcode_name_for_diag(op):
     end
     if op == 62:
         return "BUFFER_LENGTH"
+    end
+    if op == 63:
+        return "ARR_ADD_KEEP"
+    end
+    if op == 64:
+        return "SET_FIELD"
     end
     if op == 57:
         return "BOOT_READ"
@@ -7020,6 +7109,41 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             return (ok, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         heap_entry = (3, elem_w, elem_t)
+        stack = arr.1
+    elif op == 63:
+        -- ARR_ADD_KEEP: add, leaving the array (a ref record) on the stack.
+        let val = nc_stack_pop(stack, 0)
+        if val.0 != 0:
+            return (val.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let arr = nc_stack_pop(val.1, 0)
+        if arr.0 != 0:
+            return (arr.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        if not nc_type_is_array(pool, arr.2):
+            return (nc_fail(435, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let elem_t = nc_type_array_elem(pool, arr.2)
+        let elem_w = nc_type_width(pool, elem_t)
+        let ok = nc_expect_array_elem(pool, val.2, elem_t, 0)
+        if ok != 0:
+            return (ok, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        heap_entry = (3, elem_w, elem_t)
+        stack = nc_stack_push(arr.1, arr.2)
+    elif op == 64:
+        -- SET_FIELD (offset, width): a ref record's field written in place.
+        let val = nc_stack_pop(stack, 0)
+        if val.0 != 0:
+            return (val.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let arr = nc_stack_pop(val.1, 0)
+        if arr.0 != 0:
+            return (arr.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        if not nc_type_is_array(pool, arr.2) or nc_type_width(pool, val.2) != instr.2:
+            return (nc_fail(435, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
         stack = arr.1
     elif op == 33:
         if fn_idx != main_idx:
@@ -7765,6 +7889,76 @@ func nc_arr_add_store_len(width, k, acc):
     return nc_arr_add_store_len(width, k - 1, acc + 1 + nc_disp_len_rsi(nc_mul8(k)))
 end
 
+-- SET_FIELD (op 64): [array, w value words] -> stores the words into the
+-- array's element at word offset off, then drops the array. Emitted only for a
+-- ref record, whose one element exists by construction, so there is no check.
+--   mov rax, [rsp + 8w]; mov rax, [rax + 16]; (pop rcx; mov [rax + 8(off + j)], rcx) for j = w-1..0; add rsp, 8
+func nc_emit_rax_field_store(buf, mag):
+    do append(buf, 72)
+    do append(buf, 137)
+    if mag <= 127:
+        do append(buf, 72)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 136)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_set_field_stores(buf, off, j):
+    if j == 0 - 1:
+        return buf
+    end
+    do append(buf, 89)
+    buf = nc_emit_rax_field_store(buf, nc_mul8(off + j))
+    return nc_emit_set_field_stores(buf, off, j - 1)
+end
+
+func nc_emit_set_field(buf, off, w):
+    do append(buf, 72)
+    do append(buf, 139)
+    let mag = nc_mul8(w)
+    if mag <= 127:
+        do append(buf, 68)
+        do append(buf, 36)
+        do append(buf, mag)
+    else:
+        do append(buf, 132)
+        do append(buf, 36)
+        buf = nc_append_le32(buf, mag)
+    end
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 64)
+    do append(buf, 16)
+    buf = nc_emit_set_field_stores(buf, off, w - 1)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 8)
+    return buf
+end
+
+func nc_set_field_store_len(off, j, acc):
+    if j == 0 - 1:
+        return acc
+    end
+    let mag = nc_mul8(off + j)
+    let one = 7
+    if mag <= 127:
+        one = 4
+    end
+    return nc_set_field_store_len(off, j - 1, acc + 1 + one)
+end
+
+func nc_set_field_len(off, w):
+    let head = 8
+    if nc_mul8(w) <= 127:
+        head = 5
+    end
+    return head + 4 + nc_set_field_store_len(off, w - 1, 0) + 4
+end
+
 func nc_arr_add_len(width):
     return nc_disp_len_rsp_r8(nc_mul8(width)) + 177 + nc_arr_add_store_len(width, width - 1, 0)
 end
@@ -7858,6 +8052,12 @@ func nc_group(code, i, n, fn, funcs, meta, metas):
     end
     if op == 32:
         return (nc_arr_add_len(get(meta.14, i).1), i + 1)
+    end
+    if op == 63:
+        return (nc_arr_add_len(get(meta.14, i).1) - 4, i + 1)
+    end
+    if op == 64:
+        return (nc_set_field_len(instr.1, instr.2), i + 1)
     end
     if op == 20:
         let cm = get(meta.11, i)
@@ -10992,6 +11192,15 @@ func nc_emit_arr_add_stores(buf, k):
 end
 
 func nc_emit_arr_add(buf, width):
+    return nc_emit_arr_add_any(buf, width, 0)
+end
+
+-- ADD_KEEP (op 63) builds a ref record: add, leaving the array on the stack.
+func nc_emit_arr_add_keep(buf, width):
+    return nc_emit_arr_add_any(buf, width, 1)
+end
+
+func nc_emit_arr_add_any(buf, width, keep):
     buf = nc_emit_rsp_load_r8(buf, nc_mul8(width))
     do append(buf, 77)
     do append(buf, 139)
@@ -11081,10 +11290,12 @@ func nc_emit_arr_add(buf, width):
     do append(buf, 112)
     do append(buf, 16)
     buf = nc_emit_arr_add_stores(buf, width - 1)
-    do append(buf, 72)
-    do append(buf, 131)
-    do append(buf, 196)
-    do append(buf, 8)
+    if keep == 0:
+        do append(buf, 72)
+        do append(buf, 131)
+        do append(buf, 196)
+        do append(buf, 8)
+    end
     do append(buf, 73)
     do append(buf, 255)
     do append(buf, 193)
@@ -11507,6 +11718,10 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         buf = nc_emit_buf_append(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
     elif op == 32:
         buf = nc_emit_arr_add(buf, get(meta.14, i).1)
+    elif op == 63:
+        buf = nc_emit_arr_add_keep(buf, get(meta.14, i).1)
+    elif op == 64:
+        buf = nc_emit_set_field(buf, a, instr.2)
     elif op == 33:
         buf = nc_emit_clogger(buf)
     elif op == 34:
