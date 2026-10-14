@@ -2094,6 +2094,12 @@ func nc_has_value_arity_guard(name):
     if equal(name, "boot_read"):
         return true
     end
+    if equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "bufbase"):
+        return true
+    end
+    if equal(name, "sys_write") or equal(name, "output_byte") or equal(name, "yield") or equal(name, "bufget") or equal(name, "bufset"):
+        return true
+    end
     if equal(name, "stderr_write") or equal(name, "stdin_read"):
         return true
     end

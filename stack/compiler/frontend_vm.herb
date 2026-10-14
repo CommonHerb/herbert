@@ -3473,6 +3473,9 @@ func err_value_builtin_arity(name):
     if equal(name, "bufset"):
         return 3
     end
+    if equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "bufbase"):
+        return 0
+    end
     return 0
 end
 
