@@ -49,7 +49,7 @@ Some inherited structural messages are imprecise: ERR 205 says `'do' must be fol
 
 ## 3. Grammar & primitives
 
-**The only function keyword is `func`. There is NO `fn`/`func` alternative and no `while/for/loop`.** 18 reserved words: `func let return do if elif else end and or not true false int bool string buffer array`.
+**The only function keyword is `func`. There is NO `fn`/`func` alternative and no `while/for/loop`.** 18 reserved words: `func let return do if elif else end and or not true false int bool string buffer array`. `record` is not reserved: it is recognized only as the first word of a top-level `record NAME:` declaration and is an ordinary name everywhere else.
 
 ```
 program := func*
@@ -76,7 +76,32 @@ The native compiler currently permits repeated `let` bindings in one scope and s
 
 **Integer model — 64-bit UNSIGNED, modular:** literals are decimal, unsigned, must fit in 64 bits (`ERR 103` otherwise). `+ - *` keep the low 64 bits (wrap): `18446744073709551615 + 1 == 0`. `/ %` are unsigned and **fault on a zero divisor**. Shifts mask the count with `& 63`. Comparisons are unsigned. There are no negatives and no floats.
 
-**Records = tuples (there are no named-field records).** `(a, b, c)` is a tuple; a single `(e)` is just grouping. Read fields positionally, `.0 .1 .2 …`, chainable (`outer.2.0`). A non-integer token after `.` is a structural `ERR 206`; an out-of-range literal or projection on a non-tuple is a native `ERR 431`.
+**Tuples.** `(a, b, c)` is a tuple; a single `(e)` is just grouping. Read fields positionally, `.0 .1 .2 …`, chainable (`outer.2.0`). A non-integer token after `.` is a structural `ERR 206` (in a program without records); an out-of-range literal or projection on a non-tuple is a native `ERR 431`.
+
+**Records (value records).** A top-level declaration names a record's fields and their types; the record is a value, laid out exactly as the tuple of its fields:
+
+```herbert
+record Point:
+    x: int
+    y: int
+end
+
+func main():
+    let p = Point(3, 4)
+    p.x = 7
+    return p.x * 10 + p.y
+end
+```
+**stdout:** `74`
+
+- Field types use the TYPE syntax below plus record names. A record has at least two fields, distinct names, and may not contain itself, directly or through other records; records may refer to records declared later.
+- `Point(e1, e2)` constructs, positionally, with exactly one argument per field (`ERR 420` otherwise) of the field's type (`ERR 430` otherwise).
+- `e.FIELD` reads a field and chains (`seg.stop.x`, `get(a, 0).y`). A record's fields are read by name: `p.0` is `ERR 445`. An unknown field is `ERR 444`; a field name on a value that is not a record is `ERR 446`.
+- `x.FIELD = e` on a local (or parameter) `x` rebinds `x` to a copy with that field replaced; callers and other copies do not change. One level only: `s.a.x = e` is structural `ERR 212`.
+- Records are nominal: a `Point` is not a `(int, int)` and not another record with the same fields (`ERR 430` on rebinding or mixing them). There is no `==` on records. A polymorphic function called with two different records compiles one copy for each.
+- `main` may return a record of renderable fields; it renders as the tuple it is, `(3, 4)`.
+- A record and a function, two records, or a record and a builtin may not share a name, and a record's field names are distinct (`ERR 447`, which names the problem); different records may reuse a field name. A malformed declaration is structural `ERR 213`. A record construction is not a statement: `do Point(1, 2)` is `ERR 448`.
+- Field syntax and record type names are available only in a program that declares a record; elsewhere they stay `ERR 206`, `ERR 211` and `ERR 212` as before. Records are not supported on the `multiboot32-long64` route (`ERR 449`).
 
 **Arrays / buffers / strings (the growable collections):**
 - `new_array(TYPE)` — the type arg is mandatory (`new_array()` = ERR 208). Grow with `do add(a, v)`; read `get(a, i)`; size `count(a)`.
@@ -84,7 +109,7 @@ The native compiler currently permits repeated `let` bindings in one scope and s
 - Strings: `length(s)`, `index(s, i)` (returns the byte), `equal(s1, s2)` (returns `bool`, rendered as `true`/`false`, not an integer). (`slice` is NOT in the subset → ERR 438; cut strings by building a buffer.)
 - Arrays and buffers are **reference values** — mutation through an alias/parameter is visible everywhere. The current hosted allocator does not reclaim discarded allocations during a run; bounded tail-call stack use does not imply bounded heap use. Avoid allocation-heavy unbounded loops.
 - Runtime `get` and `index` check bounds; `append` checks the byte is in `0..255`. A violation terminates the generated program with a located diagnostic on stderr. These runtime faults are separate from compile-time type/arity rejection.
-- **TYPE expressions** appear only inside `new_array(...)`: `int | bool | string | buffer | array(T) | (T, T, …)` (tuple type needs ≥2 elems; `(int)` alone = ERR 211).
+- **TYPE expressions** appear inside `new_array(...)` and in record fields: `int | bool | string | buffer | array(T) | (T, T, …)` or a declared record's name (tuple type needs ≥2 elems; `(int)` alone = ERR 211).
 
 **Builtins:**
 - **VALUE** (usable in expressions): `new_array(T)` `new_buffer()` `freeze(x)` `length(x)` `count(x)` `get(coll,i)` `index(str,i)` `equal(a,b)` `clogger()` `stdin_read()` `stderr_write(str)`.
