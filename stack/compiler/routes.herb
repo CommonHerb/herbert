@@ -212,7 +212,7 @@ func nc_drive(source):
         return 0
     end
     let metas = analyzed.1
-    let main_ret = get(metas, prog.2).1
+    let main_ret = get(metas, prog.2).ret
     -- link11/link12: if main returns a renderable AGGREGATE (int/bool/string/tuple,
     -- recursively; width 2..15), linearize it into a render plan carried through the
     -- entry layout/emit. An empty plan = the single-word int/bool (kringle) path.

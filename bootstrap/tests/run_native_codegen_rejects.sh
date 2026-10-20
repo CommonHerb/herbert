@@ -629,7 +629,7 @@ func main():
     let prog = lower_program(nodes, parsed.0, type_pool)
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
     let has_faultable = nc_prog_has_faultable(prog)
-    let main_ret = get(analyzed.1, prog.2).1
+    let main_ret = get(analyzed.1, prog.2).ret
     let main_rplan = nc_build_render_plan(type_pool, main_ret)
     let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable, main_rplan)
     let layouts = pass1.1

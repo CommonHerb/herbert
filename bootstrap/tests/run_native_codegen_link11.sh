@@ -159,7 +159,7 @@ func main():
     if analyzed.0 != 0:
         return 2
     end
-    let main_ret = get(analyzed.1, prog.2).1
+    let main_ret = get(analyzed.1, prog.2).ret
     let main_rplan = nc_build_render_plan(type_pool, main_ret)
     let pass1 = nc_pass1_program(prog, analyzed.1, analyzed.2, analyzed.3, has_faultable, main_rplan)
     if pass1.0 != 0:
