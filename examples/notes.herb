@@ -437,7 +437,7 @@ func notes_draw(c, f, t, s, recovery, query, path, blink):
     let label = pixel_text(c, "File:", 28, 72, 1)
     let pathcount = length(path)
     if pathcount > 130: pathcount = 130 end
-    let pathname = pixel_text_buffer(c, f.6, 0, pathcount, 70, 72, 1)
+    let pathname = pixel_text_buffer(c, f.path, 0, pathcount, 70, 72, 1)
     let recoverycolor = x11_color(c, 8820395)
     let recoverylabel = "Recovery: created on first edit; copies are kept until you remove them."
     if s.recovery_attempted:
@@ -480,7 +480,7 @@ func notes_loop(c, f, t, s, recovery, query, path, event, lastblink):
     let keys = notes_keys(c, f, t, s, recovery, query, event)
     let checkpoint = notes_checkpoint(recovery, f, t, s)
     if x11_closed(c): let requested = notes_request_close(c, f, t, s, recovery) end
-    let now = linux_clock_ms(c.4)
+    let now = linux_clock_ms(c.clock)
     let checked = x11_need(not linux_error(now), "notes: monotonic clock failed\n")
     let blink = (now / 500) % 2
     if s.needs_draw or blink != lastblink:
@@ -491,7 +491,7 @@ func notes_loop(c, f, t, s, recovery, query, path, event, lastblink):
         let presented = x11_present(c)
     end
     let exposed = x11_ack_expose(c)
-    let waited = linux_poll(linux_u64(c.0, 0), c.3, 1, 500 - now % 500)
+    let waited = linux_poll(c.state.fd, c.poll, 1, 500 - now % 500)
     let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "notes: input wait failed\n")
     return notes_loop(c, f, t, s, recovery, query, path, event, blink)
 end
@@ -512,7 +512,7 @@ func main():
         return linux_die("notes: cannot open a regular, singly linked file owned by you (or its parent). No file changed.\n")
     end
     let t = text_buffer(65536)
-    let loaded = text_load(t, opened.1, file_count(opened))
+    let loaded = text_load(t, opened.bytes, file_count(opened))
     if loaded != 0:
         let closed = file_close(opened)
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")

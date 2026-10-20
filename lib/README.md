@@ -16,7 +16,10 @@ source; the retained source map identifies its original units.
 - `x11.herb`: local display/authentication, a fixed-size window, server pixmap,
   keyboard mapping and key/focus/close events, rectangle/ellipse requests and
   presentation. X11 itself remains an external desktop service. Its supported
-  profile and limitations are documented in the first-steps guide.
+  profile and limitations are documented in the first-steps guide. A connection
+  is an `X11` record: `c.state` is a reference record (descriptor, server ids,
+  flags), and `c.poll` and `c.clock` are the scratch buffers callers pass to
+  `linux_poll` and `linux_clock_ms`.
 - `pixel_text.herb`: original 5×7 printable ASCII glyphs, strings, buffer spans
   and decimal numbers, rendered without temporary per-frame strings.
 - `grid_map.herb`: bounded rectangular ASCII tile maps with enclosure, unique
@@ -44,6 +47,9 @@ source; the retained source map identifies its original units.
   changes are refused; post-publication sync or verification failure is reported distinctly.
   An exclusive sibling rescue copy can preserve edits without replacing the original.
   The [Notes guide](../examples/notes.md) gives file and metadata limitations.
+  A handle is a `File` record: `f.state` is a reference record (directory
+  descriptor, last status, counts, mode), `f.bytes` holds the loaded bytes and
+  `f.path` the NUL-terminated path; the stat buffers keep the kernel's layout.
 - `../examples/first_steps.herb`: the application's position, controls and scene.
 
 The compiler has no game/window-specific operation. Five hosted-only primitives

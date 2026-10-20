@@ -4,15 +4,16 @@
 -- descriptors. Copies remain after exit/save/discard, for explicit user cleanup.
 -- r: snapshot file context, state (serial0, parent-synced8, directory-created16), relative path bytes.
 func recovery_new(capacity):
-    let f = (linux_buffer(72), linux_buffer(capacity + 1), linux_cstring("recovery.txt"), linux_buffer(128), linux_buffer(144), linux_buffer(144), linux_buffer(1), linux_buffer(144), linux_buffer(capacity), linux_buffer(128))
-    let invalid = linux_put64(f.0, 0, 0 - 1)
-    let mode = linux_put64(f.0, 48, 384)
+    let f = File(FileState(0, 0, false, 0, 0, false, 0, false, 0), linux_buffer(capacity + 1), linux_cstring("recovery.txt"), linux_buffer(128), linux_buffer(144), linux_buffer(144), linux_buffer(1), linux_buffer(144), linux_buffer(capacity), linux_buffer(128))
+    let st = f.state
+    st.dirfd = 0 - 1
+    st.mode = 384
     return (f, linux_buffer(24), linux_buffer(128))
 end
 
 func recovery_open(r, original, tries):
     if tries == 0: return 0 - 17 end
-    let parent = linux_u64(original.0, 0)
+    let parent = original.state.dirfd
     if linux_u64(r.1, 16) == 0:
         let serial = linux_u64(r.1, 0) + 1
         let remembered = linux_put64(r.1, 0, serial)
@@ -33,9 +34,10 @@ func recovery_open(r, original, tries):
     let fd = linux_syscall6(257, parent, buffer_address(r.2), 720896, 0, 0, 0)
     if linux_error(fd): return fd end
     let snapshot = r.0
-    let checked = linux_syscall6(5, fd, buffer_address(snapshot.4), 0, 0, 0, 0)
+    let snapshot_state = snapshot.state
+    let checked = linux_syscall6(5, fd, buffer_address(snapshot.stat), 0, 0, 0, 0)
     if checked == 0:
-        if (linux_u32(snapshot.4, 24) & 61951) != 16832 or linux_u32(snapshot.4, 28) != linux_syscall6(107, 0, 0, 0, 0, 0, 0): checked = 0 - 13 end
+        if (linux_u32(snapshot.stat, 24) & 61951) != 16832 or linux_u32(snapshot.stat, 28) != linux_syscall6(107, 0, 0, 0, 0, 0, 0): checked = 0 - 13 end
     end
     -- mkdir mode never grants group/other access, even with permissive umask.
     -- A restrictive umask that removes owner access is a visible refusal.
@@ -43,7 +45,7 @@ func recovery_open(r, original, tries):
         let closed = linux_syscall6(3, fd, 0, 0, 0, 0, 0)
         return checked
     end
-    let held = linux_put64(snapshot.0, 0, fd)
+    snapshot_state.dirfd = fd
     let suffix = linux_text(r.2, last, "/recovery.txt")
     let ended = buffer_set(r.2, last + 13, 0)
     return 0
@@ -54,14 +56,14 @@ end
 -- published but uncertain result is 1. Failures do not disable ordinary editing.
 func recovery_save(r, original, bytes, count):
     let snapshot = r.0
-    if linux_error(linux_u64(snapshot.0, 0)):
+    if linux_error(snapshot.state.dirfd):
         let opened = recovery_open(r, original, 32)
         if opened != 0: return file_result(snapshot, opened) end
     end
     let saved = file_save(snapshot, bytes, count)
     if saved != 0: return saved end
     if linux_u64(r.1, 8) == 0:
-        let synced = linux_syscall6(74, linux_u64(original.0, 0), 0, 0, 0, 0, 0)
+        let synced = linux_syscall6(74, original.state.dirfd, 0, 0, 0, 0, 0)
         if synced != 0: return file_result(snapshot, 1) end
         let confirmed = linux_put64(r.1, 8, 1)
     end

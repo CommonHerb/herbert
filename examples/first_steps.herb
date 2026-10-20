@@ -81,10 +81,10 @@ func first_loop(c, x, y, tick, last, event):
         do process_exit(0)
         return 0
     end
-    let now = linux_clock_ms(c.4)
+    let now = linux_clock_ms(c.clock)
     let checked = x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
     if now - last < 16:
-        let waited = linux_poll(linux_u64(c.0, 0), c.3, 1, 16 - (now - last))
+        let waited = linux_poll(c.state.fd, c.poll, 1, 16 - (now - last))
         let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "desktop: input wait failed\n")
         return first_loop(c, x, y, tick, last, event)
     end
@@ -99,7 +99,7 @@ func main():
     let commands = x11_enable_text(c)
     let event = linux_buffer(16)
     let first = first_draw(c, 320, 270, 0)
-    let now = linux_clock_ms(c.4)
+    let now = linux_clock_ms(c.clock)
     let checked = x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
     return first_loop(c, 320, 270, 1, now, event)
 end

@@ -127,7 +127,7 @@ func main():
  let f = file_open(linux_argument(args, 1), 65536)
  let t = text_buffer(65536)
  let status = file_status(f)
- if status == 0: status = text_load(t, f.1, file_count(f)) end
+ if status == 0: status = text_load(t, f.bytes, file_count(f)) end
  let header = linux_buffer(40)
  let shown = newline_state(t, header, status)
  let commands = stdin_read()
@@ -224,7 +224,7 @@ rejected_load = compile('newline-rejected-load', r"""func main():
  let loaded = text_load(t, bytes, 3)
  let moved = text_seek(t, 2)
  let inserted = text_insert(t, 88)
- let status = text_load(t, f.1, file_count(f))
+ let status = text_load(t, f.bytes, file_count(f))
  let samecursor = text_cursor(t)
  let undone = text_undo(t)
  let shown = file_write_bytes(1, text_file_bytes(t), 0, text_file_length(t))
@@ -242,7 +242,7 @@ newline_save = compile('newline-save', r"""func main():
  let args = linux_arguments()
  let f = file_open(linux_argument(args, 1), 65536)
  let t = text_buffer(65536)
- let loaded = text_load(t, f.1, file_count(f))
+ let loaded = text_load(t, f.bytes, file_count(f))
  let recovery = recovery_new(65536)
  let mode = linux_argument(args, 2)
  let first = 0
@@ -821,7 +821,7 @@ func main():
  let original = file_open(linux_argument(args, 1), 65536)
  let recovery = recovery_new(65536)
  let text = text_buffer(65536)
- let loaded = text_load(text, original.1, file_count(original))
+ let loaded = text_load(text, original.bytes, file_count(original))
  let query = linux_cstring("A")
  let poll = linux_buffer(8)
  let warm = run(original, recovery, text, query, poll, 300, false)

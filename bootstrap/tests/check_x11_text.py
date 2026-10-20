@@ -36,9 +36,12 @@ func probe_loop(c, b, pause):
         return 0
     end
     let tag = linux_put32(b, 0, 4294967295)
-    let pending = linux_put32(b, 4, linux_u32(c.0, 112))
-    let wanted = linux_put32(b, 8, linux_u32(c.0, 96))
-    let sequence = linux_put32(b, 12, linux_u64(c.0, 8))
+    let st = c.state
+    let refresh = 0
+    if st.map_refresh: refresh = 1 end
+    let pending = linux_put32(b, 4, st.reply_pending)
+    let wanted = linux_put32(b, 8, refresh)
+    let sequence = linux_put32(b, 12, st.sequence)
     let wrote = probe_write(b)
     let keys = probe_keys(c, b)
     let slept = linux_syscall6(35, buffer_address(pause), 0, 0, 0, 0, 0)

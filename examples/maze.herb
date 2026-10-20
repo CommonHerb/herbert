@@ -169,14 +169,14 @@ func maze_loop(c, map, cells, state, event, tick, last):
         do process_exit(0)
         return 0
     end
-    let now = linux_clock_ms(c.4)
+    let now = linux_clock_ms(c.clock)
     let checked = x11_need(not linux_error(now), "maze: monotonic clock failed\n")
     if command == 2:
         let resetframe = maze_draw(c, map, cells, state, 0)
         return maze_loop(c, map, cells, state, event, 1, now)
     end
     if now - last < 16:
-        let waited = linux_poll(linux_u64(c.0, 0), c.3, 1, 16 - (now - last))
+        let waited = linux_poll(c.state.fd, c.poll, 1, 16 - (now - last))
         let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "maze: input wait failed\n")
         return maze_loop(c, map, cells, state, event, tick, last)
     end
@@ -224,7 +224,7 @@ func main():
     let commands = x11_enable_text(c)
     let event = linux_buffer(16)
     let first = maze_draw(c, map, cells, state, 0)
-    let now = linux_clock_ms(c.4)
+    let now = linux_clock_ms(c.clock)
     let checked = x11_need(not linux_error(now), "maze: monotonic clock failed\n")
     return maze_loop(c, map, cells, state, event, 1, now)
 end
