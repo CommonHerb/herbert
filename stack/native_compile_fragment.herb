@@ -1386,6 +1386,10 @@ func op_set_field():
     return 64
 end
 
+func op_get_field():
+    return 65
+end
+
 func op_get():
     return 29
 end
@@ -1999,8 +2003,8 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         if not is_digit(index(get(atoms, 0), 0)):
             let shape = lowered_field(poly, nodes, caller_inst_idx, node_idx, node)
             if equal(get(nodes, shape.4).0, "ref-record"):
-                ir = emit_instr(ir, op_push_int(), 0, 0)
-                ir = emit_instr_line(ir, op_get(), 0, 0, node.3)
+                -- In place: the field's words straight from the record's element.
+                return emit_instr(ir, op_get_field(), shape.2, 0)
             end
             return emit_instr(ir, op_tuple_get(), shape.2, 0)
         end
@@ -6460,6 +6464,9 @@ func nc_opcode_name_for_diag(op):
     if op == 64:
         return "SET_FIELD"
     end
+    if op == 65:
+        return "GET_FIELD"
+    end
     if op == 57:
         return "BOOT_READ"
     end
@@ -7133,6 +7140,28 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         end
         heap_entry = (3, elem_w, elem_t)
         stack = nc_stack_push(arr.1, arr.2)
+    elif op == 65:
+        -- GET_FIELD (field index): a ref record's field read in place. Records
+        -- the element's (width, field start, field width) for the emitter, as
+        -- TUPLE_GET does. Not faultable: the one element exists by construction.
+        let arr = nc_stack_pop(stack, 0)
+        if arr.0 != 0:
+            return (arr.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        if not nc_type_is_array(pool, arr.2):
+            return (nc_fail(435, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let rec_t = nc_type_array_elem(pool, arr.2)
+        if not nc_type_is_tuple(pool, rec_t):
+            return (nc_fail(431, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let kids = nc_type_tuple_children(pool, rec_t)
+        if instr.1 >= count(kids):
+            return (nc_fail(431, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let field_t = get(kids, instr.1)
+        tuple_entry = (nc_type_width(pool, rec_t), nc_tuple_child_start_loop(pool, kids, 0, instr.1, 0), nc_type_width(pool, field_t))
+        stack = nc_stack_push(arr.1, field_t)
     elif op == 64:
         -- SET_FIELD (offset, width): a ref record's field written in place.
         let val = nc_stack_pop(stack, 0)
@@ -7959,6 +7988,52 @@ func nc_set_field_store_len(off, j, acc):
     return nc_set_field_store_len(off, j - 1, acc + 1 + one)
 end
 
+-- GET_FIELD (op 65): [ref record] -> the field's w words, read from the
+-- record's one element at word offset s. Emitted only for a ref record, whose
+-- element exists by construction, so there is no check.
+--   pop rax; mov rax, [rax + 16]; push qword [rax + 8(s + j)] for j = 0..w-1
+func nc_emit_get_field_loads(buf, s, j, w):
+    if j >= w:
+        return buf
+    end
+    let mag = nc_mul8(s + j)
+    do append(buf, 255)
+    if mag <= 127:
+        do append(buf, 112)
+        do append(buf, mag)
+    else:
+        do append(buf, 176)
+        buf = nc_append_le32(buf, mag)
+    end
+    return nc_emit_get_field_loads(buf, s, j + 1, w)
+end
+
+func nc_emit_get_field(buf, meta, pc):
+    let tm = get(meta.10, pc)
+    do append(buf, 88)
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 64)
+    do append(buf, 16)
+    return nc_emit_get_field_loads(buf, tm.1, 0, tm.2)
+end
+
+func nc_get_field_loads_len(s, j, w, acc):
+    if j >= w:
+        return acc
+    end
+    let one = 6
+    if nc_mul8(s + j) <= 127:
+        one = 3
+    end
+    return nc_get_field_loads_len(s, j + 1, w, acc + one)
+end
+
+func nc_get_field_len(meta, pc):
+    let tm = get(meta.10, pc)
+    return 5 + nc_get_field_loads_len(tm.1, 0, tm.2, 0)
+end
+
 func nc_set_field_len(off, w):
     let head = 8
     if nc_mul8(w) <= 127:
@@ -8066,6 +8141,9 @@ func nc_group(code, i, n, fn, funcs, meta, metas):
     end
     if op == 64:
         return (nc_set_field_len(instr.1, instr.2), i + 1)
+    end
+    if op == 65:
+        return (nc_get_field_len(meta, i), i + 1)
     end
     if op == 20:
         let cm = get(meta.11, i)
@@ -11730,6 +11808,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         buf = nc_emit_arr_add_keep(buf, get(meta.14, i).1)
     elif op == 64:
         buf = nc_emit_set_field(buf, a, instr.2)
+    elif op == 65:
+        buf = nc_emit_get_field(buf, meta, i)
     elif op == 33:
         buf = nc_emit_clogger(buf)
     elif op == 34:

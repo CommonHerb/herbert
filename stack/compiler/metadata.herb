@@ -55,6 +55,9 @@ func nc_opcode_name_for_diag(op):
     if op == 64:
         return "SET_FIELD"
     end
+    if op == 65:
+        return "GET_FIELD"
+    end
     if op == 57:
         return "BOOT_READ"
     end
@@ -728,6 +731,28 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         end
         heap_entry = (3, elem_w, elem_t)
         stack = nc_stack_push(arr.1, arr.2)
+    elif op == 65:
+        -- GET_FIELD (field index): a ref record's field read in place. Records
+        -- the element's (width, field start, field width) for the emitter, as
+        -- TUPLE_GET does. Not faultable: the one element exists by construction.
+        let arr = nc_stack_pop(stack, 0)
+        if arr.0 != 0:
+            return (arr.0, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        if not nc_type_is_array(pool, arr.2):
+            return (nc_fail(435, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let rec_t = nc_type_array_elem(pool, arr.2)
+        if not nc_type_is_tuple(pool, rec_t):
+            return (nc_fail(431, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let kids = nc_type_tuple_children(pool, rec_t)
+        if instr.1 >= count(kids):
+            return (nc_fail(431, 0, ""), local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+        let field_t = get(kids, instr.1)
+        tuple_entry = (nc_type_width(pool, rec_t), nc_tuple_child_start_loop(pool, kids, 0, instr.1, 0), nc_type_width(pool, field_t))
+        stack = nc_stack_push(arr.1, field_t)
     elif op == 64:
         -- SET_FIELD (offset, width): a ref record's field written in place.
         let val = nc_stack_pop(stack, 0)

@@ -131,7 +131,7 @@ end
 - Declarations, construction, reads and the field rules are those of value records; `ref` is recognized only before `record` at the top level.
 - A reference record is one word wherever it goes (arguments, results, fields, array elements); copying it copies the reference. A value record may hold one, and one may hold another or a value record, but none may contain itself, directly or through other records (`ERR 447`).
 - It is not renderable (`main` returning one is `ERR 432`) and has no `==`.
-- Each construction allocates once on the heap, which does not reclaim memory during a run: build long-lived state once and update its fields, rather than constructing a new one per step. A field read copies the record's fields to the stack before taking one; a field write stores only that field.
+- Each construction allocates once on the heap, which does not reclaim memory during a run: build long-lived state once and update its fields, rather than constructing a new one per step. A field read loads only that field, and a field write stores only that field.
 
 **Arrays / buffers / strings (the growable collections):**
 - `new_array(TYPE)` — the type arg is mandatory (`new_array()` = ERR 208). Grow with `do add(a, v)`; read `get(a, i)`; size `count(a)`.
