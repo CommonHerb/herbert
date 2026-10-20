@@ -79,7 +79,7 @@ index. Each function carries bytecode in field 4, NEW_ARRAY type metadata in
 field 5 and source-line metadata in field 6; both metadata arrays must match
 the instruction count, and the code must end in RET. It returns `(error, metas, has_input, has_heap)`; on nonzero error,
 the partial metadata is not valid emission input. Each successful function has
-one metadata record, produced by `nc_build_one_meta`. Layout is in flattened
+one `FunctionMeta` record, produced by `nc_build_one_meta`. Layout is in flattened
 machine words, not source parameter counts. Types, bytecode opcode numbers and
 function layouts are supplied by the preceding stages; the following hosted
 emitter consumes the result.
@@ -125,20 +125,20 @@ status/stream checks, emitted-byte comparisons where bytes should stay fixed,
 and realistic resource measurements. A successful scalar example alone does
 not qualify these interfaces.
 
-The fields of a successful function metadata record are:
+The fields of a successful function's `FunctionMeta` record, in layout order, are:
 
-| Index | Meaning |
-| ---: | --- |
-| 0–2 | Flattened parameter words, return type, return words |
-| 3–5 | Local bases, local widths, total local words |
-| 6–8 | Hidden return-pointer slot, call-result scratch base, maximum result scratch words |
-| 9 | Legacy empty stack array (not a per-instruction snapshot stream) |
-| 10 | Per-instruction tuple metadata |
-| 11 | Per-instruction call metadata |
-| 12 | Maximum operand-stack words |
-| 13 | Input kind: 0 none, 1 clogger, 2 stdin_read |
-| 14 | Per-instruction heap metadata |
-| 15 | Heap-use flag |
+| Field | Meaning |
+| --- | --- |
+| `pwords`, `ret`, `retw` | Flattened parameter words, return type, return words |
+| `bases`, `widths`, `local_words` | Local bases, local widths, total local words |
+| `sret_word`, `scratch_base`, `max_sret` | Hidden return-pointer slot, call-result scratch base, maximum result scratch words |
+| `stacks` | Legacy empty stack array (not a per-instruction snapshot stream) |
+| `tuple_meta` | Per-instruction tuple metadata |
+| `call_meta` | Per-instruction call metadata |
+| `max_stack` | Maximum operand-stack words |
+| `input_kind` | Input kind: 0 none, 1 clogger, 2 stdin_read |
+| `heap_meta` | Per-instruction heap metadata |
+| `has_heap` | Heap-use flag |
 
 Dense stream indices are bytecode instruction positions, never source-token or
 machine-code byte offsets. Tuple entries are `(wholeTupleWords, selectedStartWord,

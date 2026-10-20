@@ -6934,7 +6934,7 @@ record MetaScan:
     call_meta: array((int, int, int))
     max_stack: int
     max_sret: int
-    has_clogger: int
+    input_kind: int
     heap_meta: array((int, int, int))
     has_heap: int
 end
@@ -7424,7 +7424,7 @@ record FunctionMeta:
     tuple_meta: array((int, int, int))
     call_meta: array((int, int, int))
     max_stack: int
-    has_clogger: int
+    input_kind: int
     heap_meta: array((int, int, int))
     has_heap: int
 end
@@ -7472,7 +7472,7 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     if p.max_sret > 0:
         scratch_base = lay.3 + hidden
     end
-    return (0, FunctionMeta(pwords, ret, retw, lay.1, lay.2, lay.3, sret_word, scratch_base, p.max_sret, p.stacks, p.tuple_meta, p.call_meta, p.max_stack, p.has_clogger, p.heap_meta, p.has_heap))
+    return (0, FunctionMeta(pwords, ret, retw, lay.1, lay.2, lay.3, sret_word, scratch_base, p.max_sret, p.stacks, p.tuple_meta, p.call_meta, p.max_stack, p.input_kind, p.heap_meta, p.has_heap))
 end
 
 func nc_analyze_program_loop(pool, prog, sig, i, n, metas, has_clogger, has_heap):
@@ -7484,7 +7484,7 @@ func nc_analyze_program_loop(pool, prog, sig, i, n, metas, has_clogger, has_heap
         return (m.0, metas, has_clogger, has_heap)
     end
     do add(metas, m.1)
-    if m.1.has_clogger != 0:
+    if m.1.input_kind != 0:
         has_clogger = 1
     end
     if m.1.has_heap != 0:
