@@ -4,6 +4,20 @@
 -- LF and CRLF line endings are accepted, with an optional final line ending.
 -- No padding or whitespace is discarded; all outer cells must be walls.
 
+-- A parse result. Success is status 0: spawn is the P cell's index and dots
+-- the number of collectibles. On error only status and the error coordinates
+-- are meaningful; they are one-based, or zero if the error has no single location.
+record GridMap:
+    status: int
+    width: int
+    height: int
+    spawn: int
+    dots: int
+    cells: buffer
+    error_row: int
+    error_column: int
+end
+
 func grid_map_dimensions(b, n, maxw, maxh, p, width, rows, column):
     if p >= n:
         if column != 0:
@@ -85,19 +99,16 @@ func grid_map_unreachable(cells, visited, cell):
     return grid_map_unreachable(cells, visited, cell + 1)
 end
 
--- (status, width, height, spawn index, dot count, cells, error row, error col)
--- Row/column are one-based, or zero if the error has no single location.
--- Success is status 0. On error only status/error coordinates are meaningful.
 -- maxw/maxh are caller limits, each 3..255; n is actual input bytes, not capacity.
 func grid_map_parse(b, n, maxw, maxh):
     if n > buffer_length(b) or maxw < 3 or maxw > 255 or maxh < 3 or maxh > 255:
-        return (13, 0, 0, 0, 0, new_buffer(), 0, 0)
+        return GridMap(13, 0, 0, 0, 0, new_buffer(), 0, 0)
     end
     let size = grid_map_dimensions(b, n, maxw, maxh, 0, 0, 0, 0)
-    if size.0 != 0: return (size.0, 0, 0, 0, 0, new_buffer(), size.3, size.4) end
+    if size.0 != 0: return GridMap(size.0, 0, 0, 0, 0, new_buffer(), size.3, size.4) end
     let cells = linux_buffer(size.1 * size.2)
     let decoded = grid_map_decode(b, n, cells, size.1, size.2, 0, 0, 0, 0, 0)
-    if decoded.0 != 0: return (decoded.0, 0, 0, 0, 0, cells, decoded.3, decoded.4) end
+    if decoded.0 != 0: return GridMap(decoded.0, 0, 0, 0, 0, cells, decoded.3, decoded.4) end
     let visited = linux_buffer(size.1 * size.2)
     let queue = linux_buffer(size.1 * size.2 * 4)
     let marked = buffer_set(visited, decoded.1, 1)
@@ -105,9 +116,9 @@ func grid_map_parse(b, n, maxw, maxh):
     let walked = grid_map_walk(cells, visited, queue, size.1, size.2, 0, 1)
     let unreachable = grid_map_unreachable(cells, visited, 0)
     if unreachable < buffer_length(cells):
-        return (11, 0, 0, 0, 0, cells, unreachable / size.1 + 1, unreachable % size.1 + 1)
+        return GridMap(11, 0, 0, 0, 0, cells, unreachable / size.1 + 1, unreachable % size.1 + 1)
     end
-    return (0, size.1, size.2, decoded.1, decoded.2, cells, 0, 0)
+    return GridMap(0, size.1, size.2, decoded.1, decoded.2, cells, 0, 0)
 end
 
 func grid_map_error(status):

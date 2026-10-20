@@ -70,15 +70,15 @@ func main():
     let loaded = linux_read_file("map.txt", 4096)
     if loaded.0 != 0: return (99,0,0,0,0,0,0,0) end
     let map = grid_map_parse(loaded.1, loaded.2, 31, 19)
-    if map.0 == 0:
+    if map.status == 0:
         -- Emit actual normalized cells before the ordinary result tuple.
-        let written = linux_syscall6(1, 1, buffer_address(map.5), buffer_length(map.5), 0, 0, 0)
-        if written != buffer_length(map.5): do process_exit(2) end
+        let written = linux_syscall6(1, 1, buffer_address(map.cells), buffer_length(map.cells), 0, 0, 0)
+        if written != buffer_length(map.cells): do process_exit(2) end
         let newline = linux_cstring("\\n")
         let ended = linux_syscall6(1, 1, buffer_address(newline), 1, 0, 0, 0)
         if ended != 1: do process_exit(2) end
     end
-    return (map.0,map.1,map.2,map.3,map.4,map.6,map.7,buffer_length(map.5))
+    return (map.status,map.width,map.height,map.spawn,map.dots,map.error_row,map.error_column,buffer_length(map.cells))
 end
 """
 

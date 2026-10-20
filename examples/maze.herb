@@ -6,11 +6,11 @@
 -- State u64 fields: source cell, target cell, transition frame, dots left,
 -- and completed steps. Cells retain the loaded map.
 func maze_restart(map, cells, state):
-    let restored = linux_copy(cells, 0, map.5, 0, map.1 * map.2)
-    let source = linux_put64(state, 0, map.3)
-    let target = linux_put64(state, 8, map.3)
+    let restored = linux_copy(cells, 0, map.cells, 0, map.width * map.height)
+    let source = linux_put64(state, 0, map.spawn)
+    let target = linux_put64(state, 8, map.spawn)
     let frame = linux_put64(state, 16, 0)
-    let dots = linux_put64(state, 24, map.4)
+    let dots = linux_put64(state, 24, map.dots)
     let steps = linux_put64(state, 32, 0)
     return 0
 end
@@ -24,13 +24,13 @@ func maze_target(c, map, cells, cell):
     let down = x11_key(c, 65364) or x11_key(c, 115)
     let target = cell
     if left and not right:
-        if cell % map.1 != 0: target = cell - 1 end
+        if cell % map.width != 0: target = cell - 1 end
     elif right and not left:
-        if cell % map.1 + 1 < map.1: target = cell + 1 end
+        if cell % map.width + 1 < map.width: target = cell + 1 end
     elif up and not down:
-        if cell >= map.1: target = cell - map.1 end
+        if cell >= map.width: target = cell - map.width end
     elif down and not up:
-        if cell + map.1 < map.1 * map.2: target = cell + map.1 end
+        if cell + map.width < map.width * map.height: target = cell + map.width end
     end
     if buffer_get(cells, target) == 35: return cell end
     return target
@@ -74,10 +74,10 @@ end
 
 -- Two drawing passes keep wall colors grouped and the X11 batch bounded.
 func maze_walls(c, map, cells, ox, oy, cell, accent):
-    if cell >= map.1 * map.2: return 0 end
+    if cell >= map.width * map.height: return 0 end
     if buffer_get(cells, cell) == 35:
-        let x = ox + (cell % map.1) * 24
-        let y = oy + (cell / map.1) * 24
+        let x = ox + (cell % map.width) * 24
+        let y = oy + (cell / map.width) * 24
         if accent:
             let drawn = x11_rect(c, x + 3, y + 3, 18, 2)
         else:
@@ -88,16 +88,16 @@ func maze_walls(c, map, cells, ox, oy, cell, accent):
 end
 
 func maze_dots(c, map, cells, ox, oy, cell):
-    if cell >= map.1 * map.2: return 0 end
+    if cell >= map.width * map.height: return 0 end
     if buffer_get(cells, cell) == 46:
-        let drawn = x11_ellipse(c, ox + (cell % map.1) * 24 + 9, oy + (cell / map.1) * 24 + 9, 6, 6)
+        let drawn = x11_ellipse(c, ox + (cell % map.width) * 24 + 9, oy + (cell / map.width) * 24 + 9, 6, 6)
     end
     return maze_dots(c, map, cells, ox, oy, cell + 1)
 end
 
 func maze_draw(c, map, cells, state, tick):
-    let ox = (800 - map.1 * 24) / 2
-    let oy = 112 + (456 - map.2 * 24) / 2
+    let ox = (800 - map.width * 24) / 2
+    let oy = 112 + (456 - map.height * 24) / 2
     let background = x11_color(c, 1054759)
     let canvas = x11_rect(c, 0, 0, 800, 640)
     let white = x11_color(c, 15265527)
@@ -110,7 +110,7 @@ func maze_draw(c, map, cells, state, tick):
     let count = pixel_number(c, linux_u64(state, 24), 94, 77, 2)
     let stepcount = pixel_number(c, linux_u64(state, 32) % 1000000, 692, 79, 1)
     let fieldcolor = x11_color(c, 1384240)
-    let field = x11_rect(c, ox - 4, oy - 4, map.1 * 24 + 8, map.2 * 24 + 8)
+    let field = x11_rect(c, ox - 4, oy - 4, map.width * 24 + 8, map.height * 24 + 8)
     let wallcolor = x11_color(c, 2377568)
     let walls = maze_walls(c, map, cells, ox, oy, 0, false)
     let accentcolor = x11_color(c, 3958662)
@@ -120,12 +120,12 @@ func maze_draw(c, map, cells, state, tick):
     let source = linux_u64(state, 0)
     let target = linux_u64(state, 8)
     let distance = linux_u64(state, 16) * 3
-    let x = ox + (source % map.1) * 24 + 12
-    let y = oy + (source / map.1) * 24 + 12
-    if target % map.1 > source % map.1: x = x + distance end
-    if target % map.1 < source % map.1: x = x - distance end
-    if target / map.1 > source / map.1: y = y + distance end
-    if target / map.1 < source / map.1: y = y - distance end
+    let x = ox + (source % map.width) * 24 + 12
+    let y = oy + (source / map.width) * 24 + 12
+    if target % map.width > source % map.width: x = x + distance end
+    if target % map.width < source % map.width: x = x - distance end
+    if target / map.width > source / map.width: y = y + distance end
+    if target / map.width < source / map.width: y = y - distance end
     let shadowcolor = x11_color(c, 660510)
     let shadow = x11_ellipse(c, x - 9, y + 6, 18, 6)
     -- Character gold stays unique for independent image observations.
@@ -194,12 +194,12 @@ end
 
 func maze_map_error(map):
     let prefix = stderr_write("maze: ")
-    let detail = stderr_write(grid_map_error(map.0))
-    if map.6 != 0:
+    let detail = stderr_write(grid_map_error(map.status))
+    if map.error_row != 0:
         let rowlabel = stderr_write(" (row ")
-        let row = maze_error_number(map.6)
+        let row = maze_error_number(map.error_row)
         let columnlabel = stderr_write(", column ")
-        let column = maze_error_number(map.7)
+        let column = maze_error_number(map.error_column)
         let ending = stderr_write(")")
     end
     return linux_die("\n")
@@ -216,8 +216,8 @@ func main():
         return linux_die("maze: cannot read map file; check its path and permissions\n")
     end
     let map = grid_map_parse(loaded.1, loaded.2, 31, 19)
-    if map.0 != 0: return maze_map_error(map) end
-    let cells = linux_buffer(map.1 * map.2)
+    if map.status != 0: return maze_map_error(map) end
+    let cells = linux_buffer(map.width * map.height)
     let state = linux_buffer(40)
     let started = maze_restart(map, cells, state)
     let c = x11_open(800, 640, "Herbert - Maze")

@@ -90,14 +90,15 @@ rate. The displayed step counter wraps after 999999.
 Concatenate `lib/linux.herb` and `lib/grid_map.herb` before a consumer. Call
 `grid_map_parse(bytes, count, max_width, max_height)` once during loading;
 `count` is the actual input byte count, and each dimension limit must be 3..255.
-The returned tuple is:
+It returns a `GridMap` value record, declared in `lib/grid_map.herb`:
 
 ```text
-(status, width, height, spawn_index, dot_count, cells, error_row, error_column)
+GridMap(status, width, height, spawn, dots, cells, error_row, error_column)
 ```
 
-Status zero means success. `cells` contains exactly `width * height` row-major
-ASCII bytes, without line endings; `spawn_index` identifies the `P` byte. Treat
+Read its fields by name, such as `map.width`. Status zero means success. `cells`
+contains exactly `width * height` row-major ASCII bytes, without line endings;
+`spawn` is the index of the `P` byte and `dots` the number of `.` cells. Treat
 these cells as the original map and copy them if an application needs mutations.
 On failure, only status and error coordinates are meaningful. Coordinates are
 one-based, or zero when there is no single offending location.
