@@ -1,11 +1,13 @@
 -- A bounded plain-text editor, compiled and supported entirely in Herbert.
--- Libraries: linux, utf8, unicode_grapheme, file_io, text_buffer,
+-- Libraries: linux, x11_clipboard, utf8, unicode_grapheme, file_io, text_buffer,
 -- session_recovery, x11, pixel_text, unicode_display. UTF-8 + LF/CRLF + TAB.
 -- App state is one reference record, built once in main and updated in place.
 -- It holds the open document's File and a spare one: Ctrl+O loads the spare and
 -- the two swap, so opening a file allocates nothing either. The selection runs
--- from anchor (-1 when there is none) to the cursor; the clipboard is a fixed
--- buffer of logical (LF) text.
+-- from anchor (-1 when there is none) to the cursor. Copied text lives in the
+-- X11 clipboard's own buffer; clip is scratch for text pasted from elsewhere,
+-- after its CRLF newlines become LF. time is the server time of the key being
+-- handled, which the clipboard protocol asks for.
 -- No per-event/frame/save string or tuple creation.
 
 ref record NotesState:
@@ -34,7 +36,7 @@ ref record NotesState:
     open_result: int
     anchor: int
     clip: buffer
-    clip_count: int
+    time: int
 end
 
 func notes_redraw(s):
@@ -193,19 +195,32 @@ func notes_edited(s, result):
     return notes_message(s, 3)
 end
 
-func notes_copy(t, s):
+func notes_copy(c, t, s):
     if not notes_selected(t, s): return notes_message(s, 32) end
     let start = notes_from(t, s)
-    let count = notes_to(t, s) - start
-    let copied = linux_copy(s.clip, 0, t.0, start, count)
-    s.clip_count = count
+    let owned = x11_clip_own(c, t.0, start, notes_to(t, s) - start, s.time)
     return notes_message(s, 31)
 end
 
-func notes_cut(t, s):
+func notes_cut(c, t, s):
     if not notes_selected(t, s): return notes_message(s, 32) end
-    let copied = notes_copy(t, s)
+    let copied = notes_copy(c, t, s)
     return notes_edited(s, text_replace(t, notes_from(t, s), notes_to(t, s), s.clip, 0, 0))
+end
+
+-- Pasted text follows the file rules: valid UTF-8, TAB and LF or CRLF (in any
+-- mix); each CRLF becomes LF. Returns the count copied to dst, or -1 to refuse.
+func notes_normalize(src, p, stop, dst, out):
+    if p >= stop: return out end
+    let decoded = utf8_decode(src, p, stop)
+    if linux_error(decoded.0): return 0 - 1 end
+    if decoded.0 == 13:
+        if decoded.1 >= stop or buffer_get(src, decoded.1) != 10: return 0 - 1 end
+        return notes_normalize(src, decoded.1, stop, dst, out)
+    end
+    if not utf8_text_allowed(decoded.0): return 0 - 1 end
+    let copied = linux_copy(dst, out, src, p, decoded.1 - p)
+    return notes_normalize(src, decoded.1, stop, dst, out + decoded.1 - p)
 end
 
 -- One line for the Open and Find fields: valid text without TAB or newline.
@@ -234,16 +249,30 @@ func notes_paste_field(t, s, query, bytes, count):
 end
 
 -- Pasted text replaces the selection, or goes in at the cursor, as one undo step.
-func notes_paste(t, s, query):
-    if s.clip_count == 0: return notes_message(s, 33) end
-    if s.opening or s.finding: return notes_paste_field(t, s, query, s.clip, s.clip_count) end
+func notes_paste_text(t, s, query, bytes, count):
+    if count == 0: return notes_message(s, 33) end
+    if s.opening or s.finding: return notes_paste_field(t, s, query, bytes, count) end
     let start = text_cursor(t)
     let stop = start
     if notes_selected(t, s):
         start = notes_from(t, s)
         stop = notes_to(t, s)
     end
-    return notes_edited(s, text_replace(t, start, stop, s.clip, 0, s.clip_count))
+    return notes_edited(s, text_replace(t, start, stop, bytes, 0, count))
+end
+
+-- Text this window copied is pasted directly; otherwise the clipboard's owner
+-- is asked, for at most two seconds.
+func notes_paste(c, t, s, query):
+    if x11_clip_owned(c): return notes_paste_text(t, s, query, x11_clip_data(c), x11_clip_count(c)) end
+    let got = x11_clip_request(c, s.time, 2000)
+    if got == 0 - 1: return notes_message(s, 36) end
+    if got == 0 - 2: return notes_message(s, 37) end
+    if got == 0 - 3: return notes_message(s, 39) end
+    if got == 0 - 4: return notes_message(s, 38) end
+    let count = notes_normalize(c.replies, 32, 32 + got, s.clip, 0)
+    if count == 0 - 1: return notes_message(s, 40) end
+    return notes_paste_text(t, s, query, s.clip, count)
 end
 
 func notes_hex_digit(key):
@@ -432,7 +461,7 @@ func notes_key(c, t, s, recovery, query, key, mods):
     end
     if control and (key == 113 or key == 81): return notes_request_close(c, f, t, s, recovery) end
     if control and (key == 111 or key == 79): return notes_open_start(s) end
-    if control and (key == 118 or key == 86): return notes_paste(t, s, query) end
+    if control and (key == 118 or key == 86): return notes_paste(c, t, s, query) end
     if s.opening: return notes_open_key(t, s, recovery, query, key, mods) end
     if control and (key == 102 or key == 70):
         s.anchor = 0 - 1
@@ -459,8 +488,8 @@ func notes_key(c, t, s, recovery, query, key, mods):
         let all = text_seek(t, text_length(t))
         return notes_redraw(s)
     end
-    if control and (key == 99 or key == 67): return notes_copy(t, s) end
-    if control and (key == 120 or key == 88): return notes_cut(t, s) end
+    if control and (key == 99 or key == 67): return notes_copy(c, t, s) end
+    if control and (key == 120 or key == 88): return notes_cut(c, t, s) end
     -- Shift extends a selection from where it started. Without Shift a movement
     -- key drops it; Left and Right first go to its start or end.
     let selected = notes_selected(t, s)
@@ -529,6 +558,7 @@ end
 
 func notes_keys(c, t, s, recovery, query, event):
     if not x11_next_key(c, event): return 0 end
+    s.time = linux_u32(event, 12)
     let handled = notes_key(c, t, s, recovery, query, linux_u32(event, 0), linux_u32(event, 4))
     return notes_keys(c, t, s, recovery, query, event)
 end
@@ -613,7 +643,7 @@ end
 
 func notes_warning(message):
     if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18: return true end
-    return (message >= 22 and message <= 30) or (message >= 32 and message <= 35)
+    return (message >= 22 and message <= 30) or (message >= 32 and message <= 40)
 end
 
 -- Highlight [a, b) behind the visible rows: the selection, or Find's match. A
@@ -698,6 +728,11 @@ func notes_status(c, f, t, s, query):
     if message == 33: status = "Nothing to paste. Ctrl+C or Ctrl+X copies a selection first." end
     if message == 34: status = "A path or search takes one line of text, without tabs." end
     if message == 35: status = "This edit is too large to undo, so it was not made." end
+    if message == 36: status = "Nothing to paste: no application offers text on the clipboard." end
+    if message == 37: status = "The clipboard's owner did not answer in time. Nothing was pasted." end
+    if message == 38: status = "The clipboard holds no text Notes can paste." end
+    if message == 39: status = "The clipboard text is larger than Notes can paste (65,504 bytes)." end
+    if message == 40: status = "Not pasted: the clipboard text has control characters, a bare CR or invalid UTF-8." end
     if s.confirming and message == 7:
         status = "Rescue saved. Close pending: Y closes; Esc returns."
     end
@@ -797,6 +832,7 @@ end
 
 func notes_loop(c, t, s, recovery, query, event, lastblink):
     let events = x11_events(c)
+    let served = x11_serve(c)
     -- Accepted typing belongs to the document before a batched WM close is
     -- considered. In particular, a queued ordinary Y must not confirm discard.
     let keys = notes_keys(c, t, s, recovery, query, event)
@@ -846,6 +882,7 @@ func main():
     s.needs_draw = true
     let c = x11_open(900, 600, "Herbert - Notes")
     let textkeys = x11_enable_text(c)
+    let clipboard = x11_enable_clipboard(c, 65536)
     let event = linux_buffer(16)
     return notes_loop(c, t, s, recovery, query, event, 0 - 1)
 end

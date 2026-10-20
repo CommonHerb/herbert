@@ -8,6 +8,7 @@ Evidence (including failed frames, input history and memory samples) is retained
 import argparse
 import contextlib
 import ctypes as C
+import ctypes.util
 import hashlib
 import json
 import os
@@ -149,6 +150,151 @@ class App:
         self.out.close()
         self.err.close()
         (self.evidence / (self.label + '-input.json')).write_text(json.dumps(self.inputs, indent=2)+'\n')
+
+
+class XSelectionRequestEvent(C.Structure):
+    _fields_ = [('type', C.c_int), ('serial', C.c_ulong), ('send_event', C.c_int), ('display', C.c_void_p),
+                ('owner', C.c_ulong), ('requestor', C.c_ulong), ('selection', C.c_ulong), ('target', C.c_ulong),
+                ('property', C.c_ulong), ('time', C.c_ulong)]
+
+
+class XSelectionEvent(C.Structure):
+    _fields_ = [('type', C.c_int), ('serial', C.c_ulong), ('send_event', C.c_int), ('display', C.c_void_p),
+                ('requestor', C.c_ulong), ('selection', C.c_ulong), ('target', C.c_ulong),
+                ('property', C.c_ulong), ('time', C.c_ulong)]
+
+
+class PeerEvent(C.Union):
+    _fields_ = [('type', C.c_int), ('request', XSelectionRequestEvent), ('selection', XSelectionEvent),
+                ('pad', C.c_long * 24)]
+
+
+class ClipboardPeer:
+    """Another X11 application on its own connection, single-threaded: it owns
+    CLIPBOARD with chosen bytes and answers (or ignores) one request per serve(),
+    or asks the current owner for a target. Xlib, ctypes and Python are TEST tools."""
+    def __init__(self, display):
+        self.x = x = C.CDLL(ctypes.util.find_library('X11'))
+        specs = {
+            'XOpenDisplay': (C.c_void_p, [C.c_char_p]),
+            'XCloseDisplay': (C.c_int, [C.c_void_p]),
+            'XDefaultRootWindow': (C.c_ulong, [C.c_void_p]),
+            'XCreateSimpleWindow': (C.c_ulong, [C.c_void_p, C.c_ulong, C.c_int, C.c_int, C.c_uint, C.c_uint,
+                                                C.c_uint, C.c_ulong, C.c_ulong]),
+            'XDestroyWindow': (C.c_int, [C.c_void_p, C.c_ulong]),
+            'XInternAtom': (C.c_ulong, [C.c_void_p, C.c_char_p, C.c_int]),
+            'XSetSelectionOwner': (C.c_int, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_ulong]),
+            'XGetSelectionOwner': (C.c_ulong, [C.c_void_p, C.c_ulong]),
+            'XConvertSelection': (C.c_int, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_ulong, C.c_ulong, C.c_ulong]),
+            'XChangeProperty': (C.c_int, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_ulong, C.c_int, C.c_int,
+                                          C.c_char_p, C.c_int]),
+            'XGetWindowProperty': (C.c_int, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_long, C.c_long, C.c_int,
+                                             C.c_ulong, C.POINTER(C.c_ulong), C.POINTER(C.c_int),
+                                             C.POINTER(C.c_ulong), C.POINTER(C.c_ulong), C.POINTER(C.c_void_p)]),
+            'XSendEvent': (C.c_int, [C.c_void_p, C.c_ulong, C.c_int, C.c_long, C.POINTER(PeerEvent)]),
+            'XPending': (C.c_int, [C.c_void_p]),
+            'XNextEvent': (C.c_int, [C.c_void_p, C.POINTER(PeerEvent)]),
+            'XFlush': (C.c_int, [C.c_void_p]),
+            'XSync': (C.c_int, [C.c_void_p, C.c_int]),
+            'XFree': (C.c_int, [C.c_void_p]),
+        }
+        for name, (restype, argtypes) in specs.items():
+            function = getattr(x, name)
+            function.restype, function.argtypes = restype, argtypes
+        self.d = x.XOpenDisplay(display.encode())
+        assert self.d, 'peer cannot open the test display'
+        self.root = x.XDefaultRootWindow(self.d)
+        self.w = x.XCreateSimpleWindow(self.d, self.root, 0, 0, 1, 1, 0, 0, 0)
+        self.clipboard, self.utf8 = self.atom(b'CLIPBOARD'), self.atom(b'UTF8_STRING')
+        self.targets, self.prop = self.atom(b'TARGETS'), self.atom(b'PEER_PASTE')
+        self.data, self.answer = None, True
+        x.XSync(self.d, 0)
+
+    def atom(self, name):
+        return self.x.XInternAtom(self.d, name, 0)
+
+    def close(self):
+        self.x.XCloseDisplay(self.d)
+
+    def owner(self):
+        return self.x.XGetSelectionOwner(self.d, self.clipboard)
+
+    def own(self, data, answer=True):
+        self.data, self.answer = data, answer
+        self.x.XSetSelectionOwner(self.d, self.clipboard, self.w, 0)
+        self.x.XSync(self.d, 0)
+        assert self.owner() == self.w, 'peer could not take the clipboard'
+
+    def disown(self):
+        self.x.XSetSelectionOwner(self.d, self.clipboard, 0, 0)
+        self.x.XSync(self.d, 0)
+
+    def serve(self, seconds=4):
+        """Answer the next request; False if it was deliberately ignored, None if none came."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            while self.x.XPending(self.d):
+                event = PeerEvent()
+                self.x.XNextEvent(self.d, C.byref(event))
+                if event.type != 30:
+                    continue
+                request = event.request
+                if not self.answer:
+                    return False
+                reply = PeerEvent()
+                s = reply.selection
+                s.type, s.display, s.requestor = 31, self.d, request.requestor
+                s.selection, s.target, s.time, s.property = request.selection, request.target, request.time, 0
+                if request.target == self.utf8 and self.data is not None:
+                    self.x.XChangeProperty(self.d, request.requestor, request.property, self.utf8, 8, 0,
+                                           self.data, len(self.data))
+                    s.property = request.property
+                self.x.XSendEvent(self.d, request.requestor, 0, 0, C.byref(reply))
+                self.x.XFlush(self.d)
+                return True
+            time.sleep(.01)
+        return None
+
+    def request(self, target=None, seconds=4):
+        """Ask the clipboard's owner for target: (type, format, value), or None if refused."""
+        self.x.XConvertSelection(self.d, self.clipboard, target or self.utf8, self.prop, self.w, 0)
+        self.x.XFlush(self.d)
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            while self.x.XPending(self.d):
+                event = PeerEvent()
+                self.x.XNextEvent(self.d, C.byref(event))
+                if event.type != 31 or event.selection.requestor != self.w:
+                    continue
+                if event.selection.property == 0:
+                    return None
+                kind, fmt = C.c_ulong(), C.c_int()
+                count, after, data = C.c_ulong(), C.c_ulong(), C.c_void_p()
+                assert self.x.XGetWindowProperty(self.d, self.w, self.prop, 0, 1 << 20, 1, 0, C.byref(kind),
+                                                 C.byref(fmt), C.byref(count), C.byref(after), C.byref(data)) == 0
+                try:
+                    if fmt.value == 8:
+                        value = C.string_at(data, count.value)
+                    else:
+                        value = list((C.c_ulong * count.value).from_address(data.value))
+                finally:
+                    if data:
+                        self.x.XFree(data)
+                assert after.value == 0, 'peer read a partial property'
+                return kind.value, fmt.value, value
+            time.sleep(.01)
+        raise AssertionError('timed out: the clipboard owner never answered')
+
+    def request_from_gone_window(self, owner):
+        """Send owner a request whose requestor window no longer exists."""
+        gone = self.x.XCreateSimpleWindow(self.d, self.root, 0, 0, 1, 1, 0, 0, 0)
+        self.x.XDestroyWindow(self.d, gone)
+        event = PeerEvent()
+        r = event.request
+        r.type, r.display, r.owner, r.requestor = 30, self.d, owner, gone
+        r.selection, r.target, r.property, r.time = self.clipboard, self.utf8, self.prop, 0
+        assert self.x.XSendEvent(self.d, owner, 0, 0, C.byref(event))
+        self.x.XSync(self.d, 0)
 
 
 @contextlib.contextmanager
@@ -1057,6 +1203,94 @@ def notes_selection_checks(args, x, display, evidence, passed):
            samples=samples)
 
 
+def notes_clipboard_checks(args, x, display, evidence, passed):
+    d = evidence/'clipboard'; d.mkdir()
+    warning = (16173151).to_bytes(3,'big')
+    def shift(key, n=1):
+        app.key('Shift_L', True)
+        for _ in range(n): app.tap(key)
+        app.key('Shift_L', False)
+    def saved(path, wanted, what):
+        app.tap('s','Control_L')
+        wait_for(lambda: path.read_bytes()==wanted, what)
+    def warned():
+        return warning in region(app.frame(),28,560,810,7)
+    def calm():
+        app.tap('s','Control_L')
+        wait_for(lambda: not warned(), 'footer back to normal before the next paste')
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; original = 'naïve café\r\nsecond\r\n'.encode(); doc.write_bytes(original)
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'clipboard') as app:
+            shift('Down'); app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Ctrl+C takes the desktop clipboard')
+            assert peer.request()==(peer.utf8, 8, 'naïve café\n'.encode()), 'copied text with an LF newline'
+            mime = peer.atom(b'text/plain;charset=utf-8')
+            assert peer.request(mime)==(mime, 8, 'naïve café\n'.encode())
+            kind, fmt, offered = peer.request(peer.targets)
+            assert (kind, fmt) == (4, 32) and {peer.targets, peer.utf8, mime} <= set(offered), offered
+            assert peer.request(peer.atom(b'STRING')) is None, 'an unoffered format is refused'
+            peer.own('café\r\nline two\n'.encode())
+            app.tap('End','Control_L'); app.tap('v','Control_L')
+            assert peer.serve() is True, 'Ctrl+V asked the other application'
+            saved(doc, original + 'café\r\nline two\r\n'.encode(), 'a pasted mix of CRLF and LF follows the CRLF style')
+            app.tap('z','Control_L'); saved(doc, original, 'one undo removes the paste')
+            for name, data in [('control', b'bad\x01text'), ('bare-cr', b'a\rb'), ('invalid', b'\xff\xfe'),
+                               ('too-large', b'x' * 70000)]:
+                calm()
+                peer.own(data); app.tap('v','Control_L')
+                assert peer.serve() is True, name
+                wait_for(warned, name + ' paste refused visibly')
+                app.frame('refused-' + name)
+                assert doc.read_bytes()==original, name
+            calm(); peer.disown(); app.tap('v','Control_L')
+            wait_for(warned, 'a paste with no clipboard owner is reported')
+            calm(); peer.own(b'never', answer=False); app.tap('v','Control_L')
+            assert peer.serve() is False
+            wait_for(warned, 'an unanswered paste is reported', timeout=6)
+            app.type('Q'); expected = original + b'Q'
+            saved(doc, expected, 'Notes keeps working after an unanswered paste')
+            # Another application taking the clipboard ends Notes' ownership.
+            app.tap('Home','Control_L'); shift('Right'); app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes takes the clipboard again')
+            peer.own(b'from peer'); app.tap('End','Control_L'); app.tap('v','Control_L')
+            assert peer.serve() is True, 'after losing the clipboard Notes asks its new owner'
+            expected += b'from peer'; saved(doc, expected, 'the new owner\'s text pasted')
+            # A request from a window that is already gone cannot stop Notes.
+            app.tap('Home','Control_L'); shift('Right'); app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard for the vanished request')
+            peer.request_from_gone_window(app.window)
+            time.sleep(.3)
+            assert app.p.poll() is None, 'a vanished requestor stopped Notes'
+            app.tap('End','Control_L'); app.type('!'); expected += b'!'
+            saved(doc, expected, 'Notes keeps working after answering a vanished window')
+            samples = []
+            for cycle in range(1, 11):
+                peer.own(b'cycle'); app.tap('v','Control_L')
+                assert peer.serve() is True
+                app.tap('z','Control_L'); saved(doc, expected, 'external paste and undo cycle')
+                if cycle % 2 == 0: samples.append(memory(app.p.pid))
+            stable_memory(samples, 'external paste undo')
+            app.tap('Escape'); app.finish()
+        big = d/'big.txt'; content = (b'x' * 1023 + b'\n') * 64; big.write_bytes(content)
+        with application(args.notes, big, b'Herbert - Notes', (900,600), x, display, d, 'clipboard-big') as app:
+            app.tap('a','Control_L'); app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns a 65,536-byte copy')
+            assert peer.request()==(peer.utf8, 8, content), 'a 65,536-byte copy arrives whole'
+            app.tap('Escape'); app.tap('Escape'); app.finish()
+        names = d/'names.txt'; names.write_bytes(b'just a note\n')
+        other = d/'other.txt'; other.write_bytes(b'second\n')
+        with application(args.notes, names, b'Herbert - Notes', (900,600), x, display, d, 'clipboard-open') as app:
+            peer.own(b'other.txt\n'); app.tap('o','Control_L'); app.tap('v','Control_L')
+            assert peer.serve() is True
+            app.tap('Return'); app.type('Q'); saved(other, b'Qsecond\n', 'a name pasted from another application opens')
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-desktop-clipboard-copy-offer-paste-crlf-refusals-timeout-ownership-vanished-requestor-64kib-field-memory',
+           samples=samples)
+
+
 def static_elf(path):
     data = path.read_bytes()
     assert data[:7] == b'\x7fELF\x02\x01\x01', 'expected little-endian ELF64'
@@ -1112,6 +1346,7 @@ def main():
                     notes_editing_checks(args,x,display,evidence,passed)
                     notes_open_checks(args,x,display,evidence,passed)
                     notes_selection_checks(args,x,display,evidence,passed)
+                    notes_clipboard_checks(args,x,display,evidence,passed)
             finally:
                 x.close()
     except BaseException as error:

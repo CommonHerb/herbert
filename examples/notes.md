@@ -53,11 +53,20 @@ everything. The selection is highlighted. A movement key without Shift drops it,
 Left and Right first going to its start or end, and the first Escape drops it
 without closing Notes. Typing, Enter, Tab, Unicode entry and Ctrl+V replace the
 selection; Backspace and Delete remove it. **Ctrl+X cuts, Ctrl+C copies and Ctrl+V
-pastes**; a cut, a paste or a typed replacement is one undo step. The clipboard
-currently belongs to this Notes window, holding the selection's text with LF
-newlines; a pasted newline follows the document's own style when saved. Ctrl+V
-also pastes into the Open and Find fields when the text is one line without tabs
-that fits; one trailing newline is dropped, and other text is refused whole.
+pastes**; a cut, a paste or a typed replacement is one undo step.
+
+**The clipboard is the desktop's.** Ctrl+C and Ctrl+X offer the selection to other
+applications, with LF newlines, and Ctrl+V pastes from whichever application
+copied last. Pasted text follows the rules for opening a file: valid UTF-8, TAB
+and LF or CRLF newlines in any mix, each newline then following the document's
+own style when saved. Text with other control characters, a bare CR or invalid
+UTF-8 is refused whole, as is text over 65,504 bytes or more than the document
+has room for. If no application offers text, or the one that does fails to
+answer within two seconds, the footer says so and nothing changes. As with any
+X11 application, copied text stays available while Notes is running; whether it
+outlives Notes depends on the desktop. Ctrl+V also pastes into the Open and Find
+fields when the text is one line without tabs that fits; one trailing newline
+is dropped, and other text is refused whole.
 
 **Ctrl+F searches** for up to 64 UTF-8 bytes, case-sensitive and byte-exact. Matches must start
 and end on grapheme boundaries; canonically equivalent spellings are not
@@ -132,8 +141,8 @@ race the final conflict check and rename. A crash can leave an owned
 `.herbert-save-*.tmp` file beside the document.
 
 Current limits: fixed-size 900x600 window, limited font and keyboard coverage,
-no compose/IME, desktop clipboard (cut, copy and paste work inside one Notes window),
-mouse editing, general save-as dialog, file browser or multi-file tabs. Ctrl+O replaces the open document; to edit two files at
+no compose/IME, primary selection (middle-click paste), mouse editing, general
+save-as dialog, file browser or multi-file tabs. Ctrl+O replaces the open document; to edit two files at
 once, launch another instance with the other path. The visible path is clipped
 after 130 bytes and the Open field shows a path's last 130 characters; the full
 path is used for file operations.

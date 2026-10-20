@@ -20,6 +20,13 @@ source; the retained source map identifies its original units.
   is an `X11` record: `c.state` is a reference record (descriptor, server ids,
   flags), and `c.poll` and `c.clock` are the scratch buffers callers pass to
   `linux_poll` and `linux_clock_ms`.
+- `x11_clipboard.herb`: the desktop clipboard for that window, opt-in. It takes
+  CLIPBOARD and answers other applications' requests (UTF8_STRING and
+  text/plain;charset=utf-8, with TARGETS and TIMESTAMP), and asks the current owner
+  for UTF-8 text with a bounded wait. Incremental transfers are refused, which
+  bounds a paste to 65,504 bytes. X11 errors from answering a window that has
+  already gone are ignored; any other X11 error still stops the program. Call
+  `x11_enable_clipboard` at startup and `x11_serve` after each `x11_events`.
 - `pixel_text.herb`: original 5×7 printable ASCII glyphs, strings, buffer spans
   and decimal numbers, rendered without temporary per-frame strings.
 - `grid_map.herb`: bounded rectangular ASCII tile maps with enclosure, unique
