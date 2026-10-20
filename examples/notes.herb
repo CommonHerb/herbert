@@ -764,7 +764,7 @@ func notes_status(c, f, t, s, query):
     if message == 6: status = "Written; sync/verification failed. Ctrl+S retries; Ctrl+Shift+S rescues." end
     if message == 7: status = "Rescue copy saved. Original stays open; its unsaved state is unchanged." end
     if message == 8: status = "Rescue copy written, but directory sync failed. Keep this window open." end
-    if message == 10: status = "No more undo history (up to 256 edits / 65536 history bytes)." end
+    if message == 10: status = "No more undo history (up to 256 edits / 131072 history bytes)." end
     if message == 11: status = "No more redo history." end
     if message == 12: status = "Match. F3 next | Shift+F3 previous | Ctrl+F new search" end
     if message == 13: status = "No matching text. Search is case-sensitive and wraps at either end." end
