@@ -40,8 +40,9 @@ source; the retained source map identifies its original units.
   A CRLF newline is one logical edit. Used by Notes.
 - `session_recovery.herb`: descriptor-relative private Notes session directories
   and reusable atomic plain-text checkpoints. Copies persist until explicit user
-  cleanup; reopening never adopts the original document. Closing a recovery
-  context is terminal; create a new context for a new session. See the Notes guide.
+  cleanup; reopening never adopts the original document. `recovery_reset(r)` ends
+  a session so the next checkpoint starts a new one beside whichever document it
+  names, without allocating. See the Notes guide.
 - `file_io.herb`: open a bounded regular file and save through an exclusive
   temporary file and atomic rename in its opened directory. Detected external
   changes are refused; post-publication sync or verification failure is reported distinctly.
@@ -50,6 +51,9 @@ source; the retained source map identifies its original units.
   A handle is a `File` record: `f.state` is a reference record (directory
   descriptor, last status, counts, mode), `f.bytes` holds the loaded bytes and
   `f.path` the NUL-terminated path; the stat buffers keep the kernel's layout.
+  `file_new(capacity)` allocates a handle's storage once and `file_load(f, path,
+  count)` loads a document into it, again and again, without allocating;
+  `file_open(path, capacity)` does both from a path string.
 - `../examples/first_steps.herb`: the application's position, controls and scene.
 
 The compiler has no game/window-specific operation. Five hosted-only primitives

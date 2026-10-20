@@ -10,7 +10,8 @@
 -- stat, baseline stat, original path bytes (NUL terminated, useful for display),
 -- temp-file stat, last published bytes (recovery after an unsuccessful
 -- post-rename stat) and the latest rescue-copy basename (NUL terminated; valid
--- after copy result 0 or 1). The stat buffers keep the kernel's layout. State:
+-- after copy result 0 or 1). Basename and path have 4096 bytes each, so one File
+-- can load document after document. The stat buffers keep the kernel's layout. State:
 -- status and published cover the last operation, rescue calls included;
 -- uncertain marks a baseline not yet confirmed after a publish.
 
@@ -48,17 +49,17 @@ func file_result(f, result):
     return result
 end
 
-func file_path_scan(path, p, slash):
-    if p >= length(path): return slash end
-    if index(path, p) == 0: return 0 - 2 end
-    if index(path, p) == 47: slash = p end
-    return file_path_scan(path, p + 1, slash)
+func file_path_scan(path, count, p, slash):
+    if p >= count: return slash end
+    if buffer_get(path, p) == 0: return 0 - 2 end
+    if buffer_get(path, p) == 47: slash = p end
+    return file_path_scan(path, count, p + 1, slash)
 end
 
-func file_path_part(path, from, stop, bytes):
-    if from >= stop: return freeze(bytes) end
-    do append(bytes, index(path, from))
-    return file_path_part(path, from + 1, stop, bytes)
+func file_dot_leaf(path, leaf, count):
+    if count - leaf == 1: return buffer_get(path, leaf) == 46 end
+    if count - leaf == 2: return buffer_get(path, leaf) == 46 and buffer_get(path, leaf + 1) == 46 end
+    return false
 end
 
 func file_stat(f):
@@ -119,44 +120,72 @@ func file_read(f):
     return file_result(f, status)
 end
 
--- Startup only. Missing leaf is a new empty document; missing parent is error.
--- Call file_close even on errors; -1 represents a parent not successfully open.
--- Capacity is a caller-chosen byte limit, from zero through 16 MiB.
+-- All of a File's storage is allocated here: documents of at most capacity
+-- bytes, a caller-chosen limit from zero through 16 MiB, and paths of at most
+-- 4095 bytes. file_load fills it, as often as needed, without allocating.
+func file_new(capacity):
+    return File(FileState(0 - 1, 0, false, 0, 0, false, 384, false, 0), linux_buffer(capacity + 1), linux_buffer(4096), linux_buffer(128), linux_buffer(144), linux_buffer(144), linux_buffer(4096), linux_buffer(144), linux_buffer(capacity), linux_buffer(128))
+end
+
+-- Load the document named by path's first count bytes into f's own storage.
+-- Any directory f held is closed first; its temp/rescue serial keeps counting.
+-- Missing leaf is a new empty document; missing parent is error. The result
+-- is also file_status(f). Call file_close even on errors; a dirfd of -1
+-- represents a parent not successfully open.
+func file_load(f, path, count):
+    let st = f.state
+    let closed = file_close(f)
+    st.status = 0
+    st.exists = false
+    st.count = 0
+    st.published = false
+    st.mode = 384
+    st.uncertain = false
+    st.saved_count = 0
+    if count == 0 or count >= buffer_length(f.path) or count > 4095 or not linux_range(path, 0, count): return file_result(f, 0 - 22) end
+    let copied = linux_copy(f.path, 0, path, 0, count)
+    let ended = buffer_set(f.path, count, 0)
+    let slash = file_path_scan(f.path, count, 0, 0 - 1)
+    let leaf = 0
+    if slash < count: leaf = slash + 1 end
+    if slash == 0 - 2 or leaf == count or file_dot_leaf(f.path, leaf, count): return file_result(f, 0 - 22) end
+    let named = linux_copy(f.basename, 0, f.path, leaf, count - leaf + 1)
+    -- The parent's name is the path cut at its last slash ("/" for a leaf at
+    -- the root), or "." written into the temp-name scratch. Nothing is allocated.
+    let dirfd = 0
+    if slash < count:
+        let cut = slash
+        if slash == 0: cut = 1 end
+        let kept = buffer_get(f.path, cut)
+        let cutoff = buffer_set(f.path, cut, 0)
+        dirfd = linux_syscall6(2, buffer_address(f.path), 589824, 0, 0, 0, 0)
+        let restored = buffer_set(f.path, cut, kept)
+    else:
+        let dot = linux_text(f.temp, 0, ".")
+        let nul = buffer_set(f.temp, 1, 0)
+        dirfd = linux_syscall6(2, buffer_address(f.temp), 589824, 0, 0, 0, 0)
+    end
+    if linux_error(dirfd): return file_result(f, dirfd) end
+    st.dirfd = dirfd
+    let stat = file_stat(f)
+    if stat == 0 - 2: return 0 end
+    if stat == 0: stat = file_regular(f.stat) end
+    if stat != 0: return file_result(f, stat) end
+    st.exists = true
+    return file_read(f)
+end
+
+-- A new File loaded from a path string. Its storage serves later file_load calls.
 func file_open(path, capacity):
     let badcapacity = capacity > 16777216
     if badcapacity: capacity = 0 end
-    let slash = file_path_scan(path, 0, 0 - 1)
-    let parent = "."
-    let leaf = path
-    if slash < length(path):
-        parent = file_path_part(path, 0, slash, new_buffer())
-        if slash == 0: parent = "/" end
-        leaf = file_path_part(path, slash + 1, length(path), new_buffer())
-    end
-    let f = File(FileState(0, 0, false, 0, 0, false, 0, false, 0), linux_buffer(capacity + 1), linux_cstring(leaf), linux_buffer(128), linux_buffer(144), linux_buffer(144), linux_cstring(path), linux_buffer(144), linux_buffer(capacity), linux_buffer(128))
-    let st = f.state
-    st.dirfd = 0 - 1
-    st.mode = 384
-    if badcapacity or slash == 0 - 2 or length(path) == 0 or length(path) > 4095 or length(leaf) == 0 or equal(leaf, ".") or equal(leaf, ".."):
+    let f = file_new(capacity)
+    if badcapacity or length(path) > 4095:
         let failed = file_result(f, 0 - 22)
         return f
     end
-    let dirname = linux_cstring(parent)
-    let dirfd = linux_syscall6(2, buffer_address(dirname), 589824, 0, 0, 0, 0)
-    if linux_error(dirfd):
-        let failed = file_result(f, dirfd)
-        return f
-    end
-    st.dirfd = dirfd
-    let stat = file_stat(f)
-    if stat == 0 - 2: return f end
-    if stat == 0: stat = file_regular(f.stat) end
-    if stat != 0:
-        let failed = file_result(f, stat)
-        return f
-    end
-    st.exists = true
-    let loaded = file_read(f)
+    let copied = linux_text(f.path, 0, path)
+    let loaded = file_load(f, f.path, length(path))
     return f
 end
 

@@ -36,7 +36,7 @@ def wait_for(predicate, description, timeout=5):
 
 
 class App:
-    def __init__(self, image, path, title, size, x, display, evidence, label):
+    def __init__(self, image, path, title, size, x, display, evidence, label, cwd=None):
         self.x, self.evidence, self.label = x, evidence, label
         self.window = None
         self.inputs = []
@@ -46,7 +46,9 @@ class App:
         env.pop('XAUTHORITY', None)
         self.out = (evidence / (label + '.stdout')).open('wb')
         self.err = (evidence / (label + '.stderr')).open('wb')
-        self.p = subprocess.Popen([str(image.resolve()), str(path.resolve())], env=env,
+        # With cwd, the path is passed exactly as given, relative paths included.
+        argument = str(path) if cwd else str(path.resolve())
+        self.p = subprocess.Popen([str(image.resolve()), argument], env=env, cwd=cwd,
                                   stdin=subprocess.DEVNULL, stdout=self.out, stderr=self.err)
         try:
             def created():
@@ -150,8 +152,8 @@ class App:
 
 
 @contextlib.contextmanager
-def application(*args):
-    app = App(*args)
+def application(*args, **kwargs):
+    app = App(*args, **kwargs)
     try:
         yield app
     finally:
@@ -881,6 +883,81 @@ def notes_fault_checks(args, x, display, evidence, passed):
         passed('notes-directory-sync-fault-'+label, expected_file_bytes=expected.decode(), injected_directory_fsync=injected[0])
     assert close_prompts['edited-document']!=close_prompts['clean-document'],'save-only warning incorrectly claims unsaved edits or recovery'
 
+def notes_open_checks(args, x, display, evidence, passed):
+    d = evidence/'open'; sub = d/'sub'; sub.mkdir(parents=True)
+    first = d/'a.txt'; first.write_bytes(b'first file\n')
+    second = sub/'b.txt'; second.write_bytes(b'second\r\nfile\r\n')
+    # Same name as first, one folder down: a field that ignored the document's
+    # folder would open this one instead.
+    decoy = sub/'a.txt'; decoy.write_bytes(b'decoy\n')
+    bad = sub/'bad.txt'; bad.write_bytes(b'\xff\n')
+    warning = (16173151).to_bytes(3,'big')
+    def warned():
+        return warning in region(app.frame(),28,560,810,7)
+    def recoveries(folder):
+        return sorted(p.read_bytes() for p in folder.glob(f'.herbert-notes-{app.p.pid}-*/recovery.txt'))
+    def opened(path):
+        app.tap('o','Control_L'); app.type(path); app.tap('Return')
+    with application(args.notes, Path('../a.txt'), b'Herbert - Notes', (900,600), x, display, d, 'notes-open', cwd=sub) as app:
+        app.type('A')
+        app.tap('o','Control_L')
+        wait_for(warned, 'Ctrl+O with unsaved edits refused visibly')
+        app.type('z'); app.tap('s','Control_L')
+        wait_for(lambda: first.read_bytes()==b'Azfirst file\n', 'refused open left typing in the document')
+        # Launched from sub as ../a.txt: the field starts with that folder, so
+        # a.txt names the open document itself, not the decoy beside the cwd.
+        opened('a.txt')
+        app.type('Q'); app.tap('s','Control_L')
+        wait_for(lambda: first.read_bytes()==b'QAzfirst file\n', 'reopened document saved at its own path')
+        assert decoy.read_bytes()==b'decoy\n', 'open ignored the document folder'
+        opened('sub/b.txt')
+        app.type('B'); app.tap('s','Control_L')
+        wait_for(lambda: second.read_bytes()==b'Bsecond\r\nfile\r\n', 'second file saved in its own CRLF style')
+        assert first.read_bytes()==b'QAzfirst file\n', 'save after open wrote the previous file'
+        wait_for(lambda: recoveries(sub)==[b'Bsecond\r\nfile\r\n'], 'recovery beside the newly opened file')
+        assert recoveries(d)==[b'Azfirst file\n', b'QAzfirst file\n'], ('earlier sessions kept', recoveries(d))
+        before = region(app.frame('before-refusals'),28,102,838,60)
+        for name, typed in [('missing-folder','missing/c.txt'), ('invalid-text','bad.txt'), ('folder','../sub')]:
+            opened(typed)
+            wait_for(warned, name + ' open refused visibly')
+            app.frame('refused-' + name)
+            # Compare until the blinking cursor matches; text must not change.
+            wait_for(lambda: region(app.frame(),28,102,838,60)==before, name + ' refusal kept the document view')
+            app.tap('Escape')
+        app.type('C'); app.tap('s','Control_L')
+        wait_for(lambda: second.read_bytes()==b'BCsecond\r\nfile\r\n', 'refusals kept text, cursor and save target')
+        assert bad.read_bytes()==b'\xff\n' and not (sub/'missing').exists()
+        fresh = sub/'new.txt'
+        opened('new.txt')
+        time.sleep(.2)
+        assert not fresh.exists(), 'opening a new name created the file'
+        app.type('N'); app.tap('s','Control_L')
+        wait_for(lambda: fresh.exists() and fresh.read_bytes()==b'N', 'new file created by save')
+        assert fresh.stat().st_mode & 0o777 == 0o600
+        assert second.read_bytes()==b'BCsecond\r\nfile\r\n'
+        (sub/'x.txt').write_bytes(b'x file\n'); (sub/'y.txt').write_bytes(b'y file\n')
+        views = {}
+        for name in ('x.txt', 'y.txt'):
+            opened(name)
+            time.sleep(.2)
+            views[name] = region(app.frame(),28,102,838,14)
+        assert views['x.txt'] != views['y.txt']
+        samples = []
+        for cycle in range(1, 21):
+            for name in ('x.txt', 'y.txt'):
+                opened(name)
+                wait_for(lambda: region(app.frame(),28,102,838,14)==views[name], name + ' shown after open')
+            if cycle % 2 == 0:
+                samples.append(memory(app.p.pid))
+        (d/'notes-open-memory.json').write_text(json.dumps(samples, indent=2)+'\n')
+        stable_memory(samples, 'alternating opens')
+        app.tap('Escape')
+        app.finish()
+        assert not list(d.glob('**/.herbert-save-*.tmp')), 'open or save leaked temporary files'
+        passed('notes-open-refuses-unsaved-opens-beside-saves-new-target-keeps-recovery-refusals-intact-memory-flat',
+               samples=samples)
+
+
 def static_elf(path):
     data = path.read_bytes()
     assert data[:7] == b'\x7fELF\x02\x01\x01', 'expected little-endian ELF64'
@@ -934,6 +1011,7 @@ def main():
                     notes_checks(args,x,display,evidence,passed)
                     notes_fault_checks(args,x,display,evidence,passed)
                     notes_editing_checks(args,x,display,evidence,passed)
+                    notes_open_checks(args,x,display,evidence,passed)
             finally:
                 x.close()
     except BaseException as error:

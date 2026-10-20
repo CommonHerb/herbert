@@ -2,9 +2,13 @@
 -- Libraries: linux, utf8, unicode_grapheme, file_io, text_buffer,
 -- session_recovery, x11, pixel_text, unicode_display. UTF-8 + LF/CRLF + TAB.
 -- App state is one reference record, built once in main and updated in place.
+-- It holds the open document's File and a spare one: Ctrl+O loads the spare and
+-- the two swap, so opening a file allocates nothing either.
 -- No per-event/frame/save string or tuple creation.
 
 ref record NotesState:
+    doc: File
+    spare: File
     top: int
     left: int
     dirty: bool
@@ -22,6 +26,10 @@ ref record NotesState:
     unicode_input: bool
     unicode_value: int
     unicode_digits: int
+    opening: bool
+    path: buffer
+    path_count: int
+    open_result: int
 end
 
 func notes_redraw(s):
@@ -57,6 +65,7 @@ func notes_quit(c, f, t, s, recovery):
     let checkpoint = notes_checkpoint(recovery, f, t, s)
     let closedrecovery = recovery_close(recovery)
     let closedfile = file_close(f)
+    let closedspare = file_close(s.spare)
     let closedwindow = x11_close(c)
     do process_exit(0)
     return 0
@@ -64,6 +73,7 @@ end
 
 func notes_request_close(c, f, t, s, recovery):
     s.unicode_input = false
+    s.opening = false
     let checkpoint = notes_checkpoint(recovery, f, t, s)
     let acknowledged = x11_ack_close(c)
     if not s.dirty: return notes_quit(c, f, t, s, recovery) end
@@ -132,6 +142,14 @@ end
 -- query input and document input never expose a partial UTF-8 sequence.
 func notes_insert_scalar(t, s, query, ch):
     if not utf8_text_allowed(ch): return notes_message(s, 18) end
+    if s.opening:
+        if ch == 9 or ch == 10: return notes_message(s, 18) end
+        let count = s.path_count
+        if utf8_width(ch) > 4095 - count: return notes_message(s, 29) end
+        let next = utf8_store(s.path, count, ch)
+        s.path_count = next
+        return notes_message(s, 19)
+    end
     if s.finding:
         if ch == 9 or ch == 10: return notes_message(s, 18) end
         let count = s.query_count
@@ -172,7 +190,7 @@ func notes_unicode_key(t, s, query, key, mods):
     if key == 65293 or key == 32:
         let value = s.unicode_value
         if digits == 0 or not utf8_text_allowed(value): return notes_message(s, 18) end
-        if s.finding and (value == 9 or value == 10): return notes_message(s, 18) end
+        if (s.finding or s.opening) and (value == 9 or value == 10): return notes_message(s, 18) end
         s.unicode_input = false
         return notes_insert_scalar(t, s, query, value)
     end
@@ -204,7 +222,112 @@ func notes_search_key(t, s, query, key, mods):
     return notes_insert_scalar(t, s, query, ch)
 end
 
-func notes_key(c, f, t, s, recovery, query, key, mods):
+-- Paths are bytes; offer only a prefix the Open field can show and edit.
+func notes_path_valid(bytes, p, count):
+    if p >= count: return true end
+    let decoded = utf8_decode(bytes, p, count)
+    if linux_error(decoded.0) or decoded.0 == 9 or decoded.0 == 10 or not utf8_text_allowed(decoded.0): return false end
+    return notes_path_valid(bytes, decoded.1, count)
+end
+
+-- The Open field starts with the open document's folder, absolute when the
+-- working directory is known, so a typed name opens beside that document.
+func notes_open_prefix(s):
+    let f = s.doc
+    let count = linux_nul_end(f.path, 0, buffer_length(f.path))
+    let slash = file_path_scan(f.path, count, 0, 0 - 1)
+    let folder = 0
+    if slash < count: folder = slash + 1 end
+    let at = 0
+    if count == 0 or buffer_get(f.path, 0) != 47:
+        let got = linux_syscall6(79, buffer_address(s.path), buffer_length(s.path), 0, 0, 0, 0)
+        if not linux_error(got) and got > 1:
+            at = got - 1
+            if buffer_get(s.path, at - 1) != 47:
+                let separator = buffer_set(s.path, at, 47)
+                at = at + 1
+            end
+        end
+    end
+    if at + folder > 4095: return 0 end
+    let copied = linux_copy(s.path, at, f.path, 0, folder)
+    if not notes_path_valid(s.path, 0, at + folder): return 0 end
+    return at + folder
+end
+
+func notes_open_start(s):
+    if s.dirty: return notes_message(s, 22) end
+    s.finding = false
+    s.opening = true
+    s.path_count = notes_open_prefix(s)
+    return notes_message(s, 19)
+end
+
+func notes_open_error(status):
+    if status == 0 - 27: return 23 end
+    if status == 0 - 40: return 24 end
+    if status == 0 - 31: return 25 end
+    if status == 0 - 116: return 26 end
+    if status == 0 - 22: return 30 end
+    return 28
+end
+
+-- Load the typed path into the spare File, then its text, and swap. A refusal
+-- leaves the open document, its text, history and recovery session as they were.
+func notes_open(t, s, recovery):
+    if s.dirty: return notes_message(s, 22) end
+    let checkpoint = notes_checkpoint(recovery, s.doc, t, s)
+    let g = s.spare
+    let loaded = file_load(g, s.path, s.path_count)
+    if loaded != 0:
+        let closed = file_close(g)
+        s.open_result = loaded
+        return notes_message(s, notes_open_error(loaded))
+    end
+    let text = text_load(t, g.bytes, file_count(g))
+    if text != 0:
+        let closed = file_close(g)
+        s.open_result = text
+        if text == 0 - 27: return notes_message(s, 23) end
+        return notes_message(s, 27)
+    end
+    let old = s.doc
+    s.doc = g
+    s.spare = old
+    let closedold = file_close(old)
+    let reset = recovery_reset(recovery)
+    s.top = 0
+    s.left = 0
+    s.confirming = false
+    s.save_result = 0
+    s.checkpoint_pending = false
+    s.recovery_result = 0
+    s.recovery_attempted = false
+    s.opening = false
+    s.query_matched = false
+    if g.state.exists: return notes_message(s, 20) end
+    return notes_message(s, 21)
+end
+
+func notes_open_key(t, s, recovery, query, key, mods):
+    if key == 65307:
+        s.opening = false
+        return notes_message(s, 1)
+    end
+    if key == 65293: return notes_open(t, s, recovery) end
+    if (mods & 12) != 0: return 0 end
+    if key == 65288:
+        let previous = unicode_grapheme_previous(s.path, s.path_count, s.path_count)
+        s.path_count = previous
+        return notes_message(s, 19)
+    end
+    let ch = x11_text_scalar(key)
+    if ch == 0 - 1: return 0 end
+    return notes_insert_scalar(t, s, query, ch)
+end
+
+func notes_key(c, t, s, recovery, query, key, mods):
+    let f = s.doc
     let control = (mods & 4) != 0
     if control and (mods & 1) != 0 and (key == 115 or key == 83): return notes_save_copy(f, t, s) end
     if control and (key == 115 or key == 83): return notes_save(f, t, s) end
@@ -225,6 +348,8 @@ func notes_key(c, f, t, s, recovery, query, key, mods):
         return notes_message(s, 16)
     end
     if control and (key == 113 or key == 81): return notes_request_close(c, f, t, s, recovery) end
+    if control and (key == 111 or key == 79): return notes_open_start(s) end
+    if s.opening: return notes_open_key(t, s, recovery, query, key, mods) end
     if control and (key == 102 or key == 70):
         s.finding = true
         s.query_count = 0
@@ -285,10 +410,10 @@ func notes_key(c, f, t, s, recovery, query, key, mods):
     return 0
 end
 
-func notes_keys(c, f, t, s, recovery, query, event):
+func notes_keys(c, t, s, recovery, query, event):
     if not x11_next_key(c, event): return 0 end
-    let handled = notes_key(c, f, t, s, recovery, query, linux_u32(event, 0), linux_u32(event, 4))
-    return notes_keys(c, f, t, s, recovery, query, event)
+    let handled = notes_key(c, t, s, recovery, query, linux_u32(event, 0), linux_u32(event, 4))
+    return notes_keys(c, t, s, recovery, query, event)
 end
 
 func notes_view(t, s):
@@ -343,6 +468,23 @@ func notes_query_missing(query, count, p):
     return notes_query_missing(query, count, next)
 end
 
+func notes_graphemes(bytes, count, p, n):
+    if p >= count: return n end
+    return notes_graphemes(bytes, count, unicode_grapheme_next(bytes, count, p), n + 1)
+end
+
+func notes_skip(bytes, count, p, n):
+    if n == 0 or p >= count: return p end
+    return notes_skip(bytes, count, unicode_grapheme_next(bytes, count, p), n - 1)
+end
+
+-- The Open field shows the path's last 130 characters.
+func notes_path_start(bytes, count):
+    let total = notes_graphemes(bytes, count, 0, 0)
+    if total <= 130: return 0 end
+    return notes_skip(bytes, count, 0, total - 130)
+end
+
 func notes_draw_hex(c, value, digits, x):
     if digits == 0: return 0 end
     let digit = value % 16
@@ -394,20 +536,38 @@ func notes_status(c, f, t, s, query):
     if message == 17: status = "Unicode entry: at most 6 hex digits. Backspace removes one." end
     if message == 18: status = "Not an allowed Unicode character. Text is unchanged." end
     if message == 9: status = "Rescue failed; no copy published this attempt. Your edits remain here." end
+    if message == 19: status = "Open: type a path. Enter opens | Esc cancels. A name that does not exist yet starts an empty file." end
+    if message == 20: status = "Opened. Original bytes and newline style are preserved." end
+    if message == 21: status = "New file. It is created when you save with Ctrl+S." end
+    if message == 22: status = "Unsaved edits. Ctrl+S saves (or Ctrl+Shift+S rescues) before Ctrl+O opens another file." end
+    if message == 23: status = "Not opened: the file exceeds the 65536-byte limit. This document is unchanged." end
+    if message == 24: status = "Not opened: symbolic links are refused. Open the intended file directly." end
+    if message == 25: status = "Not opened: multiply hardlinked files are refused to preserve their links." end
+    if message == 26: status = "Not opened: the file changed while opening. Try again." end
+    if message == 27: status = "Not opened: expected valid UTF-8 text, TAB and uniform LF or CRLF." end
+    if message == 28: status = "Not opened: no such folder, no permission, or a file owned by another account. Error" end
+    if message == 29: status = "A path is limited to 4095 bytes." end
+    if message == 30: status = "Not opened: name a regular file, not a folder." end
     if s.confirming and message == 7:
         status = "Rescue saved. Close pending: Y closes; Esc returns."
     end
     if s.confirming and message == 8:
         status = "Copy written; sync uncertain. Close pending: Y closes; Esc returns."
     end
-    if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18: let warning = x11_color(c, 16173151) end
+    if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18 or message >= 22: let warning = x11_color(c, 16173151) end
     let statusline = pixel_text(c, status, 28, 560, 1)
     if message == 4 or message == 9:
         let code = pixel_number(c, 0 - s.save_result, 830, 560, 1)
     end
+    if message == 28:
+        let code = pixel_number(c, 0 - s.open_result, 830, 560, 1)
+    end
     if s.unicode_input and not s.confirming:
         let help = pixel_text(c, "Unicode U+", 28, 580, 1)
         let number = notes_draw_hex(c, s.unicode_value, s.unicode_digits, 88)
+    elif s.opening and not s.confirming:
+        let help = pixel_text(c, "Open:", 28, 580, 1)
+        let typed = notes_draw_query(c, s.path, s.path_count, notes_path_start(s.path, s.path_count), 70)
     elif s.finding and not s.confirming:
         let help = pixel_text(c, "Find:", 28, 580, 1)
         let typed = notes_draw_query(c, query, s.query_count, 0, 70)
@@ -421,12 +581,12 @@ func notes_status(c, f, t, s, query):
         if notes_recovery_current(s): closehelp = "Close pending: Y closes (recovery kept) | Esc returns | Ctrl+S saves" end
         let help = pixel_text(c, closehelp, 28, 580, 1)
     else:
-        let help = pixel_text(c, "Ctrl+S save | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
+        let help = pixel_text(c, "Ctrl+S save | Ctrl+O open | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
     end
     return 0
 end
 
-func notes_draw(c, f, t, s, recovery, query, path, blink):
+func notes_draw(c, f, t, s, recovery, query, blink):
     let view = notes_view(t, s)
     let background = x11_color(c, 1054759)
     let canvas = x11_rect(c, 0, 0, 900, 600)
@@ -435,7 +595,7 @@ func notes_draw(c, f, t, s, recovery, query, path, blink):
     let subtitle = x11_color(c, 8820395)
     let hint = pixel_text(c, "PLAIN TEXT", 688, 39, 2)
     let label = pixel_text(c, "File:", 28, 72, 1)
-    let pathcount = length(path)
+    let pathcount = linux_nul_end(f.path, 0, buffer_length(f.path))
     if pathcount > 130: pathcount = 130 end
     let pathname = pixel_text_buffer(c, f.path, 0, pathcount, 70, 72, 1)
     let recoverycolor = x11_color(c, 8820395)
@@ -462,6 +622,11 @@ func notes_draw(c, f, t, s, recovery, query, path, blink):
             s.missing_glyphs = true
         end
     end
+    if s.opening and not s.unicode_input and not s.confirming:
+        if notes_query_missing(s.path, s.path_count, notes_path_start(s.path, s.path_count)):
+            s.missing_glyphs = true
+        end
+    end
     if blink:
         let cursorcolor = x11_color(c, 16173151)
         let col = text_column(t, text_cursor(t)) - s.left
@@ -473,18 +638,18 @@ func notes_draw(c, f, t, s, recovery, query, path, blink):
     return x11_present(c)
 end
 
-func notes_loop(c, f, t, s, recovery, query, path, event, lastblink):
+func notes_loop(c, t, s, recovery, query, event, lastblink):
     let events = x11_events(c)
     -- Accepted typing belongs to the document before a batched WM close is
     -- considered. In particular, a queued ordinary Y must not confirm discard.
-    let keys = notes_keys(c, f, t, s, recovery, query, event)
-    let checkpoint = notes_checkpoint(recovery, f, t, s)
-    if x11_closed(c): let requested = notes_request_close(c, f, t, s, recovery) end
+    let keys = notes_keys(c, t, s, recovery, query, event)
+    let checkpoint = notes_checkpoint(recovery, s.doc, t, s)
+    if x11_closed(c): let requested = notes_request_close(c, s.doc, t, s, recovery) end
     let now = linux_clock_ms(c.clock)
     let checked = x11_need(not linux_error(now), "notes: monotonic clock failed\n")
     let blink = (now / 500) % 2
     if s.needs_draw or blink != lastblink:
-        let drawn = notes_draw(c, f, t, s, recovery, query, path, blink == 0)
+        let drawn = notes_draw(c, s.doc, t, s, recovery, query, blink == 0)
     elif x11_exposed(c):
         -- Refresh the retained pixmap after uncovering/expose without rebuilding
         -- all glyphs. Repainting and blinking allocate no new objects.
@@ -493,7 +658,7 @@ func notes_loop(c, f, t, s, recovery, query, path, event, lastblink):
     let exposed = x11_ack_expose(c)
     let waited = linux_poll(c.state.fd, c.poll, 1, 500 - now % 500)
     let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "notes: input wait failed\n")
-    return notes_loop(c, f, t, s, recovery, query, path, event, blink)
+    return notes_loop(c, t, s, recovery, query, event, blink)
 end
 
 func main():
@@ -518,12 +683,12 @@ func main():
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
-    let s = NotesState(0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0)
+    let s = NotesState(f, file_new(65536), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0)
     let recovery = recovery_new(65536)
     let query = linux_buffer(64)
     s.needs_draw = true
     let c = x11_open(900, 600, "Herbert - Notes")
     let textkeys = x11_enable_text(c)
     let event = linux_buffer(16)
-    return notes_loop(c, f, t, s, recovery, query, path, event, 0 - 1)
+    return notes_loop(c, t, s, recovery, query, event, 0 - 1)
 end

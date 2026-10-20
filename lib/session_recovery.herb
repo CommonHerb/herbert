@@ -71,3 +71,21 @@ func recovery_save(r, original, bytes, count):
 end
 
 func recovery_close(r): return file_close(r.0) end
+
+-- Before another document is edited: the next checkpoint creates a new private
+-- directory beside that document. The previous session's copy stays where it is;
+-- the directory serial keeps counting, so no name is reused.
+func recovery_reset(r):
+    let closed = recovery_close(r)
+    let snapshot = r.0
+    let st = snapshot.state
+    st.status = 0
+    st.exists = false
+    st.count = 0
+    st.published = false
+    st.uncertain = false
+    st.saved_count = 0
+    let synced = linux_put64(r.1, 8, 0)
+    let created = linux_put64(r.1, 16, 0)
+    return 0
+end

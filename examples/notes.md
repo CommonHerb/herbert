@@ -64,6 +64,21 @@ unedited document was unconfirmed, the prompt instead says that saving is
 unconfirmed and no recovery copy exists. Escape returns to editing and
 Ctrl+S saves. Holding a close key cannot confirm discard.
 
+**Ctrl+O opens another file** in the same window. The Open field at the bottom
+starts with the open document's folder as an absolute path; type a name or edit
+the path, then press Enter. Escape cancels, Backspace removes one character and
+Ctrl+Shift+U entry works here too. A relative path is resolved from the directory
+Notes was started in. If the folder's name is not valid displayable UTF-8, the
+field starts empty. A name that does not exist yet opens an empty document,
+created when you save, exactly as at launch, and every launch refusal applies.
+A refused path leaves the open document, its cursor, history and recovery session
+unchanged, and the field stays open so the path can be corrected. With unsaved
+changes Ctrl+O refuses and points to Ctrl+S and Ctrl+Shift+S: opening never
+discards edits. The opened document starts with empty undo history, and its first
+edit creates a new recovery session beside it; earlier session copies stay where
+they are. Opening allocates nothing: Notes keeps one spare file context from
+startup and swaps it with the open one.
+
 **Ctrl+Shift+S saves a rescue copy** in the same directory, named
 `herbert-rescue-<process>-<number>.txt`. The footer shows the exact resulting
 basename. This works even when another program changed the original and normal
@@ -104,10 +119,11 @@ race the final conflict check and rename. A crash can leave an owned
 `.herbert-save-*.tmp` file beside the document.
 
 Current limits: fixed-size 900x600 window, limited font and keyboard coverage,
-no compose/IME, clipboard, selection, mouse editing, general save-as dialog or
-multi-file tabs.
-Open another file by launching another instance with its path. The visible path
-is clipped after 130 bytes; the supplied full path is used for file operations.
+no compose/IME, clipboard, selection, mouse editing, general save-as dialog, file
+browser or multi-file tabs. Ctrl+O replaces the open document; to edit two files at
+once, launch another instance with the other path. The visible path is clipped
+after 130 bytes and the Open field shows a path's last 130 characters; the full
+path is used for file operations.
 
 **Session recovery is automatic after editing.** At the first edit, Notes creates
 a private sibling directory named `.herbert-notes-<process>-<number>` (0700).
