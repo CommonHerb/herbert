@@ -1977,7 +1977,7 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         return emit_instr(ir, op_make_tuple(), count(kids), 0)
     end
     if equal(tag, "record-new"):
-        let decl_idx = nc_record_decl_scan(nodes, get(atoms, 0), 0)
+        let decl_idx = nc_record_decl_find(nodes, prog_idx, get(atoms, 0))
         if equal(get(nodes, decl_idx).0, "ref-record"):
             -- A ref record is a one-element array of the tuple of its fields.
             let rt = nc_record_type(type_pool, nodes, decl_idx, new_array(int))

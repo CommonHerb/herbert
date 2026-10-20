@@ -1977,7 +1977,7 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         return emit_instr(ir, op_make_tuple(), count(kids), 0)
     end
     if equal(tag, "record-new"):
-        let decl_idx = nc_record_decl_scan(nodes, get(atoms, 0), 0)
+        let decl_idx = nc_record_decl_find(nodes, prog_idx, get(atoms, 0))
         if equal(get(nodes, decl_idx).0, "ref-record"):
             -- A ref record is a one-element array of the tuple of its fields.
             let rt = nc_record_type(type_pool, nodes, decl_idx, new_array(int))
@@ -4139,6 +4139,23 @@ func nc_record_decl_scan(nodes, name, i):
     return nc_record_decl_scan(nodes, name, i + 1)
 end
 
+-- The same search through the program node's list of its records, which is far
+-- shorter than the node pool; construction sites look up their record this way.
+func nc_record_decl_find_loop(nodes, recs, name, i):
+    if i >= count(recs):
+        return 0 - 1
+    end
+    let decl_idx = parse_decimal(get(recs, i))
+    if equal(get(get(nodes, decl_idx).1, 0), name):
+        return decl_idx
+    end
+    return nc_record_decl_find_loop(nodes, recs, name, i + 1)
+end
+
+func nc_record_decl_find(nodes, prog_idx, name):
+    return nc_record_decl_find_loop(nodes, get(nodes, prog_idx).1, name, 0)
+end
+
 func nc_record_field_index_loop(atoms, field, i):
     if i >= count(atoms):
         return 0 - 1
@@ -5858,7 +5875,7 @@ end
 func nc_infer_record_new(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params):
     let node = get(nodes, idx)
     let name = get(node.1, 0)
-    let rt = nc_record_type(pool, nodes, nc_record_decl_scan(nodes, name, 0), new_array(int))
+    let rt = nc_record_type(pool, nodes, nc_record_decl_find(nodes, prog_idx, name), new_array(int))
     if rt.0 != 0:
         return (rt.0, 0, env, sig, 0)
     end
