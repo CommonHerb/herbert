@@ -1398,20 +1398,25 @@ def notes_big_checks(args, x, display, evidence, passed):
         wait_for(lambda: not warned(), 'footer back to normal')
         app.tap('a','Control_L'); app.tap('x','Control_L')
         wait_for(warned, 'cutting a selection larger than the clipboard is refused visibly')
-        app.tap('Escape')
-        saved(doc, expected, 'the refused cut left the document whole')
+        # The save's footer shows once the keys before it are handled.
+        app.tap('Escape'); app.tap('s','Control_L')
+        wait_for(lambda: not warned(), 'footer back to normal after the refused cut', timeout=10)
+        assert doc.read_bytes() == expected, 'the refused cut left the document whole'
         app.tap('o','Control_L'); app.type('over.txt'); app.tap('Return')
         wait_for(warned, 'Ctrl+O of a file over the limit is refused visibly')
         app.tap('Escape')
         app.tap('Home','Control_L')
         samples = []
+        # Each save waits for a different file, so no cycle ends before its keys.
         for cycle in range(1, 7):
-            app.type('w'); app.tap('BackSpace'); saved(doc, expected, 'edit, delete and save cycle')
+            app.type('w'); saved(doc, b'w' + expected, 'an insertion at the start saved')
+            app.tap('BackSpace'); saved(doc, expected, 'its deletion saved')
             if cycle % 2 == 0: samples.append(memory(app.p.pid))
         (d/'notes-big-memory.json').write_text(json.dumps(samples, indent=2)+'\n')
         stable_memory(samples, '1 MiB document edits and saves')
-        recoveries = sorted(p.read_bytes() for p in d.glob(f'.herbert-notes-{app.p.pid}-*/recovery.txt'))
-        assert recoveries == [expected], 'the recovery copy holds the latest text'
+        # A batch's checkpoint follows its keys, a save among them included.
+        recoveries = lambda: sorted(p.read_bytes() for p in d.glob(f'.herbert-notes-{app.p.pid}-*/recovery.txt'))
+        wait_for(lambda: recoveries() == [expected], 'the recovery copy holds the latest text', timeout=10)
         app.tap('Escape')
         app.finish()
     assert over.read_bytes() == initial + b'!'
