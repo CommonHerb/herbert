@@ -1331,6 +1331,95 @@ def notes_clipboard_checks(args, x, display, evidence, passed):
            samples=samples)
 
 
+def cpu_seconds(pid):
+    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+    return (int(fields[11]) + int(fields[12])) / os.sysconf('SC_CLK_TCK')
+
+
+def notes_big_checks(args, x, display, evidence, passed):
+    d = evidence/'big'; d.mkdir()
+    limit = 1048576
+    warning = (16173151).to_bytes(3,'big')
+    def warned():
+        return warning in region(app.frame(),28,560,810,7)
+    def saved(path, wanted, what):
+        app.tap('s','Control_L')
+        wait_for(lambda: path.read_bytes()==wanted, what, timeout=10)
+    # A document of exactly the limit: numbered lines of accented, combining,
+    # arrow and CJK text, the last line padded to land on the limit.
+    lines, size, i = [], 0, 0
+    while size < limit - 200:
+        line = f'{i:06d} é é → 漢字 {"abcdefghij"*5}\n'.encode(); lines.append(line); size += len(line); i += 1
+    initial = b''.join(lines); initial += b'z' * (limit - len(initial) - 1) + b'\n'
+    assert len(initial) == limit
+    doc = d/'limit.txt'; doc.write_bytes(initial)
+    over = d/'over.txt'; over.write_bytes(initial + b'!')
+    env = dict(os.environ, DISPLAY=display); env.pop('XAUTHORITY', None)
+    refused = subprocess.run([str(args.notes.resolve()), str(over)], env=env, stdin=subprocess.DEVNULL,
+                             capture_output=True, timeout=30)
+    (d/'over.stderr').write_bytes(refused.stderr)
+    assert refused.returncode != 0 and refused.stdout == b'', refused
+    assert refused.stderr == b'notes: file exceeds the 1048576-byte limit. No file changed.\n', refused.stderr
+    assert over.read_bytes() == initial + b'!' and not list(d.glob('.herbert-notes-*'))
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'notes-big') as app:
+        top = region(app.frame('opened'),28,102,838,14)
+        app.type('x')
+        wait_for(warned, 'typing into a full document is refused visibly')
+        app.tap('End','Control_L')
+        wait_for(lambda: region(app.frame(),28,102,838,14) != top, 'Ctrl+End shows the last lines')
+        app.frame('end')
+        for _ in range(20): app.tap('BackSpace')
+        app.type('Q')
+        expected = initial[:-20] + b'Q'
+        saved(doc, expected, 'an edit at the end of a 1 MiB document saved')
+        app.tap('Home','Control_L')
+        wait_for(lambda: region(app.frame(),28,102,838,14) == top, 'Ctrl+Home shows the first line again')
+        cpu = cpu_seconds(app.p.pid)
+        typed = 'Herbert'
+        app.type(typed)
+        expected = typed.encode() + expected
+        saved(doc, expected, 'typing at the start of the document saved')
+        cpu = cpu_seconds(app.p.pid) - cpu
+        for _ in range(len(typed) - 1): app.tap('z','Control_L')
+        expected = typed[:1].encode() + expected[len(typed):]
+        saved(doc, expected, 'undo at the start of a 1 MiB document saved')
+        for _ in range(12): app.tap('Next')
+        app.tap('Down'); app.type('M')
+        moved = region(app.frame('paged'),28,102,838,14)
+        assert moved != top, 'Page Down scrolled the view'
+        # Page Down moves 20 rows, keeping the column (1, after the H).
+        row = 12 * 20 + 1
+        offset = sum(len(line) for line in expected.split(b'\n')[:row]) + row + 1
+        expected = expected[:offset] + b'M' + expected[offset:]
+        saved(doc, expected, 'an edit 241 rows down landed on that row')
+        app.tap('a','Control_L'); app.tap('c','Control_L')
+        wait_for(warned, 'copying a selection larger than the clipboard is refused visibly')
+        app.tap('Escape'); app.tap('s','Control_L'); time.sleep(.3)
+        wait_for(lambda: not warned(), 'footer back to normal')
+        app.tap('a','Control_L'); app.tap('x','Control_L')
+        wait_for(warned, 'cutting a selection larger than the clipboard is refused visibly')
+        app.tap('Escape')
+        saved(doc, expected, 'the refused cut left the document whole')
+        app.tap('o','Control_L'); app.type('over.txt'); app.tap('Return')
+        wait_for(warned, 'Ctrl+O of a file over the limit is refused visibly')
+        app.tap('Escape')
+        app.tap('Home','Control_L')
+        samples = []
+        for cycle in range(1, 7):
+            app.type('w'); app.tap('BackSpace'); saved(doc, expected, 'edit, delete and save cycle')
+            if cycle % 2 == 0: samples.append(memory(app.p.pid))
+        (d/'notes-big-memory.json').write_text(json.dumps(samples, indent=2)+'\n')
+        stable_memory(samples, '1 MiB document edits and saves')
+        recoveries = sorted(p.read_bytes() for p in d.glob(f'.herbert-notes-{app.p.pid}-*/recovery.txt'))
+        assert recoveries == [expected], 'the recovery copy holds the latest text'
+        app.tap('Escape')
+        app.finish()
+    assert over.read_bytes() == initial + b'!'
+    assert not list(d.glob('.herbert-save-*.tmp')), 'big saves leaked temporary files'
+    passed('notes-1mib-limit-refusals-edits-at-both-ends-paging-clipboard-refusal-recovery-memory',
+           document_bytes=limit, typed=len(typed), cpu_seconds_typing_at_start=round(cpu, 3), samples=samples)
+
+
 def notes_mouse_checks(args, x, display, evidence, passed):
     d = evidence/'mouse'; d.mkdir()
     mark = (3033707).to_bytes(3,'big')
@@ -1442,6 +1531,7 @@ def main():
                     notes_selection_checks(args,x,display,evidence,passed)
                     notes_clipboard_checks(args,x,display,evidence,passed)
                     notes_mouse_checks(args,x,display,evidence,passed)
+                    notes_big_checks(args,x,display,evidence,passed)
             finally:
                 x.close()
     except BaseException as error:

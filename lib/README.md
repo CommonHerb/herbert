@@ -45,7 +45,10 @@ source; the retained source map identifies its original units.
   `capacity` payload bytes, or the budget given to `text_buffer_history(capacity,
   history)`; whole oldest records are evicted to fit. `text_replace` swaps a span
   for new text as one undo step; a budget of twice the capacity holds any
-  whole-text replace. All editing storage is allocated at construction and reused. Uniform LF/CRLF loads retain
+  whole-text replace. All editing storage is allocated at construction and reused. Loading marks every
+  boundary once; an edit re-marks only the lines it touched, and `text_row` and `text_row_offset` count rows
+  from one remembered line instead of the start. The state is the reference record `TextState` inside the value
+  record `Text`, which names its buffers (`t.bytes` is the logical text). Uniform LF/CRLF loads retain
   their style; internal logical bytes use LF. Save with `text_file_bytes(t)` and
   `text_file_length(t)` to preserve exact encoding and the on-disk capacity bound.
   A CRLF newline is one logical edit. Used by Notes.

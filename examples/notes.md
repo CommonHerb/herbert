@@ -11,7 +11,7 @@ make notes
 
 Without a path it opens `notes.txt` in the current directory. A missing file
 starts empty and is created only when you save. An existing file must contain
-at most 65,536 bytes of valid UTF-8, TAB, and either LF or CRLF newlines.
+at most 1,048,576 bytes (1 MiB) of valid UTF-8, TAB, and either LF or CRLF newlines.
 The original UTF-8 bytes and newline style are preserved when saving, making
 rescue copies and checkpointing recovery. Enter inserts a newline in that same
 style. A file without newlines (including an empty document) uses LF. No trailing
@@ -40,7 +40,7 @@ Ctrl+Home/End move to the beginning/end of the document. Page Up/Down move
 20 lines. The view scrolls vertically and horizontally to follow the cursor.
 Tabs advance to the next four-column stop. Backspace/Delete remove a whole grapheme cluster, so accents and joined emoji
 are not split into broken fragments.
-**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 131,072 bytes of inserted/deleted text in
+**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 2,097,152 bytes of inserted/deleted text in
 fixed storage, enough for one replace of a whole document. Large edits can evict older complete history records sooner;
 a replace is kept or evicted whole. Navigation is not an edit. A new edit after
 undo drops the redo branch; the oldest edits fall off the bounded history.
@@ -69,7 +69,8 @@ copied last. Pasted text follows the rules for opening a file: valid UTF-8, TAB
 and LF or CRLF newlines in any mix, each newline then following the document's
 own style when saved. Text with other control characters, a bare CR or invalid
 UTF-8 is refused whole, as is text over 65,504 bytes or more than the document
-has room for. If no application offers text, or the one that does fails to
+has room for. A copy or cut of more than 65,536 bytes is refused, and the
+selection stays. If no application offers text, or the one that does fails to
 answer within two seconds, the footer says so and nothing changes. As with any
 X11 application, copied text stays available while Notes is running; whether it
 outlives Notes depends on the desktop. Ctrl+V also pastes into the Open and Find
@@ -154,7 +155,10 @@ selection, scroll wheel, drag-and-drop, general save-as dialog, file browser or
 multi-file tabs. Ctrl+O replaces the open document; to edit two files at
 once, launch another instance with the other path. The visible path is clipped
 after 130 bytes and the Open field shows a path's last 130 characters; the full
-path is used for file operations.
+path is used for file operations. Each edit still moves
+the text after the cursor and writes the whole recovery copy, so near 1 MiB a
+keystroke takes a few tens of milliseconds, and a line many thousands of
+characters long is slower to draw.
 
 **Session recovery is automatic after editing.** At the first edit, Notes creates
 a private sibling directory named `.herbert-notes-<process>-<number>` (0700).
@@ -178,7 +182,7 @@ choose what to keep. A newly edited recovery document gets its own session copy.
 **Copies remain after successful save, normal exit, and deliberate discard.**
 Remove the named session directory yourself when you no longer need it. There
 is no cleanup timer or automatic deletion. Each edited session retains one
-snapshot of at most 64 KiB; interrupted saves can also leave a temporary file.
+snapshot of at most 1 MiB; interrupted saves can also leave a temporary file.
 These private files contain your text and continue to use disk space until you
 remove them. Clean sessions create no copy.
 
@@ -196,7 +200,7 @@ There is no protection against a malicious writer running as your own account.
 
 Recovery covers completed, acknowledged input batches, not keystrokes still in
 flight when a process dies. Close commands also attempt any pending checkpoint before confirmation or
-exit. Synchronous checkpoint writes are bounded to 64 KiB, but the host
+exit. Synchronous checkpoint writes are bounded to 1 MiB, but the host
 filesystem's sync latency is not bounded; slow storage can delay input/display.
 This is session recovery, not a replacement for explicitly saving a document.
 Idle Notes waits for input, expose, or the next 500 ms cursor blink instead of
