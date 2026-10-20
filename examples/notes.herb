@@ -204,7 +204,7 @@ end
 func notes_copy(c, t, s):
     if not notes_selected(t, s): return notes_message(s, 32) end
     let start = notes_from(t, s)
-    let owned = x11_clip_own(c, t.0, start, notes_to(t, s) - start, s.time)
+    let owned = x11_clip_own(c, t.bytes, start, notes_to(t, s) - start, s.time)
     return notes_message(s, 31)
 end
 
@@ -642,14 +642,14 @@ end
 
 func notes_draw_line(c, t, s, p, col, left, y):
     if p >= text_length(t) or col >= left + 70: return 0 end
-    let ch = buffer_get(t.0, p)
+    let ch = buffer_get(t.bytes, p)
     if ch == 10: return 0 end
     let next = text_next(t, p)
     if col >= left and ch != 9:
-        if not unicode_display_supported(t.0, p, next):
+        if not unicode_display_supported(t.bytes, p, next):
             s.missing_glyphs = true
         end
-        let letter = pixel_unicode_cluster(c, t.0, p, next, 28 + (col - left) * 12, y, 2)
+        let letter = pixel_unicode_cluster(c, t.bytes, p, next, 28 + (col - left) * 12, y, 2)
     end
     return notes_draw_line(c, t, s, next, text_next_column(col, ch), left, y)
 end

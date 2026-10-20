@@ -537,7 +537,7 @@ for i in range(700):
         lines.append(f' r = text_seek(t, {pos})')
         ops.append([op, pos])
         cursor = min(pos, len(model))
-lines += [' let header = linux_buffer(16)', ' let a = linux_put64(header, 0, text_length(t))', ' let b = linux_put64(header, 8, text_cursor(t))', ' let h = linux_syscall6(1, 1, buffer_address(header), 16, 0, 0, 0)', ' let body = linux_syscall6(1, 1, buffer_address(t.0), text_length(t), 0, 0, 0)', ' do process_exit(0)', ' return 0', 'end']
+lines += [' let header = linux_buffer(16)', ' let a = linux_put64(header, 0, text_length(t))', ' let b = linux_put64(header, 8, text_cursor(t))', ' let h = linux_syscall6(1, 1, buffer_address(header), 16, 0, 0, 0)', ' let body = linux_syscall6(1, 1, buffer_address(t.bytes), text_length(t), 0, 0, 0)', ' do process_exit(0)', ' return 0', 'end']
 exe = compile('random-text', '\n'.join(lines))
 r = subprocess.run([str(exe)], capture_output=True, timeout=10)
 (work / 'random-text/operations.json').write_text(json.dumps(ops))
@@ -580,7 +580,7 @@ bounds = compile('bounds', r"""func main():
  let back = text_backspace(t)
  let finish = text_seek(t, 999)
  let forward = text_delete(t)
- return (overflow, invalid, badload, longload, back, forward, text_length(t), buffer_get(t.0, 0), buffer_get(t.0, 1), buffer_get(t.0, 2))
+ return (overflow, invalid, badload, longload, back, forward, text_length(t), buffer_get(t.bytes, 0), buffer_get(t.bytes, 1), buffer_get(t.bytes, 2))
 end
 """)
 r = subprocess.run([str(bounds)], capture_output=True, timeout=10)
@@ -603,7 +603,7 @@ history = compile('history-model', r"""func history_run(t, commands, at, header)
  let a = linux_put64(header, 0, text_length(t))
  let b = linux_put64(header, 8, text_cursor(t))
  let h = file_write_bytes(1, header, 0, 16)
- let body = file_write_bytes(1, t.0, 0, text_length(t))
+ let body = file_write_bytes(1, t.bytes, 0, text_length(t))
  return history_run(t, commands, at + 5, header)
 end
 func main():
