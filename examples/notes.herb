@@ -45,6 +45,9 @@ ref record NotesState:
     scrolled_at: int
 end
 
+-- The largest document, in bytes on disk.
+func notes_capacity(): return 1048576 end
+
 func notes_redraw(s):
     s.needs_draw = true
     return 0
@@ -194,15 +197,19 @@ func notes_to(t, s):
     return text_cursor(t)
 end
 
--- A text_replace result: 1 changed, 0 no room (65,536-byte limit), 2 too large to undo.
+-- A text_replace result: 1 changed, 0 no room (notes_capacity), 2 too large to undo.
 func notes_edited(s, result):
     if result == 1: return notes_changed(s) end
     if result == 2: return notes_message(s, 35) end
     return notes_message(s, 3)
 end
 
+-- Copied text is offered whole from the clipboard's own buffer.
+func notes_fits_clipboard(c, t, s): return notes_to(t, s) - notes_from(t, s) <= buffer_length(x11_clip_data(c)) end
+
 func notes_copy(c, t, s):
     if not notes_selected(t, s): return notes_message(s, 32) end
+    if not notes_fits_clipboard(c, t, s): return notes_message(s, 41) end
     let start = notes_from(t, s)
     let owned = x11_clip_own(c, t.bytes, start, notes_to(t, s) - start, s.time)
     return notes_message(s, 31)
@@ -210,6 +217,7 @@ end
 
 func notes_cut(c, t, s):
     if not notes_selected(t, s): return notes_message(s, 32) end
+    if not notes_fits_clipboard(c, t, s): return notes_message(s, 41) end
     let copied = notes_copy(c, t, s)
     return notes_edited(s, text_replace(t, notes_from(t, s), notes_to(t, s), s.clip, 0, 0))
 end
@@ -583,7 +591,7 @@ func notes_point(t, s, x, y):
     else:
         col = s.left + (x - 28 + 6) / 12
     end
-    return text_column_position(t, text_row_start(t, 0, row), col, 0)
+    return text_column_position(t, text_row_offset(t, row), col, 0)
 end
 
 -- A left press in the text places the cursor (with Shift, extends the
@@ -706,7 +714,7 @@ end
 
 func notes_warning(message):
     if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18: return true end
-    return (message >= 22 and message <= 30) or (message >= 32 and message <= 40)
+    return (message >= 22 and message <= 30) or (message >= 32 and message <= 41)
 end
 
 -- Highlight [a, b) behind the visible rows: the selection, or Find's match. A
@@ -740,7 +748,7 @@ func notes_status(c, f, t, s, query):
     let col = pixel_number(c, text_column(t, text_cursor(t)) + 1, 170, 542, 1)
     let byteslabel = pixel_text(c, "Bytes", 248, 542, 1)
     let bytes = pixel_number(c, text_file_length(t), 288, 542, 1)
-    let cap = pixel_text(c, "/ 65536", 330, 542, 1)
+    let cap = pixel_text(c, "/ 1048576", 336, 542, 1)
     let style = "LF"
     if text_crlf(t): style = "CRLF" end
     let ending = pixel_text(c, style, 402, 542, 1)
@@ -754,7 +762,7 @@ func notes_status(c, f, t, s, query):
     let status = "Ready. UTF-8 text; original bytes and newline style are preserved."
     if message == 1 and s.dirty: status = "Edited. Ctrl+S saves this document." end
     if message == 2: status = "Saved. File and containing directory synced." end
-    if message == 3: status = "Not enough space (65536-byte limit). Delete text before inserting more." end
+    if message == 3: status = "Not enough space (1048576-byte limit). Delete text before inserting more." end
     if message == 4: status = "Save failed; no replacement this attempt. Ctrl+Shift+S saves a rescue copy." end
     if message == 5:
         status = "Unsaved: Y discards edits; latest recovery INCOMPLETE. Esc returns | Ctrl+S saves."
@@ -764,7 +772,7 @@ func notes_status(c, f, t, s, query):
     if message == 6: status = "Written; sync/verification failed. Ctrl+S retries; Ctrl+Shift+S rescues." end
     if message == 7: status = "Rescue copy saved. Original stays open; its unsaved state is unchanged." end
     if message == 8: status = "Rescue copy written, but directory sync failed. Keep this window open." end
-    if message == 10: status = "No more undo history (up to 256 edits / 131072 history bytes)." end
+    if message == 10: status = "No more undo history (up to 256 edits / 2097152 history bytes)." end
     if message == 11: status = "No more redo history." end
     if message == 12: status = "Match. F3 next | Shift+F3 previous | Ctrl+F new search" end
     if message == 13: status = "No matching text. Search is case-sensitive and wraps at either end." end
@@ -778,7 +786,7 @@ func notes_status(c, f, t, s, query):
     if message == 20: status = "Opened. Original bytes and newline style are preserved." end
     if message == 21: status = "New file. It is created when you save with Ctrl+S." end
     if message == 22: status = "Unsaved edits. Ctrl+S saves (or Ctrl+Shift+S rescues) before Ctrl+O opens another file." end
-    if message == 23: status = "Not opened: the file exceeds the 65536-byte limit. This document is unchanged." end
+    if message == 23: status = "Not opened: the file exceeds the 1048576-byte limit. This document is unchanged." end
     if message == 24: status = "Not opened: symbolic links are refused. Open the intended file directly." end
     if message == 25: status = "Not opened: multiply hardlinked files are refused to preserve their links." end
     if message == 26: status = "Not opened: the file changed while opening. Try again." end
@@ -796,6 +804,7 @@ func notes_status(c, f, t, s, query):
     if message == 38: status = "The clipboard holds no text Notes can paste." end
     if message == 39: status = "The clipboard text is larger than Notes can paste (65,504 bytes)." end
     if message == 40: status = "Not pasted: the clipboard text has control characters, a bare CR or invalid UTF-8." end
+    if message == 41: status = "Not copied: the selection is larger than the clipboard holds (65,536 bytes)." end
     if s.confirming and message == 7:
         status = "Rescue saved. Close pending: Y closes; Esc returns."
     end
@@ -861,7 +870,7 @@ func notes_draw(c, f, t, s, recovery, query, blink):
     let border = x11_rect(c, 24, 96, 852, 428)
     let papercolor = x11_color(c, 1384240)
     let paper = x11_rect(c, 26, 98, 848, 424)
-    let first = text_row_start(t, 0, s.top)
+    let first = text_row_offset(t, s.top)
     if notes_selected(t, s):
         let markcolor = x11_color(c, 3033707)
         let marks = notes_draw_marks(c, t, first, s.left, 0, notes_from(t, s), notes_to(t, s))
@@ -931,25 +940,25 @@ func main():
     let path = linux_argument(args, 1)
     if equal(path, ""): path = "notes.txt" end
     if not equal(linux_argument(args, 2), ""): return linux_die("usage: notes [plain-text-file]\n") end
-    let opened = file_open(path, 65536)
+    let opened = file_open(path, notes_capacity())
     if file_status(opened) != 0:
         let status = file_status(opened)
         let closed = file_close(opened)
-        if status == 0 - 27: return linux_die("notes: file exceeds the 65536-byte limit. No file changed.\n") end
+        if status == 0 - 27: return linux_die("notes: file exceeds the 1048576-byte limit. No file changed.\n") end
         if status == 0 - 40: return linux_die("notes: symbolic-link documents are refused. Open the intended regular file directly.\n") end
         if status == 0 - 31: return linux_die("notes: multiply hardlinked documents are refused to preserve their link structure.\n") end
         if status == 0 - 116: return linux_die("notes: file changed while opening. Try again after the other writer finishes.\n") end
         return linux_die("notes: cannot open a regular, singly linked file owned by you (or its parent). No file changed.\n")
     end
-    let t = text_buffer_history(65536, 131072)
+    let t = text_buffer_history(notes_capacity(), 2 * notes_capacity())
     let loaded = text_load(t, opened.bytes, file_count(opened))
     if loaded != 0:
         let closed = file_close(opened)
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
-    let s = NotesState(f, file_new(65536), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0)
-    let recovery = recovery_new(65536)
+    let s = NotesState(f, file_new(notes_capacity()), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0)
+    let recovery = recovery_new(notes_capacity())
     let query = linux_buffer(64)
     s.needs_draw = true
     let c = x11_open(900, 600, "Herbert - Notes")

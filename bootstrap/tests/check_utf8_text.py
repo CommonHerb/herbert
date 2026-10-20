@@ -584,6 +584,120 @@ execute('x11-scalar-boundaries',keyscalar,b''.join(pack(key) for key,value in ke
         b''.join(pack(value) for key,value in keyscalar_cases))
 check('x11-core-and-direct-unicode-scalar-boundaries',True,cases=len(keyscalar_cases))
 
+# Edits re-mark only the lines they touch, and rows count from a remembered
+# line. After every edit, undo and redo the driver compares the kept marks with
+# a whole-document unicode_grapheme_mark (the function the official fixture
+# checks above) and reports a row and a row start, which are checked here
+# against the newlines of the text it reports.
+marks_rows_driver = compile_program('marks-rows-driver', r"""func marks_rows_differ(t, scratch, p, stop):
+ if p > stop: return 0 - 1 end
+ if buffer_get(t.marks, p) != buffer_get(scratch, p): return p end
+ return marks_rows_differ(t, scratch, p + 1, stop)
+end
+func marks_rows_state(t, scratch, out, q, r):
+ let full = unicode_grapheme_mark(t.bytes, text_length(t), scratch)
+ let differ = marks_rows_differ(t, scratch, 0, text_length(t))
+ let at = q % (text_length(t) + 1)
+ let row = text_row(t, at)
+ let start = text_row_offset(t, r)
+ let a = linux_put64(out, 0, full)
+ let b = linux_put64(out, 8, differ)
+ let c = linux_put64(out, 16, at)
+ let d = linux_put64(out, 24, row)
+ let e = linux_put64(out, 32, start)
+ let f = linux_put64(out, 40, text_length(t))
+ let header = file_write_bytes(1, out, 0, 48)
+ return file_write_bytes(1, t.bytes, 0, text_length(t))
+end
+func marks_rows_run(t, input, at, limit, scratch, out):
+ if at >= limit: return 0 end
+ let op = linux_u64(input, at)
+ let a = linux_u64(input, at + 8)
+ let b = linux_u64(input, at + 16)
+ let n = linux_u64(input, at + 40)
+ let size = text_length(t)
+ let changed = 0
+ if op == 114:
+  let start = text_floor(t, a % (size + 1))
+  let stop = text_ceil(t, start + b % (size - start + 1))
+  changed = text_replace(t, start, stop, input, at + 48, n)
+ elif op == 117: changed = text_undo(t)
+ elif op == 121: changed = text_redo(t)
+ elif op == 98:
+  let moved = text_seek(t, a % (size + 1))
+  changed = text_backspace(t)
+ elif op == 100:
+  let moved = text_seek(t, a % (size + 1))
+  changed = text_delete(t)
+ end
+ let shown = marks_rows_state(t, scratch, out, linux_u64(input, at + 24), linux_u64(input, at + 32))
+ return marks_rows_run(t, input, at + 48 + n, limit, scratch, out)
+end
+func main():
+ let args = linux_arguments()
+ let original = file_open(linux_argument(args, 1), 65536)
+ let input = stdin_read()
+ let bytes = linux_cstring(input.1)
+ let t = text_buffer(4096)
+ let scratch = linux_buffer(4097)
+ let out = linux_buffer(48)
+ let loaded = text_load(t, original.bytes, file_count(original))
+ if loaded != 0: return linux_die("marks-rows: load failed\n") end
+ let shown = marks_rows_state(t, scratch, out, 0, 0)
+ let run = marks_rows_run(t, bytes, 0, length(input.1), scratch, out)
+ do process_exit(0)
+ return 0
+end
+""")
+
+def row_start(text,row):
+    # The start of the given row, or the end of the text when it has fewer.
+    p=0
+    for _ in range(row):
+        e=text.find(b'\n',p)
+        if e<0:return len(text)
+        p=e+1
+    return p
+
+def marks_rows(name,initial,operations):
+    d=work/name;d.mkdir()
+    (d/'document').write_bytes(initial)
+    data=b''.join(pack(ord(op),a,b,q,r,len(payload))+payload for op,a,b,q,r,payload in operations)
+    (d/'input.bin').write_bytes(data)
+    r=subprocess.run([str(marks_rows_driver),str(d/'document')],input=data,capture_output=True,timeout=120)
+    (d/'actual.bin').write_bytes(r.stdout);(d/'stderr').write_bytes(r.stderr)
+    assert r.returncode==0 and not r.stderr,(name,r.returncode,r.stderr)
+    out=r.stdout;at=0;states=0
+    while at<len(out):
+        full,differ,pos,row,start,size=struct.unpack_from('<6Q',out,at);at+=48
+        text=out[at:at+size];at+=size
+        text.decode()
+        r_value=operations[states-1][4] if states else 0
+        assert full==0 and differ==U64,(name,states,full,differ,text)
+        assert row==text[:pos].count(b'\n'),(name,states,pos,row)
+        assert start==row_start(text,r_value),(name,states,r_value,start)
+        states+=1
+    assert states==len(operations)+1,(name,states)
+    return states
+
+# A line that starts with a combining mark: re-marking it from the start-of-text
+# state would join the mark to nothing instead of breaking after the newline.
+fixed=[('r',8,0,5,1,b'x'),('r',4,0,9,2,'́'.encode()),('b',4,0,4,0,b''),('u',0,0,7,1,b''),
+       ('r',2,0,3,5,b'\n'),('r',0,0,0,0,'́\n'.encode()),('u',0,0,2,3,b''),('y',0,0,8,1,b'')]
+marks_rows('marks-rows-line-start-mark','ab\ńcd\nef'.encode(),fixed)
+pieces=['a','Z','\t','\n','\n','́','é','‍','\U0001f469','\U0001f4bb','\U0001f1fa','\U0001f1f8',
+        'ᄀ','ᅡ','ᆨ','क','्','ष','؀','漢','é']
+total=0
+for run_seed in (20261020,20261021,20261022):
+    rng=random.Random(run_seed);operations=[]
+    for _ in range(500):
+        op=rng.choice('rrrrrbduy')
+        payload=''.join(rng.choice(pieces) for _ in range(rng.randrange(7))).encode() if op=='r' else b''
+        operations.append((op,rng.randrange(1<<20),rng.randrange(48),rng.randrange(1<<20),rng.randrange(120),payload))
+    initial=''.join(rng.choice(pieces) for _ in range(300)).encode()
+    total+=marks_rows(f'marks-rows-random-{run_seed}',initial,operations)
+check('edits-remark-touched-lines-and-rows-count-from-remembered-line',True,states=total+len(fixed)+1)
+
 (work/'result.json').write_text(json.dumps(dict(checks=checks,compiler_sha256=seed_sha,
     prelude_sha256=hashlib.sha256(prelude.encode()).hexdigest(),fixture_sha256=fixture_sha,
     reviewed_table_sha256=table_sha),indent=2)+'\n')

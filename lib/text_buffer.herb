@@ -11,15 +11,17 @@
 -- Arbitrarily long deleted clusters are complete records; oldest complete
 -- records (a whole replace at once) are evicted until both limits fit. Editing
 -- discards redo.
--- A boundary cache rebuild scans once per edit/load; each navigation/render
--- traversal then visits its bytes once, with no whole-document scan per glyph.
+-- Loading marks every grapheme boundary once; an edit shifts the marks with
+-- the text and re-marks only the lines it touched. Rows are counted from one
+-- remembered line, so neither editing nor drawing scans the whole document.
 
 -- goal is the column Up and Down aim for, -1 when none is remembered. The
 -- history records form a ring of 256 slots: oldest is the first retained
 -- record's slot, retained how many are kept and applied how many of those are in
 -- effect (the rest are redo). The payload ring holds payload_bytes bytes from
 -- oldest_payload. disk_length counts the bytes the text takes on disk, where a
--- CRLF file stores two per newline.
+-- CRLF file stores two per newline. row_pos is the start of a remembered line
+-- and row its row number (the newlines before it).
 ref record TextState:
     length: int
     cursor: int
@@ -31,6 +33,8 @@ ref record TextState:
     disk_length: int
     oldest_payload: int
     payload_bytes: int
+    row_pos: int
+    row: int
 end
 
 -- bytes is the logical text; history the 256 records; serialized the file
@@ -50,7 +54,7 @@ func text_buffer(capacity): return text_buffer_history(capacity, capacity) end
 
 -- A history budget of twice the capacity holds any one replace of the whole text.
 func text_buffer_history(capacity, history):
-    let t = Text(TextState(0, 0, 0 - 1, 0, 0, 0, false, 0, 0, 0), linux_buffer(capacity), linux_buffer(14336), linux_buffer(capacity), linux_buffer(capacity + 1), linux_buffer(history), linux_buffer(4))
+    let t = Text(TextState(0, 0, 0 - 1, 0, 0, 0, false, 0, 0, 0, 0, 0), linux_buffer(capacity), linux_buffer(14336), linux_buffer(capacity), linux_buffer(capacity + 1), linux_buffer(history), linux_buffer(4))
     let first = buffer_set(t.marks, 0, 1)
     return t
 end
@@ -136,6 +140,8 @@ func text_load(t, bytes, count):
     st.disk_length = count
     st.oldest_payload = 0
     st.payload_bytes = 0
+    st.row_pos = 0
+    st.row = 0
     return text_refresh(t)
 end
 
@@ -248,26 +254,46 @@ func text_history_copy_out(t, at, to, count):
     return text_history_copy_out(t, (at + 1) % buffer_length(t.payload), to + 1, count - 1)
 end
 
+-- Re-mark the lines holding positions from..to after an edit there.
+func text_remark(t, from, to):
+    return unicode_grapheme_mark_lines(t.bytes, text_length(t), t.marks, text_line_start(t, from), text_line_end(t, to))
+end
+
+-- Before an edit at pos, move the remembered line back to pos's line if it lies
+-- later, so the edit changes neither its position nor its row.
+func text_row_before(t, pos):
+    let st = t.state
+    if st.row_pos <= pos: return 0 end
+    let start = text_line_start(t, pos)
+    st.row = st.row - text_newlines(t.bytes, start, st.row_pos, 0)
+    st.row_pos = start
+    return 0
+end
+
 -- Exact recorded byte spans deliberately ignore current grapheme boundaries:
 -- undoing an inserted combining mark removes only that mark, not its base.
 -- Internal only: a history record guarantees capacity and valid UTF-8 result.
+-- The marks, one more than the bytes, move with them before the re-mark.
 func text_history_apply(t, at, inserting):
     let pos = linux_u64(t.history, at + 8)
     let count = linux_u64(t.history, at + 16)
     let width = linux_u64(t.history, at + 48)
     let size = text_length(t)
     let st = t.state
+    let kept = text_row_before(t, pos)
     if inserting:
         let moved = text_shift_right(t.bytes, size, pos, count)
+        let shifted = text_shift_right(t.marks, size + 1, pos, count)
         let restored = text_history_copy_out(t, linux_u64(t.history, at + 40), pos, count)
         st.length = size + count
         st.disk_length = st.disk_length + width
-    else:
-        let moved = linux_copy(t.bytes, pos, t.bytes, pos + count, size - pos - count)
-        st.length = size - count
-        st.disk_length = st.disk_length - width
+        return text_remark(t, pos, pos + count)
     end
-    return text_refresh(t)
+    let moved = linux_copy(t.bytes, pos, t.bytes, pos + count, size - pos - count)
+    let shifted = linux_copy(t.marks, pos, t.marks, pos + count, size - pos - count + 1)
+    st.length = size - count
+    st.disk_length = st.disk_length - width
+    return text_remark(t, pos, pos)
 end
 
 -- Returns 1 if changed, 0 for disallowed scalar or insufficient disk capacity.
@@ -415,19 +441,50 @@ func text_column(t, p):
     return text_column_loop(t, text_line_start(t, p), p, 0)
 end
 
-func text_row_loop(t, p, stop, row):
-    if p >= stop: return row end
-    if buffer_get(t.bytes, p) == 10: row = row + 1 end
-    return text_row_loop(t, p + 1, stop, row)
+-- The row of position p, counted from the remembered line, which then moves to
+-- p's line.
+func text_row(t, p):
+    if p > text_length(t): p = text_length(t) end
+    let st = t.state
+    let row = st.row
+    if p >= st.row_pos:
+        row = row + text_newlines(t.bytes, st.row_pos, p, 0)
+    else:
+        row = row - text_newlines(t.bytes, p, st.row_pos, 0)
+    end
+    st.row_pos = text_line_start(t, p)
+    st.row = row
+    return row
 end
 
-func text_row(t, p): return text_row_loop(t, 0, p, 0) end
+func text_row_found(t, p, row):
+    let st = t.state
+    st.row_pos = p
+    st.row = row
+    return p
+end
 
-func text_row_start(t, p, rows):
-    if rows == 0: return p end
+func text_rows_down(t, p, at, row):
+    if at == row: return text_row_found(t, p, at) end
     let e = text_line_end(t, p)
-    if e >= text_length(t): return e end
-    return text_row_start(t, e + 1, rows - 1)
+    if e >= text_length(t):
+        let kept = text_row_found(t, p, at)
+        return e
+    end
+    return text_rows_down(t, e + 1, at + 1, row)
+end
+
+func text_rows_up(t, p, at, row):
+    if at == row: return text_row_found(t, p, at) end
+    return text_rows_up(t, text_line_start(t, p - 1), at - 1, row)
+end
+
+-- The start of the given row, or the end of the text if it has fewer rows. The
+-- remembered line moves to that row, or to the last.
+func text_row_offset(t, row):
+    let st = t.state
+    if row >= st.row: return text_rows_down(t, st.row_pos, st.row, row) end
+    return text_rows_up(t, st.row_pos, st.row, row)
 end
 
 func text_column_position(t, p, target, column):
