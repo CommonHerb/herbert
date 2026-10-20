@@ -37,6 +37,7 @@ ref record X11State:
     reply_pending: int
     exposed: bool
     clip: X11Clip
+    pointer_on: bool
 end
 
 -- The desktop clipboard (opt-in, x11_enable_clipboard). owned: this window holds
@@ -331,6 +332,11 @@ func x11_dispatch(c):
             end
         end
     end
+    if (kind == 4 or kind == 5 or kind == 6) and st.pointer_on and st.queue_on and linux_u32(r, 12) == st.window:
+        if kind == 6 or buffer_get(r, 1) == 1:
+            let queued = x11_queue_pointer(c, kind, linux_u16(r, 24), linux_u16(r, 26), linux_u16(r, 28), linux_u32(r, 4))
+        end
+    end
     if kind == 12 and linux_u32(r, 4) == st.window:
         st.exposed = true
     end
@@ -463,7 +469,7 @@ end
 func x11_open(width, height, title):
     let checked = x11_need(width > 0 and width <= 32767 and height > 0 and height <= 32767 and length(title) <= 1024, "desktop: invalid window size or title\n")
     let idle = X11Clip(false, false, 0, 0, 0, 0, 0, 0, 0, 0, new_buffer(), 0, new_buffer(), 0, false, 0, false, 0, 0)
-    let c = X11(X11State(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, 0, false, false, 0, 0, 0, false, idle), linux_buffer(65536), linux_buffer(65536), linux_buffer(8), linux_buffer(16), linux_buffer(256), linux_buffer(1024), linux_buffer(1024), linux_buffer(4096))
+    let c = X11(X11State(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, 0, false, false, 0, 0, 0, false, idle, false), linux_buffer(65536), linux_buffer(65536), linux_buffer(8), linux_buffer(16), linux_buffer(256), linux_buffer(1024), linux_buffer(1024), linux_buffer(4096))
     let st = c.state
     let env = linux_environment()
     let display = x11_display(linux_env(env, "DISPLAY"))
@@ -641,6 +647,51 @@ func x11_queue_key(c, code, state, timestamp):
     let a = linux_put32(c.queue, at, symbol)
     let b = linux_put32(c.queue, at + 4, state)
     let d = linux_put32(c.queue, at + 8, code)
+    let e = linux_put32(c.queue, at + 12, timestamp)
+    st.queue_count = count + 1
+    return 0
+end
+
+-- Opt-in left-button input for text consumers, after x11_enable_text: presses,
+-- drags and releases join the key queue, so pointer and key input keep their
+-- order. Startup only.
+func x11_enable_pointer(c):
+    let st = c.state
+    let p = x11_request(c, 2, 0, 16)
+    let a = linux_put32(c.requests, p + 4, st.window)
+    -- The event mask again, plus button press/release and button-1 motion.
+    let b = linux_put32(c.requests, p + 8, 2048)
+    let d = linux_put32(c.requests, p + 12, 2261263)
+    st.pointer_on = true
+    return x11_flush(c)
+end
+
+-- A pointer entry's symbol is 4294967041 (press), 4294967042 (drag) or
+-- 4294967043 (release), above every keysym; its keycode slot packs x + 65536 * y,
+-- each clamped into the window (a drag past an edge reads as that edge). A drag
+-- replaces a drag still waiting at the queue's end, so drags cannot fill it.
+func x11_queue_pointer(c, kind, x, y, state, timestamp):
+    let st = c.state
+    let symbol = 4294967041
+    if kind == 6: symbol = 4294967042 end
+    if kind == 5: symbol = 4294967043 end
+    if x >= 32768: x = 0 end
+    if x >= st.width: x = st.width - 1 end
+    if y >= 32768: y = 0 end
+    if y >= st.height: y = st.height - 1 end
+    let count = st.queue_count
+    let at = ((st.queue_head + count) % 256) * 16
+    if kind == 6 and count > 0:
+        let last = ((st.queue_head + count - 1) % 256) * 16
+        if linux_u32(c.queue, last) == symbol:
+            at = last
+            count = count - 1
+        end
+    end
+    let checked = x11_need(count < 256, "desktop: key queue capacity exceeded\n")
+    let a = linux_put32(c.queue, at, symbol)
+    let b = linux_put32(c.queue, at + 4, state)
+    let d = linux_put32(c.queue, at + 8, x + y * 65536)
     let e = linux_put32(c.queue, at + 12, timestamp)
     st.queue_count = count + 1
     return 0

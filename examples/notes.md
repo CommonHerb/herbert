@@ -55,6 +55,14 @@ without closing Notes. Typing, Enter, Tab, Unicode entry and Ctrl+V replace the
 selection; Backspace and Delete remove it. **Ctrl+X cuts, Ctrl+C copies and Ctrl+V
 pastes**; a cut, a paste or a typed replacement is one undo step.
 
+**The mouse.** A left click in the text places the cursor at the nearest
+character boundary, dragging selects, and Shift+click extends the selection to
+the click. Dragging above, below or beside the text scrolls the view one row or
+column every 50 ms while the button is held, so a selection can run past one
+screen. Clicks outside the text, and while the Open or Find field, Unicode entry
+or the close prompt is active, do nothing. Keys and clicks are handled in the
+order they happened.
+
 **The clipboard is the desktop's.** Ctrl+C and Ctrl+X offer the selection to other
 applications, with LF newlines, and Ctrl+V pastes from whichever application
 copied last. Pasted text follows the rules for opening a file: valid UTF-8, TAB
@@ -141,8 +149,9 @@ race the final conflict check and rename. A crash can leave an owned
 `.herbert-save-*.tmp` file beside the document.
 
 Current limits: fixed-size 900x600 window, limited font and keyboard coverage,
-no compose/IME, primary selection (middle-click paste), mouse editing, general
-save-as dialog, file browser or multi-file tabs. Ctrl+O replaces the open document; to edit two files at
+no compose/IME, primary selection (middle-click paste), double- or triple-click
+selection, scroll wheel, drag-and-drop, general save-as dialog, file browser or
+multi-file tabs. Ctrl+O replaces the open document; to edit two files at
 once, launch another instance with the other path. The visible path is clipped
 after 130 bytes and the Open field shows a path's last 130 characters; the full
 path is used for file operations.

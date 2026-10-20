@@ -47,9 +47,9 @@ preserves UTF-8 bytes and uniform LF/CRLF endings, with grapheme-aware editing.
 Its 64 KiB disk-byte limit and limited bitmap font/input coverage remain explicit. Compiler qualification includes composed conditionals, early returns,
 rebinding, short-circuit expressions and aggregate values. Existing-file qualification uses copied project guides, common accented prose,
 joined characters and the Unicode segmentation oracle. Notes opens another file
-in the same window from a typed path (Ctrl+O). Selection and clipboard are the
-next workflow candidate; keep it tied to ordinary editing rather than starting a
-general editor framework.
+in the same window from a typed path (Ctrl+O), selects with the keyboard and the
+mouse, and cuts, copies and pastes through the desktop clipboard. Keep further
+editing work tied to ordinary use rather than starting a general editor framework.
 
 Use the existing applications to force the next language/runtime improvement.
 Keep the kernel work and its proofs available without resuming new OS features.

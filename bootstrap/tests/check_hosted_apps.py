@@ -114,6 +114,33 @@ class App:
             else:
                 self.tap(plain.get(ch, ch), pause=pause)
 
+    def move(self, px, py):
+        """Move the real (XTest) pointer to a point given in window coordinates."""
+        pointer_api(self.x)
+        rx, ry, child = C.c_int(), C.c_int(), C.c_ulong()
+        assert self.x.x.XTranslateCoordinates(self.x.display, self.window, self.x.root, px, py,
+                                              C.byref(rx), C.byref(ry), C.byref(child))
+        self.inputs.append([round(time.monotonic() - self.started, 4), 'pointer', px, py])
+        assert self.x.xtst.XTestFakeMotionEvent(self.x.display, -1, rx.value, ry.value, 0)
+        self.x.x.XSync(self.x.display, 0)
+
+    def button(self, down):
+        pointer_api(self.x)
+        self.inputs.append([round(time.monotonic() - self.started, 4), 'button1', down])
+        assert self.x.xtst.XTestFakeButtonEvent(self.x.display, 1, int(down), 0)
+        self.x.x.XSync(self.x.display, 0)
+
+    def click(self, px, py, modifier=None, pause=.04):
+        if modifier:
+            self.key(modifier, True)
+        self.move(px, py)
+        self.button(True)
+        self.button(False)
+        if modifier:
+            self.key(modifier, False)
+        if pause:
+            time.sleep(pause)
+
     def stop(self):
         self.p.send_signal(signal.SIGSTOP)
         wait_for(lambda: '\nState:\tT' in Path(f'/proc/{self.p.pid}/status').read_text(),
@@ -295,6 +322,19 @@ class ClipboardPeer:
         r.selection, r.target, r.property, r.time = self.clipboard, self.utf8, self.prop, 0
         assert self.x.XSendEvent(self.d, owner, 0, 0, C.byref(event))
         self.x.XSync(self.d, 0)
+
+
+def pointer_api(x):
+    if getattr(x, 'pointer_ready', False):
+        return
+    x.x.XTranslateCoordinates.argtypes = [C.c_void_p, C.c_ulong, C.c_ulong, C.c_int, C.c_int,
+                                          C.POINTER(C.c_int), C.POINTER(C.c_int), C.POINTER(C.c_ulong)]
+    x.x.XTranslateCoordinates.restype = C.c_int
+    x.xtst.XTestFakeMotionEvent.argtypes = [C.c_void_p, C.c_int, C.c_int, C.c_int, C.c_ulong]
+    x.xtst.XTestFakeMotionEvent.restype = C.c_int
+    x.xtst.XTestFakeButtonEvent.argtypes = [C.c_void_p, C.c_uint, C.c_int, C.c_ulong]
+    x.xtst.XTestFakeButtonEvent.restype = C.c_int
+    x.pointer_ready = True
 
 
 @contextlib.contextmanager
@@ -1291,6 +1331,60 @@ def notes_clipboard_checks(args, x, display, evidence, passed):
            samples=samples)
 
 
+def notes_mouse_checks(args, x, display, evidence, passed):
+    d = evidence/'mouse'; d.mkdir()
+    mark = (3033707).to_bytes(3,'big')
+    def at(row, col, right=False):
+        # A point in a character cell; the right half rounds to the boundary after it.
+        return 28 + col * 12 + (9 if right else 3), 100 + row * 20 + 10
+    def saved(path, wanted, what):
+        app.tap('s','Control_L')
+        wait_for(lambda: path.read_bytes()==wanted, what)
+    def shows(colour):
+        return colour in region(app.frame(),26,98,848,424)
+    doc = d/'notes.txt'; doc.write_bytes(b'alpha beta\ngamma delta\nend\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'mouse') as app:
+        app.click(*at(1, 5, right=True)); app.type('#')
+        saved(doc, b'alpha beta\ngamma #delta\nend\n', 'a click places the cursor at the nearest boundary')
+        app.move(*at(0, 0)); app.button(True); app.move(*at(0, 2)); app.move(*at(0, 4, right=True)); app.button(False)
+        wait_for(lambda: shows(mark), 'a drag highlights its selection')
+        app.frame('dragged')
+        app.tap('x','Control_L'); saved(doc, b' beta\ngamma #delta\nend\n', 'a drag selects what it covers')
+        app.tap('z','Control_L'); saved(doc, b'alpha beta\ngamma #delta\nend\n', 'one undo restores the dragged cut')
+        app.click(*at(0, 0)); app.click(*at(1, 4, right=True), 'Shift_L'); app.type('Z')
+        saved(doc, b'Z #delta\nend\n', 'Shift+click extends the selection from the cursor')
+        app.tap('End','Control_L'); app.click(450, 30); app.type('!')
+        saved(doc, b'Z #delta\nend\n!', 'a click outside the text leaves the cursor')
+        app.tap('f','Control_L'); app.type('delta'); app.click(*at(1, 1)); app.tap('Escape'); app.type('^')
+        saved(doc, b'Z #^delta\nend\n!', 'a click while Find is open is ignored')
+        # Keys and clicks queued together are handled in the order they happened.
+        app.stop()
+        app.type('1', pause=0); app.click(*at(0, 0), pause=0); app.type('2', pause=0)
+        app.p.send_signal(signal.SIGCONT)
+        saved(doc, b'2Z #^1delta\nend\n!', 'type, click, type keeps its order')
+        samples = []
+        for cycle in range(1, 21):
+            app.move(*at(0, 0)); app.button(True); app.move(*at(1, 3)); app.button(False)
+            app.click(*at(1, 0))
+            if cycle % 2 == 0:
+                app.frame(); samples.append(memory(app.p.pid))
+        stable_memory(samples, 'clicks and drags')
+        app.tap('Escape'); app.finish()
+    long = d/'long.txt'; text = b''.join(b'line %02d\n' % i for i in range(80)); long.write_bytes(text)
+    with application(args.notes, long, b'Herbert - Notes', (900,600), x, display, d, 'mouse-scroll') as app:
+        app.move(*at(0, 0)); app.button(True); app.move(450, 560)
+        time.sleep(3)
+        app.button(False)
+        app.frame('scrolled-drag')
+        app.tap('x','Control_L'); app.tap('s','Control_L')
+        wait_for(lambda: long.read_bytes()!=text, 'the scrolled selection cut')
+        removed = 80 - long.read_bytes().count(b'\n')
+        assert removed >= 30, ('a drag held below the text selects past one screen', removed)
+        app.tap('Escape'); app.finish()
+    passed('notes-mouse-click-drag-shift-click-outside-find-order-edge-scroll-memory', samples=samples,
+           rows_selected_by_held_drag=removed)
+
+
 def static_elf(path):
     data = path.read_bytes()
     assert data[:7] == b'\x7fELF\x02\x01\x01', 'expected little-endian ELF64'
@@ -1347,6 +1441,7 @@ def main():
                     notes_open_checks(args,x,display,evidence,passed)
                     notes_selection_checks(args,x,display,evidence,passed)
                     notes_clipboard_checks(args,x,display,evidence,passed)
+                    notes_mouse_checks(args,x,display,evidence,passed)
             finally:
                 x.close()
     except BaseException as error:
