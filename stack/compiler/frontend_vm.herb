@@ -1701,51 +1701,42 @@ func resolve_instr_lines(ir):
     return resolve_instr_lines_loop(ir, 0, count(ir), new_array(int))
 end
 
-func env_from_params_loop(params, i, n, names, slots):
+-- A lowering environment is (names, slots, next slot, count). Names and slots
+-- are the persistent chunked arrays of types_and_inference.herb (nc_pget,
+-- nc_pset_str, nc_pset_int): a copy shares them, and leaving a scope only lowers
+-- count. The next slot keeps counting, so no two declarations share a slot.
+func env_from_params_loop(params, i, n, env):
     if i >= n:
-        return (names, slots, n)
+        return env
     end
-    do add(names, get(params, i))
-    do add(slots, i)
-    return env_from_params_loop(params, i + 1, n, names, slots)
+    return env_from_params_loop(params, i + 1, n, env_let(env, get(params, i)))
 end
 
 func env_from_params(params):
-    return env_from_params_loop(params, 0, count(params), new_array(string), new_array(int))
+    return env_from_params_loop(params, 0, count(params), (new_array(array(string)), new_array(array(int)), 0, 0))
 end
 
 func env_let(env, name):
-    do add(env.0, name)
-    do add(env.1, env.2)
-    return (env.0, env.1, env.2 + 1)
+    return (nc_pset_str(env.0, env.3, name), nc_pset_int(env.1, env.3, env.2), env.2 + 1, env.3 + 1)
 end
 
-func env_lookup_loop(names, slots, name, n):
+func env_lookup_loop(env, name, n):
     if n == 0:
         return fault("name undefined")
     end
     let k = n - 1
-    if equal(get(names, k), name):
-        return get(slots, k)
+    if equal(nc_pget(env.0, k), name):
+        return nc_pget(env.1, k)
     end
-    return env_lookup_loop(names, slots, name, k)
+    return env_lookup_loop(env, name, k)
 end
 
 func env_lookup(env, name):
-    return env_lookup_loop(env.0, env.1, name, count(env.0))
-end
-
-func env_rebuild_loop(env, i, keep, names, slots):
-    if i >= keep:
-        return (names, slots, env.2)
-    end
-    do add(names, get(env.0, i))
-    do add(slots, get(env.1, i))
-    return env_rebuild_loop(env, i + 1, keep, names, slots)
+    return env_lookup_loop(env, name, env.3)
 end
 
 func env_rebuild(env, keep):
-    return env_rebuild_loop(env, 0, keep, new_array(string), new_array(int))
+    return (env.0, env.1, env.2, keep)
 end
 
 func string_from_atoms_loop(atoms, i, n, buf):
@@ -2109,7 +2100,7 @@ func emit_if_arms(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, join
     end
     let arm_idx = get(kids, i)
     let arm = get(nodes, arm_idx)
-    let scope_mark = count(env.0)
+    let scope_mark = env.3
     if equal(arm.0, "else"):
         let body_idx = get(arm.2, 0)
         let body = get(nodes, body_idx)

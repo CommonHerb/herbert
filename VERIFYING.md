@@ -217,12 +217,13 @@ checks do not rebuild it automatically. The split itself preserves every byte.
 units (`make oracle-source`); the i386 kernel gates build their compiler from it.
 
 `make compiler-metadata` compiles and executes 2,000-operation CALL, tuple and
-heap cases, plus a 200-local/200-conditional case with returning arms and live
-joins, using the checksum-verified committed seed. It checks independent
-runtime values and a 128 MiB compiler peak-RSS ceiling using GNU time, with
-bounded execution and retained failure evidence. This catches the demonstrated
-quadratic copying regression; it is not a general whole-compiler linearity or
-heap-reclamation claim. `verify-local` and hosted CI both run it. Failed evidence
+heap cases, plus 200-local/200-conditional and 500-local/500-conditional cases
+with returning arms and live joins, using the checksum-verified committed seed.
+It checks independent runtime values and a 128 MiB compiler peak-RSS ceiling
+(64 MiB for the 500 case) using GNU time, with bounded execution and retained
+failure evidence. This catches the demonstrated quadratic copying regressions,
+including the copying of every local's state at each conditional; it is not a
+general whole-compiler linearity or heap-reclamation claim. `verify-local` and hosted CI both run it. Failed evidence
 uses `/tmp/compiler-metadata-*/`; composition candidates use
 `/tmp/herbert-source-check.*`. The actual measured artifact hashes are printed
 on successful metadata runs as well.

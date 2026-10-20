@@ -5,9 +5,11 @@ The straight-line inputs have 2,000 operations and independently known results.
 The pre-repair compiler crosses the sampled RSS stop threshold on the first case;
 appending metadata keeps those cases below the RSS ceiling. A fourth input has
 200 locals and 200 conditionals, exercising returning arms and live-state joins.
-Its smaller scale leaves room under the same RSS ceiling despite pre-existing
-local-environment copying in other passes. This is a focused
-regression, not a general linear-memory guarantee for every compiler stage.
+A fifth has 500 of each under a 64 MiB ceiling: compilers that copied every
+local's state at each conditional (inference, lowering and metadata, before
+2026-10-20) needed about 455 MiB for it; sharing that state keeps it near 25 MiB.
+This is a focused regression, not a general linear-memory guarantee for every
+compiler stage.
 Python and GNU time are test tools only; the programs use the Herbert seed.
 The sampled supervisor covers these single-process, single-thread Herbert
 programs and GNU time's direct child. It is not a general process-tree sandbox;
@@ -37,6 +39,8 @@ MAX_ADDRESS_BYTES = 4 * 1024 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 OPERATIONS = 2000
 BRANCH_LOCALS = 200
+DENSE_LOCALS = 500
+DENSE_MAX_RSS_KIB = 64 * 1024
 
 
 def require(condition, message):
@@ -110,10 +114,14 @@ def cases():
            + "let b = new_buffer()\ndo append(b, 65)\n"
            + "return x + get(a, 0).1 + get(a, 1).0 + length(freeze(b))\nend\n",
            OPERATIONS * (OPERATIONS + 1) // 2 + 3)
+    yield branch_case("branches", BRANCH_LOCALS)
+    yield branch_case("dense-branches", DENSE_LOCALS)
+
+
+def branch_case(label, n):
     # Every conditional has a returning arm and two continuing predecessors.
     # Keep all locals live across the joins; main exercises both surviving
     # paths and an early return. The oracle is arithmetic, not compiler-derived.
-    n = BRANCH_LOCALS
     lines = ["func branch_dense(mode):", "let total = 0"]
     lines += [f"let v{i} = {i + 1}" for i in range(n)]
     for i in range(n):
@@ -127,7 +135,7 @@ def cases():
               "end", ""]
     full = n * (n + 1) // 2 + 7 * n
     early = (halfway + 1) * (halfway + 2) // 2 + 7 * halfway
-    yield ("branches", "\n".join(lines), f"({full}, {full - 4}, {early})")
+    return (label, "\n".join(lines), f"({full}, {full - 4}, {early})")
 
 
 def main():
@@ -158,7 +166,8 @@ def main():
               f"address-space limit={MAX_ADDRESS_BYTES} bytes", flush=True)
         results = []
         for label, source, answer in cases():
-            operations = BRANCH_LOCALS if label == "branches" else OPERATIONS
+            operations = {"branches": BRANCH_LOCALS, "dense-branches": DENSE_LOCALS}.get(label, OPERATIONS)
+            ceiling = DENSE_MAX_RSS_KIB if label == "dense-branches" else MAX_RSS_KIB
             directory = work / label
             directory.mkdir()
             (directory / "source.herb").write_text(source)
@@ -169,7 +178,7 @@ def main():
             require(measurement.isascii() and measurement.isdecimal() and int(measurement) > 0,
                     f"{label}: missing/invalid RSS measurement: {measurement!r}")
             rss = int(measurement)
-            require(rss <= MAX_RSS_KIB, f"{label}: compiler RSS {rss} KiB exceeds {MAX_RSS_KIB}")
+            require(rss <= ceiling, f"{label}: compiler RSS {rss} KiB exceeds {ceiling}")
             artifact = directory / "a.out"
             require(artifact.is_file() and not artifact.is_symlink()
                     and artifact.read_bytes()[:4] == b"\x7fELF", f"{label}: missing ELF")

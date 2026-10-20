@@ -995,55 +995,118 @@ func nc_check_input_scope(pool, nodes, fn_node):
     return 0
 end
 
+-- A local environment is (count, names, classes). Names and classes are
+-- persistent arrays in chunks of 32 entries: a copy shares every chunk, and a
+-- change copies one chunk and the chunk list, so branches and assignments no
+-- longer copy every local. Entries at count and above are dead; the next local
+-- declared reuses its position. Every environment value stays valid as it was.
+func nc_chunk_copy_int(src, i, n, slot, value, out):
+    if i >= n:
+        if slot == n:
+            do add(out, value)
+        end
+        return out
+    end
+    if i == slot:
+        do add(out, value)
+    else:
+        do add(out, get(src, i))
+    end
+    return nc_chunk_copy_int(src, i + 1, n, slot, value, out)
+end
+
+func nc_chunk_copy_str(src, i, n, slot, value, out):
+    if i >= n:
+        if slot == n:
+            do add(out, value)
+        end
+        return out
+    end
+    if i == slot:
+        do add(out, value)
+    else:
+        do add(out, get(src, i))
+    end
+    return nc_chunk_copy_str(src, i + 1, n, slot, value, out)
+end
+
+func nc_chunks_copy(src, i, n, at, chunk, out):
+    if i >= n:
+        if at == n:
+            do add(out, chunk)
+        end
+        return out
+    end
+    if i == at:
+        do add(out, chunk)
+    else:
+        do add(out, get(src, i))
+    end
+    return nc_chunks_copy(src, i + 1, n, at, chunk, out)
+end
+
+func nc_pget(chunks, i):
+    return get(get(chunks, i / 32), i % 32)
+end
+
+func nc_pset_int(chunks, i, value):
+    let at = i / 32
+    let old = new_array(int)
+    if at < count(chunks):
+        old = get(chunks, at)
+    end
+    let chunk = nc_chunk_copy_int(old, 0, count(old), i % 32, value, new_array(int))
+    return nc_chunks_copy(chunks, 0, count(chunks), at, chunk, new_array(array(int)))
+end
+
+func nc_pset_str(chunks, i, value):
+    let at = i / 32
+    let old = new_array(string)
+    if at < count(chunks):
+        old = get(chunks, at)
+    end
+    let chunk = nc_chunk_copy_str(old, 0, count(old), i % 32, value, new_array(string))
+    return nc_chunks_copy(chunks, 0, count(chunks), at, chunk, new_array(array(string)))
+end
+
 func nc_class_env_new():
-    return (new_array(string), new_array(int))
+    return (0, new_array(array(string)), new_array(array(int)))
+end
+
+func nc_class_env_count(env):
+    return env.0
+end
+
+func nc_class_env_class(env, idx):
+    return nc_pget(env.2, idx)
 end
 
 func nc_class_env_add(env, name, klass):
-    do add(env.0, name)
-    do add(env.1, klass)
-    return env
-end
-
-func nc_class_env_clone_loop(env, i, n, names, classes):
-    if i >= n:
-        return (names, classes)
-    end
-    do add(names, get(env.0, i))
-    do add(classes, get(env.1, i))
-    return nc_class_env_clone_loop(env, i + 1, n, names, classes)
+    let n = env.0
+    return (n + 1, nc_pset_str(env.1, n, name), nc_pset_int(env.2, n, klass))
 end
 
 func nc_class_env_clone(env):
-    return nc_class_env_clone_loop(env, 0, count(env.0), new_array(string), new_array(int))
-end
-
-func nc_class_env_prefix_loop(env, i, keep, names, classes):
-    if i >= keep:
-        return (names, classes)
-    end
-    do add(names, get(env.0, i))
-    do add(classes, get(env.1, i))
-    return nc_class_env_prefix_loop(env, i + 1, keep, names, classes)
+    return env
 end
 
 func nc_class_env_prefix(env, keep):
-    return nc_class_env_prefix_loop(env, 0, keep, new_array(string), new_array(int))
+    return (keep, env.1, env.2)
 end
 
-func nc_class_env_lookup_info_loop(names, classes, name, n):
+func nc_class_env_lookup_info_loop(env, name, n):
     if n == 0:
         return (0, 0, 0)
     end
     let k = n - 1
-    if equal(get(names, k), name):
-        return (1, k, get(classes, k))
+    if equal(nc_pget(env.1, k), name):
+        return (1, k, nc_pget(env.2, k))
     end
-    return nc_class_env_lookup_info_loop(names, classes, name, k)
+    return nc_class_env_lookup_info_loop(env, name, k)
 end
 
 func nc_class_env_lookup_info(env, name):
-    return nc_class_env_lookup_info_loop(env.0, env.1, name, count(env.0))
+    return nc_class_env_lookup_info_loop(env, name, env.0)
 end
 
 func nc_int_array_set_loop(src, i, n, target, value, out):
@@ -1079,7 +1142,7 @@ func nc_array_int_set(src, target, value):
 end
 
 func nc_class_env_set_idx(env, idx, klass):
-    return (env.0, nc_int_array_set(env.1, idx, klass))
+    return (env.0, env.1, nc_pset_int(env.2, idx, klass))
 end
 
 func nc_make_unknowns_loop(i, n, out):
@@ -2393,7 +2456,7 @@ func nc_rebind_env_type(pool, env, idx, old, got, line):
     end
     if got == nc_type_unknown():
         -- Inferring the RHS can refine this binding after the initial lookup.
-        if nc_type_is_int_bool(old) or nc_type_is_int_bool(get(env.1, idx)):
+        if nc_type_is_int_bool(old) or nc_type_is_int_bool(nc_class_env_class(env, idx)):
             let phase = nc_infer_phase(pool)
             if phase.0 == 2:
                 -- Rebuild all dependent signatures with the new value unknown,
@@ -2702,32 +2765,34 @@ func nc_join_one_index(pool, contribs, idx, j, n, cur, line):
         return (0, cur)
     end
     let env = get(contribs, j)
-    let m = nc_join_merge_class(pool, cur, get(env.1, idx), line)
+    let m = nc_join_merge_class(pool, cur, nc_class_env_class(env, idx), line)
     if m.0 != 0:
         return m
     end
     return nc_join_one_index(pool, contribs, idx, j + 1, n, m.1, line)
 end
 
-func nc_join_build_loop(pool, entry_env, contribs, i, n, names, classes, line):
+-- The joined environment keeps the entry's names and count; a slot whose
+-- merged class differs from the entry's is the only one copied.
+func nc_join_build_loop(pool, entry_env, contribs, i, n, env, line):
     if i >= n:
-        return (0, (names, classes))
+        return (0, env)
     end
-    let klass = get(entry_env.1, i)
+    let klass = nc_class_env_class(entry_env, i)
     if count(contribs) > 0:
         let m = nc_join_one_index(pool, contribs, i, 0, count(contribs), 0, line)
         if m.0 != 0:
-            return (m.0, (names, classes))
+            return (m.0, env)
         end
-        klass = m.1
+        if m.1 != klass:
+            env = nc_class_env_set_idx(env, i, m.1)
+        end
     end
-    do add(names, get(entry_env.0, i))
-    do add(classes, klass)
-    return nc_join_build_loop(pool, entry_env, contribs, i + 1, n, names, classes, line)
+    return nc_join_build_loop(pool, entry_env, contribs, i + 1, n, env, line)
 end
 
 func nc_join_env(pool, entry_env, contribs, line):
-    return nc_join_build_loop(pool, entry_env, contribs, 0, count(entry_env.0), new_array(string), new_array(int), line)
+    return nc_join_build_loop(pool, entry_env, contribs, 0, entry_env.0, entry_env, line)
 end
 
 func nc_if_has_else(nodes, kids):
@@ -2764,14 +2829,14 @@ func nc_infer_if_arms(pool, nodes, prog_idx, kids, i, n, entry_env, sig, fn_idx,
     sig = br.2
     changed = nc_or_changed(changed, br.3)
     if not body_ends_return(body_idx, nodes):
-        contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, count(entry_env.0)))
+        contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, entry_env.0))
     end
     return nc_infer_if_arms(pool, nodes, prog_idx, kids, i + 1, n, entry_env, sig, fn_idx, funcs, n_params, contribs, changed)
 end
 
 func nc_infer_if(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params, line):
     let entry_env = nc_class_env_clone(env)
-    let contribs = new_array((array(string), array(int)))
+    let contribs = new_array((int, array(array(string)), array(array(int))))
     let arms = nc_infer_if_arms(pool, nodes, prog_idx, kids, 0, count(kids), entry_env, sig, fn_idx, funcs, n_params, contribs, 0)
     if arms.0 != 0:
         return (arms.0, entry_env, arms.2, arms.3)
