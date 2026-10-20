@@ -958,6 +958,105 @@ def notes_open_checks(args, x, display, evidence, passed):
                samples=samples)
 
 
+def notes_selection_checks(args, x, display, evidence, passed):
+    d = evidence/'selection'; d.mkdir()
+    mark, match = (3033707).to_bytes(3,'big'), (6969880).to_bytes(3,'big')
+    warning = (16173151).to_bytes(3,'big')
+    def shift(key, n=1):
+        app.key('Shift_L', True)
+        for _ in range(n): app.tap(key)
+        app.key('Shift_L', False)
+    def saved(path, wanted, what):
+        app.tap('s','Control_L')
+        wait_for(lambda: path.read_bytes()==wanted, what)
+    def shows(colour):
+        return colour in region(app.frame(),26,98,848,424)
+    def warned():
+        return warning in region(app.frame(),28,560,810,7)
+    doc = d/'notes.txt'; doc.write_bytes(b'alpha beta\ngamma delta\nend\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'selection') as app:
+        assert not shows(mark)
+        shift('Right', 5)
+        wait_for(lambda: shows(mark), 'keyboard selection highlighted')
+        app.frame('selected')
+        app.tap('c','Control_L'); app.tap('End')
+        wait_for(lambda: not shows(mark), 'movement without Shift drops the selection')
+        app.tap('v','Control_L')
+        saved(doc, b'alpha betaalpha\ngamma delta\nend\n', 'copy, then paste at the end of the line')
+        app.tap('Home'); [app.tap('Right') for _ in range(6)]; shift('Right', 4); app.tap('x','Control_L')
+        saved(doc, b'alpha alpha\ngamma delta\nend\n', 'cut removes the selection')
+        app.tap('z','Control_L'); saved(doc, b'alpha betaalpha\ngamma delta\nend\n', 'one undo restores the cut')
+        app.tap('y','Control_L'); saved(doc, b'alpha alpha\ngamma delta\nend\n', 'one redo cuts again')
+        app.tap('Home','Control_L'); app.tap('Down'); shift('End'); app.type('Z')
+        saved(doc, b'alpha alpha\nZ\nend\n', 'typing replaces the selection')
+        app.tap('z','Control_L'); saved(doc, b'alpha alpha\ngamma delta\nend\n', 'one undo restores replaced text')
+        app.tap('y','Control_L'); saved(doc, b'alpha alpha\nZ\nend\n', 'one redo replaces it again')
+        app.tap('Home','Control_L'); shift('Right', 3); app.tap('Left'); app.type('<')
+        saved(doc, b'<alpha alpha\nZ\nend\n', 'Left goes to the selection start')
+        app.tap('Home','Control_L'); shift('Right', 3); app.tap('Right'); app.type('>')
+        saved(doc, b'<al>pha alpha\nZ\nend\n', 'Right goes to the selection end')
+        app.tap('Home','Control_L'); shift('Right', 4); app.tap('BackSpace')
+        saved(doc, b'pha alpha\nZ\nend\n', 'Backspace removes the selection')
+        app.tap('Home','Control_L'); shift('Down'); app.tap('x','Control_L'); app.tap('End','Control_L'); app.tap('v','Control_L')
+        saved(doc, b'Z\nend\npha alpha\n', 'multi-line cut and paste')
+        app.tap('a','Control_L'); wait_for(lambda: shows(mark), 'Ctrl+A highlights')
+        app.type('X'); saved(doc, b'X', 'Ctrl+A then typing replaces everything')
+        app.tap('z','Control_L'); saved(doc, b'Z\nend\npha alpha\n', 'one undo restores everything')
+        # A pasted search finds the copied word; leaving Find leaves no selection.
+        app.tap('Home','Control_L'); app.tap('Down'); app.tap('Down'); [app.tap('Right') for _ in range(4)]
+        shift('Right', 5); app.tap('c','Control_L')
+        app.tap('Home','Control_L'); app.tap('f','Control_L'); app.tap('v','Control_L')
+        wait_for(lambda: shows(match) and not shows(mark), 'pasted search highlights its match')
+        app.frame('find-match')
+        app.tap('Escape')
+        wait_for(lambda: not shows(match), 'leaving Find removes the match highlight')
+        app.type('^'); saved(doc, b'Z\nend\npha ^alpha\n', 'pasted search found the copied word')
+        app.tap('a','Control_L'); app.tap('c','Control_L'); app.tap('End','Control_L')
+        app.tap('f','Control_L'); app.tap('v','Control_L')
+        wait_for(warned, 'a multi-line paste into Find is refused')
+        app.tap('Escape'); app.tap('s','Control_L')
+        assert doc.read_bytes()==b'Z\nend\npha ^alpha\n'
+        # Copy, paste, undo cycles reuse fixed storage.
+        samples = []
+        for cycle in range(1, 21):
+            app.tap('a','Control_L'); app.tap('c','Control_L'); app.tap('End','Control_L'); app.tap('v','Control_L')
+            app.tap('z','Control_L')
+            saved(doc, b'Z\nend\npha ^alpha\n', 'paste and undo cycle')
+            if cycle % 2 == 0: samples.append(memory(app.p.pid))
+        stable_memory(samples, 'select copy paste undo')
+        shift('Left')
+        wait_for(lambda: shows(mark), 'selection before Escape')
+        app.tap('Escape')
+        wait_for(lambda: not shows(mark), 'first Escape drops the selection')
+        assert app.p.poll() is None, 'Escape with a selection closed Notes'
+        app.tap('Escape')
+        app.finish()
+    names = d/'names.txt'; names.write_bytes(b'other.txt\n')
+    other = d/'other.txt'; other.write_bytes(b'second\n')
+    with application(args.notes, names, b'Herbert - Notes', (900,600), x, display, d, 'selection-open') as app:
+        shift('End'); app.tap('c','Control_L')
+        app.tap('o','Control_L'); app.tap('v','Control_L'); app.tap('Return')
+        app.type('Q'); saved(other, b'Qsecond\n', 'a pasted name opens in Ctrl+O')
+        assert names.read_bytes()==b'other.txt\n'
+        app.tap('Escape'); app.finish()
+    crlf = d/'crlf.txt'; crlf.write_bytes(b'one\r\ntwo\r\n')
+    big = d/'big.txt'; content = b'X'*30000 + b'\n' + b'Y'*30000; big.write_bytes(content)
+    with application(args.notes, crlf, b'Herbert - Notes', (900,600), x, display, d, 'selection-crlf') as app:
+        shift('Down'); app.tap('c','Control_L'); app.tap('End','Control_L'); app.tap('v','Control_L')
+        saved(crlf, b'one\r\ntwo\r\none\r\n', 'copied line keeps the CRLF style')
+        app.tap('Escape'); app.finish()
+    with application(args.notes, big, b'Herbert - Notes', (900,600), x, display, d, 'selection-big') as app:
+        # Replacing 60,002 bytes with 60,001 needs both in history: one undo step.
+        app.tap('a','Control_L'); app.tap('c','Control_L'); app.tap('End','Control_L'); app.type('!')
+        app.tap('a','Control_L'); app.tap('v','Control_L')
+        saved(big, content, 'whole-document paste over a whole-document selection')
+        app.tap('z','Control_L'); saved(big, content + b'!', 'one undo restores the replaced document')
+        app.tap('y','Control_L'); saved(big, content, 'one redo replaces it again')
+        app.tap('Escape'); app.finish()
+    passed('notes-selection-highlight-cut-copy-paste-one-undo-step-fields-crlf-whole-document-memory-flat',
+           samples=samples)
+
+
 def static_elf(path):
     data = path.read_bytes()
     assert data[:7] == b'\x7fELF\x02\x01\x01', 'expected little-endian ELF64'
@@ -1012,6 +1111,7 @@ def main():
                     notes_fault_checks(args,x,display,evidence,passed)
                     notes_editing_checks(args,x,display,evidence,passed)
                     notes_open_checks(args,x,display,evidence,passed)
+                    notes_selection_checks(args,x,display,evidence,passed)
             finally:
                 x.close()
     except BaseException as error:

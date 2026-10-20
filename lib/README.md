@@ -33,8 +33,10 @@ source; the retained source map identifies its original units.
 - `text_buffer.herb`: fixed-capacity UTF-8 text with byte offsets constrained to
   grapheme boundaries, whole-cluster deletion/navigation, four-column tabs and
   wrapped literal search. History retains up to 256 operations and at most
-  `capacity` payload bytes; whole oldest records are evicted to fit. All editing
-  storage is allocated at construction and reused. Uniform LF/CRLF loads retain
+  `capacity` payload bytes, or the budget given to `text_buffer_history(capacity,
+  history)`; whole oldest records are evicted to fit. `text_replace` swaps a span
+  for new text as one undo step; a budget of twice the capacity holds any
+  whole-text replace. All editing storage is allocated at construction and reused. Uniform LF/CRLF loads retain
   their style; internal logical bytes use LF. Save with `text_file_bytes(t)` and
   `text_file_length(t)` to preserve exact encoding and the on-disk capacity bound.
   A CRLF newline is one logical edit. Used by Notes.

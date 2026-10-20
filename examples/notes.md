@@ -40,12 +40,24 @@ Ctrl+Home/End move to the beginning/end of the document. Page Up/Down move
 20 lines. The view scrolls vertically and horizontally to follow the cursor.
 Tabs advance to the next four-column stop. Backspace/Delete remove a whole grapheme cluster, so accents and joined emoji
 are not split into broken fragments.
-**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 65,536 bytes of inserted/deleted text in
-fixed storage. Large edits can evict older complete history records sooner. A deletion using all
-65,536 history bytes is evicted by the next accepted edit. Navigation is not an edit. A new edit after
+**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 131,072 bytes of inserted/deleted text in
+fixed storage, enough for one replace of a whole document. Large edits can evict older complete history records sooner;
+a replace is kept or evicted whole. Navigation is not an edit. A new edit after
 undo drops the redo branch; the oldest edits fall off the bounded history.
 History remains available after saving. Undo/redo conservatively marks the
 document unsaved, even when it returns to the saved bytes.
+
+**Selecting.** Shift with a movement key (arrows, Home/End, Page Up/Down,
+Ctrl+Home/End) selects from where the selection started, and Ctrl+A selects
+everything. The selection is highlighted. A movement key without Shift drops it,
+Left and Right first going to its start or end, and the first Escape drops it
+without closing Notes. Typing, Enter, Tab, Unicode entry and Ctrl+V replace the
+selection; Backspace and Delete remove it. **Ctrl+X cuts, Ctrl+C copies and Ctrl+V
+pastes**; a cut, a paste or a typed replacement is one undo step. The clipboard
+currently belongs to this Notes window, holding the selection's text with LF
+newlines; a pasted newline follows the document's own style when saved. Ctrl+V
+also pastes into the Open and Find fields when the text is one line without tabs
+that fits; one trailing newline is dropped, and other text is refused whole.
 
 **Ctrl+F searches** for up to 64 UTF-8 bytes, case-sensitive and byte-exact. Matches must start
 and end on grapheme boundaries; canonically equivalent spellings are not
@@ -53,8 +65,9 @@ automatically equated.
 Typing finds the first matching position at/after the cursor. Enter/F3 finds the
 next match; Shift+Enter/Shift+F3 finds the previous match. Search wraps at both
 ends and includes overlapping matches. Escape leaves search; F3/Shift+F3 then
-repeat the last query. F3 without a previous query opens search. The cursor and scrolling show the match location; there
-is no selection highlight. Search never changes the document or undo history.
+repeat the last query. F3 without a previous query opens search. The cursor and scrolling show the match location, and
+while Find is open the match is highlighted. It is not a selection: leaving Find leaves none. Search never changes the
+document or undo history.
 
 Ctrl+S saves. Escape, Ctrl+Q or the window close button closes a clean document.
 With unsaved changes, a visible prompt requires **Y** to close without saving
@@ -119,8 +132,8 @@ race the final conflict check and rename. A crash can leave an owned
 `.herbert-save-*.tmp` file beside the document.
 
 Current limits: fixed-size 900x600 window, limited font and keyboard coverage,
-no compose/IME, clipboard, selection, mouse editing, general save-as dialog, file
-browser or multi-file tabs. Ctrl+O replaces the open document; to edit two files at
+no compose/IME, desktop clipboard (cut, copy and paste work inside one Notes window),
+mouse editing, general save-as dialog, file browser or multi-file tabs. Ctrl+O replaces the open document; to edit two files at
 once, launch another instance with the other path. The visible path is clipped
 after 130 bytes and the Open field shows a path's last 130 characters; the full
 path is used for file operations.

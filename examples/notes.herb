@@ -3,7 +3,9 @@
 -- session_recovery, x11, pixel_text, unicode_display. UTF-8 + LF/CRLF + TAB.
 -- App state is one reference record, built once in main and updated in place.
 -- It holds the open document's File and a spare one: Ctrl+O loads the spare and
--- the two swap, so opening a file allocates nothing either.
+-- the two swap, so opening a file allocates nothing either. The selection runs
+-- from anchor (-1 when there is none) to the cursor; the clipboard is a fixed
+-- buffer of logical (LF) text.
 -- No per-event/frame/save string or tuple creation.
 
 ref record NotesState:
@@ -30,6 +32,9 @@ ref record NotesState:
     path: buffer
     path_count: int
     open_result: int
+    anchor: int
+    clip: buffer
+    clip_count: int
 end
 
 func notes_redraw(s):
@@ -43,6 +48,7 @@ func notes_message(s, message):
 end
 
 func notes_changed(s):
+    s.anchor = 0 - 1
     s.dirty = true
     s.checkpoint_pending = true
     return notes_message(s, 1)
@@ -159,9 +165,85 @@ func notes_insert_scalar(t, s, query, ch):
         s.query_count = next
         return notes_find(t, s, query, false, false)
     end
+    if notes_selected(t, s):
+        let replaced = text_replace_scalar(t, notes_from(t, s), notes_to(t, s), ch)
+        return notes_edited(s, replaced)
+    end
     let changed = text_insert(t, ch)
     if changed == 0: return notes_message(s, 3) end
     return notes_changed(s)
+end
+
+func notes_selected(t, s): return s.anchor != 0 - 1 and s.anchor != text_cursor(t) end
+
+func notes_from(t, s):
+    if s.anchor < text_cursor(t): return s.anchor end
+    return text_cursor(t)
+end
+
+func notes_to(t, s):
+    if s.anchor > text_cursor(t): return s.anchor end
+    return text_cursor(t)
+end
+
+-- A text_replace result: 1 changed, 0 no room (65,536-byte limit), 2 too large to undo.
+func notes_edited(s, result):
+    if result == 1: return notes_changed(s) end
+    if result == 2: return notes_message(s, 35) end
+    return notes_message(s, 3)
+end
+
+func notes_copy(t, s):
+    if not notes_selected(t, s): return notes_message(s, 32) end
+    let start = notes_from(t, s)
+    let count = notes_to(t, s) - start
+    let copied = linux_copy(s.clip, 0, t.0, start, count)
+    s.clip_count = count
+    return notes_message(s, 31)
+end
+
+func notes_cut(t, s):
+    if not notes_selected(t, s): return notes_message(s, 32) end
+    let copied = notes_copy(t, s)
+    return notes_edited(s, text_replace(t, notes_from(t, s), notes_to(t, s), s.clip, 0, 0))
+end
+
+-- One line for the Open and Find fields: valid text without TAB or newline.
+func notes_line_valid(bytes, p, count):
+    if p >= count: return true end
+    let decoded = utf8_decode(bytes, p, count)
+    if linux_error(decoded.0) or decoded.0 == 9 or decoded.0 == 10 or not utf8_text_allowed(decoded.0): return false end
+    return notes_line_valid(bytes, decoded.1, count)
+end
+
+-- Fields take one line: one trailing newline is dropped, and anything else
+-- multi-line, a TAB or a disallowed character refuses the whole paste.
+func notes_paste_field(t, s, query, bytes, count):
+    if count > 0 and buffer_get(bytes, count - 1) == 10: count = count - 1 end
+    if not notes_line_valid(bytes, 0, count): return notes_message(s, 34) end
+    if s.opening:
+        if count > 4095 - s.path_count: return notes_message(s, 29) end
+        let copied = linux_copy(s.path, s.path_count, bytes, 0, count)
+        s.path_count = s.path_count + count
+        return notes_message(s, 19)
+    end
+    if count > 64 - s.query_count: return notes_message(s, 14) end
+    let copied = linux_copy(query, s.query_count, bytes, 0, count)
+    s.query_count = s.query_count + count
+    return notes_find(t, s, query, false, false)
+end
+
+-- Pasted text replaces the selection, or goes in at the cursor, as one undo step.
+func notes_paste(t, s, query):
+    if s.clip_count == 0: return notes_message(s, 33) end
+    if s.opening or s.finding: return notes_paste_field(t, s, query, s.clip, s.clip_count) end
+    let start = text_cursor(t)
+    let stop = start
+    if notes_selected(t, s):
+        start = notes_from(t, s)
+        stop = notes_to(t, s)
+    end
+    return notes_edited(s, text_replace(t, start, stop, s.clip, 0, s.clip_count))
 end
 
 func notes_hex_digit(key):
@@ -257,6 +339,7 @@ end
 
 func notes_open_start(s):
     if s.dirty: return notes_message(s, 22) end
+    s.anchor = 0 - 1
     s.finding = false
     s.opening = true
     s.path_count = notes_open_prefix(s)
@@ -349,8 +432,10 @@ func notes_key(c, t, s, recovery, query, key, mods):
     end
     if control and (key == 113 or key == 81): return notes_request_close(c, f, t, s, recovery) end
     if control and (key == 111 or key == 79): return notes_open_start(s) end
+    if control and (key == 118 or key == 86): return notes_paste(t, s, query) end
     if s.opening: return notes_open_key(t, s, recovery, query, key, mods) end
     if control and (key == 102 or key == 70):
+        s.anchor = 0 - 1
         s.finding = true
         s.query_count = 0
         s.query_matched = false
@@ -359,11 +444,43 @@ func notes_key(c, t, s, recovery, query, key, mods):
     if s.finding: return notes_search_key(t, s, query, key, mods) end
     if key == 65472: return notes_find(t, s, query, (mods & 1) != 0, true) end
     if key == 65307:
+        -- The first Escape drops a selection; the next one closes.
+        if notes_selected(t, s):
+            s.anchor = 0 - 1
+            return notes_redraw(s)
+        end
         return notes_request_close(c, f, t, s, recovery)
     end
     if (mods & 8) != 0: return 0 end
     let cursor = text_cursor(t)
     let changed = 0
+    if control and (key == 97 or key == 65):
+        s.anchor = 0
+        let all = text_seek(t, text_length(t))
+        return notes_redraw(s)
+    end
+    if control and (key == 99 or key == 67): return notes_copy(t, s) end
+    if control and (key == 120 or key == 88): return notes_cut(t, s) end
+    -- Shift extends a selection from where it started. Without Shift a movement
+    -- key drops it; Left and Right first go to its start or end.
+    let selected = notes_selected(t, s)
+    if key >= 65360 and key <= 65367:
+        if (mods & 1) != 0:
+            if s.anchor == 0 - 1: s.anchor = cursor end
+        elif selected and (key == 65361 or key == 65363) and not control:
+            let edge = notes_from(t, s)
+            if key == 65363: edge = notes_to(t, s) end
+            s.anchor = 0 - 1
+            let collapsed = text_seek(t, edge)
+            return notes_redraw(s)
+        else:
+            if selected: let dropped = notes_redraw(s) end
+            s.anchor = 0 - 1
+        end
+    end
+    if selected and (key == 65288 or key == 65535):
+        return notes_edited(s, text_replace(t, notes_from(t, s), notes_to(t, s), s.clip, 0, 0))
+    end
     if control and (key == 122 or key == 90):
         if (mods & 1) != 0: changed = text_redo(t) else: changed = text_undo(t) end
         if changed == 0:
@@ -494,6 +611,34 @@ func notes_draw_hex(c, value, digits, x):
     return notes_draw_hex(c, value / 16, digits - 1, x)
 end
 
+func notes_warning(message):
+    if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18: return true end
+    return (message >= 22 and message <= 30) or (message >= 32 and message <= 35)
+end
+
+-- Highlight [a, b) behind the visible rows: the selection, or Find's match. A
+-- selected newline shows as a half-cell stub at the end of its line.
+func notes_draw_marks(c, t, p, left, row, a, b):
+    if row == 21 or p > b: return 0 end
+    let e = text_line_end(t, p)
+    if b > p and a <= e:
+        let from = a
+        if from < p: from = p end
+        let to = b
+        if to > e: to = e end
+        let c0 = text_column_loop(t, p, from, 0)
+        let c1 = text_column_loop(t, from, to, c0)
+        if c0 < left: c0 = left end
+        if c1 > left + 70: c1 = left + 70 end
+        let width = 0
+        if c1 > c0: width = (c1 - c0) * 12 end
+        if b > e and e < text_length(t) and c1 >= c0 and c1 < left + 70: width = width + 6 end
+        if width > 0: let mark = x11_rect(c, 28 + (c0 - left) * 12, 100 + row * 20, width, 20) end
+    end
+    if e >= text_length(t): return 0 end
+    return notes_draw_marks(c, t, e + 1, left, row + 1, a, b)
+end
+
 func notes_status(c, f, t, s, query):
     let color = x11_color(c, 11255503)
     let rowlabel = pixel_text(c, "Line", 28, 542, 1)
@@ -548,13 +693,18 @@ func notes_status(c, f, t, s, query):
     if message == 28: status = "Not opened: no such folder, no permission, or a file owned by another account. Error" end
     if message == 29: status = "A path is limited to 4095 bytes." end
     if message == 30: status = "Not opened: name a regular file, not a folder." end
+    if message == 31: status = "Copied." end
+    if message == 32: status = "Nothing is selected. Shift with a movement key, or Ctrl+A, selects text." end
+    if message == 33: status = "Nothing to paste. Ctrl+C or Ctrl+X copies a selection first." end
+    if message == 34: status = "A path or search takes one line of text, without tabs." end
+    if message == 35: status = "This edit is too large to undo, so it was not made." end
     if s.confirming and message == 7:
         status = "Rescue saved. Close pending: Y closes; Esc returns."
     end
     if s.confirming and message == 8:
         status = "Copy written; sync uncertain. Close pending: Y closes; Esc returns."
     end
-    if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18 or message >= 22: let warning = x11_color(c, 16173151) end
+    if notes_warning(message): let warning = x11_color(c, 16173151) end
     let statusline = pixel_text(c, status, 28, 560, 1)
     if message == 4 or message == 9:
         let code = pixel_number(c, 0 - s.save_result, 830, 560, 1)
@@ -581,7 +731,7 @@ func notes_status(c, f, t, s, query):
         if notes_recovery_current(s): closehelp = "Close pending: Y closes (recovery kept) | Esc returns | Ctrl+S saves" end
         let help = pixel_text(c, closehelp, 28, 580, 1)
     else:
-        let help = pixel_text(c, "Ctrl+S save | Ctrl+O open | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
+        let help = pixel_text(c, "Ctrl+S save | Ctrl+O open | Ctrl+X/C/V cut, copy, paste | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
     end
     return 0
 end
@@ -613,8 +763,15 @@ func notes_draw(c, f, t, s, recovery, query, blink):
     let border = x11_rect(c, 24, 96, 852, 428)
     let papercolor = x11_color(c, 1384240)
     let paper = x11_rect(c, 26, 98, 848, 424)
-    let ink = x11_color(c, 15265527)
     let first = text_row_start(t, 0, s.top)
+    if notes_selected(t, s):
+        let markcolor = x11_color(c, 3033707)
+        let marks = notes_draw_marks(c, t, first, s.left, 0, notes_from(t, s), notes_to(t, s))
+    elif s.finding and s.query_matched and not s.unicode_input and not s.confirming:
+        let matchcolor = x11_color(c, 6969880)
+        let marks = notes_draw_marks(c, t, first, s.left, 0, text_cursor(t), text_cursor(t) + s.query_count)
+    end
+    let ink = x11_color(c, 15265527)
     s.missing_glyphs = false
     let text = notes_draw_rows(c, t, s, first, s.left, 0)
     if s.finding and not s.unicode_input and not s.confirming:
@@ -676,14 +833,14 @@ func main():
         if status == 0 - 116: return linux_die("notes: file changed while opening. Try again after the other writer finishes.\n") end
         return linux_die("notes: cannot open a regular, singly linked file owned by you (or its parent). No file changed.\n")
     end
-    let t = text_buffer(65536)
+    let t = text_buffer_history(65536, 131072)
     let loaded = text_load(t, opened.bytes, file_count(opened))
     if loaded != 0:
         let closed = file_close(opened)
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
-    let s = NotesState(f, file_new(65536), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0)
+    let s = NotesState(f, file_new(65536), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0)
     let recovery = recovery_new(65536)
     let query = linux_buffer(64)
     s.needs_draw = true
