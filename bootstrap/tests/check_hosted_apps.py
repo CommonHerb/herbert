@@ -1514,6 +1514,17 @@ def notes_navigation_checks(args, x, display, evidence, passed):
     with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'navigation') as app:
         app.move(450, 300)
         start = app.frame('start')
+        # With the cursor still at offset 0: a wheel scroll, then Ctrl+Home (the cursor is already there)
+        # and Ctrl+G to the line the cursor is on each bring the view back. The view must not key on
+        # the cursor's offset changing.
+        app.wheel(down=True, ticks=2)
+        wait_for(lambda: row(app.frame(), 0) == row(start, 6), 'two notches down before any typing')
+        app.tap('Home','Control_L')
+        wait_for(lambda: row(app.frame(), 1) == row(start, 1), 'Ctrl+Home brings the view back with the cursor already at the top')
+        app.wheel(down=True, ticks=2)
+        wait_for(lambda: row(app.frame(), 0) == row(start, 6), 'two notches down again')
+        app.tap('g','Control_L'); app.type('1'); app.tap('Return')
+        wait_for(lambda: row(app.frame(), 1) == row(start, 1), 'Ctrl+G to the line the cursor is on brings the view back')
         app.tap('End','Control_L'); app.tap('Up')
         end = app.frame('end')            # rows 60..80: row 17 is line 77, row 20 the empty last line, no caret on it
         app.tap('Home','Control_L')
@@ -1571,8 +1582,37 @@ def notes_navigation_checks(args, x, display, evidence, passed):
         app.tap('g','Control_L'); app.tap('Return'); app.type('9'); app.tap('Return'); app.type('?')
         text[line_start(9):line_start(9)] = b'?'
         saved('Enter without digits keeps the field up')
+        # Enter over a one-character selection on the bottom row: the cursor's offset stays, its row
+        # does not; the view must follow (the reviewer's finding 1).
+        app.tap('Home','Control_L'); app.tap('g','Control_L'); app.type('21'); app.tap('Return')
+        app.tap('Right','Shift_L'); app.tap('Return')
+        split = line_start(21); text[split:split + 1] = b'\n'
+        saved('Enter over a selection on the bottom row splits the line')
+        wait_for(lambda: row(app.frame(), 0) == row(start, 1), 'the view follows the cursor onto the row below the view')
+        # Backspace on a backward selection with the view wheel-scrolled away: the offset stays, the
+        # document shrinks, and the view must come back to the cursor (finding 3).
+        app.tap('g','Control_L'); app.type('41'); app.tap('Return')
+        wait_for(lambda: row(app.frame(), 0) != row(start, 1), 'Ctrl+G 41 scrolls')
+        g41 = app.frame('g41')      # rows 20..40 (after the split, row r holds "line r-1"); the caret is on row 20
+        app.tap('Home','Control_L')
+        wait_for(lambda: row(app.frame(), 1) == row(start, 1), 'Ctrl+Home before the selection')
+        app.tap('g','Control_L'); app.type('30'); app.tap('Return')     # from the top: the view's top row becomes 9
+        for _ in range(5): app.tap('Up','Shift_L')
+        app.wheel(down=True, ticks=10)
+        wait_for(lambda: row(app.frame(), 0) == row(g41, 19), 'ten notches down from the selection')
+        app.tap('BackSpace')
+        a, b = line_start(25), line_start(30); del text[a:b]
+        saved('Backspace removes the backward selection')
+        wait_for(lambda: row(app.frame(), 1) == row(g41, 10), 'the view comes back to the cursor after the removal')
+        # Ctrl+Shift+S inside the Go to line field closes the field, so the sibling name can show and
+        # the next key reaches the document (finding 4).
+        app.tap('g','Control_L'); app.key('Control_L',True); app.tap('s','Shift_L'); app.key('Control_L',False)
+        time.sleep(.3)
+        app.type('x'); text[a:a] = b'x'
+        saved('a rescue copy inside Go to line closes the field')
         app.tap('Escape'); app.finish()
-    passed('notes-wheel-scrolls-view-not-cursor-burst-clamp-find-ignored-memory-go-to-line-clamp-zero-backspace-digits-escape',
+    passed('notes-wheel-scrolls-view-not-cursor-burst-clamp-find-ignored-memory-go-to-line-clamp-zero-backspace-digits-escape-'
+           'view-back-at-same-offset-split-bottom-row-shrink-under-wheel-rescue-in-field',
            samples=samples)
 
 

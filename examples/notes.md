@@ -39,10 +39,11 @@ Type to insert text. Left/Right move across whole grapheme clusters; Home/End mo
 Ctrl+Home/End move to the beginning/end of the document. Page Up/Down move
 20 lines. **Ctrl+G goes to a line:** type its number, then Enter (0 means the
 first line; a number past the last line goes to the end of the text; Escape
-cancels). The view scrolls vertically and horizontally to follow the cursor.
+cancels). The view scrolls vertically and horizontally to follow the cursor,
+never past where Ctrl+End stops (the last line at the bottom).
 **The scroll wheel** moves the view three lines a notch without moving the
-cursor, down as far as Ctrl+End would show; the view comes back to the cursor
-the next time the cursor moves.
+cursor, down as far as Ctrl+End would show; the next key, click or drag brings
+the view back to the cursor before it is handled.
 Tabs advance to the next four-column stop. Backspace/Delete remove a whole grapheme cluster, so accents and joined emoji
 are not split into broken fragments.
 **Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 2,097,152 bytes of inserted/deleted text in

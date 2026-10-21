@@ -10,9 +10,10 @@
 -- handled, which the clipboard protocol asks for. dragging is true from a left
 -- press in the text to its release; drag_x/drag_y hold the pointer's last place
 -- and scrolled_at the last time a drag held past an edge scrolled the view.
--- followed is the cursor position the view last moved to: the wheel moves the
--- view alone, and the view comes back when the cursor next moves. going is the
--- Go to line field, with the number typed so far and its digit count.
+-- detached is true while the wheel has moved the view away from the cursor;
+-- the next key (other than a bare modifier), click or drag re-attaches it, and
+-- the view follows the cursor every frame as before. going is the Go to line
+-- field, with the number typed so far and its digit count.
 -- No per-event/frame/save string or tuple creation.
 
 ref record NotesState:
@@ -46,7 +47,7 @@ ref record NotesState:
     drag_x: int
     drag_y: int
     scrolled_at: int
-    followed: int
+    detached: bool
     going: bool
     line_value: int
     line_digits: int
@@ -98,6 +99,7 @@ end
 func notes_request_close(c, f, t, s, recovery):
     s.unicode_input = false
     s.opening = false
+    s.going = false
     do notes_checkpoint(recovery, f, t, s)
     do x11_ack_close(c)
     if not s.dirty: return notes_quit(c, f, t, s, recovery) end
@@ -133,6 +135,8 @@ func notes_save_copy(f, t, s):
     if result == 0 or result == 1:
         s.finding = false
         s.unicode_input = false
+        s.opening = false
+        s.going = false
     end
     if result == 0: return notes_message(s, 7) end
     if result == 1: return notes_message(s, 8) end
@@ -470,7 +474,7 @@ func notes_open(t, s, recovery):
     do recovery_reset(recovery)
     s.top = 0
     s.left = 0
-    s.followed = 0 - 1
+    s.detached = false
     s.confirming = false
     s.save_result = 0
     s.checkpoint_pending = false
@@ -697,27 +701,40 @@ func notes_wheel(t, s, upward, ticks):
     end
     if top == s.top: return 0 end
     s.top = top
+    s.detached = true
     return notes_redraw(s)
 end
+
+-- A view the wheel moved away comes back at the next key that is not a bare
+-- modifier, click or drag, before that input is handled: whatever it does to
+-- the cursor, the next frame follows the cursor again.
+func notes_attach(s):
+    if not s.detached: return 0 end
+    s.detached = false
+    return notes_redraw(s)
+end
+
+func notes_modifier(key): return (key >= 65505 and key <= 65518) or key == 65027 end
 
 func notes_keys(c, t, s, recovery, query, event):
     if not x11_next_key(c, event): return 0 end
     s.time = linux_u32(event, 12)
     let symbol = linux_u32(event, 0)
     if symbol >= 4294967041:
+        if symbol <= 4294967042: do notes_attach(s) end
         do notes_pointer(t, s, symbol, linux_u32(event, 4), linux_u32(event, 8))
         return notes_keys(c, t, s, recovery, query, event)
     end
+    if not notes_modifier(symbol): do notes_attach(s) end
     do notes_key(c, t, s, recovery, query, symbol, linux_u32(event, 4))
     return notes_keys(c, t, s, recovery, query, event)
 end
 
--- The view follows the cursor when it has moved since the view last did; a
--- view the wheel moved stays until then.
+-- The view follows the cursor every frame, except while the wheel has moved it
+-- away; the next key, click or drag re-attaches it (notes_attach).
 func notes_view(t, s):
+    if s.detached: return 0 end
     let cursor = text_cursor(t)
-    if cursor == s.followed: return 0 end
-    s.followed = cursor
     let row = text_row(t, cursor)
     let col = text_column(t, cursor)
     let top = s.top
@@ -726,6 +743,12 @@ func notes_view(t, s):
     if row >= top + 21: top = row - 20 end
     if col < left: left = col end
     if col >= left + 70: left = col - 69 end
+    -- Never past where Ctrl+End stops (the last row at the bottom): a document
+    -- that lost its rows below the cursor would otherwise show only its last row.
+    let reached = text_row_clamp(t, top + 20)
+    let limit = 0
+    if reached > 20: limit = reached - 20 end
+    if top > limit: top = limit end
     s.top = top
     s.left = left
     return 0
@@ -797,7 +820,7 @@ end
 
 func notes_warning(message):
     if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18: return true end
-    return (message >= 22 and message <= 30) or (message >= 32 and message <= 41)
+    return (message >= 22 and message <= 30) or (message >= 32 and message <= 41) or message == 43 or message == 44
 end
 
 -- Highlight [a, b) behind the visible rows: the selection, or Find's match. A
@@ -1049,7 +1072,7 @@ func main():
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
-    let s = NotesState(f, file_new(notes_capacity()), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0, 0 - 1, false, 0, 0)
+    let s = NotesState(f, file_new(notes_capacity()), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0, false, false, 0, 0)
     let recovery = recovery_new(notes_capacity())
     let query = linux_buffer(64)
     s.needs_draw = true
