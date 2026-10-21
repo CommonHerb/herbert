@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -2715,6 +2715,171 @@
       "profile": "reject",
       "source": "func main():\n    do main()\n    return 0\nend\n",
       "diagnostic": "line 2: native-subset: user functions may not call main (ERR 421)"
+    },
+    {
+      "id": "while-sum", "profile": "run",
+      "source": "func main():\n    let i = 0\n    let acc = 0\n    while i < 10:\n        acc = acc + i\n        i = i + 1\n    end\n    return acc\nend\n",
+      "stdin": "", "stdout": "45\n", "status": 0
+    },
+    {
+      "id": "while-nested", "profile": "run",
+      "source": "func main():\n    let i = 1\n    let acc = 0\n    while i <= 5:\n        let j = 1\n        while j <= 5:\n            acc = acc + i * j\n            j = j + 1\n        end\n        i = i + 1\n    end\n    return acc\nend\n",
+      "stdin": "", "stdout": "225\n", "status": 0
+    },
+    {
+      "id": "while-early-return", "profile": "run",
+      "source": "func first_square_over(limit):\n    let i = 0\n    while true:\n        if i * i > limit:\n            return i\n        end\n        i = i + 1\n    end\n    return 0\nend\n\nfunc main():\n    return first_square_over(50)\nend\n",
+      "stdin": "", "stdout": "8\n", "status": 0
+    },
+    {
+      "id": "while-body-let", "profile": "run",
+      "source": "func main():\n    let i = 0\n    let acc = 0\n    while i < 5:\n        let sq = i * i\n        acc = acc + sq\n        i = i + 1\n    end\n    return acc\nend\n",
+      "stdin": "", "stdout": "30\n", "status": 0
+    },
+    {
+      "id": "while-buffer", "profile": "run",
+      "source": "func main():\n    let b = new_buffer()\n    let i = 0\n    while i < 5:\n        do append(b, 65 + i)\n        i = i + 1\n    end\n    do flogger(freeze(b))\n    do flogger(\"\\n\")\n    return 0\nend\n",
+      "stdin": "", "stdout": "ABCDE\n0\n", "status": 0
+    },
+    {
+      "id": "while-tail-call-in-body", "profile": "run",
+      "source": "func count_down(n, acc):\n    while n > 0:\n        if n % 2 == 0:\n            return count_down(n - 1, acc + 2)\n        end\n        n = n - 1\n        acc = acc + 1\n    end\n    return acc\nend\n\nfunc main():\n    return count_down(10, 0)\nend\n",
+      "stdin": "", "stdout": "15\n", "status": 0
+    },
+    {
+      "id": "while-one-line", "profile": "run",
+      "source": "func main():\n    let i = 0\n    while i < 3: i = i + 1 end\n    return i\nend\n",
+      "stdin": "", "stdout": "3\n", "status": 0
+    },
+    {
+      "id": "while-value-record", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nfunc main():\n    let p = Point(0, 100)\n    let i = 0\n    while i < 4:\n        p.x = p.x + 3\n        p.y = p.y - 1\n        i = i + 1\n    end\n    return p\nend\n",
+      "stdin": "", "stdout": "(12, 96)\n", "status": 0
+    },
+    {
+      "id": "while-ref-record", "profile": "run",
+      "source": "ref record Counter:\n    total: int\n    hits: int\nend\n\nfunc bump(c, n):\n    let i = 0\n    while i < n:\n        c.total = c.total + i\n        c.hits = c.hits + 1\n        i = i + 1\n    end\n    return c.hits\nend\n\nfunc main():\n    let c = Counter(0, 0)\n    let h = bump(c, 5)\n    return c.total * 100 + h\nend\n",
+      "stdin": "", "stdout": "1005\n", "status": 0
+    },
+    {
+      "id": "while-stdin", "profile": "run",
+      "source": "func main():\n    let incoming = stdin_read()\n    let s = incoming.1\n    let i = 0\n    let n = 0\n    while i < length(s):\n        if index(s, i) == 108:\n            n = n + 1\n        end\n        i = i + 1\n    end\n    return n\nend\n",
+      "stdin": "hello\n", "stdout": "2\n", "status": 0
+    },
+    {
+      "id": "while-bool-control", "profile": "run",
+      "source": "func main():\n    let go = true\n    let i = 0\n    while go:\n        i = i + 1\n        if i == 4:\n            go = false\n        end\n    end\n    return i\nend\n",
+      "stdin": "", "stdout": "4\n", "status": 0
+    },
+    {
+      "id": "while-if-join-then-loop", "profile": "run",
+      "source": "func main():\n    let i = 0\n    let x = 1\n    if x == 1:\n        x = 2\n    end\n    while i < x:\n        i = i + 1\n    end\n    return i * 10 + x\nend\n",
+      "stdin": "", "stdout": "22\n", "status": 0
+    },
+    {
+      "id": "while-while-true", "profile": "run",
+      "source": "func find(limit):\n    let i = 0\n    while true:\n        if i >= limit:\n            return i * 2\n        end\n        i = i + 1\n    end\n    return 0\nend\n\nfunc main():\n    return find(6)\nend\n",
+      "stdin": "", "stdout": "12\n", "status": 0
+    },
+    {
+      "id": "while-tuple-local", "profile": "run",
+      "source": "func main():\n    let t = (0, 0)\n    let i = 0\n    while i < 4:\n        t = (t.0 + 1, t.1 + 2)\n        i = i + 1\n    end\n    return t\nend\n",
+      "stdin": "", "stdout": "(4, 8)\n", "status": 0
+    },
+    {
+      "id": "while-process-exit-in-body", "profile": "run-stdio",
+      "source": "func main():\n    let i = 0\n    while i < 10:\n        if i == 3:\n            do stderr_write(\"three\\n\")\n            do process_exit(3)\n        end\n        i = i + 1\n    end\n    return 0\nend\n",
+      "stdin": "", "stdout": "", "stderr": "three\n", "status": 3
+    },
+    {
+      "id": "while-nested-inner-return", "profile": "run",
+      "source": "func scan(n):\n    let i = 0\n    while i < n:\n        let j = 0\n        while j < n:\n            if i * j == 12:\n                return i * 100 + j\n            end\n            j = j + 1\n        end\n        i = i + 1\n    end\n    return 0\nend\n\nfunc main():\n    return scan(10)\nend\n",
+      "stdin": "", "stdout": "206\n", "status": 0
+    },
+    {
+      "id": "while-param-fixed-in-body", "profile": "run",
+      "source": "func f(p):\n    let i = 0\n    while i < 2:\n        p = p + 1\n        i = i + 1\n    end\n    return p\nend\n\nfunc main():\n    return f(5)\nend\n",
+      "stdin": "", "stdout": "7\n", "status": 0
+    },
+    {
+      "id": "while-missing-colon", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i < 3\n        i = i + 1\n    end\n    return i\nend\n",
+      "diagnostic": "line 4: expected expression (ERR 204)"
+    },
+    {
+      "id": "while-empty-body", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i < 3:\n    end\n    return i\nend\n",
+      "diagnostic": "line 3: while body must contain at least one statement (ERR 214)"
+    },
+    {
+      "id": "while-else-after-body", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i < 3:\n        i = i + 1\n    else:\n        i = 9\n    end\n    return i\nend\n",
+      "diagnostic": "line 5: expected end (ERR 203)"
+    },
+    {
+      "id": "while-let-while", "profile": "reject",
+      "source": "func main():\n    let while = 3\n    return while\nend\n",
+      "diagnostic": "line 2: invalid assignment or name (ERR 212)"
+    },
+    {
+      "id": "while-func-while", "profile": "reject",
+      "source": "func while():\n    return 1\nend\n\nfunc main():\n    return while()\nend\n",
+      "diagnostic": "line 1: invalid function header (ERR 202)"
+    },
+    {
+      "id": "while-int-condition", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i:\n        i = 1\n    end\n    return i\nend\n",
+      "diagnostic": "line 3: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "while-int-to-bool-in-body", "profile": "reject",
+      "source": "func main():\n    let x = 0\n    while x == 0:\n        x = true\n    end\n    return x\nend\n",
+      "diagnostic": "line 3: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "while-width-change-in-body", "profile": "reject",
+      "source": "func main():\n    let x = 0\n    while x < 3:\n        x = (1, 2)\n    end\n    return x\nend\n",
+      "diagnostic": "line 4: native-subset: local rebind changes value width (ERR 433)"
+    },
+    {
+      "id": "while-no-return-after-loop", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i < 3:\n        i = i + 1\n    end\nend\n",
+      "diagnostic": "line 1: native-subset: ambiguous or unconstrained function signature (ERR 424)"
+    },
+    {
+      "id": "while-returning-body-nothing-after", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i < 3:\n        return i\n    end\nend\n",
+      "diagnostic": "program: native-subset: invalid branch target 8 (ERR 415)"
+    },
+    {
+      "id": "while-long64-route", "profile": "reject",
+      "source": "-- emit: multiboot32-long64\nfunc main():\n    let i = 0\n    while i < 3:\n        i = i + 1\n    end\n    return i\nend\n",
+      "diagnostic": "program: native-subset: multiboot32-long64: body not in the control-flow+locals 64-bit subset (ERR 502)"
+    },
+    {
+      "id": "while-break", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i < 3:\n        break\n    end\n    return i\nend\n",
+      "diagnostic": "line 4: invalid assignment or name (ERR 212)"
+    },
+    {
+      "id": "while-body-let-read-after", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i < 1:\n        let t = 5\n        i = i + 1\n    end\n    return t\nend\n",
+      "diagnostic": "line 7: native-subset: forbidden construct 'undefined-name' (ERR 404)"
+    },
+    {
+      "id": "while-condition-missing", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while :\n        i = i + 1\n    end\n    return i\nend\n",
+      "diagnostic": "line 3: expected expression (ERR 204)"
+    },
+    {
+      "id": "while-elif-after-body", "profile": "reject",
+      "source": "func main():\n    let i = 0\n    while i < 3:\n        i = i + 1\n    elif i == 3:\n        i = 9\n    end\n    return i\nend\n",
+      "diagnostic": "line 5: expected end (ERR 203)"
+    },
+    {
+      "id": "while-tuple-condition", "profile": "reject",
+      "source": "func main():\n    let t = (true, false)\n    let i = 0\n    while t:\n        i = i + 1\n    end\n    return i\nend\n",
+      "diagnostic": "line 4: native-subset: structural type conflict (ERR 430)"
     }
   ]
 }
