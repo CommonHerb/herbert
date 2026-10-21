@@ -22,7 +22,7 @@ Stay inside the **accept-list**. Unsupported or malformed programs are not guara
 
 **ACCEPTED (proven to compile + run):**
 - `func NAME(params): <body> end`, with `func main()` taking **zero** params.
-- Statements: `let NAME = EXPR`, `NAME = EXPR` (rebind existing), `return EXPR`, `do CALL(...)` (void builtins only), `if/elif/else/end`.
+- Statements: `let NAME = EXPR`, `NAME = EXPR` (rebind existing), `return EXPR`, `do CALL(...)` (any call, for its effect; a result is discarded), `if/elif/else/end`.
 - Infix arithmetic `+ - *` and all six comparisons `< <= > >= == !=` (all uint64, modular wrap). `/ %` exist but fault on a zero divisor.
 - Self, non-tail, and mutual (cross-function) recursion; see G2 for stack-use limits. **No loop keywords exist.**
 - Tuples `(a, b, c)` as values and as `main`'s return; positional access `t.0 t.1 …` (chainable `t.2.0`).
@@ -60,7 +60,7 @@ stmt    := 'let' NAME '=' expr        -- local binding; see current shadowing be
          | NAME '=' expr              -- rebind an EXISTING binding (undefined = ERR 404; changing width = ERR 433)
          | NAME '.' FIELD '=' expr    -- replace one field of a local record (programs that declare records)
          | 'return' expr             -- exactly one value; write an explicit return on every path
-         | 'do' call                 -- statement call to a VOID builtin only
+         | 'do' call                 -- one call for its effect; any result is discarded
          | 'if' expr ':' body ('elif' expr ':' body)* ('else' ':' body)? 'end'
 ```
 
@@ -143,7 +143,9 @@ end
 
 **Builtins:**
 - **VALUE** (usable in expressions): `new_array(T)` `new_buffer()` `freeze(x)` `length(x)` `count(x)` `get(coll,i)` `index(str,i)` `equal(a,b)` `clogger()` `stdin_read()` `stderr_write(str)`.
-- **VOID** (MUST be called as `do CALL(...)`): `add(arr,v)` `append(buf,byte)` `flogger(str)` `fwriter(str)` `process_exit(status)`. Using a void builtin as a value = `ERR 440`; ordinary `do` on a value builtin currently reaches native `ERR 404`. A non-call expression after `do` is structural `ERR 205`.
+- **VOID** (MUST be called as `do CALL(...)`): `add(arr,v)` `append(buf,byte)` `flogger(str)` `fwriter(str)` `process_exit(status)`. Using a void builtin as a value = `ERR 440`. A non-call expression after `do` is structural `ERR 205`.
+
+**Statement calls.** `do` also takes any other call, of a user function or a value builtin, and discards its result: `do push(b, 72)` runs `push` for its effect. It means exactly `let unused = push(b, 72)` with a name nothing reads, compiles to the same bytes, and gets the same diagnostics: an unknown callee is `ERR 419`, a wrong argument count `ERR 420`, a type mismatch `ERR 430`. `do` must be followed by one call (`ERR 205` for `do f(1) + f(2)`), and a record construction is not a statement (`ERR 448`). Hosted programs only: the specialized `-- emit:` routes keep their own rules, and `ast-dump` shows the `do` as written.
 
 **Recursion is the only iteration.** The "for loop" idiom is a helper that tail-recurses on an index with an accumulator:
 ```
@@ -245,7 +247,7 @@ The compiler checks input errors before generating any output. The complete enve
 - **G4 — The render cap (ERR 432).** `main` returns int/bool/string OR a tuple of ≥2 renderables flattening to 2..15 words. Arrays/buffers as the result or as any tuple element → ERR 432. Strings render **quoted** on normal return; `process_exit` terminates before rendering. The exact over-cap message is misleadingly `main must return int or bool (ERR 432)` — it does NOT mean tuples are banned (2..15-word tuples render fine); it means you exceeded the 15-word cap or returned an array.
 - **G5 — Integers are uint64, modular, no negatives.** `0 - 1` renders as `18446744073709551615`. A "-1 not-found sentinel" therefore prints as that huge number. Comparisons are unsigned.
 - **G6 — Checked input belongs in `main`.** Bind `let input = stdin_read()`, handle `input.0`, then pass `input.1` to helpers. More than one input operation produces ERR 411; a reached helper containing one produces ERR 404.
-- **G7 — `do` is mandatory for void/mutating builtins.** `do append(buf, 65)`, `do add(arr, x)`. `let x = add(a,1)` → ERR 440. Value builtins (`freeze/count/get/length/index/new_array/new_buffer/equal`) are used normally in expressions.
+- **G7 — `do` is mandatory for void/mutating builtins.** `do append(buf, 65)`, `do add(arr, x)`. `let x = add(a,1)` → ERR 440. Value builtins (`freeze/count/get/length/index/new_array/new_buffer/equal`) are used normally in expressions. To call any function only for its effect, write `do f(x)` rather than binding a name you never read.
 - **G8 — Tuple `.N` must be an in-range integer literal**, checked at compile time (`t.99` on a 3-tuple → ERR 431).
 - **G9 — Preserved old output.** A failed compilation leaves the previous `a.out` untouched. Check compiler status and its complete success envelope before executing the result; file existence alone cannot distinguish an old executable from a new one.
 - **G10 — Syntax shape.** `func name(args):` … `end`; `if cond:` / `elif cond:` / `else:` … `end`; `let x = …`; entry point `func main():`. No unary minus. Char literals `'K'`, `'\n'` are int byte values. Comments are `-- …`.
@@ -402,7 +404,8 @@ It is an application of the existing compiler/seed pin above.
 ## Hosted byte storage and Linux interface — September 12
 
 The ordinary hosted compiler also supports these value builtins in main or
-helpers; each is reserved as a function name and rejected under `do`:
+helpers; each is reserved as a function name and, like any value call, can be
+used under `do` to discard its result:
 
 - `buffer_length(b)` returns the logical byte count without a copy.
 - `buffer_get(b, i)` reads an existing byte with bounds checking.

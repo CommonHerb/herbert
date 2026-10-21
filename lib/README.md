@@ -81,8 +81,9 @@ provide general reusable memory and the Linux x86-64 boundary:
 | `buffer_address(b)` | **Unsafe borrowed address** of its backing storage. Appending can relocate it; reacquire after growth. An empty buffer gives no permission to dereference. |
 | `linux_syscall6(n, a1, a2, a3, a4, a5, a6)` | **Unsafe** raw Linux/x86-64 system call, all arguments and result are unsigned 64-bit integers. Unused arguments are normally zero. |
 
-All five names are reserved builtin function names. They are value expressions,
-not `do` calls, and they are refused by the specialized kernel/module targets.
+All five names are reserved builtin function names. They are value expressions;
+`do buffer_set(b, i, v)` discards the result, as `do` does for any call. They
+are refused by the specialized kernel/module targets.
 Existing scalar/collection behavior is unchanged. A `freeze` snapshot is still
 independent of later buffer changes; it copies, so it is not a per-frame view.
 Bounds diagnostics currently use the existing `get` wording and invalid byte

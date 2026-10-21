@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Separate CLI contract tests output publication and injected I/O faults.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -416,22 +416,19 @@
       "status": 0
     },
     {
-      "id": "grammar-do-new-array-call-shaped",
-      "profile": "reject",
+      "id": "grammar-do-new-array-call-shaped", "profile": "run",
       "source": "func main():\n    do new_array(int)\n    return 42\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'new_array' (ERR 404)"
+      "stdin": "", "stdout": "42\n", "status": 0
     },
     {
-      "id": "grammar-do-grouped-new-array-call-shaped",
-      "profile": "reject",
+      "id": "grammar-do-grouped-new-array-call-shaped", "profile": "run",
       "source": "func main():\n    do ((new_array(int)))\n    return 42\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'new_array' (ERR 404)"
+      "stdin": "", "stdout": "42\n", "status": 0
     },
     {
-      "id": "grammar-do-value-builtin-call-shaped",
-      "profile": "reject",
+      "id": "grammar-do-value-builtin-call-shaped", "profile": "run",
       "source": "func main():\n    do length(\"x\")\n    return 42\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'length' (ERR 404)"
+      "stdin": "", "stdout": "42\n", "status": 0
     },
     {
       "id": "grammar-do-non-call-not",
@@ -973,7 +970,7 @@
       "id": "arity-context-value-under-do",
       "profile": "reject",
       "source": "func main():\n    do length()\n    return 42\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'length' (ERR 404)"
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'length' (ERR 420)"
     },
     {
       "id": "arity-context-unsupported-slice",
@@ -1203,19 +1200,21 @@
       "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
     },
     {
-      "id": "stderr-write-context-do", "profile": "reject",
+      "id": "stderr-write-context-do", "profile": "run-stdio",
       "source": "func main():\n    do stderr_write(\"x\")\n    return 0\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'stderr_write' (ERR 404)"
+      "stdin": "", "stdout": "0\n", "stderr": "x", "status": 0
     },
     {
-      "id": "stderr-write-context-before-arity", "profile": "reject",
+      "id": "stderr-write-context-before-arity",
+      "profile": "reject",
       "source": "func main():\n    do stderr_write()\n    return 0\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'stderr_write' (ERR 404)"
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'stderr_write' (ERR 420)"
     },
     {
-      "id": "process-exit-renamed-unknown", "profile": "reject",
+      "id": "process-exit-renamed-unknown",
+      "profile": "reject",
       "source": "func main():\n    do process_exit_twin(7)\n    return 0\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'process_exit_twin' (ERR 404)"
+      "diagnostic": "line 2: native-subset: unknown callee 'process_exit_twin' (ERR 419)"
     },
     {
       "id": "stderr-write-renamed-unknown", "profile": "reject",
@@ -1488,16 +1487,15 @@
       "diagnostic": "line 2: native-subset: arity mismatch at call to 'stdin_read' (ERR 420)"
     },
     {
-      "id": "stdin-read-context-do",
-      "profile": "reject",
+      "id": "stdin-read-context-do", "profile": "run",
       "source": "func main():\n    do stdin_read()\n    return 0\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'stdin_read' (ERR 404)"
+      "stdin": "", "stdout": "0\n", "status": 0
     },
     {
       "id": "stdin-read-context-before-arity",
       "profile": "reject",
       "source": "func main():\n    do stdin_read(missing())\n    return 0\nend\n",
-      "diagnostic": "line 2: native-subset: forbidden construct 'stdin_read' (ERR 404)"
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'stdin_read' (ERR 420)"
     },
     {
       "id": "stdin-read-helper-before-main",
@@ -2653,6 +2651,70 @@
       "id": "ref-record-field-reads-through-array", "profile": "run",
       "source": "ref record Cell:\n    v: int\n    hits: int\nend\n\nfunc touch(a, i, n):\n    if i == n:\n        return 0\n    end\n    let c = get(a, i)\n    c.hits = c.hits + c.v\n    return touch(a, i + 1, n)\nend\n\nfunc main():\n    let a = new_array(Cell)\n    do add(a, Cell(1, 0))\n    do add(a, Cell(2, 0))\n    do add(a, Cell(3, 0))\n    let t1 = touch(a, 0, 3)\n    let t2 = touch(a, 0, 3)\n    return get(a, 0).hits * 100 + get(a, 1).hits * 10 + get(a, 2).hits\nend\n",
       "stdin": "", "stdout": "246\n", "status": 0
+    },
+    {
+      "id": "statement-call-user-effect", "profile": "run",
+      "source": "func push(b, v):\n    do append(b, v)\n    return 1\nend\n\nfunc main():\n    let b = new_buffer()\n    do push(b, 72)\n    do push(b, 105)\n    do flogger(freeze(b))\n    return 0\nend\n",
+      "stdin": "", "stdout": "Hi0\n", "status": 0
+    },
+    {
+      "id": "statement-call-value-builtins", "profile": "run",
+      "source": "func main():\n    do length(\"abc\")\n    do new_array(int)\n    do equal(\"a\", \"b\")\n    do index(\"abc\", 1)\n    return 7\nend\n",
+      "stdin": "", "stdout": "7\n", "status": 0
+    },
+    {
+      "id": "statement-call-polymorphic", "profile": "run",
+      "source": "func same(x):\n    return x\nend\n\nfunc main():\n    do same(1)\n    do same(\"two\")\n    do same((3, true))\n    return same(4)\nend\n",
+      "stdin": "", "stdout": "4\n", "status": 0
+    },
+    {
+      "id": "statement-call-in-branches", "profile": "run",
+      "source": "func note(a, v):\n    do add(a, v)\n    return count(a)\nend\n\nfunc pick(a, n):\n    if n == 0:\n        do note(a, 10)\n    elif n == 1:\n        do note(a, 11)\n        if count(a) > 1:\n            do note(a, 12)\n        end\n    else:\n        do note(a, 13)\n    end\n    return count(a)\nend\n\nfunc main():\n    let a = new_array(int)\n    do pick(a, 0)\n    do pick(a, 1)\n    do pick(a, 2)\n    return (count(a), get(a, 0), get(a, 3))\nend\n",
+      "stdin": "", "stdout": "(4, 10, 13)\n", "status": 0
+    },
+    {
+      "id": "statement-call-records", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\nend\n\nref record Counter:\n    total: int\n    steps: int\nend\n\nfunc make(n):\n    return Point(n, n * 2)\nend\n\nfunc bump(c, n):\n    c.total = c.total + n\n    c.steps = c.steps + 1\n    return c\nend\n\nfunc main():\n    let c = Counter(0, 0)\n    do make(3)\n    do bump(c, 5)\n    do bump(c, 7)\n    return c.total * 10 + c.steps\nend\n",
+      "stdin": "", "stdout": "122\n", "status": 0
+    },
+    {
+      "id": "statement-call-split-line", "profile": "run",
+      "source": "func show(n):\n    do flogger(\"x\")\n    return n\nend\n\nfunc main():\n    do\n        show(1)\n    do show(2) -- a trailing comment\n    return 3\nend\n",
+      "stdin": "", "stdout": "xx3\n", "status": 0
+    },
+    {
+      "id": "statement-call-tail-loop", "profile": "run",
+      "source": "func step(a, i):\n    do add(a, i * i)\n    return 0\nend\n\nfunc loop(a, i, n):\n    if i >= n:\n        return count(a)\n    end\n    do step(a, i)\n    return loop(a, i + 1, n)\nend\n\nfunc main():\n    let a = new_array(int)\n    do loop(a, 0, 100000)\n    return (count(a), get(a, 99999))\nend\n",
+      "stdin": "", "stdout": "(100000, 9999800001)\n", "status": 0
+    },
+    {
+      "id": "statement-call-never-returning-helper", "profile": "run-stdio",
+      "source": "func never(i):\n    let a = new_array(int)\n    return get(a, i)\nend\n\nfunc main():\n    do never(3)\n    return 0\nend\n",
+      "stdin": "", "stdout": "", "stderr": "herbert: line 3: get: position 3 out of range (count 0)\n", "status": 1
+    },
+    {
+      "id": "statement-call-unknown-callee",
+      "profile": "reject",
+      "source": "func main():\n    do unknown_helper(1)\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: unknown callee 'unknown_helper' (ERR 419)"
+    },
+    {
+      "id": "statement-call-user-arity",
+      "profile": "reject",
+      "source": "func f(x):\n    return x\nend\n\nfunc main():\n    do f(1, 2)\n    return 0\nend\n",
+      "diagnostic": "line 6: native-subset: arity mismatch at call to 'f' (ERR 420)"
+    },
+    {
+      "id": "statement-call-argument-type",
+      "profile": "reject",
+      "source": "func f(s):\n    return length(s)\nend\n\nfunc main():\n    do f(1)\n    do f(\"x\")\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "statement-call-main",
+      "profile": "reject",
+      "source": "func main():\n    do main()\n    return 0\nend\n",
+      "diagnostic": "line 2: native-subset: user functions may not call main (ERR 421)"
     }
   ]
 }

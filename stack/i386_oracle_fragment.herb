@@ -1080,6 +1080,49 @@ func retag_record_calls(nodes, prog_idx):
     return retag_record_calls_loop(nodes, record_decl_names(nodes, prog_idx), pool_new(), 0)
 end
 
+-- A statement call: `do CALL(...)` whose callee is not a void builtin means
+-- `let NAME = CALL(...)` with a NAME no source can spell, so the result is
+-- discarded and every later stage sees an ordinary let. Runs after
+-- retag_record_calls, so a record construction stays "record-new" (ERR 448).
+func do_call_needs_let(nodes, node):
+    if not equal(node.0, "do"):
+        return false
+    end
+    let call = get(nodes, get(node.2, 0))
+    return equal(call.0, "call") and not err_is_void_builtin(get(call.1, 0))
+end
+
+func do_calls_any(nodes, i):
+    if i >= count(nodes):
+        return false
+    end
+    if do_call_needs_let(nodes, get(nodes, i)):
+        return true
+    end
+    return do_calls_any(nodes, i + 1)
+end
+
+func retag_do_calls_loop(nodes, out, i):
+    if i >= count(nodes):
+        return out
+    end
+    let node = get(nodes, i)
+    if do_call_needs_let(nodes, node):
+        let name = freeze(emit_decimal(append_str(new_buffer(), "do "), i))
+        do add(out, ("let", atoms1(name), node.2, node.3))
+        return retag_do_calls_loop(nodes, out, i + 1)
+    end
+    do add(out, node)
+    return retag_do_calls_loop(nodes, out, i + 1)
+end
+
+func retag_do_calls(nodes):
+    if not do_calls_any(nodes, 0):
+        return nodes
+    end
+    return retag_do_calls_loop(nodes, pool_new(), 0)
+end
+
 func parse_funcdef(tokens, pos, pool):
     -- tokens[pos+0]: "func"; pos+1: name; pos+2: "("
     let line = get(tokens, pos).2
@@ -14871,7 +14914,7 @@ func nc_drive(source):
     end
     let parsed_nodes = pool_new()
     let parsed = parse_program(tokens, 0, parsed_nodes)
-    let nodes = retag_record_calls(parsed_nodes, parsed.0)
+    let nodes = retag_do_calls(retag_record_calls(parsed_nodes, parsed.0))
     let type_pool = nc_type_pool_new()
     let ast_result = nc_verify_ast(nodes, parsed.0, type_pool)
     if ast_result.0 != 0:
