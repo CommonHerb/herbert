@@ -42,8 +42,9 @@ first line; a number past the last line goes to the end of the text; Escape
 cancels). The view scrolls vertically and horizontally to follow the cursor,
 never past where Ctrl+End stops (the last line at the bottom).
 **The scroll wheel** moves the view three lines a notch without moving the
-cursor, down as far as Ctrl+End would show; the next key, click or drag brings
-the view back to the cursor before it is handled.
+cursor, down as far as Ctrl+End would show; the next key, or the next click in
+the text, brings the view back to the cursor before it is handled (the click
+lands on the line it was seen on).
 Tabs advance to the next four-column stop. Backspace/Delete remove a whole grapheme cluster, so accents and joined emoji
 are not split into broken fragments.
 **Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 2,097,152 bytes of inserted/deleted text in

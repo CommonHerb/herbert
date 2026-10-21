@@ -1498,12 +1498,13 @@ def notes_navigation_checks(args, x, display, evidence, passed):
     def saved(what):
         app.tap('s','Control_L')
         wait_for(lambda: doc.read_bytes() == bytes(text), what)
-    def line_start(n):
+    def line_start(n, buf=None):
         # The offset Ctrl+G n should reach: the start of row n-1, or the end.
+        buf = text if buf is None else buf
         at = 0
         for _ in range(max(n, 1) - 1):
-            nl = text.find(b'\n', at)
-            if nl < 0: return len(text)
+            nl = buf.find(b'\n', at)
+            if nl < 0: return len(buf)
             at = nl + 1
         return at
     def goto(n, marker, what, typed=None):
@@ -1611,8 +1612,47 @@ def notes_navigation_checks(args, x, display, evidence, passed):
         app.type('x'); text[a:a] = b'x'
         saved('a rescue copy inside Go to line closes the field')
         app.tap('Escape'); app.finish()
+    # Inputs that arrive in one drain, and clicks while the view is wheel-scrolled, on a fresh file
+    # (the second look's holes).
+    doc2 = d/'long2.txt'; doc2.write_bytes(b''.join(lines)); text2 = bytearray(doc2.read_bytes())
+    with application(args.notes, doc2, b'Herbert - Notes', (900,600), x, display, d, 'navigation-drain') as app:
+        app.move(450, 300)
+        start = app.frame('start2')
+        app.tap('End','Control_L'); app.tap('Up')
+        end = app.frame('end2')
+        app.tap('Home','Control_L')
+        wait_for(lambda: row(app.frame(), 1) == row(start, 1), 'back at the top')
+        # Ctrl+End and a notch in one drain: the view ends where Ctrl+End puts it, not three rows from the top.
+        app.stop(); app.tap('End','Control_L', pause=0); app.wheel(down=True, pause=0); app.p.send_signal(signal.SIGCONT)
+        wait_for(lambda: row(app.frame(), 0) == row(end, 0), 'Ctrl+End then a notch in one drain shows the end')
+        app.tap('Home','Control_L')
+        wait_for(lambda: row(app.frame(), 1) == row(start, 1), 'back at the top again')
+        # A click outside the text leaves a wheel-scrolled view; a click in the text lands on the line it was
+        # seen on and brings the view back.
+        app.wheel(down=True, ticks=2)
+        wait_for(lambda: row(app.frame(), 0) == row(start, 6), 'two notches down')
+        app.click(450, 30); time.sleep(.3)
+        assert row(app.frame(), 0) == row(start, 6), 'a click outside the text re-attached the view'
+        app.click(31, 110); app.type('Q')
+        s7 = line_start(7, text2); text2[s7:s7] = b'Q'
+        app.tap('s','Control_L')
+        wait_for(lambda: doc2.read_bytes() == bytes(text2), 'a click in the scrolled view lands on the line that was shown')
+        # Backspace on a backward selection reaching below the view, then a notch up, in one drain: the view
+        # comes back to the cursor and never shows past the end.
+        app.tap('End','Control_L')
+        for _ in range(3): app.tap('Prior','Shift_L')
+        for _ in range(15): app.tap('Up','Shift_L')
+        app.wheel(down=True, ticks=20)
+        # Row 20, the empty last row: the selected rows above it are highlighted.
+        wait_for(lambda: row(app.frame(), 20) == row(end, 20), 'twenty notches down reach the end view')
+        app.stop(); app.tap('BackSpace', pause=0); app.wheel(down=False, pause=0); app.p.send_signal(signal.SIGCONT)
+        a6 = line_start(6, text2); del text2[a6:]
+        app.tap('s','Control_L')
+        wait_for(lambda: doc2.read_bytes() == bytes(text2), 'the backward selection removed')
+        wait_for(lambda: row(app.frame(), 1) == row(start, 1), 'the view shows the first lines after the removal')
+        app.tap('Escape'); app.finish()
     passed('notes-wheel-scrolls-view-not-cursor-burst-clamp-find-ignored-memory-go-to-line-clamp-zero-backspace-digits-escape-'
-           'view-back-at-same-offset-split-bottom-row-shrink-under-wheel-rescue-in-field',
+           'view-back-at-same-offset-split-bottom-row-shrink-under-wheel-rescue-in-field-one-drain-key-and-notch-click-outside',
            samples=samples)
 
 

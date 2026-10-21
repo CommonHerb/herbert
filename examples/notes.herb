@@ -664,6 +664,7 @@ func notes_pointer(t, s, symbol, state, code):
     let y = code / 65536
     if symbol == 4294967041:
         if not notes_in_text(x, y): return 0 end
+        do notes_attach(s)
         let target = notes_point(t, s, x, y)
         if (state & 1) != 0:
             if s.anchor == 0 - 1: s.anchor = text_cursor(t) end
@@ -686,6 +687,9 @@ end
 -- notch costs the distance between the cursor's line and the view, never a
 -- count of the whole text.
 func notes_wheel(t, s, upward, ticks):
+    -- A key handled earlier in this drain may have moved the cursor or shrunk
+    -- the text with the view not yet redrawn: start from the view it would show.
+    do notes_view(t, s)
     let rows = 3 * ticks
     let top = s.top
     if upward:
@@ -706,8 +710,9 @@ func notes_wheel(t, s, upward, ticks):
 end
 
 -- A view the wheel moved away comes back at the next key that is not a bare
--- modifier, click or drag, before that input is handled: whatever it does to
--- the cursor, the next frame follows the cursor again.
+-- modifier, or the next press in the text (notes_pointer), before that input
+-- is handled: whatever it does to the cursor, the next frame follows the
+-- cursor again. A press lands on the row it was seen on, the view as drawn.
 func notes_attach(s):
     if not s.detached: return 0 end
     s.detached = false
@@ -721,7 +726,6 @@ func notes_keys(c, t, s, recovery, query, event):
     s.time = linux_u32(event, 12)
     let symbol = linux_u32(event, 0)
     if symbol >= 4294967041:
-        if symbol <= 4294967042: do notes_attach(s) end
         do notes_pointer(t, s, symbol, linux_u32(event, 4), linux_u32(event, 8))
         return notes_keys(c, t, s, recovery, query, event)
     end
