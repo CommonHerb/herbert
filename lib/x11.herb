@@ -333,8 +333,11 @@ func x11_dispatch(c):
         end
     end
     if (kind == 4 or kind == 5 or kind == 6) and st.pointer_on and st.queue_on and linux_u32(r, 12) == st.window:
-        if kind == 6 or buffer_get(r, 1) == 1:
+        let detail = buffer_get(r, 1)
+        if kind == 6 or detail == 1:
             do x11_queue_pointer(c, kind, linux_u16(r, 24), linux_u16(r, 26), linux_u16(r, 28), linux_u32(r, 4))
+        elif kind == 4 and (detail == 4 or detail == 5):
+            do x11_queue_wheel(c, detail == 4, linux_u16(r, 28), linux_u32(r, 4))
         end
     end
     if kind == 12 and linux_u32(r, 4) == st.window:
@@ -670,6 +673,32 @@ end
 -- 4294967043 (release), above every keysym; its keycode slot packs x + 65536 * y,
 -- each clamped into the window (a drag past an edge reads as that edge). A drag
 -- replaces a drag still waiting at the queue's end, so drags cannot fill it.
+-- A wheel entry (x11_queue_wheel) is 4294967044 (up) or 4294967045 (down) with
+-- a tick count in the keycode slot; a tick joins a same-way wheel entry waiting
+-- at the queue's end, so a burst takes one slot and one drain handles it whole.
+func x11_queue_wheel(c, upward, state, timestamp):
+    let st = c.state
+    let symbol = 4294967045
+    if upward: symbol = 4294967044 end
+    let count = st.queue_count
+    if count > 0:
+        let last = ((st.queue_head + count - 1) % 256) * 16
+        if linux_u32(c.queue, last) == symbol:
+            do linux_put32(c.queue, last + 8, linux_u32(c.queue, last + 8) + 1)
+            do linux_put32(c.queue, last + 12, timestamp)
+            return 0
+        end
+    end
+    do x11_need(count < 256, "desktop: key queue capacity exceeded\n")
+    let at = ((st.queue_head + count) % 256) * 16
+    do linux_put32(c.queue, at, symbol)
+    do linux_put32(c.queue, at + 4, state)
+    do linux_put32(c.queue, at + 8, 1)
+    do linux_put32(c.queue, at + 12, timestamp)
+    st.queue_count = count + 1
+    return 0
+end
+
 func x11_queue_pointer(c, kind, x, y, state, timestamp):
     let st = c.state
     let symbol = 4294967041

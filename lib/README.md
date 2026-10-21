@@ -21,7 +21,8 @@ source; the retained source map identifies its original units.
   flags), and `c.poll` and `c.clock` are the scratch buffers callers pass to
   `linux_poll` and `linux_clock_ms`.
   `x11_enable_pointer` (opt-in, after `x11_enable_text`) adds left-button presses,
-  drags and releases to the same ordered queue as key presses.
+  drags and releases, and scroll-wheel notches with a tick count, to the same
+  ordered queue as key presses.
 - `x11_clipboard.herb`: the desktop clipboard for that window, opt-in. It takes
   CLIPBOARD and answers other applications' requests (UTF8_STRING and
   text/plain;charset=utf-8, with TARGETS and TIMESTAMP), and asks the current owner

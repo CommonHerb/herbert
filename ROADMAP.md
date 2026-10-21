@@ -48,7 +48,8 @@ Its 1 MiB disk-byte limit, 64 KiB clipboard and limited bitmap font/input covera
 rebinding, short-circuit expressions and aggregate values. Existing-file qualification uses copied project guides, common accented prose,
 joined characters and the Unicode segmentation oracle. Notes opens another file
 in the same window from a typed path (Ctrl+O), selects with the keyboard and the
-mouse, and cuts, copies and pastes through the desktop clipboard. Keep further
+mouse, cuts, copies and pastes through the desktop clipboard, scrolls with the
+wheel and goes to a line by number (Ctrl+G). Keep further
 editing work tied to ordinary use rather than starting a general editor framework.
 
 Use the existing applications to force the next language/runtime improvement.

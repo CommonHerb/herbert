@@ -124,11 +124,19 @@ class App:
         assert self.x.xtst.XTestFakeMotionEvent(self.x.display, -1, rx.value, ry.value, 0)
         self.x.x.XSync(self.x.display, 0)
 
-    def button(self, down):
+    def button(self, down, number=1):
         pointer_api(self.x)
-        self.inputs.append([round(time.monotonic() - self.started, 4), 'button1', down])
-        assert self.x.xtst.XTestFakeButtonEvent(self.x.display, 1, int(down), 0)
+        self.inputs.append([round(time.monotonic() - self.started, 4), 'button%d' % number, down])
+        assert self.x.xtst.XTestFakeButtonEvent(self.x.display, number, int(down), 0)
         self.x.x.XSync(self.x.display, 0)
+
+    def wheel(self, down, ticks=1, pause=.04):
+        """Scroll-wheel notches: X buttons 5 (down) and 4 (up), a press and release each."""
+        for _ in range(ticks):
+            self.button(True, 5 if down else 4)
+            self.button(False, 5 if down else 4)
+        if pause:
+            time.sleep(pause)
 
     def click(self, px, py, modifier=None, pause=.04):
         if modifier:
@@ -1479,6 +1487,95 @@ def notes_mouse_checks(args, x, display, evidence, passed):
            rows_selected_by_held_drag=removed)
 
 
+def notes_navigation_checks(args, x, display, evidence, passed):
+    d = evidence/'navigation'; d.mkdir()
+    lines = [b'line %02d\n' % i for i in range(80)]
+    doc = d/'long.txt'; doc.write_bytes(b''.join(lines))
+    text = bytearray(doc.read_bytes())
+    def row(frame, r):
+        # One text row: glyphs at y = 102 + 20 r, scale 2.
+        return region(frame, 28, 100 + r * 20, 840, 20)
+    def saved(what):
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes() == bytes(text), what)
+    def line_start(n):
+        # The offset Ctrl+G n should reach: the start of row n-1, or the end.
+        at = 0
+        for _ in range(max(n, 1) - 1):
+            nl = text.find(b'\n', at)
+            if nl < 0: return len(text)
+            at = nl + 1
+        return at
+    def goto(n, marker, what, typed=None):
+        app.tap('g','Control_L'); app.type(typed if typed is not None else str(n)); app.tap('Return')
+        app.type(marker)
+        text[line_start(n):line_start(n)] = marker.encode()
+        saved(what)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'navigation') as app:
+        app.move(450, 300)
+        start = app.frame('start')
+        app.tap('End','Control_L'); app.tap('Up')
+        end = app.frame('end')            # rows 60..80: row 17 is line 77, row 20 the empty last line, no caret on it
+        app.tap('Home','Control_L')
+        wait_for(lambda: row(app.frame(), 0) == row(start, 0), 'Ctrl+Home shows the first line')
+        # One notch moves the view three rows and leaves the cursor; typing brings the view back.
+        app.wheel(down=True)
+        wait_for(lambda: row(app.frame(), 0) == row(start, 3), 'one notch down shows the fourth line first')
+        app.frame('one-notch')
+        app.wheel(down=False)
+        wait_for(lambda: row(app.frame(), 0) == row(start, 0), 'one notch up shows the first line again')
+        app.wheel(down=False); time.sleep(.3)
+        # Row 1, not row 0: the caret blinks on row 0 while the cursor is in view.
+        assert row(app.frame(), 1) == row(start, 1), 'a notch up at the top changes nothing'
+        app.wheel(down=True, ticks=2)
+        wait_for(lambda: row(app.frame(), 0) == row(start, 6), 'two notches down show the seventh line first')
+        app.type('#'); text[0:0] = b'#'
+        saved('the wheel leaves the cursor where it was')
+        wait_for(lambda: row(app.frame(), 1) == row(start, 1), 'typing brings the view back to the cursor')
+        # A burst queued while Notes is stopped is one entry; the view stops where Ctrl+End stops
+        # (the last row at the bottom) and Notes lives.
+        app.stop(); app.wheel(down=True, ticks=300, pause=0); app.p.send_signal(signal.SIGCONT)
+        wait_for(lambda: row(app.frame(), 0) == row(end, 0) and row(app.frame(), 20) == row(end, 20),
+                 'a 300-notch burst stops with the last line at the bottom')
+        app.frame('burst')
+        app.wheel(down=False)
+        wait_for(lambda: row(app.frame(), 3) == row(end, 0) and row(app.frame(), 20) == row(end, 17),
+                 'one notch up from the end shows line 60 fourth')
+        samples = []
+        for cycle in range(1, 21):
+            app.wheel(down=True, ticks=5); app.wheel(down=False, ticks=5)
+            if cycle % 2 == 0:
+                app.frame(); samples.append(memory(app.p.pid))
+        stable_memory(samples, 'wheel notches')
+        # The wheel does nothing while Find is up.
+        app.tap('Home','Control_L')
+        wait_for(lambda: row(app.frame(), 1) == row(start, 1), 'Ctrl+Home brings the first lines back')
+        app.tap('f','Control_L'); app.wheel(down=True); time.sleep(.3)
+        assert row(app.frame(), 1) == row(start, 1), 'a notch while Find is up is ignored'
+        app.tap('Escape')
+        # Ctrl+G: a line number, its clamp, zero, Backspace, the digit limit, Escape, Enter without digits.
+        app.tap('g','Control_L')
+        field = app.frame('go-to-line')
+        assert region(field,28,580,810,7) != region(start,28,580,810,7), 'the Go to line field is not shown'
+        app.tap('Escape')
+        goto(50, '@', 'Ctrl+G 50 puts the cursor at the start of line 50')
+        goto(999999, '$', 'a line past the last goes to the end of the text')
+        goto(0, '%', 'line 0 means the first line')
+        app.tap('g','Control_L'); app.type('51'); app.tap('BackSpace'); app.type('0'); app.tap('Return')
+        app.type('&'); text[line_start(50):line_start(50)] = b'&'
+        saved('Backspace edits the number')
+        goto(50, '*', 'an eighth digit is refused', typed='00000501')
+        app.tap('g','Control_L'); app.type('7'); app.tap('Escape'); app.type('!')
+        text[line_start(50) + 1:line_start(50) + 1] = b'!'      # after the marker typed before it
+        saved('Escape leaves the cursor where it was')
+        app.tap('g','Control_L'); app.tap('Return'); app.type('9'); app.tap('Return'); app.type('?')
+        text[line_start(9):line_start(9)] = b'?'
+        saved('Enter without digits keeps the field up')
+        app.tap('Escape'); app.finish()
+    passed('notes-wheel-scrolls-view-not-cursor-burst-clamp-find-ignored-memory-go-to-line-clamp-zero-backspace-digits-escape',
+           samples=samples)
+
+
 def static_elf(path):
     data = path.read_bytes()
     assert data[:7] == b'\x7fELF\x02\x01\x01', 'expected little-endian ELF64'
@@ -1536,6 +1633,7 @@ def main():
                     notes_selection_checks(args,x,display,evidence,passed)
                     notes_clipboard_checks(args,x,display,evidence,passed)
                     notes_mouse_checks(args,x,display,evidence,passed)
+                    notes_navigation_checks(args,x,display,evidence,passed)
                     notes_big_checks(args,x,display,evidence,passed)
             finally:
                 x.close()

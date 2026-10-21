@@ -487,6 +487,14 @@ func text_row_offset(t, row):
     return text_rows_up(t, st.row_pos, st.row, row)
 end
 
+-- The given row, or the document's last row if it has fewer: found by walking
+-- from the remembered line, never by counting the text beyond that row. The
+-- remembered line moves to the row returned.
+func text_row_clamp(t, row):
+    do text_row_offset(t, row)
+    return t.state.row
+end
+
 func text_column_position(t, p, target, column):
     if p >= text_length(t): return p end
     let ch = buffer_get(t.bytes, p)

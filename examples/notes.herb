@@ -10,6 +10,9 @@
 -- handled, which the clipboard protocol asks for. dragging is true from a left
 -- press in the text to its release; drag_x/drag_y hold the pointer's last place
 -- and scrolled_at the last time a drag held past an edge scrolled the view.
+-- followed is the cursor position the view last moved to: the wheel moves the
+-- view alone, and the view comes back when the cursor next moves. going is the
+-- Go to line field, with the number typed so far and its digit count.
 -- No per-event/frame/save string or tuple creation.
 
 ref record NotesState:
@@ -43,6 +46,10 @@ ref record NotesState:
     drag_x: int
     drag_y: int
     scrolled_at: int
+    followed: int
+    going: bool
+    line_value: int
+    line_digits: int
 end
 
 -- The largest document, in bytes on disk.
@@ -327,6 +334,45 @@ func notes_unicode_key(t, s, query, key, mods):
     return notes_message(s, 16)
 end
 
+-- Ctrl+G, decimal digits, Enter goes to that line (0 means the first; past the
+-- last means the end of the text). Escape cancels without moving anything.
+func notes_line_start(s):
+    s.going = true
+    s.line_value = 0
+    s.line_digits = 0
+    return notes_message(s, 42)
+end
+
+func notes_line_key(t, s, key, mods):
+    if key == 65307:
+        s.going = false
+        return notes_message(s, 1)
+    end
+    if (mods & 12) != 0: return 0 end
+    let digits = s.line_digits
+    if key == 65288:
+        if digits > 0:
+            s.line_value = s.line_value / 10
+            s.line_digits = digits - 1
+        end
+        return notes_message(s, 42)
+    end
+    if key == 65293:
+        if digits == 0: return notes_message(s, 44) end
+        let line = s.line_value
+        if line > 0: line = line - 1 end
+        s.going = false
+        s.anchor = 0 - 1
+        do text_seek(t, text_row_offset(t, line))
+        return notes_message(s, 1)
+    end
+    if key < 48 or key > 57: return 0 end
+    if digits == 7: return notes_message(s, 43) end
+    s.line_value = s.line_value * 10 + (key - 48)
+    s.line_digits = digits + 1
+    return notes_message(s, 42)
+end
+
 func notes_search_key(t, s, query, key, mods):
     if key == 65307:
         s.finding = false
@@ -424,6 +470,7 @@ func notes_open(t, s, recovery):
     do recovery_reset(recovery)
     s.top = 0
     s.left = 0
+    s.followed = 0 - 1
     s.confirming = false
     s.save_result = 0
     s.checkpoint_pending = false
@@ -467,6 +514,7 @@ func notes_key(c, t, s, recovery, query, key, mods):
         return 0
     end
     if s.unicode_input: return notes_unicode_key(t, s, query, key, mods) end
+    if s.going: return notes_line_key(t, s, key, mods) end
     if control and (mods & 1) != 0 and (key == 117 or key == 85):
         s.unicode_input = true
         s.unicode_value = 0
@@ -485,6 +533,7 @@ func notes_key(c, t, s, recovery, query, key, mods):
         return notes_message(s, 15)
     end
     if s.finding: return notes_search_key(t, s, query, key, mods) end
+    if control and (key == 103 or key == 71): return notes_line_start(s) end
     if key == 65472: return notes_find(t, s, query, (mods & 1) != 0, true) end
     if key == 65307:
         -- The first Escape drops a selection; the next one closes.
@@ -602,7 +651,11 @@ func notes_pointer(t, s, symbol, state, code):
         s.dragging = false
         return 0
     end
-    if s.confirming or s.unicode_input or s.opening or s.finding: return 0 end
+    if s.confirming or s.unicode_input or s.opening or s.finding or s.going: return 0 end
+    if symbol == 4294967044 or symbol == 4294967045:
+        if s.dragging: return 0 end
+        return notes_wheel(t, s, symbol == 4294967044, code)
+    end
     let x = code % 65536
     let y = code / 65536
     if symbol == 4294967041:
@@ -622,6 +675,31 @@ func notes_pointer(t, s, symbol, state, code):
     return notes_redraw(s)
 end
 
+-- A wheel tick moves the view three rows and leaves the cursor and selection
+-- where they are; the view stays there until the cursor next moves (notes_view).
+-- Downward it stops where Ctrl+End would, the last row at the bottom: the row
+-- that would be at the bottom is looked for from the remembered line, so a
+-- notch costs the distance between the cursor's line and the view, never a
+-- count of the whole text.
+func notes_wheel(t, s, upward, ticks):
+    let rows = 3 * ticks
+    let top = s.top
+    if upward:
+        if rows > top: rows = top end
+        top = top - rows
+    else:
+        let want = top + rows
+        let reached = text_row_clamp(t, want + 20)
+        let limit = 0
+        if reached > 20: limit = reached - 20 end
+        if want > limit: want = limit end
+        if want > top: top = want end
+    end
+    if top == s.top: return 0 end
+    s.top = top
+    return notes_redraw(s)
+end
+
 func notes_keys(c, t, s, recovery, query, event):
     if not x11_next_key(c, event): return 0 end
     s.time = linux_u32(event, 12)
@@ -634,9 +712,14 @@ func notes_keys(c, t, s, recovery, query, event):
     return notes_keys(c, t, s, recovery, query, event)
 end
 
+-- The view follows the cursor when it has moved since the view last did; a
+-- view the wheel moved stays until then.
 func notes_view(t, s):
-    let row = text_row(t, text_cursor(t))
-    let col = text_column(t, text_cursor(t))
+    let cursor = text_cursor(t)
+    if cursor == s.followed: return 0 end
+    s.followed = cursor
+    let row = text_row(t, cursor)
+    let col = text_column(t, cursor)
     let top = s.top
     let left = s.left
     if row < top: top = row end
@@ -805,6 +888,9 @@ func notes_status(c, f, t, s, query):
     if message == 39: status = "The clipboard text is larger than Notes can paste (65,504 bytes)." end
     if message == 40: status = "Not pasted: the clipboard text has control characters, a bare CR or invalid UTF-8." end
     if message == 41: status = "Not copied: the selection is larger than the clipboard holds (65,536 bytes)." end
+    if message == 42: status = "Go to line: type a number, then Enter. Esc cancels. Ctrl+Home and Ctrl+End jump to the top and bottom." end
+    if message == 43: status = "Go to line: at most 7 digits. Backspace removes one." end
+    if message == 44: status = "Type a line number first, then Enter. Esc cancels." end
     if s.confirming and message == 7:
         status = "Rescue saved. Close pending: Y closes; Esc returns."
     end
@@ -822,6 +908,9 @@ func notes_status(c, f, t, s, query):
     if s.unicode_input and not s.confirming:
         do pixel_text(c, "Unicode U+", 28, 580, 1)
         do notes_draw_hex(c, s.unicode_value, s.unicode_digits, 88)
+    elif s.going and not s.confirming:
+        do pixel_text(c, "Go to line:", 28, 580, 1)
+        if s.line_digits > 0: do pixel_number(c, s.line_value, 100, 580, 1) end
     elif s.opening and not s.confirming:
         do pixel_text(c, "Open:", 28, 580, 1)
         do notes_draw_query(c, s.path, s.path_count, notes_path_start(s.path, s.path_count), 70)
@@ -838,7 +927,7 @@ func notes_status(c, f, t, s, query):
         if notes_recovery_current(s): closehelp = "Close pending: Y closes (recovery kept) | Esc returns | Ctrl+S saves" end
         do pixel_text(c, closehelp, 28, 580, 1)
     else:
-        do pixel_text(c, "Ctrl+S save | Ctrl+O open | Ctrl+X/C/V cut, copy, paste | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
+        do pixel_text(c, "Ctrl+S save | Ctrl+O open | Ctrl+G line | Ctrl+X/C/V cut, copy, paste | Ctrl+Z/Y undo, redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
     end
     return 0
 end
@@ -892,10 +981,13 @@ func notes_draw(c, f, t, s, recovery, query, blink):
         end
     end
     if blink:
-        do x11_color(c, 16173151)
-        let col = text_column(t, text_cursor(t)) - s.left
-        let row = text_row(t, text_cursor(t)) - s.top
-        do x11_rect(c, 28 + col * 12, 100 + row * 20, 2, 18)
+        -- The caret, when the cursor is in view (the wheel can scroll it out).
+        let col = text_column(t, text_cursor(t))
+        let row = text_row(t, text_cursor(t))
+        if row >= s.top and row < s.top + 21 and col >= s.left and col < s.left + 70:
+            do x11_color(c, 16173151)
+            do x11_rect(c, 28 + (col - s.left) * 12, 100 + (row - s.top) * 20, 2, 18)
+        end
     end
     do notes_status(c, f, t, s, query)
     s.needs_draw = false
@@ -957,7 +1049,7 @@ func main():
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
-    let s = NotesState(f, file_new(notes_capacity()), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0)
+    let s = NotesState(f, file_new(notes_capacity()), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0, 0 - 1, false, 0, 0)
     let recovery = recovery_new(notes_capacity())
     let query = linux_buffer(64)
     s.needs_draw = true
