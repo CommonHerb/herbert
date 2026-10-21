@@ -158,7 +158,9 @@ while i < n:
 end
 ```
 The condition must be a bool (`ERR 430`), the body needs at least one statement (`ERR 214`), a `let` inside the body is
-not visible after `end`, and rebinding inside the body keeps the local's width (`ERR 433`) and class (`ERR 430`). There
+not visible after `end`, and rebinding inside the body keeps the local's width (`ERR 433`); a local's class may change
+within one pass over the body, but must be the entry class again by `end`, where the loop's join refuses a changed
+class (`ERR 430`), so an `int` local cannot leave the body a `bool`. There
 is no `break` or `continue`; a `return` inside the body leaves the function. Recursion is still available, and the
 older "for loop" idiom is a helper that tail-recurses on an index with an accumulator:
 ```
