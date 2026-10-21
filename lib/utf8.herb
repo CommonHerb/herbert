@@ -60,19 +60,19 @@ func utf8_store(bytes, offset, cp):
     if width == 0: return 0 - 84 end
     if not linux_range(bytes, offset, width): return 0 - 27 end
     if width == 1:
-        let a = buffer_set(bytes, offset, cp)
+        do buffer_set(bytes, offset, cp)
     elif width == 2:
-        let a = buffer_set(bytes, offset, 192 + cp / 64)
-        let b = buffer_set(bytes, offset + 1, 128 + cp % 64)
+        do buffer_set(bytes, offset, 192 + cp / 64)
+        do buffer_set(bytes, offset + 1, 128 + cp % 64)
     elif width == 3:
-        let a = buffer_set(bytes, offset, 224 + cp / 4096)
-        let b = buffer_set(bytes, offset + 1, 128 + (cp / 64) % 64)
-        let c = buffer_set(bytes, offset + 2, 128 + cp % 64)
+        do buffer_set(bytes, offset, 224 + cp / 4096)
+        do buffer_set(bytes, offset + 1, 128 + (cp / 64) % 64)
+        do buffer_set(bytes, offset + 2, 128 + cp % 64)
     else:
-        let a = buffer_set(bytes, offset, 240 + cp / 262144)
-        let b = buffer_set(bytes, offset + 1, 128 + (cp / 4096) % 64)
-        let c = buffer_set(bytes, offset + 2, 128 + (cp / 64) % 64)
-        let d = buffer_set(bytes, offset + 3, 128 + cp % 64)
+        do buffer_set(bytes, offset, 240 + cp / 262144)
+        do buffer_set(bytes, offset + 1, 128 + (cp / 4096) % 64)
+        do buffer_set(bytes, offset + 2, 128 + (cp / 64) % 64)
+        do buffer_set(bytes, offset + 3, 128 + cp % 64)
     end
     return offset + width
 end

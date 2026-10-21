@@ -134,7 +134,7 @@ end
 -- represents a parent not successfully open.
 func file_load(f, path, count):
     let st = f.state
-    let closed = file_close(f)
+    do file_close(f)
     st.status = 0
     st.exists = false
     st.count = 0
@@ -143,13 +143,13 @@ func file_load(f, path, count):
     st.uncertain = false
     st.saved_count = 0
     if count == 0 or count >= buffer_length(f.path) or count > 4095 or not linux_range(path, 0, count): return file_result(f, 0 - 22) end
-    let copied = linux_copy(f.path, 0, path, 0, count)
-    let ended = buffer_set(f.path, count, 0)
+    do linux_copy(f.path, 0, path, 0, count)
+    do buffer_set(f.path, count, 0)
     let slash = file_path_scan(f.path, count, 0, 0 - 1)
     let leaf = 0
     if slash < count: leaf = slash + 1 end
     if slash == 0 - 2 or leaf == count or file_dot_leaf(f.path, leaf, count): return file_result(f, 0 - 22) end
-    let named = linux_copy(f.basename, 0, f.path, leaf, count - leaf + 1)
+    do linux_copy(f.basename, 0, f.path, leaf, count - leaf + 1)
     -- The parent's name is the path cut at its last slash ("/" for a leaf at
     -- the root), or "." written into the temp-name scratch. Nothing is allocated.
     let dirfd = 0
@@ -157,12 +157,12 @@ func file_load(f, path, count):
         let cut = slash
         if slash == 0: cut = 1 end
         let kept = buffer_get(f.path, cut)
-        let cutoff = buffer_set(f.path, cut, 0)
+        do buffer_set(f.path, cut, 0)
         dirfd = linux_syscall6(2, buffer_address(f.path), 589824, 0, 0, 0, 0)
-        let restored = buffer_set(f.path, cut, kept)
+        do buffer_set(f.path, cut, kept)
     else:
-        let dot = linux_text(f.temp, 0, ".")
-        let nul = buffer_set(f.temp, 1, 0)
+        do linux_text(f.temp, 0, ".")
+        do buffer_set(f.temp, 1, 0)
         dirfd = linux_syscall6(2, buffer_address(f.temp), 589824, 0, 0, 0, 0)
     end
     if linux_error(dirfd): return file_result(f, dirfd) end
@@ -181,11 +181,11 @@ func file_open(path, capacity):
     if badcapacity: capacity = 0 end
     let f = file_new(capacity)
     if badcapacity or length(path) > 4095:
-        let failed = file_result(f, 0 - 22)
+        do file_result(f, 0 - 22)
         return f
     end
-    let copied = linux_text(f.path, 0, path)
-    let loaded = file_load(f, f.path, length(path))
+    do linux_text(f.path, 0, path)
+    do file_load(f, f.path, length(path))
     return f
 end
 
@@ -194,12 +194,12 @@ func file_temp(f, tries):
     if tries == 0: return 0 - 17 end
     let serial = st.serial + 1
     st.serial = serial
-    let prefix = linux_text(f.temp, 0, ".herbert-save-")
+    do linux_text(f.temp, 0, ".herbert-save-")
     let pidend = linux_decimal(f.temp, 14, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
-    let dash = buffer_set(f.temp, pidend, 45)
+    do buffer_set(f.temp, pidend, 45)
     let serialend = linux_decimal(f.temp, pidend + 1, serial)
-    let suffix = linux_text(f.temp, serialend, ".tmp")
-    let nul = buffer_set(f.temp, serialend + 4, 0)
+    do linux_text(f.temp, serialend, ".tmp")
+    do buffer_set(f.temp, serialend + 4, 0)
     let fd = linux_syscall6(257, st.dirfd, buffer_address(f.temp), 655553, 384, 0, 0)
     if fd == 0 - 17: return file_temp(f, tries - 1) end
     return fd
@@ -285,18 +285,18 @@ func file_save(f, bytes, count):
         end
     end
     if status != 0:
-        let removed = linux_syscall6(263, st.dirfd, buffer_address(f.temp), 0, 0, 0, 0)
+        do linux_syscall6(263, st.dirfd, buffer_address(f.temp), 0, 0, 0, 0)
         return file_result(f, status)
     end
     st.published = true
     st.exists = true
-    let savedbytes = linux_copy(f.saved, 0, bytes, 0, count)
+    do linux_copy(f.saved, 0, bytes, 0, count)
     st.saved_count = count
     st.uncertain = true
     let synced = linux_syscall6(74, st.dirfd, 0, 0, 0, 0, 0)
     let refreshed = file_stat(f)
     if refreshed == 0 and file_renamed_same(f.stat, f.temp_stat):
-        let baseline = linux_copy(f.baseline, 0, f.stat, 0, 144)
+        do linux_copy(f.baseline, 0, f.stat, 0, 144)
         st.uncertain = false
     else:
         refreshed = 0 - 116
@@ -308,12 +308,12 @@ end
 func file_copy_publish(f, tries):
     let st = f.state
     if tries == 0: return 0 - 17 end
-    let prefix = linux_text(f.copy_name, 0, "herbert-rescue-")
+    do linux_text(f.copy_name, 0, "herbert-rescue-")
     let pidend = linux_decimal(f.copy_name, 15, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
-    let dash = buffer_set(f.copy_name, pidend, 45)
+    do buffer_set(f.copy_name, pidend, 45)
     let serialend = linux_decimal(f.copy_name, pidend + 1, st.serial)
-    let suffix = linux_text(f.copy_name, serialend, ".txt")
-    let nul = buffer_set(f.copy_name, serialend + 4, 0)
+    do linux_text(f.copy_name, serialend, ".txt")
+    do buffer_set(f.copy_name, serialend + 4, 0)
     let status = linux_syscall6(316, st.dirfd, buffer_address(f.temp), st.dirfd, buffer_address(f.copy_name), 1, 0)
     if status == 0 - 17:
         st.serial = st.serial + 1
@@ -337,7 +337,7 @@ func file_save_copy(f, bytes, count):
     let status = file_fill_temp(f, fd, bytes, count, 384, false)
     if status == 0: status = file_copy_publish(f, 32) end
     if status != 0:
-        let removed = linux_syscall6(263, st.dirfd, buffer_address(f.temp), 0, 0, 0, 0)
+        do linux_syscall6(263, st.dirfd, buffer_address(f.temp), 0, 0, 0, 0)
         return file_result(f, status)
     end
     st.published = true

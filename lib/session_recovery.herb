@@ -16,16 +16,16 @@ func recovery_open(r, original, tries):
     let parent = original.state.dirfd
     if linux_u64(r.1, 16) == 0:
         let serial = linux_u64(r.1, 0) + 1
-        let remembered = linux_put64(r.1, 0, serial)
-        let prefix = linux_text(r.2, 0, ".herbert-notes-")
+        do linux_put64(r.1, 0, serial)
+        do linux_text(r.2, 0, ".herbert-notes-")
         let pidend = linux_decimal(r.2, 15, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
-        let dash = buffer_set(r.2, pidend, 45)
+        do buffer_set(r.2, pidend, 45)
         let last = linux_decimal(r.2, pidend + 1, serial)
-        let nul = buffer_set(r.2, last, 0)
+        do buffer_set(r.2, last, 0)
         let created = linux_syscall6(258, parent, buffer_address(r.2), 448, 0, 0, 0)
         if created == 0 - 17: return recovery_open(r, original, tries - 1) end
         if created != 0: return created end
-        let remembered = linux_put64(r.1, 16, 1)
+        do linux_put64(r.1, 16, 1)
     end
     -- After mkdir succeeds, retry that same candidate. Open/stat/mode failures
     -- must never create another empty directory on every subsequent edit.
@@ -42,12 +42,12 @@ func recovery_open(r, original, tries):
     -- mkdir mode never grants group/other access, even with permissive umask.
     -- A restrictive umask that removes owner access is a visible refusal.
     if checked != 0:
-        let closed = linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+        do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
         return checked
     end
     snapshot_state.dirfd = fd
-    let suffix = linux_text(r.2, last, "/recovery.txt")
-    let ended = buffer_set(r.2, last + 13, 0)
+    do linux_text(r.2, last, "/recovery.txt")
+    do buffer_set(r.2, last + 13, 0)
     return 0
 end
 
@@ -65,7 +65,7 @@ func recovery_save(r, original, bytes, count):
     if linux_u64(r.1, 8) == 0:
         let synced = linux_syscall6(74, original.state.dirfd, 0, 0, 0, 0, 0)
         if synced != 0: return file_result(snapshot, 1) end
-        let confirmed = linux_put64(r.1, 8, 1)
+        do linux_put64(r.1, 8, 1)
     end
     return 0
 end
@@ -76,7 +76,7 @@ func recovery_close(r): return file_close(r.0) end
 -- directory beside that document. The previous session's copy stays where it is;
 -- the directory serial keeps counting, so no name is reused.
 func recovery_reset(r):
-    let closed = recovery_close(r)
+    do recovery_close(r)
     let snapshot = r.0
     let st = snapshot.state
     st.status = 0
@@ -85,7 +85,7 @@ func recovery_reset(r):
     st.published = false
     st.uncertain = false
     st.saved_count = 0
-    let synced = linux_put64(r.1, 8, 0)
-    let created = linux_put64(r.1, 16, 0)
+    do linux_put64(r.1, 8, 0)
+    do linux_put64(r.1, 16, 0)
     return 0
 end

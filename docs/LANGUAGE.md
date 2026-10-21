@@ -195,7 +195,7 @@ Use **at most one syntactic input operation in `main`**, then pass its string to
 func main():
     let input = stdin_read()
     if input.0 != 0:
-        let ignored = stderr_write("cannot read standard input\n")
+        do stderr_write("cannot read standard input\n")
         do process_exit(1)
         return 0
     end

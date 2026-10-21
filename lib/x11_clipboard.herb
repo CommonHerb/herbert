@@ -17,11 +17,11 @@ end
 
 func x11_change_property(c, window, property, kind, format, mode, units):
     let p = x11_request(c, 18, mode, 24 + x11_pad(units * (format / 8)))
-    let a = linux_put32(c.requests, p + 4, window)
-    let b = linux_put32(c.requests, p + 8, property)
-    let d = linux_put32(c.requests, p + 12, kind)
-    let e = buffer_set(c.requests, p + 16, format)
-    let f = linux_put32(c.requests, p + 20, units)
+    do linux_put32(c.requests, p + 4, window)
+    do linux_put32(c.requests, p + 8, property)
+    do linux_put32(c.requests, p + 12, kind)
+    do buffer_set(c.requests, p + 16, format)
+    do linux_put32(c.requests, p + 20, units)
     return p + 24
 end
 
@@ -31,19 +31,19 @@ func x11_put_text(c, cb, window, property, kind, offset, mode):
     let n = cb.count - offset
     if n > 32768: n = 32768 end
     let q = x11_change_property(c, window, property, kind, 8, mode, n)
-    let copied = linux_copy(c.requests, q, cb.data, offset, n)
+    do linux_copy(c.requests, q, cb.data, offset, n)
     if offset + n >= cb.count: return 0 end
     return x11_put_text(c, cb, window, property, kind, offset + n, 2)
 end
 
 func x11_notify(c, requestor, selection, target, property, time):
     let p = x11_request(c, 25, 0, 44)
-    let a = linux_put32(c.requests, p + 4, requestor)
-    let b = buffer_set(c.requests, p + 12, 31)
-    let d = linux_put32(c.requests, p + 16, time)
-    let e = linux_put32(c.requests, p + 20, requestor)
-    let f = linux_put32(c.requests, p + 24, selection)
-    let g = linux_put32(c.requests, p + 28, target)
+    do linux_put32(c.requests, p + 4, requestor)
+    do buffer_set(c.requests, p + 12, 31)
+    do linux_put32(c.requests, p + 16, time)
+    do linux_put32(c.requests, p + 20, requestor)
+    do linux_put32(c.requests, p + 24, selection)
+    do linux_put32(c.requests, p + 28, target)
     return linux_put32(c.requests, p + 32, property)
 end
 
@@ -60,17 +60,17 @@ func x11_serve_one(c, cb, at):
     if cb.owned and selection == cb.clipboard:
         if target == cb.targets:
             let q = x11_change_property(c, requestor, property, 4, 32, 0, 4)
-            let a = linux_put32(c.requests, q, cb.targets)
-            let b = linux_put32(c.requests, q + 4, cb.timestamp)
-            let d = linux_put32(c.requests, q + 8, cb.utf8)
-            let e = linux_put32(c.requests, q + 12, cb.mime)
+            do linux_put32(c.requests, q, cb.targets)
+            do linux_put32(c.requests, q + 4, cb.timestamp)
+            do linux_put32(c.requests, q + 8, cb.utf8)
+            do linux_put32(c.requests, q + 12, cb.mime)
             answer = property
         elif target == cb.timestamp:
             let q = x11_change_property(c, requestor, property, 19, 32, 0, 1)
-            let a = linux_put32(c.requests, q, cb.time)
+            do linux_put32(c.requests, q, cb.time)
             answer = property
         elif target == cb.utf8 or target == cb.mime:
-            let sent = x11_put_text(c, cb, requestor, property, target, 0, 0)
+            do x11_put_text(c, cb, requestor, property, target, 0, 0)
             answer = property
         end
     end
@@ -79,7 +79,7 @@ end
 
 func x11_serve_loop(c, cb, i):
     if i == cb.pending_count: return 0 end
-    let served = x11_serve_one(c, cb, i * 32)
+    do x11_serve_one(c, cb, i * 32)
     return x11_serve_loop(c, cb, i + 1)
 end
 
@@ -88,7 +88,7 @@ func x11_serve(c):
     let cb = st.clip
     if not cb.on or cb.pending_count == 0: return 0 end
     let from = (st.sequence + 1) % 65536
-    let served = x11_serve_loop(c, cb, 0)
+    do x11_serve_loop(c, cb, 0)
     cb.pending_count = 0
     cb.tolerant_from = from
     cb.tolerant_to = st.sequence
@@ -101,14 +101,14 @@ end
 func x11_clip_own(c, src, from, count, time):
     let st = c.state
     let cb = st.clip
-    let copied = linux_copy(cb.data, 0, src, from, count)
+    do linux_copy(cb.data, 0, src, from, count)
     cb.count = count
     cb.time = time
     cb.owned = true
     let p = x11_request(c, 22, 0, 16)
-    let a = linux_put32(c.requests, p + 4, st.window)
-    let b = linux_put32(c.requests, p + 8, cb.clipboard)
-    let d = linux_put32(c.requests, p + 12, time)
+    do linux_put32(c.requests, p + 4, st.window)
+    do linux_put32(c.requests, p + 8, cb.clipboard)
+    do linux_put32(c.requests, p + 12, time)
     return x11_flush(c)
 end
 
@@ -123,7 +123,7 @@ func x11_settle(c):
     let have = st.partial
     if have == 0: return 0 end
     let got = linux_read_exact(st.fd, c.replies, have, 32 - have, c.poll, c.clock)
-    let checked = x11_need(got == 0, "desktop: incomplete X11 event\n")
+    do x11_need(got == 0, "desktop: incomplete X11 event\n")
     st.partial = 0
     if buffer_get(c.replies, 0) == 1: return x11_keyboard_reply(c) end
     return x11_dispatch(c)
@@ -134,42 +134,42 @@ end
 func x11_reply_runtime(c, sequence):
     let st = c.state
     let got = linux_read_exact(st.fd, c.replies, 0, 32, c.poll, c.clock)
-    let checked = x11_need(got == 0, "desktop: incomplete X11 reply\n")
+    do x11_need(got == 0, "desktop: incomplete X11 reply\n")
     if buffer_get(c.replies, 0) != 1:
-        let event = x11_dispatch(c)
+        do x11_dispatch(c)
         return x11_reply_runtime(c, sequence)
     end
     if st.reply_pending != 0 and linux_u16(c.replies, 2) == st.reply_pending - 1:
-        let keyboard = x11_keyboard_reply(c)
+        do x11_keyboard_reply(c)
         return x11_reply_runtime(c, sequence)
     end
-    let checked2 = x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
+    do x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
     let extra = linux_u32(c.replies, 4) * 4
-    let checked3 = x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
+    do x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
     let rest = linux_read_exact(st.fd, c.replies, 32, extra, c.poll, c.clock)
-    let checked4 = x11_need(rest == 0, "desktop: truncated X11 reply body\n")
+    do x11_need(rest == 0, "desktop: truncated X11 reply body\n")
     return extra
 end
 
 func x11_clip_wait(c, cb, start, wait_ms):
     let st = c.state
-    let events = x11_events_loop(c, 512)
+    do x11_events_loop(c, 512)
     if cb.notified: return 0 end
     let now = linux_clock_ms(c.clock)
-    let checked = x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
+    do x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
     if now - start >= wait_ms: return 0 end
-    let polled = linux_poll(st.fd, c.poll, 1, wait_ms - (now - start))
+    do linux_poll(st.fd, c.poll, 1, wait_ms - (now - start))
     return x11_clip_wait(c, cb, start, wait_ms)
 end
 
 func x11_clip_fetch(c, cb):
     let st = c.state
-    let settled = x11_settle(c)
+    do x11_settle(c)
     let p = x11_request(c, 20, 1, 24)
-    let a = linux_put32(c.requests, p + 4, st.window)
-    let b = linux_put32(c.requests, p + 8, cb.property)
-    let d = linux_put32(c.requests, p + 20, 16376)
-    let sent = x11_flush(c)
+    do linux_put32(c.requests, p + 4, st.window)
+    do linux_put32(c.requests, p + 8, cb.property)
+    do linux_put32(c.requests, p + 20, 16376)
+    do x11_flush(c)
     let extra = x11_reply_runtime(c, st.sequence)
     let r = c.replies
     if linux_u32(r, 8) == cb.incr or linux_u32(r, 12) != 0: return 0 - 3 end
@@ -187,15 +187,15 @@ func x11_clip_request(c, time, wait_ms):
     let cb = st.clip
     cb.notified = false
     let p = x11_request(c, 24, 0, 24)
-    let a = linux_put32(c.requests, p + 4, st.window)
-    let b = linux_put32(c.requests, p + 8, cb.clipboard)
-    let d = linux_put32(c.requests, p + 12, cb.utf8)
-    let e = linux_put32(c.requests, p + 16, cb.property)
-    let f = linux_put32(c.requests, p + 20, time)
-    let sent = x11_flush(c)
+    do linux_put32(c.requests, p + 4, st.window)
+    do linux_put32(c.requests, p + 8, cb.clipboard)
+    do linux_put32(c.requests, p + 12, cb.utf8)
+    do linux_put32(c.requests, p + 16, cb.property)
+    do linux_put32(c.requests, p + 20, time)
+    do x11_flush(c)
     let start = linux_clock_ms(c.clock)
-    let checked = x11_need(not linux_error(start), "desktop: monotonic clock failed\n")
-    let waited = x11_clip_wait(c, cb, start, wait_ms)
+    do x11_need(not linux_error(start), "desktop: monotonic clock failed\n")
+    do x11_clip_wait(c, cb, start, wait_ms)
     if not cb.notified: return 0 - 2 end
     if cb.answer == 0: return 0 - 1 end
     return x11_clip_fetch(c, cb)

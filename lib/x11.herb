@@ -91,7 +91,7 @@ func x11_pad(n): return ((n + 3) / 4) * 4 end
 
 func x11_zero(b, p, n):
     if n == 0: return 0 end
-    let ignored = buffer_set(b, p, 0)
+    do buffer_set(b, p, 0)
     return x11_zero(b, p + 1, n - 1)
 end
 
@@ -111,41 +111,41 @@ func x11_display_digits(text, p, out):
     let ch = index(text, p)
     if ch == 46:
         let ok = p + 2 == length(text)
-        let checked = x11_need(ok, "desktop: only local DISPLAY screen 0 is supported\n")
-        let checked2 = x11_need(index(text, p + 1) == 48, "desktop: only screen 0 is supported\n")
+        do x11_need(ok, "desktop: only local DISPLAY screen 0 is supported\n")
+        do x11_need(index(text, p + 1) == 48, "desktop: only screen 0 is supported\n")
         return freeze(out)
     end
-    let checked = x11_need(ch >= 48 and ch <= 57, "desktop: DISPLAY must be :N or unix:N (screen 0)\n")
-    let checked2 = x11_need(length(freeze(out)) < 5, "desktop: DISPLAY number is too long\n")
+    do x11_need(ch >= 48 and ch <= 57, "desktop: DISPLAY must be :N or unix:N (screen 0)\n")
+    do x11_need(length(freeze(out)) < 5, "desktop: DISPLAY number is too long\n")
     do append(out, ch)
     return x11_display_digits(text, p + 1, out)
 end
 
 func x11_display(text):
-    let checked = x11_need(length(text) > 1, "desktop: DISPLAY is missing; run from your desktop terminal\n")
+    do x11_need(length(text) > 1, "desktop: DISPLAY is missing; run from your desktop terminal\n")
     let p = 1
     if index(text, 0) != 58:
-        let checked2 = x11_need(length(text) > 5, "desktop: only local X11 displays are supported\n")
-        let checked3 = x11_need(index(text, 0) == 117 and index(text, 1) == 110 and index(text, 2) == 105 and index(text, 3) == 120 and index(text, 4) == 58, "desktop: only local X11 displays are supported\n")
+        do x11_need(length(text) > 5, "desktop: only local X11 displays are supported\n")
+        do x11_need(index(text, 0) == 117 and index(text, 1) == 110 and index(text, 2) == 105 and index(text, 3) == 120 and index(text, 4) == 58, "desktop: only local X11 displays are supported\n")
         p = 5
     end
     let out = new_buffer()
     let digits = x11_display_digits(text, p, out)
-    let checked4 = x11_need(length(digits) > 0, "desktop: DISPLAY has no display number\n")
+    do x11_need(length(digits) > 0, "desktop: DISPLAY has no display number\n")
     return digits
 end
 
 -- Xauthority fields are length-prefixed, big-endian, unlike this X11 stream.
 func x11_auth_field(b, p, n):
-    let checked = x11_need(p <= n and n - p >= 2, "desktop: malformed Xauthority file\n")
+    do x11_need(p <= n and n - p >= 2, "desktop: malformed Xauthority file\n")
     let size = buffer_get(b, p) * 256 + buffer_get(b, p + 1)
-    let checked2 = x11_need(size <= n - p - 2, "desktop: truncated Xauthority field\n")
+    do x11_need(size <= n - p - 2, "desktop: truncated Xauthority field\n")
     return (p + 2, size, p + 2 + size)
 end
 
 func x11_auth_find(b, p, n, display, hostname):
     if p == n: return (0, 0) end
-    let checked = x11_need(p < n and n - p >= 2, "desktop: malformed Xauthority record\n")
+    do x11_need(p < n and n - p >= 2, "desktop: malformed Xauthority record\n")
     let family = buffer_get(b, p) * 256 + buffer_get(b, p + 1)
     let address = x11_auth_field(b, p + 2, n)
     let number = x11_auth_field(b, address.2, n)
@@ -165,8 +165,8 @@ func x11_auth_path(env):
     if length(path) > 0: return path end
     let home = linux_env(env, "HOME")
     let b = new_buffer()
-    let copied = x11_append_text(b, home, 0)
-    let copied2 = x11_append_text(b, "/.Xauthority", 0)
+    do x11_append_text(b, home, 0)
+    do x11_append_text(b, "/.Xauthority", 0)
     return freeze(b)
 end
 
@@ -179,27 +179,27 @@ end
 func x11_connect(display, pollbuf, clockbuf):
     let addr = linux_buffer(110)
     let a = linux_put16(addr, 0, 1)
-    let b = linux_text(addr, 2, "/tmp/.X11-unix/X")
-    let d = linux_text(addr, 18, display)
+    do linux_text(addr, 2, "/tmp/.X11-unix/X")
+    do linux_text(addr, 18, display)
     let fd = linux_syscall6(41, 1, 526337, 0, 0, 0, 0)
-    let checked = x11_need(not linux_error(fd), "desktop: cannot create a Linux display socket\n")
+    do x11_need(not linux_error(fd), "desktop: cannot create a Linux display socket\n")
     let connected = linux_syscall6(42, fd, buffer_address(addr), 19 + length(display), 0, 0, 0)
     if connected == 0 - 115:
         let ready = linux_poll(fd, pollbuf, 4, 5000)
-        let checked2 = x11_need(not linux_error(ready) and ready != 0, "desktop: display connection timed out\n")
+        do x11_need(not linux_error(ready) and ready != 0, "desktop: display connection timed out\n")
         let value = linux_buffer(8)
-        let size = linux_put32(value, 4, 4)
+        do linux_put32(value, 4, 4)
         let result = linux_syscall6(55, fd, 1, 4, buffer_address(value), buffer_address(value) + 4, 0)
-        let checked3 = x11_need(result == 0 and linux_u32(value, 0) == 0, "desktop: could not connect to DISPLAY\n")
+        do x11_need(result == 0 and linux_u32(value, 0) == 0, "desktop: could not connect to DISPLAY\n")
     else:
-        let checked4 = x11_need(connected == 0, "desktop: could not connect to DISPLAY\n")
+        do x11_need(connected == 0, "desktop: could not connect to DISPLAY\n")
     end
     return fd
 end
 
 func x11_visuals(b, p, n, count_left, visual):
     if count_left == 0: return false end
-    let checked = x11_need(p <= n and n - p >= 24, "desktop: truncated X11 visual information\n")
+    do x11_need(p <= n and n - p >= 24, "desktop: truncated X11 visual information\n")
     if linux_u32(b, p) == visual:
         return buffer_get(b, p + 4) == 4 and linux_u32(b, p + 8) == 16711680 and linux_u32(b, p + 12) == 65280 and linux_u32(b, p + 16) == 255
     end
@@ -208,9 +208,9 @@ end
 
 func x11_depths(b, p, n, left, visual):
     if left == 0: return false end
-    let checked = x11_need(p <= n and n - p >= 8, "desktop: truncated X11 depth information\n")
+    do x11_need(p <= n and n - p >= 8, "desktop: truncated X11 depth information\n")
     let count_visuals = linux_u16(b, p + 2)
-    let checked2 = x11_need(count_visuals <= (n - p - 8) / 24, "desktop: invalid X11 visual count\n")
+    do x11_need(count_visuals <= (n - p - 8) / 24, "desktop: invalid X11 visual count\n")
     if buffer_get(b, p) == 24 and x11_visuals(b, p + 8, n, count_visuals, visual): return true end
     return x11_depths(b, p + 8 + count_visuals * 24, n, left - 1, visual)
 end
@@ -224,38 +224,38 @@ func x11_setup(c, env, display):
         pos = x11_auth_find(auth.1, 0, auth.2, display, linux_hostname())
     else:
         let explicit = linux_env(env, "XAUTHORITY")
-        let checked = x11_need(length(explicit) == 0 and auth.0 == 0 - 2, "desktop: cannot read Xauthority (cookie contents are never printed)\n")
+        do x11_need(length(explicit) == 0 and auth.0 == 0 - 2, "desktop: cannot read Xauthority (cookie contents are never printed)\n")
     end
     let b = c.requests
     let a = buffer_set(b, 0, 108)
-    let d = linux_put16(b, 2, 11)
+    do linux_put16(b, 2, 11)
     let size = 12
     if pos.1 == 16:
-        let e = linux_put16(b, 6, 18)
-        let f = linux_put16(b, 8, 16)
-        let g = linux_text(b, 12, "MIT-MAGIC-COOKIE-1")
-        let h = linux_copy(b, 32, auth.1, pos.0, 16)
+        do linux_put16(b, 6, 18)
+        do linux_put16(b, 8, 16)
+        do linux_text(b, 12, "MIT-MAGIC-COOKIE-1")
+        do linux_copy(b, 32, auth.1, pos.0, 16)
         size = 48
     end
     let sent = linux_send_all(fd, b, 0, size, c.poll, c.clock)
-    let checked2 = x11_need(sent == 0, "desktop: X11 handshake write failed\n")
+    do x11_need(sent == 0, "desktop: X11 handshake write failed\n")
     let received = linux_read_exact(fd, c.replies, 0, 8, c.poll, c.clock)
-    let checked3 = x11_need(received == 0, "desktop: X11 handshake read failed\n")
-    let checked4 = x11_need(buffer_get(c.replies, 0) == 1, "desktop: X11 authentication refused; check DISPLAY and XAUTHORITY\n")
-    let checked5 = x11_need(linux_u16(c.replies, 2) == 11, "desktop: unsupported X11 protocol version\n")
+    do x11_need(received == 0, "desktop: X11 handshake read failed\n")
+    do x11_need(buffer_get(c.replies, 0) == 1, "desktop: X11 authentication refused; check DISPLAY and XAUTHORITY\n")
+    do x11_need(linux_u16(c.replies, 2) == 11, "desktop: unsupported X11 protocol version\n")
     let bytes = linux_u16(c.replies, 6) * 4
-    let checked6 = x11_need(bytes >= 32 and bytes <= buffer_length(c.replies), "desktop: X11 setup exceeds supported size\n")
+    do x11_need(bytes >= 32 and bytes <= buffer_length(c.replies), "desktop: X11 setup exceeds supported size\n")
     let received2 = linux_read_exact(fd, c.replies, 0, bytes, c.poll, c.clock)
-    let checked7 = x11_need(received2 == 0, "desktop: incomplete X11 setup\n")
+    do x11_need(received2 == 0, "desktop: incomplete X11 setup\n")
     let r = c.replies
     let rootpos = 32 + x11_pad(linux_u16(r, 16)) + buffer_get(r, 21) * 8
-    let checked8 = x11_need(buffer_get(r, 20) > 0 and rootpos <= bytes and bytes - rootpos >= 40, "desktop: X11 screen information is incomplete\n")
+    do x11_need(buffer_get(r, 20) > 0 and rootpos <= bytes and bytes - rootpos >= 40, "desktop: X11 screen information is incomplete\n")
     let visual = linux_u32(r, rootpos + 32)
-    let checked9 = x11_need(buffer_get(r, rootpos + 38) == 24 and x11_depths(r, rootpos + 40, bytes, buffer_get(r, rootpos + 39), visual), "desktop: requires a depth-24 RGB TrueColor X11 screen\n")
+    do x11_need(buffer_get(r, rootpos + 38) == 24 and x11_depths(r, rootpos + 40, bytes, buffer_get(r, rootpos + 39), visual), "desktop: requires a depth-24 RGB TrueColor X11 screen\n")
     let base = linux_u32(r, 4)
     let mask = linux_u32(r, 8)
-    let checked10 = x11_need((mask & 7) == 7 and (base & mask) == 0, "desktop: unsupported X11 resource-id layout\n")
-    let checked11 = x11_need(linux_u16(r, 18) >= 16384, "desktop: X11 request limit is too small\n")
+    do x11_need((mask & 7) == 7 and (base & mask) == 0, "desktop: unsupported X11 resource-id layout\n")
+    do x11_need(linux_u16(r, 18) >= 16384, "desktop: X11 request limit is too small\n")
     st.root = linux_u32(r, rootpos)
     st.visual = visual
     st.depth = 24
@@ -266,24 +266,24 @@ func x11_setup(c, env, display):
     st.gc = (base | 3)
     st.min_keycode = buffer_get(r, 26)
     st.max_keycode = buffer_get(r, 27)
-    let checked12 = x11_need(buffer_get(r, 26) >= 8 and buffer_get(r, 27) >= buffer_get(r, 26), "desktop: invalid X11 keyboard range\n")
+    do x11_need(buffer_get(r, 26) >= 8 and buffer_get(r, 27) >= buffer_get(r, 26), "desktop: invalid X11 keyboard range\n")
     -- Authentication bytes are no longer needed; do not leave them in requests.
-    let cleared = x11_zero(c.requests, 0, 48)
+    do x11_zero(c.requests, 0, 48)
     return 0
 end
 
 func x11_request(c, opcode, detail, bytes):
     let st = c.state
     let p = st.batch
-    let checked = x11_need(bytes >= 4 and bytes % 4 == 0 and bytes <= buffer_length(c.requests) and p <= buffer_length(c.requests), "desktop: request batch capacity exceeded\n")
+    do x11_need(bytes >= 4 and bytes % 4 == 0 and bytes <= buffer_length(c.requests) and p <= buffer_length(c.requests), "desktop: request batch capacity exceeded\n")
     if bytes > buffer_length(c.requests) - p:
-        let flushed = x11_flush(c)
+        do x11_flush(c)
         p = 0
     end
-    let cleared = x11_zero(c.requests, p, bytes)
-    let a = buffer_set(c.requests, p, opcode)
-    let b = buffer_set(c.requests, p + 1, detail)
-    let d = linux_put16(c.requests, p + 2, bytes / 4)
+    do x11_zero(c.requests, p, bytes)
+    do buffer_set(c.requests, p, opcode)
+    do buffer_set(c.requests, p + 1, detail)
+    do linux_put16(c.requests, p + 2, bytes / 4)
     st.batch = p + bytes
     st.sequence = (st.sequence + 1) % 65536
     return p
@@ -294,7 +294,7 @@ func x11_flush(c):
     let n = st.batch
     if n == 0: return 0 end
     let sent = linux_send_all(st.fd, c.requests, 0, n, c.poll, c.clock)
-    let checked = x11_need(sent == 0, "desktop: lost display connection while drawing\n")
+    do x11_need(sent == 0, "desktop: lost display connection while drawing\n")
     st.batch = 0
     return 0
 end
@@ -313,7 +313,7 @@ func x11_dispatch(c):
             cb.owned = false
         end
         if kind == 30 and linux_u32(r, 8) == st.window and cb.pending_count < 8:
-            let kept = linux_copy(cb.pending, cb.pending_count * 32, r, 0, 32)
+            do linux_copy(cb.pending, cb.pending_count * 32, r, 0, 32)
             cb.pending_count = cb.pending_count + 1
         end
         if kind == 31 and linux_u32(r, 8) == st.window and linux_u32(r, 12) == cb.clipboard:
@@ -326,15 +326,15 @@ func x11_dispatch(c):
             let code = buffer_get(r, 1)
             let value = 0
             if kind == 2: value = 1 end
-            let changed = buffer_set(c.pressed, code, value)
+            do buffer_set(c.pressed, code, value)
             if kind == 2 and st.queue_on and st.focused:
-                let queued = x11_queue_key(c, code, linux_u16(r, 28), linux_u32(r, 4))
+                do x11_queue_key(c, code, linux_u16(r, 28), linux_u32(r, 4))
             end
         end
     end
     if (kind == 4 or kind == 5 or kind == 6) and st.pointer_on and st.queue_on and linux_u32(r, 12) == st.window:
         if kind == 6 or buffer_get(r, 1) == 1:
-            let queued = x11_queue_pointer(c, kind, linux_u16(r, 24), linux_u16(r, 26), linux_u16(r, 28), linux_u32(r, 4))
+            do x11_queue_pointer(c, kind, linux_u16(r, 24), linux_u16(r, 26), linux_u16(r, 28), linux_u32(r, 4))
         end
     end
     if kind == 12 and linux_u32(r, 4) == st.window:
@@ -346,7 +346,7 @@ func x11_dispatch(c):
     -- Focus/unmap/mapping changes clear held state, not already accepted text.
     -- Queued presses retain their translated symbol and arrival order.
     if kind == 10 and linux_u32(r, 4) == st.window:
-        let cleared = x11_zero(c.pressed, 0, 256)
+        do x11_zero(c.pressed, 0, 256)
         st.focused = false
     end
     if kind == 33 and buffer_get(r, 1) == 32 and linux_u32(r, 4) == st.window and linux_u32(r, 8) == st.wm_protocols and linux_u32(r, 12) == st.wm_delete:
@@ -356,52 +356,52 @@ func x11_dispatch(c):
         st.closing = true
     end
     if kind == 18 and linux_u32(r, 8) == st.window:
-        let cleared = x11_zero(c.pressed, 0, 256)
+        do x11_zero(c.pressed, 0, 256)
         st.focused = false
     end
     if kind == 34:
         st.map_refresh = true
-        let cleared = x11_zero(c.pressed, 0, 256)
+        do x11_zero(c.pressed, 0, 256)
     end
-    let checked = x11_need(kind != 35, "desktop: unexpected extended X11 event\n")
+    do x11_need(kind != 35, "desktop: unexpected extended X11 event\n")
     return 0
 end
 
 func x11_reply(c, sequence):
     let st = c.state
     let got = linux_read_exact(st.fd, c.replies, 0, 32, c.poll, c.clock)
-    let checked = x11_need(got == 0, "desktop: incomplete X11 reply\n")
+    do x11_need(got == 0, "desktop: incomplete X11 reply\n")
     if buffer_get(c.replies, 0) != 1:
-        let event = x11_dispatch(c)
+        do x11_dispatch(c)
         return x11_reply(c, sequence)
     end
-    let checked2 = x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
+    do x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
     let extra = linux_u32(c.replies, 4) * 4
-    let checked3 = x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
+    do x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
     let rest = linux_read_exact(st.fd, c.replies, 32, extra, c.poll, c.clock)
-    let checked4 = x11_need(rest == 0, "desktop: truncated X11 reply body\n")
+    do x11_need(rest == 0, "desktop: truncated X11 reply body\n")
     return extra
 end
 
 func x11_intern(c, name):
     let st = c.state
     let p = x11_request(c, 16, 0, 8 + x11_pad(length(name)))
-    let a = linux_put16(c.requests, p + 4, length(name))
-    let b = linux_text(c.requests, p + 8, name)
-    let sent = x11_flush(c)
+    do linux_put16(c.requests, p + 4, length(name))
+    do linux_text(c.requests, p + 8, name)
+    do x11_flush(c)
     let reply = x11_reply(c, st.sequence)
-    let checked = x11_need(reply == 0, "desktop: invalid InternAtom reply\n")
+    do x11_need(reply == 0, "desktop: invalid InternAtom reply\n")
     return linux_u32(c.replies, 8)
 end
 
 func x11_property(c, atom, kind, format, units):
     let st = c.state
     let p = x11_request(c, 18, 0, 24 + x11_pad(units * (format / 8)))
-    let a = linux_put32(c.requests, p + 4, st.window)
-    let b = linux_put32(c.requests, p + 8, atom)
-    let d = linux_put32(c.requests, p + 12, kind)
-    let e = buffer_set(c.requests, p + 16, format)
-    let f = linux_put32(c.requests, p + 20, units)
+    do linux_put32(c.requests, p + 4, st.window)
+    do linux_put32(c.requests, p + 8, atom)
+    do linux_put32(c.requests, p + 12, kind)
+    do buffer_set(c.requests, p + 16, format)
+    do linux_put32(c.requests, p + 20, units)
     return p + 24
 end
 
@@ -409,14 +409,14 @@ func x11_keyboard_fill(c, i, n, stride):
     let st = c.state
     if i == n: return 0 end
     let symbol = linux_u32(c.replies, 32 + i * stride * 4)
-    let stored = linux_put32(c.keymap, (st.min_keycode + i) * 4, symbol)
+    do linux_put32(c.keymap, (st.min_keycode + i) * 4, symbol)
     let shifted = 0
     if stride > 1: shifted = linux_u32(c.replies, 36 + i * stride * 4) end
     if shifted == 0:
         shifted = symbol
         if symbol >= 97 and symbol <= 122: shifted = symbol - 32 end
     end
-    let saved = linux_put32(c.shifted, (st.min_keycode + i) * 4, shifted)
+    do linux_put32(c.shifted, (st.min_keycode + i) * 4, shifted)
     return x11_keyboard_fill(c, i + 1, n, stride)
 end
 
@@ -425,8 +425,8 @@ func x11_keyboard_request(c):
     let low = st.min_keycode
     let n = st.max_keycode - low + 1
     let p = x11_request(c, 101, 0, 8)
-    let a = buffer_set(c.requests, p + 4, low)
-    let b = buffer_set(c.requests, p + 5, n)
+    do buffer_set(c.requests, p + 4, low)
+    do buffer_set(c.requests, p + 5, n)
     st.reply_pending = st.sequence + 1
     -- A subsequent MappingNotify sets96 again, including while this reply is
     -- pending. Completing this request must not erase that later notification.
@@ -438,8 +438,8 @@ func x11_keyboard_complete(c, bytes):
     let st = c.state
     let n = st.max_keycode - st.min_keycode + 1
     let stride = buffer_get(c.replies, 1)
-    let checked = x11_need(stride > 0 and bytes == n * stride * 4, "desktop: invalid keyboard mapping reply\n")
-    let filled = x11_keyboard_fill(c, 0, n, stride)
+    do x11_need(stride > 0 and bytes == n * stride * 4, "desktop: invalid keyboard mapping reply\n")
+    do x11_keyboard_fill(c, 0, n, stride)
     st.reply_pending = 0
     return 0
 end
@@ -447,7 +447,7 @@ end
 -- Startup only, before the window is mapped or ordered text input enabled.
 func x11_keyboard(c):
     let st = c.state
-    let sent = x11_keyboard_request(c)
+    do x11_keyboard_request(c)
     let bytes = x11_reply(c, st.reply_pending - 1)
     return x11_keyboard_complete(c, bytes)
 end
@@ -458,16 +458,16 @@ end
 func x11_keyboard_reply(c):
     let st = c.state
     let pending = st.reply_pending
-    let checked = x11_need(pending != 0 and linux_u16(c.replies, 2) == pending - 1, "desktop: unexpected X11 keyboard reply\n")
+    do x11_need(pending != 0 and linux_u16(c.replies, 2) == pending - 1, "desktop: unexpected X11 keyboard reply\n")
     let bytes = linux_u32(c.replies, 4) * 4
-    let checked2 = x11_need(bytes <= buffer_length(c.replies) - 32, "desktop: keyboard reply exceeds fixed buffer\n")
+    do x11_need(bytes <= buffer_length(c.replies) - 32, "desktop: keyboard reply exceeds fixed buffer\n")
     let got = linux_read_exact(st.fd, c.replies, 32, bytes, c.poll, c.clock)
-    let checked3 = x11_need(got == 0, "desktop: truncated keyboard mapping reply\n")
+    do x11_need(got == 0, "desktop: truncated keyboard mapping reply\n")
     return x11_keyboard_complete(c, bytes)
 end
 
 func x11_open(width, height, title):
-    let checked = x11_need(width > 0 and width <= 32767 and height > 0 and height <= 32767 and length(title) <= 1024, "desktop: invalid window size or title\n")
+    do x11_need(width > 0 and width <= 32767 and height > 0 and height <= 32767 and length(title) <= 1024, "desktop: invalid window size or title\n")
     let idle = X11Clip(false, false, 0, 0, 0, 0, 0, 0, 0, 0, new_buffer(), 0, new_buffer(), 0, false, 0, false, 0, 0)
     let c = X11(X11State(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, 0, false, false, 0, 0, 0, false, idle, false), linux_buffer(65536), linux_buffer(65536), linux_buffer(8), linux_buffer(16), linux_buffer(256), linux_buffer(1024), linux_buffer(1024), linux_buffer(4096))
     let st = c.state
@@ -477,50 +477,50 @@ func x11_open(width, height, title):
     st.fd = fd
     st.width = width
     st.height = height
-    let setup = x11_setup(c, env, display)
+    do x11_setup(c, env, display)
     let protocols = x11_intern(c, "WM_PROTOCOLS")
     let deleted = x11_intern(c, "WM_DELETE_WINDOW")
     st.wm_protocols = protocols
     st.wm_delete = deleted
     let p = x11_request(c, 1, 24, 40)
-    let a = linux_put32(c.requests, p + 4, st.window)
-    let b = linux_put32(c.requests, p + 8, st.root)
-    let d = linux_put16(c.requests, p + 16, width)
-    let e = linux_put16(c.requests, p + 18, height)
-    let f = linux_put16(c.requests, p + 22, 1)
-    let g = linux_put32(c.requests, p + 24, st.visual)
-    let h = linux_put32(c.requests, p + 28, 2050)
-    let i = linux_put32(c.requests, p + 32, 1054759)
+    do linux_put32(c.requests, p + 4, st.window)
+    do linux_put32(c.requests, p + 8, st.root)
+    do linux_put16(c.requests, p + 16, width)
+    do linux_put16(c.requests, p + 18, height)
+    do linux_put16(c.requests, p + 22, 1)
+    do linux_put32(c.requests, p + 24, st.visual)
+    do linux_put32(c.requests, p + 28, 2050)
+    do linux_put32(c.requests, p + 32, 1054759)
     -- key press/release, exposure, structure notify, focus change.
-    let j = linux_put32(c.requests, p + 36, 2260995)
+    do linux_put32(c.requests, p + 36, 2260995)
     let namepos = x11_property(c, 39, 31, 8, length(title))
-    let name = linux_text(c.requests, namepos, title)
+    do linux_text(c.requests, namepos, title)
     let classpos = x11_property(c, 67, 31, 8, 19)
-    let classname = linux_text(c.requests, classpos, "herbert")
-    let classname2 = linux_text(c.requests, classpos + 8, "HerbertApp")
+    do linux_text(c.requests, classpos, "herbert")
+    do linux_text(c.requests, classpos + 8, "HerbertApp")
     let protocolpos = x11_property(c, protocols, 4, 32, 1)
-    let prot = linux_put32(c.requests, protocolpos, deleted)
+    do linux_put32(c.requests, protocolpos, deleted)
     -- ICCCM normal hints: min=max for this deliberately fixed-size surface.
     let hints = x11_property(c, 40, 41, 32, 18)
-    let flags = linux_put32(c.requests, hints, 48)
-    let minw = linux_put32(c.requests, hints + 20, width)
-    let minh = linux_put32(c.requests, hints + 24, height)
-    let maxw = linux_put32(c.requests, hints + 28, width)
-    let maxh = linux_put32(c.requests, hints + 32, height)
+    do linux_put32(c.requests, hints, 48)
+    do linux_put32(c.requests, hints + 20, width)
+    do linux_put32(c.requests, hints + 24, height)
+    do linux_put32(c.requests, hints + 28, width)
+    do linux_put32(c.requests, hints + 32, height)
     let pix = x11_request(c, 53, 24, 16)
-    let pixid = linux_put32(c.requests, pix + 4, st.pixmap)
-    let drawable = linux_put32(c.requests, pix + 8, st.window)
-    let pixw = linux_put16(c.requests, pix + 12, width)
-    let pixh = linux_put16(c.requests, pix + 14, height)
+    do linux_put32(c.requests, pix + 4, st.pixmap)
+    do linux_put32(c.requests, pix + 8, st.window)
+    do linux_put16(c.requests, pix + 12, width)
+    do linux_put16(c.requests, pix + 14, height)
     let gc = x11_request(c, 55, 0, 20)
-    let gcid = linux_put32(c.requests, gc + 4, st.gc)
-    let gcd = linux_put32(c.requests, gc + 8, st.pixmap)
-    let gcmask = linux_put32(c.requests, gc + 12, 65536)
-    let noexpose = linux_put32(c.requests, gc + 16, 0)
-    let keyboard = x11_keyboard(c)
+    do linux_put32(c.requests, gc + 4, st.gc)
+    do linux_put32(c.requests, gc + 8, st.pixmap)
+    do linux_put32(c.requests, gc + 12, 65536)
+    do linux_put32(c.requests, gc + 16, 0)
+    do x11_keyboard(c)
     let mapped = x11_request(c, 8, 0, 8)
-    let mapid = linux_put32(c.requests, mapped + 4, st.window)
-    let sent = x11_flush(c)
+    do linux_put32(c.requests, mapped + 4, st.window)
+    do x11_flush(c)
     return c
 end
 
@@ -533,13 +533,13 @@ func x11_events_loop(c, budget):
     let n = linux_syscall6(45, st.fd, buffer_address(c.replies) + have, 32 - have, 64, 0, 0)
     if n == 0 - 11: return 0 end
     if n == 0 - 4: return x11_events_loop(c, budget - 1) end
-    let checked = x11_need(not linux_error(n) and n > 0 and n <= 32 - have, "desktop: display connection closed\n")
+    do x11_need(not linux_error(n) and n > 0 and n <= 32 - have, "desktop: display connection closed\n")
     let total = have + n
     if total == 32:
         if buffer_get(c.replies, 0) == 1:
-            let keyboard = x11_keyboard_reply(c)
+            do x11_keyboard_reply(c)
         else:
-            let event = x11_dispatch(c)
+            do x11_dispatch(c)
         end
         st.partial = 0
     else:
@@ -550,7 +550,7 @@ end
 
 func x11_events(c):
     let st = c.state
-    let events = x11_events_loop(c, 512)
+    do x11_events_loop(c, 512)
     if st.map_refresh and st.reply_pending == 0 and st.partial == 0:
         return x11_keyboard_request(c)
     end
@@ -578,42 +578,42 @@ end
 func x11_color(c, rgb):
     let st = c.state
     let p = x11_request(c, 56, 0, 16)
-    let a = linux_put32(c.requests, p + 4, st.gc)
-    let b = linux_put32(c.requests, p + 8, 4)
+    do linux_put32(c.requests, p + 4, st.gc)
+    do linux_put32(c.requests, p + 8, 4)
     return linux_put32(c.requests, p + 12, rgb)
 end
 
 func x11_rect(c, x, y, width, height):
     let st = c.state
     let p = x11_request(c, 70, 0, 20)
-    let a = linux_put32(c.requests, p + 4, st.pixmap)
-    let b = linux_put32(c.requests, p + 8, st.gc)
-    let d = linux_put16(c.requests, p + 12, x)
-    let e = linux_put16(c.requests, p + 14, y)
-    let f = linux_put16(c.requests, p + 16, width)
+    do linux_put32(c.requests, p + 4, st.pixmap)
+    do linux_put32(c.requests, p + 8, st.gc)
+    do linux_put16(c.requests, p + 12, x)
+    do linux_put16(c.requests, p + 14, y)
+    do linux_put16(c.requests, p + 16, width)
     return linux_put16(c.requests, p + 18, height)
 end
 
 func x11_ellipse(c, x, y, width, height):
     let st = c.state
     let p = x11_request(c, 71, 0, 24)
-    let a = linux_put32(c.requests, p + 4, st.pixmap)
-    let b = linux_put32(c.requests, p + 8, st.gc)
-    let d = linux_put16(c.requests, p + 12, x)
-    let e = linux_put16(c.requests, p + 14, y)
-    let f = linux_put16(c.requests, p + 16, width)
-    let g = linux_put16(c.requests, p + 18, height)
+    do linux_put32(c.requests, p + 4, st.pixmap)
+    do linux_put32(c.requests, p + 8, st.gc)
+    do linux_put16(c.requests, p + 12, x)
+    do linux_put16(c.requests, p + 14, y)
+    do linux_put16(c.requests, p + 16, width)
+    do linux_put16(c.requests, p + 18, height)
     return linux_put16(c.requests, p + 22, 23040)
 end
 
 func x11_present(c):
     let st = c.state
     let p = x11_request(c, 62, 0, 28)
-    let a = linux_put32(c.requests, p + 4, st.pixmap)
-    let b = linux_put32(c.requests, p + 8, st.window)
-    let d = linux_put32(c.requests, p + 12, st.gc)
-    let e = linux_put16(c.requests, p + 24, st.width)
-    let f = linux_put16(c.requests, p + 26, st.height)
+    do linux_put32(c.requests, p + 4, st.pixmap)
+    do linux_put32(c.requests, p + 8, st.window)
+    do linux_put32(c.requests, p + 12, st.gc)
+    do linux_put16(c.requests, p + 24, st.width)
+    do linux_put16(c.requests, p + 26, st.height)
     return x11_flush(c)
 end
 
@@ -638,16 +638,16 @@ end
 func x11_queue_key(c, code, state, timestamp):
     let st = c.state
     let count = st.queue_count
-    let checked = x11_need(count < 256, "desktop: key queue capacity exceeded\n")
+    do x11_need(count < 256, "desktop: key queue capacity exceeded\n")
     let symbol = linux_u32(c.keymap, code * 4)
     let shifted = (state & 1) != 0
     if (state & 2) != 0 and symbol >= 97 and symbol <= 122: shifted = not shifted end
     if shifted: symbol = linux_u32(c.shifted, code * 4) end
     let at = ((st.queue_head + count) % 256) * 16
-    let a = linux_put32(c.queue, at, symbol)
-    let b = linux_put32(c.queue, at + 4, state)
-    let d = linux_put32(c.queue, at + 8, code)
-    let e = linux_put32(c.queue, at + 12, timestamp)
+    do linux_put32(c.queue, at, symbol)
+    do linux_put32(c.queue, at + 4, state)
+    do linux_put32(c.queue, at + 8, code)
+    do linux_put32(c.queue, at + 12, timestamp)
     st.queue_count = count + 1
     return 0
 end
@@ -658,10 +658,10 @@ end
 func x11_enable_pointer(c):
     let st = c.state
     let p = x11_request(c, 2, 0, 16)
-    let a = linux_put32(c.requests, p + 4, st.window)
+    do linux_put32(c.requests, p + 4, st.window)
     -- The event mask again, plus button press/release and button-1 motion.
-    let b = linux_put32(c.requests, p + 8, 2048)
-    let d = linux_put32(c.requests, p + 12, 2261263)
+    do linux_put32(c.requests, p + 8, 2048)
+    do linux_put32(c.requests, p + 12, 2261263)
     st.pointer_on = true
     return x11_flush(c)
 end
@@ -688,11 +688,11 @@ func x11_queue_pointer(c, kind, x, y, state, timestamp):
             count = count - 1
         end
     end
-    let checked = x11_need(count < 256, "desktop: key queue capacity exceeded\n")
-    let a = linux_put32(c.queue, at, symbol)
-    let b = linux_put32(c.queue, at + 4, state)
-    let d = linux_put32(c.queue, at + 8, x + y * 65536)
-    let e = linux_put32(c.queue, at + 12, timestamp)
+    do x11_need(count < 256, "desktop: key queue capacity exceeded\n")
+    do linux_put32(c.queue, at, symbol)
+    do linux_put32(c.queue, at + 4, state)
+    do linux_put32(c.queue, at + 8, x + y * 65536)
+    do linux_put32(c.queue, at + 12, timestamp)
     st.queue_count = count + 1
     return 0
 end
@@ -704,7 +704,7 @@ func x11_next_key(c, event):
     let count = st.queue_count
     if count == 0: return false end
     let head = st.queue_head
-    let copied = linux_copy(event, 0, c.queue, head * 16, 16)
+    do linux_copy(event, 0, c.queue, head * 16, 16)
     st.queue_head = (head + 1) % 256
     st.queue_count = count - 1
     return true

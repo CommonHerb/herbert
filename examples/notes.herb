@@ -79,11 +79,11 @@ func notes_recovery_current(s):
 end
 
 func notes_quit(c, f, t, s, recovery):
-    let checkpoint = notes_checkpoint(recovery, f, t, s)
-    let closedrecovery = recovery_close(recovery)
-    let closedfile = file_close(f)
-    let closedspare = file_close(s.spare)
-    let closedwindow = x11_close(c)
+    do notes_checkpoint(recovery, f, t, s)
+    do recovery_close(recovery)
+    do file_close(f)
+    do file_close(s.spare)
+    do x11_close(c)
     do process_exit(0)
     return 0
 end
@@ -91,8 +91,8 @@ end
 func notes_request_close(c, f, t, s, recovery):
     s.unicode_input = false
     s.opening = false
-    let checkpoint = notes_checkpoint(recovery, f, t, s)
-    let acknowledged = x11_ack_close(c)
+    do notes_checkpoint(recovery, f, t, s)
+    do x11_ack_close(c)
     if not s.dirty: return notes_quit(c, f, t, s, recovery) end
     s.confirming = true
     return notes_message(s, 5)
@@ -148,7 +148,7 @@ func notes_find(t, s, query, backward, advance):
     let found = text_find(t, query, s.query_count, start, backward)
     s.query_matched = false
     if found != 0 - 1:
-        let moved = text_seek(t, found)
+        do text_seek(t, found)
         s.query_matched = true
         return notes_message(s, 12)
     end
@@ -211,14 +211,14 @@ func notes_copy(c, t, s):
     if not notes_selected(t, s): return notes_message(s, 32) end
     if not notes_fits_clipboard(c, t, s): return notes_message(s, 41) end
     let start = notes_from(t, s)
-    let owned = x11_clip_own(c, t.bytes, start, notes_to(t, s) - start, s.time)
+    do x11_clip_own(c, t.bytes, start, notes_to(t, s) - start, s.time)
     return notes_message(s, 31)
 end
 
 func notes_cut(c, t, s):
     if not notes_selected(t, s): return notes_message(s, 32) end
     if not notes_fits_clipboard(c, t, s): return notes_message(s, 41) end
-    let copied = notes_copy(c, t, s)
+    do notes_copy(c, t, s)
     return notes_edited(s, text_replace(t, notes_from(t, s), notes_to(t, s), s.clip, 0, 0))
 end
 
@@ -233,7 +233,7 @@ func notes_normalize(src, p, stop, dst, out):
         return notes_normalize(src, decoded.1, stop, dst, out)
     end
     if not utf8_text_allowed(decoded.0): return 0 - 1 end
-    let copied = linux_copy(dst, out, src, p, decoded.1 - p)
+    do linux_copy(dst, out, src, p, decoded.1 - p)
     return notes_normalize(src, decoded.1, stop, dst, out + decoded.1 - p)
 end
 
@@ -252,12 +252,12 @@ func notes_paste_field(t, s, query, bytes, count):
     if not notes_line_valid(bytes, 0, count): return notes_message(s, 34) end
     if s.opening:
         if count > 4095 - s.path_count: return notes_message(s, 29) end
-        let copied = linux_copy(s.path, s.path_count, bytes, 0, count)
+        do linux_copy(s.path, s.path_count, bytes, 0, count)
         s.path_count = s.path_count + count
         return notes_message(s, 19)
     end
     if count > 64 - s.query_count: return notes_message(s, 14) end
-    let copied = linux_copy(query, s.query_count, bytes, 0, count)
+    do linux_copy(query, s.query_count, bytes, 0, count)
     s.query_count = s.query_count + count
     return notes_find(t, s, query, false, false)
 end
@@ -369,13 +369,13 @@ func notes_open_prefix(s):
         if not linux_error(got) and got > 1:
             at = got - 1
             if buffer_get(s.path, at - 1) != 47:
-                let separator = buffer_set(s.path, at, 47)
+                do buffer_set(s.path, at, 47)
                 at = at + 1
             end
         end
     end
     if at + folder > 4095: return 0 end
-    let copied = linux_copy(s.path, at, f.path, 0, folder)
+    do linux_copy(s.path, at, f.path, 0, folder)
     if not notes_path_valid(s.path, 0, at + folder): return 0 end
     return at + folder
 end
@@ -402,17 +402,17 @@ end
 -- leaves the open document, its text, history and recovery session as they were.
 func notes_open(t, s, recovery):
     if s.dirty: return notes_message(s, 22) end
-    let checkpoint = notes_checkpoint(recovery, s.doc, t, s)
+    do notes_checkpoint(recovery, s.doc, t, s)
     let g = s.spare
     let loaded = file_load(g, s.path, s.path_count)
     if loaded != 0:
-        let closed = file_close(g)
+        do file_close(g)
         s.open_result = loaded
         return notes_message(s, notes_open_error(loaded))
     end
     let text = text_load(t, g.bytes, file_count(g))
     if text != 0:
-        let closed = file_close(g)
+        do file_close(g)
         s.open_result = text
         if text == 0 - 27: return notes_message(s, 23) end
         return notes_message(s, 27)
@@ -420,8 +420,8 @@ func notes_open(t, s, recovery):
     let old = s.doc
     s.doc = g
     s.spare = old
-    let closedold = file_close(old)
-    let reset = recovery_reset(recovery)
+    do file_close(old)
+    do recovery_reset(recovery)
     s.top = 0
     s.left = 0
     s.confirming = false
@@ -499,7 +499,7 @@ func notes_key(c, t, s, recovery, query, key, mods):
     let changed = 0
     if control and (key == 97 or key == 65):
         s.anchor = 0
-        let all = text_seek(t, text_length(t))
+        do text_seek(t, text_length(t))
         return notes_redraw(s)
     end
     if control and (key == 99 or key == 67): return notes_copy(c, t, s) end
@@ -514,7 +514,7 @@ func notes_key(c, t, s, recovery, query, key, mods):
             let edge = notes_from(t, s)
             if key == 65363: edge = notes_to(t, s) end
             s.anchor = 0 - 1
-            let collapsed = text_seek(t, edge)
+            do text_seek(t, edge)
             return notes_redraw(s)
         else:
             if selected: let dropped = notes_redraw(s) end
@@ -534,25 +534,25 @@ func notes_key(c, t, s, recovery, query, key, mods):
         changed = text_redo(t)
         if changed == 0: return notes_message(s, 11) end
     elif key == 65361:
-        let moved = text_seek(t, text_previous(t, cursor))
+        do text_seek(t, text_previous(t, cursor))
     elif key == 65363:
-        let moved = text_seek(t, text_next(t, cursor))
+        do text_seek(t, text_next(t, cursor))
     elif key == 65362:
-        let moved = text_vertical(t, false, 1)
+        do text_vertical(t, false, 1)
     elif key == 65364:
-        let moved = text_vertical(t, true, 1)
+        do text_vertical(t, true, 1)
     elif key == 65360:
         let target = text_line_start(t, cursor)
         if control: target = 0 end
-        let moved = text_seek(t, target)
+        do text_seek(t, target)
     elif key == 65367:
         let target = text_line_end(t, cursor)
         if control: target = text_length(t) end
-        let moved = text_seek(t, target)
+        do text_seek(t, target)
     elif key == 65365:
-        let moved = text_vertical(t, false, 20)
+        do text_vertical(t, false, 20)
     elif key == 65366:
-        let moved = text_vertical(t, true, 20)
+        do text_vertical(t, true, 20)
     elif control:
         return 0
     elif key == 65288:
@@ -618,7 +618,7 @@ func notes_pointer(t, s, symbol, state, code):
     if not s.dragging: return 0 end
     s.drag_x = x
     s.drag_y = y
-    let moved = text_seek(t, notes_point(t, s, x, y))
+    do text_seek(t, notes_point(t, s, x, y))
     return notes_redraw(s)
 end
 
@@ -627,10 +627,10 @@ func notes_keys(c, t, s, recovery, query, event):
     s.time = linux_u32(event, 12)
     let symbol = linux_u32(event, 0)
     if symbol >= 4294967041:
-        let pointed = notes_pointer(t, s, symbol, linux_u32(event, 4), linux_u32(event, 8))
+        do notes_pointer(t, s, symbol, linux_u32(event, 4), linux_u32(event, 8))
         return notes_keys(c, t, s, recovery, query, event)
     end
-    let handled = notes_key(c, t, s, recovery, query, symbol, linux_u32(event, 4))
+    do notes_key(c, t, s, recovery, query, symbol, linux_u32(event, 4))
     return notes_keys(c, t, s, recovery, query, event)
 end
 
@@ -657,14 +657,14 @@ func notes_draw_line(c, t, s, p, col, left, y):
         if not unicode_display_supported(t.bytes, p, next):
             s.missing_glyphs = true
         end
-        let letter = pixel_unicode_cluster(c, t.bytes, p, next, 28 + (col - left) * 12, y, 2)
+        do pixel_unicode_cluster(c, t.bytes, p, next, 28 + (col - left) * 12, y, 2)
     end
     return notes_draw_line(c, t, s, next, text_next_column(col, ch), left, y)
 end
 
 func notes_draw_rows(c, t, s, p, left, row):
     if row == 21: return 0 end
-    let line = notes_draw_line(c, t, s, p, 0, left, 102 + row * 20)
+    do notes_draw_line(c, t, s, p, 0, left, 102 + row * 20)
     let e = text_line_end(t, p)
     if e >= text_length(t): return 0 end
     return notes_draw_rows(c, t, s, e + 1, left, row + 1)
@@ -673,7 +673,7 @@ end
 func notes_draw_query(c, query, count, p, x):
     if p >= count: return 0 end
     let next = unicode_grapheme_next(query, count, p)
-    let letter = pixel_unicode_cluster(c, query, p, next, x, 578, 1)
+    do pixel_unicode_cluster(c, query, p, next, x, 578, 1)
     return notes_draw_query(c, query, count, next, x + 6)
 end
 
@@ -708,7 +708,7 @@ func notes_draw_hex(c, value, digits, x):
     let digit = value % 16
     let ch = 48 + digit
     if digit >= 10: ch = 65 + digit - 10 end
-    let letter = pixel_letter(c, pixel_glyph(ch), x + (digits - 1) * 6, 580, 1, 0)
+    do pixel_letter(c, pixel_glyph(ch), x + (digits - 1) * 6, 580, 1, 0)
     return notes_draw_hex(c, value / 16, digits - 1, x)
 end
 
@@ -741,23 +741,23 @@ func notes_draw_marks(c, t, p, left, row, a, b):
 end
 
 func notes_status(c, f, t, s, query):
-    let color = x11_color(c, 11255503)
-    let rowlabel = pixel_text(c, "Line", 28, 542, 1)
-    let row = pixel_number(c, text_row(t, text_cursor(t)) + 1, 62, 542, 1)
-    let collabel = pixel_text(c, "Column", 124, 542, 1)
-    let col = pixel_number(c, text_column(t, text_cursor(t)) + 1, 170, 542, 1)
-    let byteslabel = pixel_text(c, "Bytes", 248, 542, 1)
+    do x11_color(c, 11255503)
+    do pixel_text(c, "Line", 28, 542, 1)
+    do pixel_number(c, text_row(t, text_cursor(t)) + 1, 62, 542, 1)
+    do pixel_text(c, "Column", 124, 542, 1)
+    do pixel_number(c, text_column(t, text_cursor(t)) + 1, 170, 542, 1)
+    do pixel_text(c, "Bytes", 248, 542, 1)
     let bytes = pixel_number(c, text_file_length(t), 288, 542, 1)
-    let cap = pixel_text(c, "/ 1048576", 336, 542, 1)
+    do pixel_text(c, "/ 1048576", 336, 542, 1)
     let style = "LF"
     if text_crlf(t): style = "CRLF" end
-    let ending = pixel_text(c, style, 402, 542, 1)
+    do pixel_text(c, style, 402, 542, 1)
     let encoding = "UTF-8"
     if s.missing_glyphs: encoding = "UTF-8 | Boxed glyphs unavailable" end
-    let encoded = pixel_text(c, encoding, 450, 542, 1)
+    do pixel_text(c, encoding, 450, 542, 1)
     let dirty = "Saved"
     if s.dirty: dirty = "UNSAVED" end
-    let label = pixel_text(c, dirty, 806, 542, 1)
+    do pixel_text(c, dirty, 806, 542, 1)
     let message = s.message_id
     let status = "Ready. UTF-8 text; original bytes and newline style are preserved."
     if message == 1 and s.dirty: status = "Edited. Ctrl+S saves this document." end
@@ -812,75 +812,75 @@ func notes_status(c, f, t, s, query):
         status = "Copy written; sync uncertain. Close pending: Y closes; Esc returns."
     end
     if notes_warning(message): let warning = x11_color(c, 16173151) end
-    let statusline = pixel_text(c, status, 28, 560, 1)
+    do pixel_text(c, status, 28, 560, 1)
     if message == 4 or message == 9:
-        let code = pixel_number(c, 0 - s.save_result, 830, 560, 1)
+        do pixel_number(c, 0 - s.save_result, 830, 560, 1)
     end
     if message == 28:
-        let code = pixel_number(c, 0 - s.open_result, 830, 560, 1)
+        do pixel_number(c, 0 - s.open_result, 830, 560, 1)
     end
     if s.unicode_input and not s.confirming:
-        let help = pixel_text(c, "Unicode U+", 28, 580, 1)
-        let number = notes_draw_hex(c, s.unicode_value, s.unicode_digits, 88)
+        do pixel_text(c, "Unicode U+", 28, 580, 1)
+        do notes_draw_hex(c, s.unicode_value, s.unicode_digits, 88)
     elif s.opening and not s.confirming:
-        let help = pixel_text(c, "Open:", 28, 580, 1)
-        let typed = notes_draw_query(c, s.path, s.path_count, notes_path_start(s.path, s.path_count), 70)
+        do pixel_text(c, "Open:", 28, 580, 1)
+        do notes_draw_query(c, s.path, s.path_count, notes_path_start(s.path, s.path_count), 70)
     elif s.finding and not s.confirming:
-        let help = pixel_text(c, "Find:", 28, 580, 1)
-        let typed = notes_draw_query(c, query, s.query_count, 0, 70)
-        let help2 = pixel_text(c, "Enter next | Shift+Enter previous | Esc done", 570, 580, 1)
+        do pixel_text(c, "Find:", 28, 580, 1)
+        do notes_draw_query(c, query, s.query_count, 0, 70)
+        do pixel_text(c, "Enter next | Shift+Enter previous | Esc done", 570, 580, 1)
     elif message == 7 or message == 8:
-        let label = pixel_text(c, "Sibling file:", 28, 580, 1)
+        do pixel_text(c, "Sibling file:", 28, 580, 1)
         let name = file_copy_name(f)
-        let shown = pixel_text_buffer(c, name, 0, linux_nul_end(name, 0, buffer_length(name)), 112, 580, 1)
+        do pixel_text_buffer(c, name, 0, linux_nul_end(name, 0, buffer_length(name)), 112, 580, 1)
     elif s.confirming and message != 5:
         let closehelp = "Close pending: Y discards edits | Esc returns | Ctrl+S saves"
         if notes_recovery_current(s): closehelp = "Close pending: Y closes (recovery kept) | Esc returns | Ctrl+S saves" end
-        let help = pixel_text(c, closehelp, 28, 580, 1)
+        do pixel_text(c, closehelp, 28, 580, 1)
     else:
-        let help = pixel_text(c, "Ctrl+S save | Ctrl+O open | Ctrl+X/C/V cut, copy, paste | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
+        do pixel_text(c, "Ctrl+S save | Ctrl+O open | Ctrl+X/C/V cut, copy, paste | Ctrl+Z undo | Ctrl+Y redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
     end
     return 0
 end
 
 func notes_draw(c, f, t, s, recovery, query, blink):
-    let view = notes_view(t, s)
-    let background = x11_color(c, 1054759)
-    let canvas = x11_rect(c, 0, 0, 900, 600)
-    let heading = x11_color(c, 15265527)
-    let title = pixel_text(c, "Herbert Notes", 28, 24, 3)
-    let subtitle = x11_color(c, 8820395)
-    let hint = pixel_text(c, "PLAIN TEXT", 688, 39, 2)
-    let label = pixel_text(c, "File:", 28, 72, 1)
+    do notes_view(t, s)
+    do x11_color(c, 1054759)
+    do x11_rect(c, 0, 0, 900, 600)
+    do x11_color(c, 15265527)
+    do pixel_text(c, "Herbert Notes", 28, 24, 3)
+    do x11_color(c, 8820395)
+    do pixel_text(c, "PLAIN TEXT", 688, 39, 2)
+    do pixel_text(c, "File:", 28, 72, 1)
     let pathcount = linux_nul_end(f.path, 0, buffer_length(f.path))
     if pathcount > 130: pathcount = 130 end
-    let pathname = pixel_text_buffer(c, f.path, 0, pathcount, 70, 72, 1)
-    let recoverycolor = x11_color(c, 8820395)
+    do pixel_text_buffer(c, f.path, 0, pathcount, 70, 72, 1)
+    do x11_color(c, 8820395)
     let recoverylabel = "Recovery: created on first edit; copies are kept until you remove them."
     if s.recovery_attempted:
         recoverylabel = "Recovery copy kept beside this file:"
         if s.recovery_result != 0:
-            let warning = x11_color(c, 16173151)
+            do x11_color(c, 16173151)
             recoverylabel = "RECOVERY INCOMPLETE. Save or rescue. Attempted path:"
         end
-        let name = pixel_text_buffer(c, recovery.2, 0, linux_nul_end(recovery.2, 0, buffer_length(recovery.2)), 352, 85, 1)
+        do pixel_text_buffer(c, recovery.2, 0, linux_nul_end(recovery.2, 0, buffer_length(recovery.2)), 352, 85, 1)
     end
-    let recoveryhint = pixel_text(c, recoverylabel, 28, 85, 1)
-    let bordercolor = x11_color(c, 2767956)
-    let border = x11_rect(c, 24, 96, 852, 428)
-    let papercolor = x11_color(c, 1384240)
-    let paper = x11_rect(c, 26, 98, 848, 424)
+    do pixel_text(c, recoverylabel, 28, 85, 1)
+    do x11_color(c, 2767956)
+    do x11_rect(c, 24, 96, 852, 428)
+    do x11_color(c, 1384240)
+    do x11_rect(c, 26, 98, 848, 424)
     let first = text_row_offset(t, s.top)
     if notes_selected(t, s):
-        let markcolor = x11_color(c, 3033707)
-        let marks = notes_draw_marks(c, t, first, s.left, 0, notes_from(t, s), notes_to(t, s))
+        do x11_color(c, 3033707)
+        do notes_draw_marks(c, t, first, s.left, 0, notes_from(t, s), notes_to(t, s))
     elif s.finding and s.query_matched and not s.unicode_input and not s.confirming:
-        let matchcolor = x11_color(c, 6969880)
-        let marks = notes_draw_marks(c, t, first, s.left, 0, text_cursor(t), text_cursor(t) + s.query_count)
+        do x11_color(c, 6969880)
+        do notes_draw_marks(c, t, first, s.left, 0, text_cursor(t), text_cursor(t) + s.query_count)
     end
-    let ink = x11_color(c, 15265527)
+    do x11_color(c, 15265527)
     s.missing_glyphs = false
-    let text = notes_draw_rows(c, t, s, first, s.left, 0)
+    do notes_draw_rows(c, t, s, first, s.left, 0)
     if s.finding and not s.unicode_input and not s.confirming:
         if notes_query_missing(query, s.query_count, 0):
             s.missing_glyphs = true
@@ -892,46 +892,46 @@ func notes_draw(c, f, t, s, recovery, query, blink):
         end
     end
     if blink:
-        let cursorcolor = x11_color(c, 16173151)
+        do x11_color(c, 16173151)
         let col = text_column(t, text_cursor(t)) - s.left
         let row = text_row(t, text_cursor(t)) - s.top
-        let cursor = x11_rect(c, 28 + col * 12, 100 + row * 20, 2, 18)
+        do x11_rect(c, 28 + col * 12, 100 + row * 20, 2, 18)
     end
-    let status = notes_status(c, f, t, s, query)
+    do notes_status(c, f, t, s, query)
     s.needs_draw = false
     return x11_present(c)
 end
 
 func notes_loop(c, t, s, recovery, query, event, lastblink):
-    let events = x11_events(c)
-    let served = x11_serve(c)
+    do x11_events(c)
+    do x11_serve(c)
     -- Accepted typing belongs to the document before a batched WM close is
     -- considered. In particular, a queued ordinary Y must not confirm discard.
-    let keys = notes_keys(c, t, s, recovery, query, event)
-    let checkpoint = notes_checkpoint(recovery, s.doc, t, s)
+    do notes_keys(c, t, s, recovery, query, event)
+    do notes_checkpoint(recovery, s.doc, t, s)
     if x11_closed(c): let requested = notes_request_close(c, s.doc, t, s, recovery) end
     let now = linux_clock_ms(c.clock)
-    let checked = x11_need(not linux_error(now), "notes: monotonic clock failed\n")
+    do x11_need(not linux_error(now), "notes: monotonic clock failed\n")
     -- A drag held past the text's edge scrolls one row or column per 50 ms.
     let held = s.dragging and not notes_in_text(s.drag_x, s.drag_y)
     if held and now - s.scrolled_at >= 50:
         s.scrolled_at = now
-        let scrolled = text_seek(t, notes_point(t, s, s.drag_x, s.drag_y))
-        let redraw = notes_redraw(s)
+        do text_seek(t, notes_point(t, s, s.drag_x, s.drag_y))
+        do notes_redraw(s)
     end
     let blink = (now / 500) % 2
     if s.needs_draw or blink != lastblink:
-        let drawn = notes_draw(c, s.doc, t, s, recovery, query, blink == 0)
+        do notes_draw(c, s.doc, t, s, recovery, query, blink == 0)
     elif x11_exposed(c):
         -- Refresh the retained pixmap after uncovering/expose without rebuilding
         -- all glyphs. Repainting and blinking allocate no new objects.
-        let presented = x11_present(c)
+        do x11_present(c)
     end
-    let exposed = x11_ack_expose(c)
+    do x11_ack_expose(c)
     let wait = 500 - now % 500
     if held and wait > 50: wait = 50 end
     let waited = linux_poll(c.state.fd, c.poll, 1, wait)
-    let checked2 = x11_need(not linux_error(waited) or waited == 0 - 4, "notes: input wait failed\n")
+    do x11_need(not linux_error(waited) or waited == 0 - 4, "notes: input wait failed\n")
     return notes_loop(c, t, s, recovery, query, event, blink)
 end
 
@@ -943,7 +943,7 @@ func main():
     let opened = file_open(path, notes_capacity())
     if file_status(opened) != 0:
         let status = file_status(opened)
-        let closed = file_close(opened)
+        do file_close(opened)
         if status == 0 - 27: return linux_die("notes: file exceeds the 1048576-byte limit. No file changed.\n") end
         if status == 0 - 40: return linux_die("notes: symbolic-link documents are refused. Open the intended regular file directly.\n") end
         if status == 0 - 31: return linux_die("notes: multiply hardlinked documents are refused to preserve their link structure.\n") end
@@ -953,7 +953,7 @@ func main():
     let t = text_buffer_history(notes_capacity(), 2 * notes_capacity())
     let loaded = text_load(t, opened.bytes, file_count(opened))
     if loaded != 0:
-        let closed = file_close(opened)
+        do file_close(opened)
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
@@ -962,9 +962,9 @@ func main():
     let query = linux_buffer(64)
     s.needs_draw = true
     let c = x11_open(900, 600, "Herbert - Notes")
-    let textkeys = x11_enable_text(c)
-    let clipboard = x11_enable_clipboard(c, 65536)
-    let pointer = x11_enable_pointer(c)
+    do x11_enable_text(c)
+    do x11_enable_clipboard(c, 65536)
+    do x11_enable_pointer(c)
     let event = linux_buffer(16)
     return notes_loop(c, t, s, recovery, query, event, 0 - 1)
 end

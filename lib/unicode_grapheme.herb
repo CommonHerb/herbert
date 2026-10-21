@@ -85,13 +85,13 @@ end
 
 func unicode_grapheme_clear(marks, p, stop):
     if p >= stop: return 0 end
-    let cleared = buffer_set(marks, p, 0)
+    do buffer_set(marks, p, 0)
     return unicode_grapheme_clear(marks, p + 1, stop)
 end
 
 func unicode_grapheme_mark_loop(bytes, count, marks, p, stop, state):
     if p == stop:
-        let endmark = buffer_set(marks, stop, 1)
+        do buffer_set(marks, stop, 1)
         return 0
     end
     -- Common prose bytes avoid decoding/property lookup. GB9b is the only
@@ -100,7 +100,7 @@ func unicode_grapheme_mark_loop(bytes, count, marks, p, stop, state):
     if first >= 32 and first <= 126:
         let boundary = 1
         if state.0 == 7: boundary = 0 end
-        let marked = buffer_set(marks, p, boundary)
+        do buffer_set(marks, p, boundary)
         return unicode_grapheme_mark_loop(bytes, count, marks, p + 1, stop, (0, 0, 0, 0))
     end
     let decoded = utf8_decode(bytes, p, count)
@@ -108,8 +108,8 @@ func unicode_grapheme_mark_loop(bytes, count, marks, p, stop, state):
     let props = unicode_grapheme_property(decoded.0)
     let boundary = 0
     if p == 0 or unicode_grapheme_break(state, props): boundary = 1 end
-    let marked = buffer_set(marks, p, boundary)
-    let cleared = unicode_grapheme_clear(marks, p + 1, decoded.1)
+    do buffer_set(marks, p, boundary)
+    do unicode_grapheme_clear(marks, p + 1, decoded.1)
     return unicode_grapheme_mark_loop(bytes, count, marks, decoded.1, stop, unicode_grapheme_step(state, props))
 end
 

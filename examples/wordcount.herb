@@ -21,7 +21,7 @@ end
 func main():
     let incoming = stdin_read()
     if incoming.0 != 0:
-        let ignored = stderr_write("wordcount: cannot read standard input\n")
+        do stderr_write("wordcount: cannot read standard input\n")
         do process_exit(1)
         return (0, 0, 0)
     end

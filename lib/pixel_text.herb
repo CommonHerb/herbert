@@ -103,14 +103,14 @@ end
 func pixel_letter(c, glyph, x, y, scale, i):
     if i == 35: return 0 end
     if index(glyph, i) == 49:
-        let drawn = x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
+        do x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
     end
     return pixel_letter(c, glyph, x, y, scale, i + 1)
 end
 
 func pixel_text_loop(c, text, x, y, scale, i):
     if i == length(text): return 0 end
-    let drawn = pixel_letter(c, pixel_glyph(index(text, i)), x + i * 6 * scale, y, scale, 0)
+    do pixel_letter(c, pixel_glyph(index(text, i)), x + i * 6 * scale, y, scale, 0)
     return pixel_text_loop(c, text, x, y, scale, i + 1)
 end
 
@@ -121,12 +121,12 @@ end
 -- Fixed buffer text, without freezing/copying into a temporary string.
 func pixel_text_buffer_loop(c, b, offset, count, x, y, scale, i):
     if i == count: return 0 end
-    let drawn = pixel_letter(c, pixel_glyph(buffer_get(b, offset + i)), x + i * 6 * scale, y, scale, 0)
+    do pixel_letter(c, pixel_glyph(buffer_get(b, offset + i)), x + i * 6 * scale, y, scale, 0)
     return pixel_text_buffer_loop(c, b, offset, count, x, y, scale, i + 1)
 end
 
 func pixel_text_buffer(c, b, offset, count, x, y, scale):
-    let checked = linux_require_range(b, offset, count)
+    do linux_require_range(b, offset, count)
     return pixel_text_buffer_loop(c, b, offset, count, x, y, scale, 0)
 end
 
@@ -135,6 +135,6 @@ end
 func pixel_number(c, n, x, y, scale):
     let at = x
     if n >= 10: at = pixel_number(c, n / 10, x, y, scale) end
-    let drawn = pixel_letter(c, pixel_glyph(48 + n % 10), at, y, scale, 0)
+    do pixel_letter(c, pixel_glyph(48 + n % 10), at, y, scale, 0)
     return at + 6 * scale
 end

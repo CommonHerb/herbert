@@ -13,7 +13,7 @@ end
 
 -- The caller includes any desired newline; messages must never contain secrets.
 func linux_die(message):
-    let ignored = stderr_write(message)
+    do stderr_write(message)
     do process_exit(1)
     return 0
 end
@@ -47,39 +47,39 @@ func linux_require_range(b, offset, size):
 end
 
 func linux_u16(b, o):
-    let checked = linux_require_range(b, o, 2)
+    do linux_require_range(b, o, 2)
     return buffer_get(b, o) | (buffer_get(b, o + 1) << 8)
 end
 
 func linux_u32(b, o):
-    let checked = linux_require_range(b, o, 4)
+    do linux_require_range(b, o, 4)
     return linux_u16(b, o) | (linux_u16(b, o + 2) << 16)
 end
 
 func linux_u64(b, o):
-    let checked = linux_require_range(b, o, 8)
+    do linux_require_range(b, o, 8)
     return linux_u32(b, o) | (linux_u32(b, o + 4) << 32)
 end
 
 -- Field stores keep the low 16/32/64 bits, in little-endian byte order.
 func linux_put16(b, o, v):
-    let checked = linux_require_range(b, o, 2)
-    let first = buffer_set(b, o, v & 255)
-    let second = buffer_set(b, o + 1, (v >> 8) & 255)
+    do linux_require_range(b, o, 2)
+    do buffer_set(b, o, v & 255)
+    do buffer_set(b, o + 1, (v >> 8) & 255)
     return 0
 end
 
 func linux_put32(b, o, v):
-    let checked = linux_require_range(b, o, 4)
-    let low = linux_put16(b, o, v)
-    let high = linux_put16(b, o + 2, v >> 16)
+    do linux_require_range(b, o, 4)
+    do linux_put16(b, o, v)
+    do linux_put16(b, o + 2, v >> 16)
     return 0
 end
 
 func linux_put64(b, o, v):
-    let checked = linux_require_range(b, o, 8)
-    let low = linux_put32(b, o, v)
-    let high = linux_put32(b, o + 4, v >> 32)
+    do linux_require_range(b, o, 8)
+    do linux_put32(b, o, v)
+    do linux_put32(b, o + 4, v >> 32)
     return 0
 end
 
@@ -87,14 +87,14 @@ func linux_copy_loop(dst, offset, src, from, n):
     if n == 0:
         return 0
     end
-    let stored = buffer_set(dst, offset, buffer_get(src, from))
+    do buffer_set(dst, offset, buffer_get(src, from))
     return linux_copy_loop(dst, offset + 1, src, from + 1, n - 1)
 end
 
 -- Forward byte copy; overlapping ranges require destination <= source offset.
 func linux_copy(dst, offset, src, from, n):
-    let checked_dst = linux_require_range(dst, offset, n)
-    let checked_src = linux_require_range(src, from, n)
+    do linux_require_range(dst, offset, n)
+    do linux_require_range(src, from, n)
     return linux_copy_loop(dst, offset, src, from, n)
 end
 
@@ -102,24 +102,24 @@ func linux_text_loop(dst, offset, s, i):
     if i >= length(s):
         return 0
     end
-    let stored = buffer_set(dst, offset + i, index(s, i))
+    do buffer_set(dst, offset + i, index(s, i))
     return linux_text_loop(dst, offset, s, i + 1)
 end
 
 func linux_text(dst, offset, s):
-    let checked = linux_require_range(dst, offset, length(s))
+    do linux_require_range(dst, offset, length(s))
     return linux_text_loop(dst, offset, s, 0)
 end
 
 func linux_cstring(s):
     let b = linux_buffer(length(s) + 1)
-    let copied = linux_text(b, 0, s)
+    do linux_text(b, 0, s)
     return b
 end
 
 -- Scratch buffer must have at least 16 bytes. Error is a raw -errno value.
 func linux_clock_ms(clockbuf):
-    let checked = linux_require_range(clockbuf, 0, 16)
+    do linux_require_range(clockbuf, 0, 16)
     let result = linux_syscall6(228, 1, buffer_address(clockbuf), 0, 0, 0, 0)
     if linux_error(result):
         return result
@@ -130,10 +130,10 @@ end
 -- Scratch buffer must have at least 8 bytes. Returns revents, zero on timeout,
 -- or raw -errno. EINTR is returned to the caller, which owns its deadline.
 func linux_poll(fd, pollbuf, events, timeout):
-    let checked = linux_require_range(pollbuf, 0, 8)
-    let descriptor = linux_put32(pollbuf, 0, fd)
-    let requested = linux_put16(pollbuf, 4, events)
-    let cleared = linux_put16(pollbuf, 6, 0)
+    do linux_require_range(pollbuf, 0, 8)
+    do linux_put32(pollbuf, 0, fd)
+    do linux_put16(pollbuf, 4, events)
+    do linux_put16(pollbuf, 6, 0)
     let result = linux_syscall6(7, buffer_address(pollbuf), 1, timeout, 0, 0, 0)
     if linux_error(result):
         return result
@@ -254,7 +254,7 @@ end
 func linux_environment():
     let incoming = linux_read_file("/proc/self/environ", 1048576)
     if incoming.0 != 0:
-        let failed = linux_die("linux: cannot read the process environment\n")
+        do linux_die("linux: cannot read the process environment\n")
     end
     return incoming.1
 end
@@ -310,7 +310,7 @@ func linux_hostname():
     let b = linux_buffer(390)
     let result = linux_syscall6(63, buffer_address(b), 0, 0, 0, 0, 0)
     if linux_error(result):
-        let failed = linux_die("linux: cannot read the host name\n")
+        do linux_die("linux: cannot read the host name\n")
     end
     return linux_string_loop(b, 65, linux_nul_end(b, 65, 130), new_buffer())
 end
@@ -320,7 +320,7 @@ end
 func linux_arguments():
     let incoming = linux_read_file("/proc/self/cmdline", 65536)
     if incoming.0 != 0:
-        let failed = linux_die("linux: cannot read program arguments\n")
+        do linux_die("linux: cannot read program arguments\n")
     end
     return (incoming.1, incoming.2)
 end
@@ -340,7 +340,7 @@ end
 func linux_decimal(b, offset, n):
     let at = offset
     if n >= 10: at = linux_decimal(b, offset, n / 10) end
-    let checked = linux_require_range(b, at, 1)
-    let stored = buffer_set(b, at, 48 + n % 10)
+    do linux_require_range(b, at, 1)
+    do buffer_set(b, at, 48 + n % 10)
     return at + 1
 end

@@ -71,15 +71,15 @@ func grid_map_decode(b, n, cells, width, height, p, cell, spawn, spawns, dots):
     elif ch == 46:
         dots = dots + 1
     end
-    let stored = buffer_set(cells, cell, ch)
+    do buffer_set(cells, cell, ch)
     return grid_map_decode(b, n, cells, width, height, p + 1, cell + 1, spawn, spawns, dots)
 end
 
 -- Enqueue at most once. The caller supplies an in-range adjacent cell.
 func grid_map_visit(cells, visited, queue, cell, tail):
     if buffer_get(cells, cell) == 35 or buffer_get(visited, cell) != 0: return tail end
-    let marked = buffer_set(visited, cell, 1)
-    let queued = linux_put32(queue, tail * 4, cell)
+    do buffer_set(visited, cell, 1)
+    do linux_put32(queue, tail * 4, cell)
     return tail + 1
 end
 
@@ -111,9 +111,9 @@ func grid_map_parse(b, n, maxw, maxh):
     if decoded.0 != 0: return GridMap(decoded.0, 0, 0, 0, 0, cells, decoded.3, decoded.4) end
     let visited = linux_buffer(size.1 * size.2)
     let queue = linux_buffer(size.1 * size.2 * 4)
-    let marked = buffer_set(visited, decoded.1, 1)
-    let queued = linux_put32(queue, 0, decoded.1)
-    let walked = grid_map_walk(cells, visited, queue, size.1, size.2, 0, 1)
+    do buffer_set(visited, decoded.1, 1)
+    do linux_put32(queue, 0, decoded.1)
+    do grid_map_walk(cells, visited, queue, size.1, size.2, 0, 1)
     let unreachable = grid_map_unreachable(cells, visited, 0)
     if unreachable < buffer_length(cells):
         return GridMap(11, 0, 0, 0, 0, cells, unreachable / size.1 + 1, unreachable % size.1 + 1)

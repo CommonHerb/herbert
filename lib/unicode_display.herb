@@ -252,7 +252,7 @@ end
 func pixel_unicode_cell(c, body, base, top, bottom, x, y, scale, i):
     if i == 50: return 0 end
     if unicode_display_cell_ink(body, base, top, bottom, i):
-        let drawn = x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
+        do x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
     end
     return pixel_unicode_cell(c, body, base, top, bottom, x, y, scale, i + 1)
 end
