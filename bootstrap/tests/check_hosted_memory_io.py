@@ -162,7 +162,13 @@ end
                 bad_args = valid_args.copy()
                 bad_args[idx] = "true"
                 compile_probe(f"{name}-type-{idx}", f"func main():\n    return {name}({', '.join(bad_args)})\nend\n", 430)
-            compile_probe(name + "-void-use", f"func main():\n    do {name}({', '.join(valid_args)})\n    return 0\nend\n", 404)
+            # A statement call discards the result: the same image as the call bound to an unused name.
+            call = f"{name}({', '.join(valid_args)})"
+            called = compile_probe(name + "-statement-call", f"func main():\n    do {call}\n    return 0\nend\n")
+            bound = compile_probe(name + "-bound", f"func main():\n    let unused = {call}\n    return 0\nend\n")
+            require(called.read_bytes() == bound.read_bytes(), True, name + "-statement-call image")
+            passed += 1
+            print(f"PASS {name}-statement-call: same image as the bound call", flush=True)
             compile_probe(name + "-reserved", f"func {name}():\n    return 0\nend\nfunc main():\n    return 0\nend\n", 429)
 
         # The i386 routes are built by the oracle compiler, which this seed
