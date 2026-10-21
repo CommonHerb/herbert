@@ -899,6 +899,9 @@ func parse_stmt(tokens, pos, pool):
     if equal(text, "if"):
         return parse_if(tokens, pos + 1, pool, ln)
     end
+    if equal(text, "while"):
+        return parse_while(tokens, pos + 1, pool, ln)
+    end
     return parse_assign(tokens, pos, pool, ln)
 end
 
@@ -945,6 +948,15 @@ func parse_if(tokens, pos, pool, line):
     -- consume "end"
     pos = pos + 1
     return (add_node(pool, "if", atoms0(), if_kids, line), pos)
+end
+
+-- while EXPR ':' body 'end': kids are the condition and the body. The
+-- structural pass has already required the colon, a statement and the end.
+func parse_while(tokens, pos, pool, line):
+    let cr = parse_expr(tokens, pos, pool)
+    let br = parse_body(tokens, cr.1 + 1, pool)
+    -- consume "end"
+    return (add_node(pool, "while", atoms0(), kids2(cr.0, br.0), line), br.1 + 1)
 end
 
 func parse_elifs(tokens, pos, pool, if_kids):
@@ -2171,6 +2183,27 @@ func emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_ins
     return env
 end
 
+-- top: condition; br_if_false exit; body; br top; exit. The branch back is
+-- the only backward branch the IR has; a body that ends in a return has no
+-- fall-through, so it gets none (as an if arm gets no branch to its join).
+-- The body's names close at end, as an arm's do; their slots stay allocated.
+func emit_while_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    let top_label = make_label("loop", count(ir))
+    ir = emit_label(ir, top_label)
+    let exit_label = make_label("exit", count(ir))
+    let scope_mark = env.3
+    ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    ir = emit_target_instr(ir, op_br_if_false(), exit_label)
+    let body_idx = get(kids, 1)
+    let body = get(nodes, body_idx)
+    let body_env = emit_body(body.2, 0, count(body.2), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    if not body_ends_return(body_idx, nodes):
+        ir = emit_target_instr(ir, op_br(), top_label)
+    end
+    ir = emit_label(ir, exit_label)
+    return env_rebuild(body_env, scope_mark)
+end
+
 -- (position, field count, declaration) of FIELD in the one record that
 -- declares it, or (-1, 0, 0) when no record or more than one does.
 func unique_record_field_loop(nodes, field, i, found):
@@ -2264,6 +2297,9 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     end
     if equal(tag, "if"):
         return emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    end
+    if equal(tag, "while"):
+        return emit_while_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     end
     return fault("bad statement")
 end
@@ -2405,6 +2441,9 @@ func diagnostic_message(code, payload):
     end
     if code == 213:
         return "invalid record declaration"
+    end
+    if code == 214:
+        return "while body must contain at least one statement"
     end
     if code == 301:
         return diagnostic_with_payload("duplicate let '", payload, "' in this scope")
@@ -2688,6 +2727,9 @@ func err_is_reserved_word(s):
         return true
     end
     if equal(s, "if") or equal(s, "elif") or equal(s, "else") or equal(s, "end"):
+        return true
+    end
+    if equal(s, "while"):
         return true
     end
     if equal(s, "and") or equal(s, "or") or equal(s, "not"):
@@ -2979,6 +3021,9 @@ func err_parse_stmt(tokens, pos, ctx):
     if equal(text, "if"):
         return err_parse_if(tokens, pos + 1, ctx, line)
     end
+    if equal(text, "while"):
+        return err_parse_while(tokens, pos + 1, ctx, line)
+    end
     if err_is_reserved_word(text):
         return err_parse_fail_at(205, line)
     end
@@ -3064,6 +3109,29 @@ func err_parse_if(tokens, pos, ctx, if_line):
         return err_parse_fail_current(203, tokens, pos, ctx)
     end
     return err_parse_ok(pos + 1)
+end
+
+-- while EXPR ':' body 'end'. The same codes as an if arm, except that an
+-- empty body is 214 so the message can name the loop.
+func err_parse_while(tokens, pos, ctx, while_line):
+    let cr = err_parse_expr(tokens, pos, ctx)
+    if cr.0 == err_err_tag():
+        return cr
+    end
+    if not tok_is_punct_text(tokens, cr.2, ":"):
+        return err_parse_fail_current(204, tokens, cr.2, ctx)
+    end
+    let br = err_parse_body(tokens, cr.2 + 1, ctx, 0)
+    if br.0 == err_err_tag():
+        return br
+    end
+    if br.3 == 0:
+        return err_parse_fail_at(214, while_line)
+    end
+    if not tok_is_ident_text(tokens, br.2, "end"):
+        return err_parse_fail_current(203, tokens, br.2, ctx)
+    end
+    return err_parse_ok(br.2 + 1)
 end
 
 func err_parse_elifs(tokens, pos, ctx, if_line):
@@ -3199,8 +3267,8 @@ func err_is_record_head(tokens, pos):
 end
 
 -- Only a declaration at the top level counts: the scan tracks block depth
--- (func, if and a record head open a block, end closes one), so the same
--- tokens inside a function body leave the program record-free.
+-- (func, if, while and a record head open a block, end closes one), so the
+-- same tokens inside a function body leave the program record-free.
 func err_is_ref_record_head(tokens, pos):
     return tok_is_ident_text(tokens, pos, "ref") and err_is_record_head(tokens, pos + 1)
 end
@@ -3217,7 +3285,7 @@ func err_record_names_scan(tokens, pos, names, depth):
         do add(names, get(tokens, pos + 1).1)
         return err_record_names_scan(tokens, pos + 3, names, 1)
     end
-    if tok_is_ident_text(tokens, pos, "func") or tok_is_ident_text(tokens, pos, "if"):
+    if tok_is_ident_text(tokens, pos, "func") or tok_is_ident_text(tokens, pos, "if") or tok_is_ident_text(tokens, pos, "while"):
         return err_record_names_scan(tokens, pos + 1, names, depth + 1)
     end
     if depth > 0 and tok_is_ident_text(tokens, pos, "end"):
@@ -4345,6 +4413,9 @@ func nc_count_input_body(nodes, stmts, i, n, input_name):
         here = nc_count_input_expr(nodes, get(kids, 0), input_name)
     elif equal(tag, "if"):
         here = nc_count_input_if_arms(nodes, kids, 0, count(kids), input_name)
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(kids, 1))
+        here = nc_count_input_expr(nodes, get(kids, 0), input_name) + nc_count_input_body(nodes, wb.2, 0, count(wb.2), input_name)
     elif equal(tag, "do"):
         here = nc_count_input_expr(nodes, get(kids, 0), input_name)
     end
@@ -4799,6 +4870,9 @@ func nc_body_count_name(nodes, stmts, i, n, name):
         end
     elif equal(tag, "if"):
         here = nc_if_count_name(nodes, stmt.2, 0, count(stmt.2), name)
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(stmt.2, 1))
+        here = nc_expr_count_name(nodes, get(stmt.2, 0), name) + nc_body_count_name(nodes, wb.2, 0, count(wb.2), name)
     end
     return here + nc_body_count_name(nodes, stmts, i + 1, n, name)
 end
@@ -4832,6 +4906,11 @@ func nc_body_assigns_name(nodes, stmts, i, n, name):
         end
     elif equal(tag, "if"):
         if nc_if_assigns_name(nodes, stmt.2, 0, count(stmt.2), name):
+            return true
+        end
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(stmt.2, 1))
+        if nc_body_assigns_name(nodes, wb.2, 0, count(wb.2), name):
             return true
         end
     end
@@ -4869,6 +4948,9 @@ func nc_body_let_target_count_name(nodes, stmts, i, n, name):
         end
     elif equal(tag, "if"):
         here = nc_if_let_target_count_name(nodes, stmt.2, 0, count(stmt.2), name)
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(stmt.2, 1))
+        here = nc_body_let_target_count_name(nodes, wb.2, 0, count(wb.2), name)
     end
     return here + nc_body_let_target_count_name(nodes, stmts, i + 1, n, name)
 end
@@ -4958,6 +5040,11 @@ func nc_returns_all_trap(nodes, top_stmts, stmts, i, n, top, before):
         let r = nc_if_returns_all_trap(nodes, top_stmts, here_before, stmt.2, 0, count(stmt.2))
         here_ok = r.0
         here_cnt = r.1
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(stmt.2, 1))
+        let wr = nc_returns_all_trap(nodes, top_stmts, wb.2, 0, count(wb.2), false, here_before)
+        here_ok = wr.0
+        here_cnt = wr.1
     end
     if not here_ok:
         return (false, here_cnt)
@@ -6119,6 +6206,10 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         end
         return (r.0, r.1, r.2, r.3, 0)
     end
+    if equal(tag, "while"):
+        let w = nc_infer_while(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params, node.3)
+        return (w.0, w.1, w.2, w.3, 0)
+    end
     return (nc_infer_fail(pool, 404, node.3, tag), env, sig, 0, 0)
 end
 
@@ -6186,6 +6277,38 @@ end
 
 func nc_join_env(pool, entry_env, contribs, line):
     return nc_join_build_loop(pool, entry_env, contribs, 0, entry_env.0, entry_env, line)
+end
+
+-- A loop is inferred like an if without else: the condition is a bool against
+-- the entry env, the body starts from the entry env, and the exit env joins the
+-- entry env (zero iterations) with the body's exit when the body can fall
+-- through. Rebinding keeps widths, so one pass over the body is enough.
+func nc_infer_while(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params, line):
+    let entry_env = nc_class_env_clone(env)
+    let c = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), entry_env, nc_type_bool(), sig, fn_idx, funcs, n_params)
+    if c.0 != 0:
+        return (c.0, entry_env, c.2, c.3)
+    end
+    sig = c.2
+    let changed = c.3
+    let body_idx = get(kids, 1)
+    let body = get(nodes, body_idx)
+    let br = nc_infer_body(pool, nodes, prog_idx, body.2, 0, count(body.2), nc_class_env_clone(entry_env), sig, fn_idx, funcs, n_params, 0)
+    if br.0 != 0:
+        return (br.0, entry_env, br.2, nc_or_changed(changed, br.3))
+    end
+    sig = br.2
+    changed = nc_or_changed(changed, br.3)
+    let contribs = new_array((int, array(array(string)), array(array(int))))
+    if not body_ends_return(body_idx, nodes):
+        contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, entry_env.0))
+    end
+    contribs = nc_contrib_add(contribs, nc_class_env_clone(entry_env))
+    let joined = nc_join_env(pool, entry_env, contribs, line)
+    if joined.0 != 0:
+        return (joined.0, entry_env, sig, changed)
+    end
+    return (0, joined.1, sig, changed)
 end
 
 func nc_if_has_else(nodes, kids):
@@ -6945,6 +7068,88 @@ func nc_meta_merge_locals(pool, a, b, i, n, out):
     return nc_meta_merge_locals(pool, a, b, i + 1, n, out)
 end
 
+-- The targets of backward unconditional branches (a loop's branch back to its
+-- condition). Programs without a loop have none and skip the records below.
+func nc_meta_back_targets(code, i, n, out):
+    if i >= n:
+        return out
+    end
+    let instr = get(code, i)
+    if instr.0 == 16 and instr.1 < i:
+        do add(out, instr.1)
+    end
+    return nc_meta_back_targets(code, i + 1, n, out)
+end
+
+func nc_int_array_has(a, i, n, value):
+    if i >= n:
+        return false
+    end
+    if get(a, i) == value:
+        return true
+    end
+    return nc_int_array_has(a, i + 1, n, value)
+end
+
+func nc_meta_top_find(tops, i, n, pc):
+    if i >= n:
+        return 0 - 1
+    end
+    if get(tops, i).0 == pc:
+        return i
+    end
+    return nc_meta_top_find(tops, i + 1, n, pc)
+end
+
+func nc_meta_stack_same_loop(pool, a, b, i, n):
+    if i >= n:
+        return 0
+    end
+    let m = nc_type_merge(pool, get(a, i), get(b, i), 0)
+    if m.0 != 0:
+        return m.0
+    end
+    if m.1 != get(a, i):
+        return nc_fail(416, 0, "")
+    end
+    return nc_meta_stack_same_loop(pool, a, b, i + 1, n)
+end
+
+func nc_meta_locals_same_loop(a, b, i, n):
+    if i >= n:
+        return 0
+    end
+    if nc_pget(a, i) != nc_pget(b, i):
+        return nc_fail(414, 0, "")
+    end
+    return nc_meta_locals_same_loop(a, b, i + 1, n)
+end
+
+-- A branch back to a loop's condition: the state arriving there must merge into
+-- the state recorded when the scan passed the condition without changing it,
+-- so the one forward pass checked the body under the state of every iteration.
+-- Slots are never reused, so a body-local let is unknown at the top and stays
+-- unknown under the join; only a loop-carried slot whose class moved fails.
+func nc_meta_back_edge_ok(pool, tops, target, stack, local_types):
+    let k = nc_meta_top_find(tops, 0, count(tops), target)
+    if k == 0 - 1:
+        return nc_fail(415, 0, int_to_str(target))
+    end
+    let top = get(tops, k)
+    if count(stack) != count(top.1) or nc_pcount(local_types) != nc_pcount(top.2):
+        return nc_fail(416, 0, "")
+    end
+    let s = nc_meta_stack_same_loop(pool, top.1, stack, 0, count(stack))
+    if s != 0:
+        return s
+    end
+    let lm = nc_meta_merge_locals(pool, top.2, local_types, 0, nc_pcount(top.2), top.2)
+    if lm.0 != 0:
+        return lm.0
+    end
+    return nc_meta_locals_same_loop(lm.1, top.2, 0, nc_pcount(top.2))
+end
+
 func nc_meta_enter_flow(pool, incoming, i, n, stack, local_types, live):
     if i >= n:
         return (0, stack, local_types, live)
@@ -6997,7 +7202,10 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     end
     stack = enter.1
     local_types = enter.2
-    flow = (flow.0, true, flow.2)
+    flow = (flow.0, true, flow.2, flow.3, flow.4)
+    if nc_int_array_has(flow.3, 0, count(flow.3), i):
+        do add(flow.4, (i, stack, local_types))
+    end
     -- The pass visits each instruction once, in increasing index order. Build
     -- dense metadata streams alongside it; copying an n-entry array for each
     -- CALL/projection/heap operation made both work and arena use quadratic.
@@ -7007,8 +7215,13 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     let heap_entry = (0, 0, 0)
     let instr = get(code, i)
     let op = instr.0
-    if op == 16 or op == 17 or op == 18 or op == 19:
+    if op == 17 or op == 18 or op == 19:
         if instr.1 <= i or instr.1 >= n:
+            return MetaScan(nc_fail(415, 0, int_to_str(instr.1)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+    end
+    if op == 16:
+        if instr.1 == i or instr.1 >= n:
             return MetaScan(nc_fail(415, 0, int_to_str(instr.1)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
     end
@@ -7122,8 +7335,15 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         tuple_entry = (tw, es, ew)
         stack = nc_stack_push(p.1, elem_t)
     elif op == 16:
-        do add(get(flow.0, instr.1), (stack, local_types))
-        flow = (flow.0, false, flow.2)
+        if instr.1 < i:
+            let back = nc_meta_back_edge_ok(pool, flow.4, instr.1, stack, local_types)
+            if back != 0:
+                return MetaScan(back, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+        else:
+            do add(get(flow.0, instr.1), (stack, local_types))
+        end
+        flow = (flow.0, false, flow.2, flow.3, flow.4)
     elif op == 17:
         let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), 0)
         if p.0 != 0:
@@ -7194,7 +7414,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             end
         end
         stack = new_array(int)
-        flow = (flow.0, false, flow.2)
+        flow = (flow.0, false, flow.2, flow.3, flow.4)
     elif op == 22:
         let p = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
         if p.0 != 0:
@@ -7493,7 +7713,9 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     let call_meta = new_array((int, int, int))
     let incoming = nc_meta_incoming_loop(0, n, new_array(array((array(int), array(array(int))))))
     let layout_types = nc_meta_layout_types_loop(local_types, 0, nc_pcount(local_types), new_array(array(int)))
-    let flow = (incoming, true, layout_types)
+    let back_targets = nc_meta_back_targets(code, 0, n, new_array(int))
+    let tops = new_array((int, array(int), array(array(int))))
+    let flow = (incoming, true, layout_types, back_targets, tops)
     let p = nc_meta_process_loop(pool, funcs, sig, fn_idx, prog.2, count(prog.1), code, fn.5, 0, n, new_array(int), local_types, stacks, tuple_meta, call_meta, 0, 0, 0, heap_meta0, 0, flow)
     if p.status != 0:
         return (p.status, FunctionMeta(0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, stacks, tuple_meta, call_meta, 0, 0, p.heap_meta, p.has_heap))
@@ -8404,7 +8626,12 @@ func nc_branch_and_rel_verify_loop(code, i, n, fn, funcs, meta, metas, layout, l
     let g = nc_group(code, i, n, fn, funcs, meta, metas)
     if op == 16 or op == 17 or op == 18 or op == 19:
         let target = instr.1
-        if target >= n or target <= i:
+        if target >= n or target == i:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        -- Only an unconditional branch may go backward: a loop's branch back
+        -- to its condition.
+        if target < i and op != 16:
             return nc_fail(415, 0, int_to_str(target))
         end
         if get(layout.2, target) == 0:
@@ -8412,7 +8639,10 @@ func nc_branch_and_rel_verify_loop(code, i, n, fn, funcs, meta, metas, layout, l
         end
         let base = layout.0 + get(layout.1, i) + nc_branch_end_delta(op)
         let dest = layout.0 + get(layout.1, target)
-        if dest <= base:
+        if target > i and dest <= base:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        if target < i and dest >= base:
             return nc_fail(415, 0, int_to_str(target))
         end
         if not nc_rel_ok(dest, base):

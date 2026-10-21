@@ -899,6 +899,9 @@ func parse_stmt(tokens, pos, pool):
     if equal(text, "if"):
         return parse_if(tokens, pos + 1, pool, ln)
     end
+    if equal(text, "while"):
+        return parse_while(tokens, pos + 1, pool, ln)
+    end
     return parse_assign(tokens, pos, pool, ln)
 end
 
@@ -945,6 +948,15 @@ func parse_if(tokens, pos, pool, line):
     -- consume "end"
     pos = pos + 1
     return (add_node(pool, "if", atoms0(), if_kids, line), pos)
+end
+
+-- while EXPR ':' body 'end': kids are the condition and the body. The
+-- structural pass has already required the colon, a statement and the end.
+func parse_while(tokens, pos, pool, line):
+    let cr = parse_expr(tokens, pos, pool)
+    let br = parse_body(tokens, cr.1 + 1, pool)
+    -- consume "end"
+    return (add_node(pool, "while", atoms0(), kids2(cr.0, br.0), line), br.1 + 1)
 end
 
 func parse_elifs(tokens, pos, pool, if_kids):
@@ -2171,6 +2183,27 @@ func emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_ins
     return env
 end
 
+-- top: condition; br_if_false exit; body; br top; exit. The branch back is
+-- the only backward branch the IR has; a body that ends in a return has no
+-- fall-through, so it gets none (as an if arm gets no branch to its join).
+-- The body's names close at end, as an arm's do; their slots stay allocated.
+func emit_while_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+    let top_label = make_label("loop", count(ir))
+    ir = emit_label(ir, top_label)
+    let exit_label = make_label("exit", count(ir))
+    let scope_mark = env.3
+    ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    ir = emit_target_instr(ir, op_br_if_false(), exit_label)
+    let body_idx = get(kids, 1)
+    let body = get(nodes, body_idx)
+    let body_env = emit_body(body.2, 0, count(body.2), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    if not body_ends_return(body_idx, nodes):
+        ir = emit_target_instr(ir, op_br(), top_label)
+    end
+    ir = emit_label(ir, exit_label)
+    return env_rebuild(body_env, scope_mark)
+end
+
 -- (position, field count, declaration) of FIELD in the one record that
 -- declares it, or (-1, 0, 0) when no record or more than one does.
 func unique_record_field_loop(nodes, field, i, found):
@@ -2264,6 +2297,9 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     end
     if equal(tag, "if"):
         return emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    end
+    if equal(tag, "while"):
+        return emit_while_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     end
     return fault("bad statement")
 end
@@ -2405,6 +2441,9 @@ func diagnostic_message(code, payload):
     end
     if code == 213:
         return "invalid record declaration"
+    end
+    if code == 214:
+        return "while body must contain at least one statement"
     end
     if code == 301:
         return diagnostic_with_payload("duplicate let '", payload, "' in this scope")
@@ -2688,6 +2727,9 @@ func err_is_reserved_word(s):
         return true
     end
     if equal(s, "if") or equal(s, "elif") or equal(s, "else") or equal(s, "end"):
+        return true
+    end
+    if equal(s, "while"):
         return true
     end
     if equal(s, "and") or equal(s, "or") or equal(s, "not"):
@@ -2979,6 +3021,9 @@ func err_parse_stmt(tokens, pos, ctx):
     if equal(text, "if"):
         return err_parse_if(tokens, pos + 1, ctx, line)
     end
+    if equal(text, "while"):
+        return err_parse_while(tokens, pos + 1, ctx, line)
+    end
     if err_is_reserved_word(text):
         return err_parse_fail_at(205, line)
     end
@@ -3064,6 +3109,29 @@ func err_parse_if(tokens, pos, ctx, if_line):
         return err_parse_fail_current(203, tokens, pos, ctx)
     end
     return err_parse_ok(pos + 1)
+end
+
+-- while EXPR ':' body 'end'. The same codes as an if arm, except that an
+-- empty body is 214 so the message can name the loop.
+func err_parse_while(tokens, pos, ctx, while_line):
+    let cr = err_parse_expr(tokens, pos, ctx)
+    if cr.0 == err_err_tag():
+        return cr
+    end
+    if not tok_is_punct_text(tokens, cr.2, ":"):
+        return err_parse_fail_current(204, tokens, cr.2, ctx)
+    end
+    let br = err_parse_body(tokens, cr.2 + 1, ctx, 0)
+    if br.0 == err_err_tag():
+        return br
+    end
+    if br.3 == 0:
+        return err_parse_fail_at(214, while_line)
+    end
+    if not tok_is_ident_text(tokens, br.2, "end"):
+        return err_parse_fail_current(203, tokens, br.2, ctx)
+    end
+    return err_parse_ok(br.2 + 1)
 end
 
 func err_parse_elifs(tokens, pos, ctx, if_line):
@@ -3199,8 +3267,8 @@ func err_is_record_head(tokens, pos):
 end
 
 -- Only a declaration at the top level counts: the scan tracks block depth
--- (func, if and a record head open a block, end closes one), so the same
--- tokens inside a function body leave the program record-free.
+-- (func, if, while and a record head open a block, end closes one), so the
+-- same tokens inside a function body leave the program record-free.
 func err_is_ref_record_head(tokens, pos):
     return tok_is_ident_text(tokens, pos, "ref") and err_is_record_head(tokens, pos + 1)
 end
@@ -3217,7 +3285,7 @@ func err_record_names_scan(tokens, pos, names, depth):
         do add(names, get(tokens, pos + 1).1)
         return err_record_names_scan(tokens, pos + 3, names, 1)
     end
-    if tok_is_ident_text(tokens, pos, "func") or tok_is_ident_text(tokens, pos, "if"):
+    if tok_is_ident_text(tokens, pos, "func") or tok_is_ident_text(tokens, pos, "if") or tok_is_ident_text(tokens, pos, "while"):
         return err_record_names_scan(tokens, pos + 1, names, depth + 1)
     end
     if depth > 0 and tok_is_ident_text(tokens, pos, "end"):

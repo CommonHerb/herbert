@@ -14,7 +14,7 @@ The examples below are complete programs for the ordinary hosted seed.
 
 ## 1. What Herbert is
 
-Herbert is a small, self-hosting statically-typed language whose gen-1 **seed is a compiler** (a freestanding x86-64 ELF): it reads Herbert **source on stdin** and writes a compiled native executable to `./a.out`. A program is a sequence of `func` definitions with a zero-argument `func main()` entry point, whose return value is auto-rendered to stdout. There are **no loops** — iteration is expressed with recursion. The seed implements the native subset described below; semantic coverage and runtime resource handling are not complete.
+Herbert is a small, self-hosting statically-typed language whose gen-1 **seed is a compiler** (a freestanding x86-64 ELF): it reads Herbert **source on stdin** and writes a compiled native executable to `./a.out`. A program is a sequence of `func` definitions with a zero-argument `func main()` entry point, whose return value is auto-rendered to stdout. Iteration is a `while` loop or recursion. The seed implements the native subset described below; semantic coverage and runtime resource handling are not complete.
 
 ## 2. THE SEED-NATIVE SUBSET (accept vs reject — read this first)
 
@@ -22,9 +22,9 @@ Stay inside the **accept-list**. Unsupported or malformed programs are not guara
 
 **ACCEPTED (proven to compile + run):**
 - `func NAME(params): <body> end`, with `func main()` taking **zero** params.
-- Statements: `let NAME = EXPR`, `NAME = EXPR` (rebind existing), `return EXPR`, `do CALL(...)` (any call, for its effect; a result is discarded), `if/elif/else/end`.
+- Statements: `let NAME = EXPR`, `NAME = EXPR` (rebind existing), `return EXPR`, `do CALL(...)` (any call, for its effect; a result is discarded), `if/elif/else/end`, `while EXPR: ... end`.
 - Infix arithmetic `+ - *` and all six comparisons `< <= > >= == !=` (all uint64, modular wrap). `/ %` exist but fault on a zero divisor.
-- Self, non-tail, and mutual (cross-function) recursion; see G2 for stack-use limits. **No loop keywords exist.**
+- `while` loops (the only loop keyword), and self, non-tail and mutual (cross-function) recursion; see G2 for stack-use limits.
 - Tuples `(a, b, c)` as values and as `main`'s return; positional access `t.0 t.1 …` (chainable `t.2.0`).
 - Hosted builtins described here: `new_array` `add` `count` `get` `length` `equal` `index` `new_buffer` `append` `freeze` `flogger` `fwriter` `clogger` `stdin_read` `stderr_write` `process_exit`. Type syntax uses `int bool string buffer array`.
 - `--` line comments.
@@ -41,7 +41,7 @@ Build sequences with `new_array(TYPE)` + `do add(a,x)` + `get(a,i)` + `count(a)`
 
 **Native rejection examples:** wrong user-call, hosted builtin or kernel-side builtin (`input_byte` `module_byte` `sys_read` `bufbase` `sys_write` `output_byte` `yield` `bufget` `bufset`) arity `420`; `slice` `438`; `freeze/append` on non-buffer `437`; `get/count` on non-array `435`; array element-type mismatch `436`; type mismatch e.g. `flogger` of a non-string `430`; a void builtin used as a value `440`; tuple `.N` out-of-range/on-non-tuple `431`; `main` returning an array or a tuple containing an array, or exceeding the render-word cap `432`; more than one input operation (`clogger`/`stdin_read` combined) `411`. Empty input or no `main` produces a **program-level** `ERR 429`, not a located line diagnostic; other uses of code 429 can be located. Unknown variable names and assignment to an undefined name currently use `ERR 404`. For supported ordinary calls, argument count is checked before inspecting the arguments; `new_array` type syntax has its separate structural rules. These examples do not promise every malformed builtin invocation has a clean diagnostic or override earlier whole-program checks.
 
-**Compiler rejection envelope:** checked lexical errors (`101`–`110`), checked structural errors (`201`–`213`, plus duplicate parameter `311`), and native rejections print one diagnostic to **stderr**, leave stdout empty, and exit with status **1**. They preserve an existing `a.out`; output existence alone is not success. Checked input failure prints `compiler: stdin read failed (errno N)\n`; output-publication failure prints `compiler: output publication failed\n`. Both use stderr, empty stdout and status 1, and preserve the previous output before publication. Whole-source lexical, structural and AST/operator-class checks precede reachability-based native inference. This does **not** promise the globally earliest source-position error. Uncalled functions and statements after a return are structurally checked, but do not receive uniform semantic checking.
+**Compiler rejection envelope:** checked lexical errors (`101`–`110`), checked structural errors (`201`–`214`, plus duplicate parameter `311`), and native rejections print one diagnostic to **stderr**, leave stdout empty, and exit with status **1**. They preserve an existing `a.out`; output existence alone is not success. Checked input failure prints `compiler: stdin read failed (errno N)\n`; output-publication failure prints `compiler: output publication failed\n`. Both use stderr, empty stdout and status 1, and preserve the previous output before publication. Whole-source lexical, structural and AST/operator-class checks precede reachability-based native inference. This does **not** promise the globally earliest source-position error. Uncalled functions and statements after a return are structurally checked, but do not receive uniform semantic checking.
 
 Distinguish the two processes when reading faults. If **the compiler** (`seedbin`) emits `herbert: line N: get: position ... out of range` on stderr while compiling, that is an internal compiler fault; `N` can refer to the compiler's own source. If **your compiled program** (`a.out`) emits the same-shaped message while running, it is an ordinary runtime bounds fault, with the line of your program's offending call. Report the former as a compiler defect; investigate your own indexing or appended byte value for the latter.
 
@@ -49,7 +49,7 @@ Some inherited structural messages are imprecise: ERR 205 says `'do' must be fol
 
 ## 3. Grammar & primitives
 
-**The only function keyword is `func`. There is NO `fn`/`func` alternative and no `while/for/loop`.** 18 reserved words: `func let return do if elif else end and or not true false int bool string buffer array`. `record` is not reserved: it is recognized only as the first word of a top-level `record NAME:` declaration and is an ordinary name everywhere else.
+**The only function keyword is `func`. There is NO `fn`/`func` alternative; `while` is the only loop keyword (no `for`, `loop`, `break` or `continue`).** 19 reserved words: `func let return do if elif else end while and or not true false int bool string buffer array`. `record` is not reserved: it is recognized only as the first word of a top-level `record NAME:` declaration and is an ordinary name everywhere else.
 
 ```
 program := (func | record)*
@@ -62,6 +62,7 @@ stmt    := 'let' NAME '=' expr        -- local binding; see current shadowing be
          | 'return' expr             -- exactly one value; write an explicit return on every path
          | 'do' call                 -- one call for its effect; any result is discarded
          | 'if' expr ':' body ('elif' expr ':' body)* ('else' ':' body)? 'end'
+         | 'while' expr ':' body 'end'  -- repeat body while expr (a bool) is true; a let inside body ends with it
 ```
 
 The native compiler currently permits repeated `let` bindings in one scope and same-width `int`/`bool` rebinding; do not assume the older full-language `ERR 301` duplicate-let rule is enforced here. Return-path diagnostics are also incomplete: a body with no return can report `ERR 424`, and a partial-return body can reach `ERR 415` rather than a dedicated missing-return error. Do not mistake these observations for a settled, complete semantic contract.
@@ -147,7 +148,19 @@ end
 
 **Statement calls.** `do` also takes any other call, of a user function or a value builtin, and discards its result: `do push(b, 72)` runs `push` for its effect. It means exactly `let unused = push(b, 72)` with a name nothing reads, compiles to the same bytes, and gets the same diagnostics: an unknown callee is `ERR 419`, a wrong argument count `ERR 420`, a type mismatch `ERR 430`. `do` must be followed by one call (`ERR 205` for `do f(1) + f(2)`), and a record construction is not a statement (`ERR 448`). Hosted programs only: the specialized `-- emit:` routes keep their own rules, and `ast-dump` shows the `do` as written.
 
-**Recursion is the only iteration.** The "for loop" idiom is a helper that tail-recurses on an index with an accumulator:
+**Iteration.** `while` repeats its body while a bool condition holds; a counting loop rebinds a local:
+```
+let i = 0
+let acc = 0
+while i < n:
+    acc = acc + i
+    i = i + 1
+end
+```
+The condition must be a bool (`ERR 430`), the body needs at least one statement (`ERR 214`), a `let` inside the body is
+not visible after `end`, and rebinding inside the body keeps the local's width (`ERR 433`) and class (`ERR 430`). There
+is no `break` or `continue`; a `return` inside the body leaves the function. Recursion is still available, and the
+older "for loop" idiom is a helper that tail-recurses on an index with an accumulator:
 ```
 func loop(i, n, acc):
     if i >= n:
@@ -241,7 +254,7 @@ The compiler checks input errors before generating any output. The complete enve
 
 ## 6. GOTCHAS (front-loaded — a cold model WILL hit these)
 
-- **G1 — No loops; recurse.** `while`/`for` are not loop constructs. Use the tail-recursive index+accumulator idiom; malformed statement/header syntax is now checked before AST construction.
+- **G1 — One loop: `while`.** `for`, `break` and `continue` do not exist (a bare one is `ERR 212`, an ordinary name). Where a loop does not fit, recurse; malformed statement/header syntax is checked before AST construction.
 - **G2 — Tail form is necessary, not sufficient for bounded stack.** Non-tail recursion (`n + rest`, `n * fact(n-1)`) uses the hardware stack. So can mutual tail calls whose flattened argument widths differ. Stack-overflow depth depends on program layout and host limits; there is no portable safe-depth number. For deep work, use a tested equal-width tail-recursive shape and avoid allocating on every iteration when the loop is unbounded.
 - **G3 — The empty/first/rest ERR-419 trap.** No list primitives exist. `empty/first/rest/plus/head/nil/map/cons` → `ERR 419 unknown callee`. Use arrays/buffers (see §2).
 - **G4 — The render cap (ERR 432).** `main` returns int/bool/string OR a tuple of ≥2 renderables flattening to 2..15 words. Arrays/buffers as the result or as any tuple element → ERR 432. Strings render **quoted** on normal return; `process_exit` terminates before rendering. The exact over-cap message is misleadingly `main must return int or bool (ERR 432)` — it does NOT mean tuples are banned (2..15-word tuples render fine); it means you exceeded the 15-word cap or returned an array.
@@ -278,7 +291,21 @@ end
 ```
 **stdout:** `55\n`
 
-### Example 3 — the "loop" idiom: tail recursion + accumulator (TCO-flat, scales)
+### Example 3 — a counting loop
+```herbert
+func main():
+    let i = 0
+    let acc = 0
+    while i < 2000:
+        acc = acc + i
+        i = i + 1
+    end
+    return acc
+end
+```
+**stdout:** `1999000\n`  *(sum 0..1999)*
+
+### Example 3b — the same as tail recursion + accumulator (TCO-flat, scales)
 ```herbert
 func loop(i, n, acc):
     if i >= n:

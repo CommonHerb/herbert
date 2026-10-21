@@ -969,6 +969,9 @@ func nc_count_input_body(nodes, stmts, i, n, input_name):
         here = nc_count_input_expr(nodes, get(kids, 0), input_name)
     elif equal(tag, "if"):
         here = nc_count_input_if_arms(nodes, kids, 0, count(kids), input_name)
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(kids, 1))
+        here = nc_count_input_expr(nodes, get(kids, 0), input_name) + nc_count_input_body(nodes, wb.2, 0, count(wb.2), input_name)
     elif equal(tag, "do"):
         here = nc_count_input_expr(nodes, get(kids, 0), input_name)
     end
@@ -1423,6 +1426,9 @@ func nc_body_count_name(nodes, stmts, i, n, name):
         end
     elif equal(tag, "if"):
         here = nc_if_count_name(nodes, stmt.2, 0, count(stmt.2), name)
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(stmt.2, 1))
+        here = nc_expr_count_name(nodes, get(stmt.2, 0), name) + nc_body_count_name(nodes, wb.2, 0, count(wb.2), name)
     end
     return here + nc_body_count_name(nodes, stmts, i + 1, n, name)
 end
@@ -1456,6 +1462,11 @@ func nc_body_assigns_name(nodes, stmts, i, n, name):
         end
     elif equal(tag, "if"):
         if nc_if_assigns_name(nodes, stmt.2, 0, count(stmt.2), name):
+            return true
+        end
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(stmt.2, 1))
+        if nc_body_assigns_name(nodes, wb.2, 0, count(wb.2), name):
             return true
         end
     end
@@ -1493,6 +1504,9 @@ func nc_body_let_target_count_name(nodes, stmts, i, n, name):
         end
     elif equal(tag, "if"):
         here = nc_if_let_target_count_name(nodes, stmt.2, 0, count(stmt.2), name)
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(stmt.2, 1))
+        here = nc_body_let_target_count_name(nodes, wb.2, 0, count(wb.2), name)
     end
     return here + nc_body_let_target_count_name(nodes, stmts, i + 1, n, name)
 end
@@ -1582,6 +1596,11 @@ func nc_returns_all_trap(nodes, top_stmts, stmts, i, n, top, before):
         let r = nc_if_returns_all_trap(nodes, top_stmts, here_before, stmt.2, 0, count(stmt.2))
         here_ok = r.0
         here_cnt = r.1
+    elif equal(tag, "while"):
+        let wb = get(nodes, get(stmt.2, 1))
+        let wr = nc_returns_all_trap(nodes, top_stmts, wb.2, 0, count(wb.2), false, here_before)
+        here_ok = wr.0
+        here_cnt = wr.1
     end
     if not here_ok:
         return (false, here_cnt)
@@ -2743,6 +2762,10 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         end
         return (r.0, r.1, r.2, r.3, 0)
     end
+    if equal(tag, "while"):
+        let w = nc_infer_while(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params, node.3)
+        return (w.0, w.1, w.2, w.3, 0)
+    end
     return (nc_infer_fail(pool, 404, node.3, tag), env, sig, 0, 0)
 end
 
@@ -2810,6 +2833,38 @@ end
 
 func nc_join_env(pool, entry_env, contribs, line):
     return nc_join_build_loop(pool, entry_env, contribs, 0, entry_env.0, entry_env, line)
+end
+
+-- A loop is inferred like an if without else: the condition is a bool against
+-- the entry env, the body starts from the entry env, and the exit env joins the
+-- entry env (zero iterations) with the body's exit when the body can fall
+-- through. Rebinding keeps widths, so one pass over the body is enough.
+func nc_infer_while(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params, line):
+    let entry_env = nc_class_env_clone(env)
+    let c = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), entry_env, nc_type_bool(), sig, fn_idx, funcs, n_params)
+    if c.0 != 0:
+        return (c.0, entry_env, c.2, c.3)
+    end
+    sig = c.2
+    let changed = c.3
+    let body_idx = get(kids, 1)
+    let body = get(nodes, body_idx)
+    let br = nc_infer_body(pool, nodes, prog_idx, body.2, 0, count(body.2), nc_class_env_clone(entry_env), sig, fn_idx, funcs, n_params, 0)
+    if br.0 != 0:
+        return (br.0, entry_env, br.2, nc_or_changed(changed, br.3))
+    end
+    sig = br.2
+    changed = nc_or_changed(changed, br.3)
+    let contribs = new_array((int, array(array(string)), array(array(int))))
+    if not body_ends_return(body_idx, nodes):
+        contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, entry_env.0))
+    end
+    contribs = nc_contrib_add(contribs, nc_class_env_clone(entry_env))
+    let joined = nc_join_env(pool, entry_env, contribs, line)
+    if joined.0 != 0:
+        return (joined.0, entry_env, sig, changed)
+    end
+    return (0, joined.1, sig, changed)
 end
 
 func nc_if_has_else(nodes, kids):

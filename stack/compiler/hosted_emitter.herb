@@ -863,7 +863,12 @@ func nc_branch_and_rel_verify_loop(code, i, n, fn, funcs, meta, metas, layout, l
     let g = nc_group(code, i, n, fn, funcs, meta, metas)
     if op == 16 or op == 17 or op == 18 or op == 19:
         let target = instr.1
-        if target >= n or target <= i:
+        if target >= n or target == i:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        -- Only an unconditional branch may go backward: a loop's branch back
+        -- to its condition.
+        if target < i and op != 16:
             return nc_fail(415, 0, int_to_str(target))
         end
         if get(layout.2, target) == 0:
@@ -871,7 +876,10 @@ func nc_branch_and_rel_verify_loop(code, i, n, fn, funcs, meta, metas, layout, l
         end
         let base = layout.0 + get(layout.1, i) + nc_branch_end_delta(op)
         let dest = layout.0 + get(layout.1, target)
-        if dest <= base:
+        if target > i and dest <= base:
+            return nc_fail(415, 0, int_to_str(target))
+        end
+        if target < i and dest >= base:
             return nc_fail(415, 0, int_to_str(target))
         end
         if not nc_rel_ok(dest, base):

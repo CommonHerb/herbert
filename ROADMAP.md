@@ -10,7 +10,7 @@ verifiable on demand.
 
 - A self-hosting Linux/x86-64 compiler, distributed as a committed native seed.
   Its own source compiles back to the same bytes without a foreign compiler.
-- Hosted arithmetic, recursion, tuples, named records (value records, and reference
+- Hosted arithmetic, `while` loops, recursion, tuples, named records (value records, and reference
   records updated in place), collections and process I/O. The checked input and
   compiler publication contracts are documented in `README.md`; records are in
   `docs/LANGUAGE.md`.

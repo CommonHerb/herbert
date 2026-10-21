@@ -420,6 +420,88 @@ func nc_meta_merge_locals(pool, a, b, i, n, out):
     return nc_meta_merge_locals(pool, a, b, i + 1, n, out)
 end
 
+-- The targets of backward unconditional branches (a loop's branch back to its
+-- condition). Programs without a loop have none and skip the records below.
+func nc_meta_back_targets(code, i, n, out):
+    if i >= n:
+        return out
+    end
+    let instr = get(code, i)
+    if instr.0 == 16 and instr.1 < i:
+        do add(out, instr.1)
+    end
+    return nc_meta_back_targets(code, i + 1, n, out)
+end
+
+func nc_int_array_has(a, i, n, value):
+    if i >= n:
+        return false
+    end
+    if get(a, i) == value:
+        return true
+    end
+    return nc_int_array_has(a, i + 1, n, value)
+end
+
+func nc_meta_top_find(tops, i, n, pc):
+    if i >= n:
+        return 0 - 1
+    end
+    if get(tops, i).0 == pc:
+        return i
+    end
+    return nc_meta_top_find(tops, i + 1, n, pc)
+end
+
+func nc_meta_stack_same_loop(pool, a, b, i, n):
+    if i >= n:
+        return 0
+    end
+    let m = nc_type_merge(pool, get(a, i), get(b, i), 0)
+    if m.0 != 0:
+        return m.0
+    end
+    if m.1 != get(a, i):
+        return nc_fail(416, 0, "")
+    end
+    return nc_meta_stack_same_loop(pool, a, b, i + 1, n)
+end
+
+func nc_meta_locals_same_loop(a, b, i, n):
+    if i >= n:
+        return 0
+    end
+    if nc_pget(a, i) != nc_pget(b, i):
+        return nc_fail(414, 0, "")
+    end
+    return nc_meta_locals_same_loop(a, b, i + 1, n)
+end
+
+-- A branch back to a loop's condition: the state arriving there must merge into
+-- the state recorded when the scan passed the condition without changing it,
+-- so the one forward pass checked the body under the state of every iteration.
+-- Slots are never reused, so a body-local let is unknown at the top and stays
+-- unknown under the join; only a loop-carried slot whose class moved fails.
+func nc_meta_back_edge_ok(pool, tops, target, stack, local_types):
+    let k = nc_meta_top_find(tops, 0, count(tops), target)
+    if k == 0 - 1:
+        return nc_fail(415, 0, int_to_str(target))
+    end
+    let top = get(tops, k)
+    if count(stack) != count(top.1) or nc_pcount(local_types) != nc_pcount(top.2):
+        return nc_fail(416, 0, "")
+    end
+    let s = nc_meta_stack_same_loop(pool, top.1, stack, 0, count(stack))
+    if s != 0:
+        return s
+    end
+    let lm = nc_meta_merge_locals(pool, top.2, local_types, 0, nc_pcount(top.2), top.2)
+    if lm.0 != 0:
+        return lm.0
+    end
+    return nc_meta_locals_same_loop(lm.1, top.2, 0, nc_pcount(top.2))
+end
+
 func nc_meta_enter_flow(pool, incoming, i, n, stack, local_types, live):
     if i >= n:
         return (0, stack, local_types, live)
@@ -472,7 +554,10 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     end
     stack = enter.1
     local_types = enter.2
-    flow = (flow.0, true, flow.2)
+    flow = (flow.0, true, flow.2, flow.3, flow.4)
+    if nc_int_array_has(flow.3, 0, count(flow.3), i):
+        do add(flow.4, (i, stack, local_types))
+    end
     -- The pass visits each instruction once, in increasing index order. Build
     -- dense metadata streams alongside it; copying an n-entry array for each
     -- CALL/projection/heap operation made both work and arena use quadratic.
@@ -482,8 +567,13 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
     let heap_entry = (0, 0, 0)
     let instr = get(code, i)
     let op = instr.0
-    if op == 16 or op == 17 or op == 18 or op == 19:
+    if op == 17 or op == 18 or op == 19:
         if instr.1 <= i or instr.1 >= n:
+            return MetaScan(nc_fail(415, 0, int_to_str(instr.1)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+        end
+    end
+    if op == 16:
+        if instr.1 == i or instr.1 >= n:
             return MetaScan(nc_fail(415, 0, int_to_str(instr.1)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
     end
@@ -597,8 +687,15 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         tuple_entry = (tw, es, ew)
         stack = nc_stack_push(p.1, elem_t)
     elif op == 16:
-        do add(get(flow.0, instr.1), (stack, local_types))
-        flow = (flow.0, false, flow.2)
+        if instr.1 < i:
+            let back = nc_meta_back_edge_ok(pool, flow.4, instr.1, stack, local_types)
+            if back != 0:
+                return MetaScan(back, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+        else:
+            do add(get(flow.0, instr.1), (stack, local_types))
+        end
+        flow = (flow.0, false, flow.2, flow.3, flow.4)
     elif op == 17:
         let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), 0)
         if p.0 != 0:
@@ -669,7 +766,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             end
         end
         stack = new_array(int)
-        flow = (flow.0, false, flow.2)
+        flow = (flow.0, false, flow.2, flow.3, flow.4)
     elif op == 22:
         let p = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
         if p.0 != 0:
@@ -968,7 +1065,9 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     let call_meta = new_array((int, int, int))
     let incoming = nc_meta_incoming_loop(0, n, new_array(array((array(int), array(array(int))))))
     let layout_types = nc_meta_layout_types_loop(local_types, 0, nc_pcount(local_types), new_array(array(int)))
-    let flow = (incoming, true, layout_types)
+    let back_targets = nc_meta_back_targets(code, 0, n, new_array(int))
+    let tops = new_array((int, array(int), array(array(int))))
+    let flow = (incoming, true, layout_types, back_targets, tops)
     let p = nc_meta_process_loop(pool, funcs, sig, fn_idx, prog.2, count(prog.1), code, fn.5, 0, n, new_array(int), local_types, stacks, tuple_meta, call_meta, 0, 0, 0, heap_meta0, 0, flow)
     if p.status != 0:
         return (p.status, FunctionMeta(0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, stacks, tuple_meta, call_meta, 0, 0, p.heap_meta, p.has_heap))
