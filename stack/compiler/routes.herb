@@ -159,16 +159,16 @@ end
 
 func nc_drive(source):
     if nc_is_ast_dump(source):
-        let ad = nc_emit_ast_dump_program(source)
+        do nc_emit_ast_dump_program(source)
         return 0
     end
     if nc_is_multiboot32_long64(source):
-        let l6 = nc_emit_multiboot32_long64_program(source)
+        do nc_emit_multiboot32_long64_program(source)
         return 0
     end
     if nc_route_is_i386(source):
         let route = diagnostic_with_payload("emit route '", nc_route_name(source), "' is built by the i386 oracle compiler (stack/i386_oracle_fragment.herb), not the production compiler")
-        let moved = nc_fail(443, 0, route)
+        do nc_fail(443, 0, route)
         return 0
     end
     -- Use the checked lexer on the hosted production path. The emit routes above
@@ -176,8 +176,8 @@ func nc_drive(source):
     -- nc_check_source before their own lexing.
     let lexed = err_lex_source(source)
     if lexed.0 == err_err_tag():
-        let reported = stderr_write(serialize_diagnostic(lexed.1))
-        let newline = stderr_write("\n")
+        do stderr_write(serialize_diagnostic(lexed.1))
+        do stderr_write("\n")
         do process_exit(1)
         return 0
     end
@@ -188,8 +188,8 @@ func nc_drive(source):
     -- This is an interim two-pass front end, not checked AST construction.
     let structure = err_parse_program(tokens, lexed.3)
     if structure.0 == err_err_tag():
-        let reported = stderr_write(serialize_diagnostic(structure.1))
-        let newline = stderr_write("\n")
+        do stderr_write(serialize_diagnostic(structure.1))
+        do stderr_write("\n")
         do process_exit(1)
         return 0
     end
@@ -204,11 +204,11 @@ func nc_drive(source):
     let prog = lower_program_poly(nodes, parsed.0, type_pool, ast_result.2)
     let has_faultable = nc_prog_has_faultable(prog)
     if has_faultable != 0:
-        let diag_strings = nc_append_fault_rodata(prog.1)
+        do nc_append_fault_rodata(prog.1)
     end
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
     if analyzed.0 != 0:
-        let fail_an = nc_fail(analyzed.0, 0, "")
+        do nc_fail(analyzed.0, 0, "")
         return 0
     end
     let metas = analyzed.1
@@ -240,7 +240,7 @@ func nc_drive(source):
     let frozen_code = freeze(emitted.1)
     let code_len = length(frozen_code)
     if code_len != pass1.2:
-        let fail = nc_fail(418, 0, "program-length")
+        do nc_fail(418, 0, "program-length")
         return 0
     end
     let ro_len = nc_rodata_len(prog.1)

@@ -3,7 +3,7 @@ func main():
     let incoming = stdin_read()
     if incoming.0 != 0:
         let message = diagnostic_with_payload("compiler: stdin read failed (errno ", int_to_str(incoming.0), ")\n")
-        let reported = stderr_write(message)
+        do stderr_write(message)
         do process_exit(1)
     end
     let source = incoming.1

@@ -1252,15 +1252,15 @@ end
 func nc_check_source(source):
     let lexed = err_lex_source(source)
     if lexed.0 == err_err_tag():
-        let reported = stderr_write(serialize_diagnostic(lexed.1))
-        let newline = stderr_write("\n")
+        do stderr_write(serialize_diagnostic(lexed.1))
+        do stderr_write("\n")
         do process_exit(1)
         return 0
     end
     let structure = err_parse_program(lexed.2, lexed.3)
     if structure.0 == err_err_tag():
-        let reported = stderr_write(serialize_diagnostic(structure.1))
-        let newline = stderr_write("\n")
+        do stderr_write(serialize_diagnostic(structure.1))
+        do stderr_write("\n")
         do process_exit(1)
         return 0
     end
@@ -1268,7 +1268,7 @@ func nc_check_source(source):
 end
 
 func nc_emit_ast_dump_program(source):
-    let checked = nc_check_source(source)
+    do nc_check_source(source)
     let tokens = lex_source(source)
     let parsed_nodes = pool_new()
     let parsed = parse_program(tokens, 0, parsed_nodes)
@@ -2200,7 +2200,7 @@ func lowered_field(poly, nodes, inst_idx, node_idx, node):
         let field = get(node.1, count(node.1) - 1)
         let u = unique_record_field_loop(nodes, field, 0, (0 - 1, 0, 0))
         if u.0 == 0 - 1:
-            let failed = nc_fail(446, node.3, field)
+            do nc_fail(446, node.3, field)
             return (inst_idx, node_idx, 0, 0, 0)
         end
         return (inst_idx, node_idx, u.0, u.1, u.2)

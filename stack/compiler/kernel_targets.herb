@@ -2008,15 +2008,15 @@ func nc_tap_calls_ok(code, i, n, funcs, nf):
         let callee = get(code, i).1
         let nargs = get(code, i).2
         if callee == 0:
-            let e1 = nc_fail(606, 0, "multiboot32-long64: cannot call main (the entry is not a callee)")
+            do nc_fail(606, 0, "multiboot32-long64: cannot call main (the entry is not a callee)")
             return false
         end
         if callee >= nf:
-            let e2 = nc_fail(607, 0, "multiboot32-long64: call target out of range")
+            do nc_fail(607, 0, "multiboot32-long64: call target out of range")
             return false
         end
         if get(funcs, callee).2 != nargs:
-            let e3 = nc_fail(608, 0, "multiboot32-long64: call arity mismatch")
+            do nc_fail(608, 0, "multiboot32-long64: call arity mismatch")
             return false
         end
     end
@@ -2027,20 +2027,20 @@ func nc_tap_func_ok(fn, funcs, nf, is_main):
     let code = fn.4
     let n = count(code)
     if not nc_tap_body_ok(code, n):
-        let e4 = nc_fail(605, 0, "multiboot32-long64: function body not in the call+recursion subset")
+        do nc_fail(605, 0, "multiboot32-long64: function body not in the call+recursion subset")
         return false
     end
     if nc_tap_frame_size(fn) > 15:
-        let e5 = nc_fail(602, 0, "multiboot32-long64: too many slots (max 15)")
+        do nc_fail(602, 0, "multiboot32-long64: too many slots (max 15)")
         return false
     end
     if fn.2 > 14:
-        let e6 = nc_fail(609, 0, "multiboot32-long64: more than 14 parameters (param-copy disp8 bound)")
+        do nc_fail(609, 0, "multiboot32-long64: more than 14 parameters (param-copy disp8 bound)")
         return false
     end
     if is_main == 1:
         if fn.2 != 0:
-            let e7 = nc_fail(601, 0, "multiboot32-long64: main must take no parameters")
+            do nc_fail(601, 0, "multiboot32-long64: main must take no parameters")
             return false
         end
     end
@@ -2258,7 +2258,7 @@ func nc_tap_boot_init(buf, esp_val):
     buf = nc_append_le32(buf, 67108864)
     buf = nc_tap_boot_fail_branch(buf, 135, fail_off) -- ja
     if buffer_length(buf) != start + 259:
-        let failed = nc_fail(656, 0, "multiboot32-long64: boot initializer length invariant")
+        do nc_fail(656, 0, "multiboot32-long64: boot initializer length invariant")
         return buf
     end
     return buf
@@ -2336,11 +2336,11 @@ end
 func nc_tap_emit_program(funcs, mainidx):
     let nf = count(funcs)
     if mainidx != 0:
-        let e0 = nc_fail(600, 0, "multiboot32-long64: main not the entry (index 0)")
+        do nc_fail(600, 0, "multiboot32-long64: main not the entry (index 0)")
         return 0
     end
     if not equal(get(funcs, 0).0, "main"):
-        let e0b = nc_fail(600, 0, "multiboot32-long64: entry function is not main")
+        do nc_fail(600, 0, "multiboot32-long64: entry function is not main")
         return 0
     end
     if not nc_tap_all_funcs_ok(funcs, 0, nf):
@@ -2392,7 +2392,7 @@ func nc_tap_emit_program(funcs, mainidx):
         -- immediate. A program that takes all of that and never indexes the page (bufbase() with no
         -- bufget/bufset anywhere) is refused rather than quietly handed a live pointer it cannot use.
         if nc_tap_idx_ops(funcs, 0, nf, 0) < 1:
-            let fb = nc_fail(655, 0, "multiboot32-long64: buffer mode needs at least one bufget/bufset")
+            do nc_fail(655, 0, "multiboot32-long64: buffer mode needs at least one bufget/bufset")
             return 0
         end
     end
@@ -2415,7 +2415,7 @@ func nc_tap_emit_program(funcs, mainidx):
     let stack_2m_base = guard_2m + 2097152
     let esp_val = stack_2m_base + 2097152
     if esp_val > 67108864:
-        let f7 = nc_fail(603, 0, "multiboot32-long64: stack exceeds the 64-MiB target RAM budget")
+        do nc_fail(603, 0, "multiboot32-long64: stack exceeds the 64-MiB target RAM budget")
         return 0
     end
     let cbuf = new_buffer()
@@ -2446,7 +2446,7 @@ func nc_tap_emit_program(funcs, mainidx):
         do append(cbuf, 8 * main_frame)
     end
     if uses_boot and buffer_length(cbuf) != main_body_base:
-        let fboot = nc_fail(656, 0, "multiboot32-long64: boot prefix length invariant")
+        do nc_fail(656, 0, "multiboot32-long64: boot prefix length invariant")
         return 0
     end
     let mlay = nc_tap_offsets_loop(maincode, 0, mainn, main_body_base, new_array(int), funcs, 1, 0, main_frame)
@@ -2457,12 +2457,12 @@ func nc_tap_emit_program(funcs, mainidx):
     do append(cbuf, 32)
     cbuf = nc32_emit_epilogue(cbuf)
     if buffer_length(cbuf) != callee_block_start:
-        let f8 = nc_fail(610, 0, "multiboot32-long64: main block length invariant")
+        do nc_fail(610, 0, "multiboot32-long64: main block length invariant")
         return 0
     end
     cbuf = nc_tap_emit_callees(cbuf, funcs, 1, nf, bases, buf_2m)
     if buffer_length(cbuf) != gdt_off:
-        let f9 = nc_fail(611, 0, "multiboot32-long64: callee block length invariant")
+        do nc_fail(611, 0, "multiboot32-long64: callee block length invariant")
         return 0
     end
     cbuf = nc32_long_emit_gdt(cbuf, gdt_vaddr)
@@ -2475,7 +2475,7 @@ func nc_tap_emit_program(funcs, mainidx):
     let frozen_code = freeze(cbuf)
     let code_len = length(frozen_code)
     if code_len != load_end - v0:
-        let f6 = nc_fail(604, 0, "multiboot32-long64: code length invariant")
+        do nc_fail(604, 0, "multiboot32-long64: code length invariant")
         return 0
     end
     let filesz = 12 + code_len
@@ -2510,7 +2510,7 @@ func nc_tap_emit_program(funcs, mainidx):
 end
 
 func nc_emit_multiboot32_long64_program(source):
-    let checked = nc_check_source(source)
+    do nc_check_source(source)
     let tokens = lex_source(source)
     let nodes = pool_new()
     let parsed = parse_program(tokens, 0, nodes)
@@ -2531,18 +2531,18 @@ func nc_emit_multiboot32_long64_program(source):
     end
     let mainfn = get(funcs, prog.2)
     if mainfn.2 != 0:
-        let f2 = nc_fail(501, 0, "multiboot32-long64: main must take no parameters")
+        do nc_fail(501, 0, "multiboot32-long64: main must take no parameters")
         return 0
     end
     let code = mainfn.4
     let n = count(code)
     if not nc64_body_ok(code, n):
-        let f3 = nc_fail(502, 0, "multiboot32-long64: body not in the control-flow+locals 64-bit subset")
+        do nc_fail(502, 0, "multiboot32-long64: body not in the control-flow+locals 64-bit subset")
         return 0
     end
     let nlocals = nc32_nlocals_loop(code, 0, n, 0)
     if nlocals > 15:
-        let f4 = nc_fail(504, 0, "multiboot32-long64: too many locals (max 15)")
+        do nc_fail(504, 0, "multiboot32-long64: too many locals (max 15)")
         return 0
     end
     let prefix_len = 5
@@ -2556,7 +2556,7 @@ func nc_emit_multiboot32_long64_program(source):
     bodybuf = nc64_lower_loop(bodybuf, code, 0, n, offs, epi)
     let bodylen = buffer_length(bodybuf)
     if bodylen != epi - prefix_len:
-        let f5 = nc_fail(505, 0, "multiboot32-long64: body length invariant (a lowered op was dropped or mis-sized)")
+        do nc_fail(505, 0, "multiboot32-long64: body length invariant (a lowered op was dropped or mis-sized)")
         return 0
     end
     let v0 = 1048588
@@ -2573,7 +2573,7 @@ func nc_emit_multiboot32_long64_program(source):
     let load_end = pd_vaddr + 4096
     let esp_val = load_end + 16384
     if esp_val > 1073741824:
-        let f7 = nc_fail(503, 0, "multiboot32-long64: image exceeds the identity-mapped low 1 GiB")
+        do nc_fail(503, 0, "multiboot32-long64: image exceeds the identity-mapped low 1 GiB")
         return 0
     end
     let cbuf = new_buffer()
@@ -2605,7 +2605,7 @@ func nc_emit_multiboot32_long64_program(source):
     let frozen_code = freeze(cbuf)
     let code_len = length(frozen_code)
     if code_len != load_end - v0:
-        let f6 = nc_fail(504, 0, "multiboot32-long64: code length invariant")
+        do nc_fail(504, 0, "multiboot32-long64: code length invariant")
         return 0
     end
     let filesz = 12 + code_len

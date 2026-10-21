@@ -158,8 +158,8 @@ func nc_serialize_diag(code, line, payload):
 end
 
 func nc_fail(code, line, payload):
-    let reported = stderr_write(nc_serialize_diag(code, line, payload))
-    let newline = stderr_write("\n")
+    do stderr_write(nc_serialize_diag(code, line, payload))
+    do stderr_write("\n")
     do process_exit(1)
     return 1
 end
@@ -1783,8 +1783,8 @@ func nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos, sites, ed
     let inst = get(funcs.0, cur)
     let here = nc_tuple_sites_node(nodes, get(fn_nodes, inst.0), 0)
     let e = nc_tuple_depth_vec(depths, inst.1, 0, count(inst.1), edge)
-    let supplied = nc_tuple_add_pushers(funcs.2, cur, 0, count(funcs.2), order)
-    let added = nc_tuple_add_callees(funcs.1, cur, 0, count(funcs.1), order)
+    do nc_tuple_add_pushers(funcs.2, cur, 0, count(funcs.2), order)
+    do nc_tuple_add_callees(funcs.1, cur, 0, count(funcs.1), order)
     return nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos + 1, sites + here, e, depth)
 end
 
@@ -1793,7 +1793,7 @@ func nc_check_recursive_tuple(pool, nodes, prog_idx, funcs, t, line, fn_idx):
         return 0
     end
     let depths = new_array(int)
-    let top = nc_tuple_depth_loop(pool, count(pool.0) + nc_type_struct_base() - 1, 0, depths)
+    do nc_tuple_depth_loop(pool, count(pool.0) + nc_type_struct_base() - 1, 0, depths)
     let depth = nc_tuple_depth_cached(depths, t)
     let prog = get(nodes, prog_idx)
     let order = new_array(int)
@@ -2001,7 +2001,7 @@ func nc_poly_constrain_user_call(pool, nodes, prog_idx, call_idx, env, want, sig
     if nc_func_never_returns(nodes, prog_idx, callee.1):
         return (0, ar.2, gi.2, changed)
     end
-    let pushed = nc_tuple_note_push(funcs, gi.1, fn_idx, want)
+    do nc_tuple_note_push(funcs, gi.1, fn_idx, want)
     let su = nc_sig_unify_ret(pool, gi.2, gi.1, want, node.3, nodes, prog_idx, funcs)
     if su.0 != 0:
         return (su.0, ar.2, gi.2, changed)
@@ -2509,7 +2509,7 @@ func nc_infer_field_read(pool, nodes, idx, node, field, r, funcs, fn_idx):
     if fi == 0 - 1:
         return (nc_infer_fail(pool, 444, node.3, field), 0, r.2, r.3, r.4)
     end
-    let noted = nc_poly_note_field(funcs, fn_idx, idx, fi, 0, nc_type_record_decl(pool, r.1))
+    do nc_poly_note_field(funcs, fn_idx, idx, fi, 0, nc_type_record_decl(pool, r.1))
     return (0, get(nc_type_children(pool, r.1), fi), r.2, r.3, r.4)
 end
 
@@ -2586,7 +2586,7 @@ func nc_infer_field_assign(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, fu
     if ok != 0:
         return (ok, r.2, r.3, r.4, 0)
     end
-    let noted = nc_poly_note_field(funcs, fn_idx, stmt_idx, fi, count(children), nc_type_record_decl(pool, li.2))
+    do nc_poly_note_field(funcs, fn_idx, stmt_idx, fi, count(children), nc_type_record_decl(pool, li.2))
     return (0, r.2, r.3, r.4, 0)
 end
 
@@ -2873,7 +2873,7 @@ func nc_poly_infer_instance(pool, nodes, prog_idx, funcs, inst_idx, sig):
     let prog = get(nodes, prog_idx)
     let inst = get(funcs.0, inst_idx)
     let fn_node = get(nodes, get(prog.2, inst.0))
-    let name = get(fn_node.1, 0)
+    do get(fn_node.1, 0)
     let params_node = get(nodes, get(fn_node.2, 0))
     let body_node = get(nodes, get(fn_node.2, 1))
     let input_scope = nc_check_input_scope(pool, nodes, fn_node)
