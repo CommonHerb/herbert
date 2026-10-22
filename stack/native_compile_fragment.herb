@@ -196,10 +196,11 @@ end
 -- ====================================================================
 
 func div10_acc(n, q):
-    if n < 10:
-        return q
+    while n >= 10:
+        n = n - 10
+        q = q + 1
     end
-    return div10_acc(n - 10, q + 1)
+    return q
 end
 
 func div10(n):
@@ -207,10 +208,10 @@ func div10(n):
 end
 
 func mod10(n):
-    if n < 10:
-        return n
+    while n >= 10:
+        n = n - 10
     end
-    return mod10(n - 10)
+    return n
 end
 
 -- Append decimal digits of n to buf, high-order first. Recursive on
@@ -233,11 +234,11 @@ end
 -- ====================================================================
 
 func append_str_loop(buf, s, i, n):
-    if i >= n:
-        return buf
+    while i < n:
+        do append(buf, index(s, i))
+        i = i + 1
     end
-    do append(buf, index(s, i))
-    return append_str_loop(buf, s, i + 1, n)
+    return buf
 end
 
 func append_str(buf, s):
@@ -341,29 +342,29 @@ end
 -- Append decimal forms of each byte of `bytes` (a string) as a fresh
 -- entry in the `atoms` array.
 func collect_str_atoms(atoms, bytes, i, n):
-    if i >= n:
-        return atoms
+    while i < n:
+        do add(atoms, int_to_str(index(bytes, i)))
+        i = i + 1
     end
-    do add(atoms, int_to_str(index(bytes, i)))
-    return collect_str_atoms(atoms, bytes, i + 1, n)
+    return atoms
 end
 
 -- Large literals reuse the immutable decimal strings for all 256 byte values.
 -- Keep the same AST atoms while avoiding one new decimal buffer per byte.
 func byte_decimal_strings_loop(out, i):
-    if i >= 256:
-        return out
+    while i < 256:
+        do add(out, int_to_str(i))
+        i = i + 1
     end
-    do add(out, int_to_str(i))
-    return byte_decimal_strings_loop(out, i + 1)
+    return out
 end
 
 func collect_str_atoms_cached(atoms, bytes, i, n, cache):
-    if i >= n:
-        return atoms
+    while i < n:
+        do add(atoms, get(cache, index(bytes, i)))
+        i = i + 1
     end
-    do add(atoms, get(cache, index(bytes, i)))
-    return collect_str_atoms_cached(atoms, bytes, i + 1, n, cache)
+    return atoms
 end
 
 -- ====================================================================
@@ -422,10 +423,10 @@ func parse_type(tokens, pos, pool):
 end
 
 func parse_type_tail(tokens, pos, pool, kids):
-    if tok_is_punct_text(tokens, pos, ","):
+    while tok_is_punct_text(tokens, pos, ","):
         let r = parse_type(tokens, pos + 1, pool)
         do add(kids, r.0)
-        return parse_type_tail(tokens, r.1, pool, kids)
+        pos = r.1
     end
     return pos
 end
@@ -505,10 +506,11 @@ func parse_bitwise_loop(tokens, pos, pool, lidx, cls):
 end
 
 func parse_or_loop(tokens, pos, pool, lidx):
-    if tok_is_ident_text(tokens, pos, "or"):
+    while tok_is_ident_text(tokens, pos, "or"):
         let op_tok = get(tokens, pos)
         let r = parse_and(tokens, pos + 1, pool)
-        return parse_or_loop(tokens, r.1, pool, make_binop(pool, "or", lidx, r.0, op_tok.2))
+        pos = r.1
+        lidx = make_binop(pool, "or", lidx, r.0, op_tok.2)
     end
     return (lidx, pos)
 end
@@ -519,10 +521,11 @@ func parse_and(tokens, pos, pool):
 end
 
 func parse_and_loop(tokens, pos, pool, lidx):
-    if tok_is_ident_text(tokens, pos, "and"):
+    while tok_is_ident_text(tokens, pos, "and"):
         let op_tok = get(tokens, pos)
         let r = parse_cmp(tokens, pos + 1, pool)
-        return parse_and_loop(tokens, r.1, pool, make_binop(pool, "and", lidx, r.0, op_tok.2))
+        pos = r.1
+        lidx = make_binop(pool, "and", lidx, r.0, op_tok.2)
     end
     return (lidx, pos)
 end
@@ -738,11 +741,12 @@ func parse_dot(tokens, pos, pool):
 end
 
 func parse_dot_loop(tokens, pos, pool, lidx):
-    if tok_is_punct_text(tokens, pos, "."):
+    while tok_is_punct_text(tokens, pos, "."):
         let dot_tok = get(tokens, pos)
         let idx_tok = get(tokens, pos + 1)
         let new_idx = add_node(pool, "dot", atoms1(idx_tok.1), kids1(lidx), dot_tok.2)
-        return parse_dot_loop(tokens, pos + 2, pool, new_idx)
+        pos = pos + 2
+        lidx = new_idx
     end
     return (lidx, pos)
 end
@@ -874,12 +878,12 @@ func parse_body(tokens, pos, pool):
 end
 
 func parse_body_loop(tokens, pos, pool, stmt_kids):
-    if is_body_terminator(tokens, pos):
-        return pos
+    while not (is_body_terminator(tokens, pos)):
+        let r = parse_stmt(tokens, pos, pool)
+        do add(stmt_kids, r.0)
+        pos = r.1
     end
-    let r = parse_stmt(tokens, pos, pool)
-    do add(stmt_kids, r.0)
-    return parse_body_loop(tokens, r.1, pool, stmt_kids)
+    return pos
 end
 
 func parse_stmt(tokens, pos, pool):
@@ -960,9 +964,8 @@ func parse_while(tokens, pos, pool, line):
 end
 
 func parse_elifs(tokens, pos, pool, if_kids):
-    if tok_is_ident_text(tokens, pos, "elif"):
+    while tok_is_ident_text(tokens, pos, "elif"):
         pos = parse_clause_into(tokens, pos + 1, pool, if_kids)
-        return parse_elifs(tokens, pos, pool, if_kids)
     end
     return pos
 end
@@ -1035,13 +1038,13 @@ end
 -- record NAME: FIELD: TYPE ... end -> ("record", [NAME, FIELD...], [type...]);
 -- ref record NAME: ... end is the same node tagged "ref-record".
 func parse_record_fields(tokens, pos, pool, atoms, kids):
-    if tok_is_ident_text(tokens, pos, "end"):
-        return pos + 1
+    while not (tok_is_ident_text(tokens, pos, "end")):
+        do add(atoms, get(tokens, pos).1)
+        let r = parse_type(tokens, pos + 2, pool)
+        do add(kids, r.0)
+        pos = r.1
     end
-    do add(atoms, get(tokens, pos).1)
-    let r = parse_type(tokens, pos + 2, pool)
-    do add(kids, r.0)
-    return parse_record_fields(tokens, r.1, pool, atoms, kids)
+    return pos + 1
 end
 
 func parse_recorddef(tokens, pos, pool, tag):
@@ -1060,12 +1063,12 @@ end
 -- Constructors parse as calls. In a program that declares records, every call
 -- whose callee is a record becomes "record-new", so no call walker sees one.
 func record_decl_names_loop(nodes, recs, i, names):
-    if i >= count(recs):
-        return names
+    while i < count(recs):
+        let decl = get(nodes, parse_decimal(get(recs, i)))
+        do add(names, get(decl.1, 0))
+        i = i + 1
     end
-    let decl = get(nodes, parse_decimal(get(recs, i)))
-    do add(names, get(decl.1, 0))
-    return record_decl_names_loop(nodes, recs, i + 1, names)
+    return names
 end
 
 func record_decl_names(nodes, prog_idx):
@@ -1105,13 +1108,13 @@ func do_call_needs_let(nodes, node):
 end
 
 func do_calls_any(nodes, i):
-    if i >= count(nodes):
-        return false
+    while i < count(nodes):
+        if do_call_needs_let(nodes, get(nodes, i)):
+            return true
+        end
+        i = i + 1
     end
-    if do_call_needs_let(nodes, get(nodes, i)):
-        return true
-    end
-    return do_calls_any(nodes, i + 1)
+    return false
 end
 
 func retag_do_calls_loop(nodes, out, i):
@@ -1173,12 +1176,12 @@ end
 -- ====================================================================
 
 func emit_atoms(buf, atoms, i, n):
-    if i >= n:
-        return buf
+    while i < n:
+        do append(buf, ' ')
+        buf = append_str(buf, get(atoms, i))
+        i = i + 1
     end
-    do append(buf, ' ')
-    buf = append_str(buf, get(atoms, i))
-    return emit_atoms(buf, atoms, i + 1, n)
+    return buf
 end
 
 -- ====================================================================
@@ -1239,21 +1242,21 @@ end
 
 -- The program node's atoms index its record declarations; dump them as trees.
 func emit_record_dumps(buf, pool, recs, i):
-    if i >= count(recs):
-        return buf
+    while i < count(recs):
+        do append(buf, ' ')
+        buf = ser_dump(buf, pool, parse_decimal(get(recs, i)))
+        i = i + 1
     end
-    do append(buf, ' ')
-    buf = ser_dump(buf, pool, parse_decimal(get(recs, i)))
-    return emit_record_dumps(buf, pool, recs, i + 1)
+    return buf
 end
 
 func emit_kids_dump(buf, pool, kids, i, n):
-    if i >= n:
-        return buf
+    while i < n:
+        do append(buf, ' ')
+        buf = ser_dump(buf, pool, get(kids, i))
+        i = i + 1
     end
-    do append(buf, ' ')
-    buf = ser_dump(buf, pool, get(kids, i))
-    return emit_kids_dump(buf, pool, kids, i + 1, n)
+    return buf
 end
 
 -- Validate `source` with the checked lexer and parser before an emit route
@@ -1306,10 +1309,13 @@ func times10(n):
 end
 
 func parse_decimal_loop(s, i, n, acc):
-    if i >= n:
-        return acc
+    while i < n:
+        let next_i = i + 1
+        let next_acc = times10(acc) + index(s, i) - '0'
+        i = next_i
+        acc = next_acc
     end
-    return parse_decimal_loop(s, i + 1, n, times10(acc) + index(s, i) - '0')
+    return acc
 end
 
 func parse_decimal(s):
@@ -1689,14 +1695,14 @@ func collect_labels(ir):
 end
 
 func find_label_pos_loop(labels, name, i, n):
-    if i >= n:
-        return fault("missing label")
+    while i < n:
+        let item = get(labels, i)
+        if equal(item.0, name):
+            return item.1
+        end
+        i = i + 1
     end
-    let item = get(labels, i)
-    if equal(item.0, name):
-        return item.1
-    end
-    return find_label_pos_loop(labels, name, i + 1, n)
+    return fault("missing label")
 end
 
 func find_label_pos(labels, name):
@@ -1776,14 +1782,14 @@ func env_let(env, name):
 end
 
 func env_lookup_loop(env, name, n):
-    if n == 0:
-        return fault("name undefined")
+    while n != 0:
+        let k = n - 1
+        if equal(nc_pget(env.0, k), name):
+            return nc_pget(env.1, k)
+        end
+        n = k
     end
-    let k = n - 1
-    if equal(nc_pget(env.0, k), name):
-        return nc_pget(env.1, k)
-    end
-    return env_lookup_loop(env, name, k)
+    return fault("name undefined")
 end
 
 func env_lookup(env, name):
@@ -1795,11 +1801,11 @@ func env_rebuild(env, keep):
 end
 
 func string_from_atoms_loop(atoms, i, n, buf):
-    if i >= n:
-        return buf
+    while i < n:
+        do append(buf, parse_decimal(get(atoms, i)))
+        i = i + 1
     end
-    do append(buf, parse_decimal(get(atoms, i)))
-    return string_from_atoms_loop(atoms, i + 1, n, buf)
+    return buf
 end
 
 func string_from_atoms(atoms):
@@ -1811,14 +1817,14 @@ func string_from_atoms(atoms):
 end
 
 func intern_string_loop(strings, s, i, n):
-    if i >= n:
-        do add(strings, s)
-        return count(strings) - 1
+    while i < n:
+        if equal(get(strings, i), s):
+            return i
+        end
+        i = i + 1
     end
-    if equal(get(strings, i), s):
-        return i
-    end
-    return intern_string_loop(strings, s, i + 1, n)
+    do add(strings, s)
+    return count(strings) - 1
 end
 
 func intern_string(strings, s):
@@ -1875,11 +1881,11 @@ func opcode_for_binop(tag):
 end
 
 func emit_exprs(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
-    if i >= n:
-        return ir
+    while i < n:
+        ir = emit_expr(get(kids, i), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        i = i + 1
     end
-    ir = emit_expr(get(kids, i), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-    return emit_exprs(kids, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    return ir
 end
 
 func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -2063,17 +2069,17 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
 end
 
 func if_ends_return(kids, i, n, nodes):
-    if i >= n:
-        return false
+    while i < n:
+        let arm = get(nodes, get(kids, i))
+        if equal(arm.0, "else"):
+            return body_ends_return(get(arm.2, 0), nodes)
+        end
+        if not body_ends_return(get(arm.2, 1), nodes):
+            return false
+        end
+        i = i + 1
     end
-    let arm = get(nodes, get(kids, i))
-    if equal(arm.0, "else"):
-        return body_ends_return(get(arm.2, 0), nodes)
-    end
-    if not body_ends_return(get(arm.2, 1), nodes):
-        return false
-    end
-    return if_ends_return(kids, i + 1, n, nodes)
+    return false
 end
 
 func stmt_ends_return(stmt_idx, nodes):
@@ -2088,13 +2094,13 @@ func stmt_ends_return(stmt_idx, nodes):
 end
 
 func body_has_return(stmts, i, n, nodes):
-    if i >= n:
-        return false
+    while i < n:
+        if stmt_ends_return(get(stmts, i), nodes):
+            return true
+        end
+        i = i + 1
     end
-    if stmt_ends_return(get(stmts, i), nodes):
-        return true
-    end
-    return body_has_return(stmts, i + 1, n, nodes)
+    return false
 end
 
 func body_ends_return(body_idx, nodes):
@@ -2105,16 +2111,16 @@ func body_ends_return(body_idx, nodes):
 end
 
 func emit_body(stmts, i, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
-    if i >= n:
-        return env
+    while i < n:
+        env = emit_stmt(get(stmts, i), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        -- Inference ends this body at a returning statement. Lowering must not request
+        -- specializations or local metadata for statements inference never visited.
+        if stmt_ends_return(get(stmts, i), nodes):
+            return env
+        end
+        i = i + 1
     end
-    env = emit_stmt(get(stmts, i), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-    -- Inference ends this body at a returning statement. Lowering must not request
-    -- specializations or local metadata for statements inference never visited.
-    if stmt_ends_return(get(stmts, i), nodes):
-        return env
-    end
-    return emit_body(stmts, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    return env
 end
 
 func emit_do_call(call_idx, stmt_line, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -2207,20 +2213,20 @@ end
 -- (position, field count, declaration) of FIELD in the one record that
 -- declares it, or (-1, 0, 0) when no record or more than one does.
 func unique_record_field_loop(nodes, field, i, found):
-    if i >= count(nodes):
-        return found
-    end
-    let node = get(nodes, i)
-    if is_record_decl_tag(node.0):
-        let fi = nc_record_field_index(nodes, i, field)
-        if fi != 0 - 1:
-            if found.0 != 0 - 1:
-                return (0 - 1, 0, 0)
+    while i < count(nodes):
+        let node = get(nodes, i)
+        if is_record_decl_tag(node.0):
+            let fi = nc_record_field_index(nodes, i, field)
+            if fi != 0 - 1:
+                if found.0 != 0 - 1:
+                    return (0 - 1, 0, 0)
+                end
+                found = (fi, count(node.1) - 1, i)
             end
-            found = (fi, count(node.1) - 1, i)
         end
+        i = i + 1
     end
-    return unique_record_field_loop(nodes, field, i + 1, found)
+    return found
 end
 
 -- Inference records each field's position per instance. A missing entry means
@@ -2319,14 +2325,15 @@ func lower_func_poly(func_idx, inst_idx, entry_pc, strings, nodes, prog_idx, typ
 end
 
 func lower_program_poly_loop(instances, i, entry_pc, funcs, strings, nodes, prog_idx, type_pool, poly):
-    if i >= count(instances):
-        return funcs
+    while i < count(instances):
+        let prog = get(nodes, prog_idx)
+        let inst = get(instances, i)
+        let fn = lower_func_poly(get(prog.2, inst.0), i, entry_pc, strings, nodes, prog_idx, type_pool, poly)
+        do add(funcs, fn)
+        i = i + 1
+        entry_pc = entry_pc + count(fn.4)
     end
-    let prog = get(nodes, prog_idx)
-    let inst = get(instances, i)
-    let fn = lower_func_poly(get(prog.2, inst.0), i, entry_pc, strings, nodes, prog_idx, type_pool, poly)
-    do add(funcs, fn)
-    return lower_program_poly_loop(instances, i + 1, entry_pc + count(fn.4), funcs, strings, nodes, prog_idx, type_pool, poly)
+    return funcs
 end
 
 func lower_program_poly(nodes, prog_idx, type_pool, poly):
@@ -2753,13 +2760,13 @@ func err_is_valid_name_token(tokens, pos):
 end
 
 func err_name_seen_loop(names, start, n, name):
-    if start >= n:
-        return false
+    while start < n:
+        if equal(get(names, start), name):
+            return true
+        end
+        start = start + 1
     end
-    if equal(get(names, start), name):
-        return true
-    end
-    return err_name_seen_loop(names, start + 1, n, name)
+    return false
 end
 
 func err_name_seen(names, name):
@@ -2835,14 +2842,15 @@ func err_parse_expr(tokens, pos, ctx):
 end
 
 func err_parse_expr_tail(tokens, pos, ctx, root_kind):
-    if bin_op_class(tokens, pos) == 0:
-        return err_parse_ok_extra(pos, root_kind)
+    while bin_op_class(tokens, pos) != 0:
+        let r = err_parse_not(tokens, pos + 1, ctx)
+        if r.0 == err_err_tag():
+            return r
+        end
+        pos = r.2
+        root_kind = err_expr_other()
     end
-    let r = err_parse_not(tokens, pos + 1, ctx)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_expr_tail(tokens, r.2, ctx, err_expr_other())
+    return err_parse_ok_extra(pos, root_kind)
 end
 
 func err_parse_not(tokens, pos, ctx):
@@ -2985,14 +2993,15 @@ func err_parse_tuple_tail(tokens, pos, ctx):
 end
 
 func err_parse_body(tokens, pos, ctx, seen_count):
-    if is_body_terminator(tokens, pos):
-        return err_parse_ok_extra(pos, seen_count)
+    while not (is_body_terminator(tokens, pos)):
+        let r = err_parse_stmt(tokens, pos, ctx)
+        if r.0 == err_err_tag():
+            return r
+        end
+        pos = r.2
+        seen_count = seen_count + 1
     end
-    let r = err_parse_stmt(tokens, pos, ctx)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_body(tokens, r.2, ctx, seen_count + 1)
+    return err_parse_ok_extra(pos, seen_count)
 end
 
 func err_parse_stmt(tokens, pos, ctx):
@@ -3135,7 +3144,7 @@ func err_parse_while(tokens, pos, ctx, while_line):
 end
 
 func err_parse_elifs(tokens, pos, ctx, if_line):
-    if tok_is_ident_text(tokens, pos, "elif"):
+    while tok_is_ident_text(tokens, pos, "elif"):
         let cr = err_parse_expr(tokens, pos + 1, ctx)
         if cr.0 == err_err_tag():
             return cr
@@ -3150,7 +3159,7 @@ func err_parse_elifs(tokens, pos, ctx, if_line):
         if br.3 == 0:
             return err_parse_fail_at(210, if_line)
         end
-        return err_parse_elifs(tokens, br.2, ctx, if_line)
+        pos = br.2
     end
     return err_parse_ok(pos)
 end
@@ -3304,23 +3313,24 @@ end
 
 -- record NAME: FIELD: TYPE ... end, with at least two fields (ERR 213).
 func err_parse_record_fields(tokens, pos, ctx, n_fields, record_line):
-    if tok_is_ident_text(tokens, pos, "end"):
-        if n_fields < 2:
-            return err_parse_fail_at(213, record_line)
+    while not (tok_is_ident_text(tokens, pos, "end")):
+        if not err_is_valid_name_token(tokens, pos):
+            return err_parse_fail_at(213, err_token_line(tokens, pos, ctx))
         end
-        return err_parse_ok(pos + 1)
+        if not tok_is_punct_text(tokens, pos + 1, ":"):
+            return err_parse_fail_at(213, err_token_line(tokens, pos + 1, ctx))
+        end
+        let t = err_parse_type(tokens, pos + 2, ctx)
+        if t.0 == err_err_tag():
+            return t
+        end
+        pos = t.2
+        n_fields = n_fields + 1
     end
-    if not err_is_valid_name_token(tokens, pos):
-        return err_parse_fail_at(213, err_token_line(tokens, pos, ctx))
+    if n_fields < 2:
+        return err_parse_fail_at(213, record_line)
     end
-    if not tok_is_punct_text(tokens, pos + 1, ":"):
-        return err_parse_fail_at(213, err_token_line(tokens, pos + 1, ctx))
-    end
-    let t = err_parse_type(tokens, pos + 2, ctx)
-    if t.0 == err_err_tag():
-        return t
-    end
-    return err_parse_record_fields(tokens, t.2, ctx, n_fields + 1, record_line)
+    return err_parse_ok(pos + 1)
 end
 
 func err_parse_record(tokens, pos, ctx):
