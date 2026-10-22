@@ -12601,17 +12601,18 @@ end
 -- across if-arms means the env's final counter can understate the peak, so the
 -- frame is sized from the actual slots the code touches.
 func nc32_nlocals_loop(code, i, n, acc):
-    if i >= n:
-        return acc
-    end
-    let op = get(code, i).0
-    let a = acc
-    if op == 3 or op == 4:
-        if get(code, i).1 + 1 > a:
-            a = get(code, i).1 + 1
+    while i < n:
+        let op = get(code, i).0
+        let a = acc
+        if op == 3 or op == 4:
+            if get(code, i).1 + 1 > a:
+                a = get(code, i).1 + 1
+            end
         end
+        i = i + 1
+        acc = a
     end
-    return nc32_nlocals_loop(code, i + 1, n, a)
+    return acc
 end
 
 -- PASS B of the depth gate (Codex C1): every branch must target strictly forward
@@ -13474,27 +13475,28 @@ end
 -- and using nc64_pops/nc64_pushes so NE (op 12) is accounted. Records the depth BEFORE each instr;
 -- rejects any unknown opcode, any underflow, any RET not at depth exactly 1. Returns (ok, depths).
 func nc64_build_depths(code, i, n, cur, depths):
-    if i >= n:
-        return (1, depths)
-    end
-    let op = get(code, i).0
-    if not nc64_op_allowed(op):
-        return (0, depths)
-    end
-    if cur > 1500:
-        return (0, depths)
-    end
-    let pops = nc64_pops(op)
-    if cur < pops:
-        return (0, depths)
-    end
-    do add(depths, cur)
-    if op == 21:
-        if cur != 1:
+    while i < n:
+        let op = get(code, i).0
+        if not nc64_op_allowed(op):
             return (0, depths)
         end
+        if cur > 1500:
+            return (0, depths)
+        end
+        let pops = nc64_pops(op)
+        if cur < pops:
+            return (0, depths)
+        end
+        do add(depths, cur)
+        if op == 21:
+            if cur != 1:
+                return (0, depths)
+            end
+        end
+        i = i + 1
+        cur = cur - pops + nc64_pushes(op)
     end
-    return nc64_build_depths(code, i + 1, n, cur - pops + nc64_pushes(op), depths)
+    return (1, depths)
 end
 
 -- The full 64-bit subset gate (mirrors nc32_body_ok): ends in RET, all opcodes admitted +
@@ -13799,27 +13801,28 @@ end
 -- PASS A depth walk (op-20-aware; mirrors nc64_build_depths). Cap 1500 (each push is
 -- 8 bytes); the guard page is the runtime backstop for deeper recursion.
 func nc_tap_build_depths(code, i, n, cur, depths):
-    if i >= n:
-        return (1, depths)
-    end
-    let op = get(code, i).0
-    if not nc_tap_op_allowed(op):
-        return (0, depths)
-    end
-    if cur > 1500:
-        return (0, depths)
-    end
-    let pops = nc_tap_pops(op, get(code, i).2)
-    if cur < pops:
-        return (0, depths)
-    end
-    do add(depths, cur)
-    if op == 21:
-        if cur != 1:
+    while i < n:
+        let op = get(code, i).0
+        if not nc_tap_op_allowed(op):
             return (0, depths)
         end
+        if cur > 1500:
+            return (0, depths)
+        end
+        let pops = nc_tap_pops(op, get(code, i).2)
+        if cur < pops:
+            return (0, depths)
+        end
+        do add(depths, cur)
+        if op == 21:
+            if cur != 1:
+                return (0, depths)
+            end
+        end
+        i = i + 1
+        cur = cur - pops + nc_tap_pushes(op)
     end
-    return nc_tap_build_depths(code, i + 1, n, cur - pops + nc_tap_pushes(op), depths)
+    return (1, depths)
 end
 
 func nc_tap_body_ok(code, n):
@@ -13940,19 +13943,19 @@ end
 -- under the equal-arity rule (the Linux ng==nf specialization), disjoint from every
 -- src because the operand stack sits below the frame while the slots sit above rbp.
 func nc_tap_emit_tail_copy(obuf, k, nf):
-    if k >= nf:
-        return obuf
+    while k < nf:
+        do append(obuf, 72)    -- 48 8B 44 24 ib mov rax,[rsp + 8*(nf-1-k)]
+        do append(obuf, 139)
+        do append(obuf, 68)
+        do append(obuf, 36)
+        do append(obuf, 8 * (nf - 1 - k))
+        do append(obuf, 72)    -- 48 89 45 ib    mov [rbp + 8 + 8*(nf-k)],rax
+        do append(obuf, 137)
+        do append(obuf, 69)
+        do append(obuf, 8 + 8 * (nf - k))
+        k = k + 1
     end
-    do append(obuf, 72)    -- 48 8B 44 24 ib mov rax,[rsp + 8*(nf-1-k)]
-    do append(obuf, 139)
-    do append(obuf, 68)
-    do append(obuf, 36)
-    do append(obuf, 8 * (nf - 1 - k))
-    do append(obuf, 72)    -- 48 89 45 ib    mov [rbp + 8 + 8*(nf-k)],rax
-    do append(obuf, 137)
-    do append(obuf, 69)
-    do append(obuf, 8 + 8 * (nf - k))
-    return nc_tap_emit_tail_copy(obuf, k + 1, nf)
+    return obuf
 end
 
 -- gyre: the TAIL transition -- the long64 port of the proven Linux nc_emit_tail_call,
@@ -14027,10 +14030,13 @@ end
 -- transition), so it threads (funcs, is_main, nparams, frame) -- the same context the
 -- lowering consults, keeping sizes and bytes in lockstep for the ERR 610/611 checks.
 func nc_tap_body_size(code, i, n, acc, funcs, is_main, nparams, frame):
-    if i >= n:
-        return acc
+    while i < n:
+        let next_i = i + 1
+        let next_acc = acc + nc_tap_op_size_at(code, i, n, funcs, is_main, nparams, frame)
+        i = next_i
+        acc = next_acc
     end
-    return nc_tap_body_size(code, i + 1, n, acc + nc_tap_op_size_at(code, i, n, funcs, is_main, nparams, frame), funcs, is_main, nparams, frame)
+    return acc
 end
 
 func nc_tap_func_total(fn, funcs, is_main, frame):
@@ -14040,39 +14046,43 @@ func nc_tap_func_total(fn, funcs, is_main, frame):
 end
 
 func nc_tap_callees_total(funcs, i, nf, acc):
-    if i >= nf:
-        return acc
+    while i < nf:
+        let fn = get(funcs, i)
+        let frame = nc_tap_frame_size(fn)
+        i = i + 1
+        acc = acc + nc_tap_func_total(fn, funcs, 0, frame)
     end
-    let fn = get(funcs, i)
-    let frame = nc_tap_frame_size(fn)
-    return nc_tap_callees_total(funcs, i + 1, nf, acc + nc_tap_func_total(fn, funcs, 0, frame))
+    return acc
 end
 
 -- absolute instruction offsets within one function (cur starts at the function's body
 -- base = its image base + its prologue length). gyre: tail-aware via nc_tap_op_size_at.
 func nc_tap_offsets_loop(code, i, n, cur, offs, funcs, is_main, nparams, frame):
-    if i >= n:
-        return (offs, cur)
+    while i < n:
+        do add(offs, cur)
+        let next_i = i + 1
+        let next_cur = cur + nc_tap_op_size_at(code, i, n, funcs, is_main, nparams, frame)
+        i = next_i
+        cur = next_cur
     end
-    do add(offs, cur)
-    return nc_tap_offsets_loop(code, i + 1, n, cur + nc_tap_op_size_at(code, i, n, funcs, is_main, nparams, frame), offs, funcs, is_main, nparams, frame)
+    return (offs, cur)
 end
 
 -- mov rax,[rbp + 16 + 8*(nparams-1-i)] (48 8B 45 disp8); mov [rbp - 8*(i+1)],rax
 -- (48 89 45 disp8). Source disp bound: nparams<=14 -> 16+8*13=120<=127.
 func nc_tap_emit_param_copies(obuf, i, nparams):
-    if i >= nparams:
-        return obuf
+    while i < nparams:
+        do append(obuf, 72)
+        do append(obuf, 139)
+        do append(obuf, 69)
+        do append(obuf, 16 + 8 * (nparams - 1 - i))
+        do append(obuf, 72)
+        do append(obuf, 137)
+        do append(obuf, 69)
+        do append(obuf, 256 - 8 * (i + 1))
+        i = i + 1
     end
-    do append(obuf, 72)
-    do append(obuf, 139)
-    do append(obuf, 69)
-    do append(obuf, 16 + 8 * (nparams - 1 - i))
-    do append(obuf, 72)
-    do append(obuf, 137)
-    do append(obuf, 69)
-    do append(obuf, 256 - 8 * (i + 1))
-    return nc_tap_emit_param_copies(obuf, i + 1, nparams)
+    return obuf
 end
 
 func nc_tap_emit_prologue(obuf, is_main, nparams, frame):
@@ -14350,55 +14360,56 @@ end
 
 -- callee image bases (i starts at 1; bases[0] = main entry, already added).
 func nc_tap_callee_bases(funcs, i, nf, cur, bases):
-    if i >= nf:
-        return bases
+    while i < nf:
+        do add(bases, cur)
+        let fn = get(funcs, i)
+        let frame = nc_tap_frame_size(fn)
+        i = i + 1
+        cur = cur + nc_tap_func_total(fn, funcs, 0, frame)
     end
-    do add(bases, cur)
-    let fn = get(funcs, i)
-    let frame = nc_tap_frame_size(fn)
-    return nc_tap_callee_bases(funcs, i + 1, nf, cur + nc_tap_func_total(fn, funcs, 0, frame), bases)
+    return bases
 end
 
 func nc_tap_emit_callees(buf, funcs, i, nf, bases, buf_2m):
-    if i >= nf:
-        return buf
+    while i < nf:
+        let fn = get(funcs, i)
+        let code = fn.4
+        let n = count(code)
+        let frame = nc_tap_frame_size(fn)
+        if frame > 0:
+            buf = nc_tap_emit_prologue(buf, 0, fn.2, frame)
+        end
+        let pbase = get(bases, i) + nc_tap_prologue_len(0, fn.2, frame)
+        let lay = nc_tap_offsets_loop(code, 0, n, pbase, new_array(int), funcs, 0, fn.2, frame)
+        buf = nc_tap_lower_body(buf, code, 0, n, lay.0, lay.1, bases, funcs, 0, fn.2, frame, buf_2m)
+        buf = nc_tap_emit_epilogue(buf, 0, frame)
+        i = i + 1
     end
-    let fn = get(funcs, i)
-    let code = fn.4
-    let n = count(code)
-    let frame = nc_tap_frame_size(fn)
-    if frame > 0:
-        buf = nc_tap_emit_prologue(buf, 0, fn.2, frame)
-    end
-    let pbase = get(bases, i) + nc_tap_prologue_len(0, fn.2, frame)
-    let lay = nc_tap_offsets_loop(code, 0, n, pbase, new_array(int), funcs, 0, fn.2, frame)
-    buf = nc_tap_lower_body(buf, code, 0, n, lay.0, lay.1, bases, funcs, 0, fn.2, frame, buf_2m)
-    buf = nc_tap_emit_epilogue(buf, 0, frame)
-    return nc_tap_emit_callees(buf, funcs, i + 1, nf, bases, buf_2m)
+    return buf
 end
 
 -- each call op targets an in-range NON-main function with matching arity.
 func nc_tap_calls_ok(code, i, n, funcs, nf):
-    if i >= n:
-        return true
+    while i < n:
+        if get(code, i).0 == 20:
+            let callee = get(code, i).1
+            let nargs = get(code, i).2
+            if callee == 0:
+                do nc_fail(606, 0, "multiboot32-long64: cannot call main (the entry is not a callee)")
+                return false
+            end
+            if callee >= nf:
+                do nc_fail(607, 0, "multiboot32-long64: call target out of range")
+                return false
+            end
+            if get(funcs, callee).2 != nargs:
+                do nc_fail(608, 0, "multiboot32-long64: call arity mismatch")
+                return false
+            end
+        end
+        i = i + 1
     end
-    if get(code, i).0 == 20:
-        let callee = get(code, i).1
-        let nargs = get(code, i).2
-        if callee == 0:
-            do nc_fail(606, 0, "multiboot32-long64: cannot call main (the entry is not a callee)")
-            return false
-        end
-        if callee >= nf:
-            do nc_fail(607, 0, "multiboot32-long64: call target out of range")
-            return false
-        end
-        if get(funcs, callee).2 != nargs:
-            do nc_fail(608, 0, "multiboot32-long64: call arity mismatch")
-            return false
-        end
-    end
-    return nc_tap_calls_ok(code, i + 1, n, funcs, nf)
+    return true
 end
 
 func nc_tap_func_ok(fn, funcs, nf, is_main):
@@ -14426,17 +14437,17 @@ func nc_tap_func_ok(fn, funcs, nf, is_main):
 end
 
 func nc_tap_all_funcs_ok(funcs, i, nf):
-    if i >= nf:
-        return true
+    while i < nf:
+        let ismain = 0
+        if i == 0:
+            ismain = 1
+        end
+        if not nc_tap_func_ok(get(funcs, i), funcs, nf, ismain):
+            return false
+        end
+        i = i + 1
     end
-    let ismain = 0
-    if i == 0:
-        ismain = 1
-    end
-    if not nc_tap_func_ok(get(funcs, i), funcs, nf, ismain):
-        return false
-    end
-    return nc_tap_all_funcs_ok(funcs, i + 1, nf)
+    return true
 end
 
 func nc_tap_roundup_2m(v):
@@ -14473,40 +14484,40 @@ end
 -- widened the predicate from op-45-only; an op-45-only program keeps the SAME block at the
 -- SAME offset, so every hearken golden is byte-identical under the widened predicate.)
 func nc_tap_code_uses_uart(code, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if get(code, i).0 == 45:
+            return true
+        end
+        if get(code, i).0 == 53:
+            return true
+        end
+        i = i + 1
     end
-    if get(code, i).0 == 45:
-        return true
-    end
-    if get(code, i).0 == 53:
-        return true
-    end
-    return nc_tap_code_uses_uart(code, i + 1, n)
+    return false
 end
 
 func nc_tap_uses_uart(funcs, i, nf):
-    if i >= nf:
-        return false
+    while i < nf:
+        let fn = get(funcs, i)
+        let code = fn.4
+        if nc_tap_code_uses_uart(code, 0, count(code)):
+            return true
+        end
+        i = i + 1
     end
-    let fn = get(funcs, i)
-    let code = fn.4
-    if nc_tap_code_uses_uart(code, 0, count(code)):
-        return true
-    end
-    return nc_tap_uses_uart(funcs, i + 1, nf)
+    return false
 end
 
 -- folio activation examines every lowered function, not reachability. The
 -- non-input path emits neither capture nor validation and keeps its old bytes.
 func nc_tap_code_uses_boot(code, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if get(code, i).0 == 57:
+            return true
+        end
+        i = i + 1
     end
-    if get(code, i).0 == 57:
-        return true
-    end
-    return nc_tap_code_uses_boot(code, i + 1, n)
+    return false
 end
 
 func nc_tap_uses_boot(funcs, i, nf):
@@ -14648,49 +14659,49 @@ end
 -- buffer mode off -> the layout, the PD and p_memsz are byte-identical to taproot/hearken/riposte/
 -- gyre, which is why this change cannot move any of the 29 committed long64 goldens.
 func nc_tap_code_uses_buf(code, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        let op = get(code, i).0
+        if op == 49:
+            return true
+        end
+        if op == 50:
+            return true
+        end
+        if op == 51:
+            return true
+        end
+        i = i + 1
     end
-    let op = get(code, i).0
-    if op == 49:
-        return true
-    end
-    if op == 50:
-        return true
-    end
-    if op == 51:
-        return true
-    end
-    return nc_tap_code_uses_buf(code, i + 1, n)
+    return false
 end
 
 func nc_tap_uses_buf(funcs, i, nf):
-    if i >= nf:
-        return false
+    while i < nf:
+        let fn = get(funcs, i)
+        let code = fn.4
+        if nc_tap_code_uses_buf(code, 0, count(code)):
+            return true
+        end
+        i = i + 1
     end
-    let fn = get(funcs, i)
-    let code = fn.4
-    if nc_tap_code_uses_buf(code, 0, count(code)):
-        return true
-    end
-    return nc_tap_uses_buf(funcs, i + 1, nf)
+    return false
 end
 
 -- the IR gate's census: how many INDEXED ops (50/51) the whole program contains. bufbase alone
 -- hands a program a live absolute pointer into a page it never indexes, which is buffer geometry
 -- bought and not used; the gate below refuses it.
 func nc_tap_code_idx_ops(code, i, n, acc):
-    if i >= n:
-        return acc
+    while i < n:
+        let op = get(code, i).0
+        if op == 50:
+            acc = acc + 1
+        end
+        if op == 51:
+            acc = acc + 1
+        end
+        i = i + 1
     end
-    let op = get(code, i).0
-    if op == 50:
-        acc = acc + 1
-    end
-    if op == 51:
-        acc = acc + 1
-    end
-    return nc_tap_code_idx_ops(code, i + 1, n, acc)
+    return acc
 end
 
 func nc_tap_idx_ops(funcs, i, nf, acc):
