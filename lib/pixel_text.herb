@@ -101,33 +101,33 @@ func pixel_glyph(ch):
 end
 
 func pixel_letter(c, glyph, x, y, scale, i):
-    if i == 35: return 0 end
-    if index(glyph, i) == 49:
-        do x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
+    while i != 35:
+        if index(glyph, i) == 49:
+            do x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
+        end
+        i = i + 1
     end
-    return pixel_letter(c, glyph, x, y, scale, i + 1)
-end
-
-func pixel_text_loop(c, text, x, y, scale, i):
-    if i == length(text): return 0 end
-    do pixel_letter(c, pixel_glyph(index(text, i)), x + i * 6 * scale, y, scale, 0)
-    return pixel_text_loop(c, text, x, y, scale, i + 1)
+    return 0
 end
 
 func pixel_text(c, text, x, y, scale):
-    return pixel_text_loop(c, text, x, y, scale, 0)
+    let i = 0
+    while i != length(text):
+        do pixel_letter(c, pixel_glyph(index(text, i)), x + i * 6 * scale, y, scale, 0)
+        i = i + 1
+    end
+    return 0
 end
 
 -- Fixed buffer text, without freezing/copying into a temporary string.
-func pixel_text_buffer_loop(c, b, offset, count, x, y, scale, i):
-    if i == count: return 0 end
-    do pixel_letter(c, pixel_glyph(buffer_get(b, offset + i)), x + i * 6 * scale, y, scale, 0)
-    return pixel_text_buffer_loop(c, b, offset, count, x, y, scale, i + 1)
-end
-
 func pixel_text_buffer(c, b, offset, count, x, y, scale):
     do linux_require_range(b, offset, count)
-    return pixel_text_buffer_loop(c, b, offset, count, x, y, scale, 0)
+    let i = 0
+    while i != count:
+        do pixel_letter(c, pixel_glyph(buffer_get(b, offset + i)), x + i * 6 * scale, y, scale, 0)
+        i = i + 1
+    end
+    return 0
 end
 
 -- Bounded recursion (at most 20 digits for uint64), with no temporary strings.

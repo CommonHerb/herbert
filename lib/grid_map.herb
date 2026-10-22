@@ -19,60 +19,66 @@ record GridMap:
 end
 
 func grid_map_dimensions(b, n, maxw, maxh, p, width, rows, column):
-    if p >= n:
-        if column != 0:
+    while p < n:
+        let ch = buffer_get(b, p)
+        if ch == 10 or ch == 13:
+            let next = p + 1
+            if ch == 13:
+                if next >= n: return (12, width, rows, rows + 1, column + 1) end
+                if buffer_get(b, next) != 10: return (12, width, rows, rows + 1, column + 1) end
+                next = next + 1
+            end
+            if column == 0: return (5, width, rows, rows + 1, 1) end
             if width == 0: width = column end
             if column != width: return (4, width, rows, rows + 1, column + 1) end
+            p = next
             rows = rows + 1
+            column = 0
+        else:
+            if column >= maxw or rows >= maxh: return (3, width, rows, rows + 1, column + 1) end
+            p = p + 1
+            column = column + 1
         end
-        if width == 0: return (1, 0, 0, 0, 0) end
-        if width < 3 or rows < 3: return (2, width, rows, 0, 0) end
-        return (0, width, rows, 0, 0)
     end
-    let ch = buffer_get(b, p)
-    if ch == 10 or ch == 13:
-        let next = p + 1
-        if ch == 13:
-            if next >= n: return (12, width, rows, rows + 1, column + 1) end
-            if buffer_get(b, next) != 10: return (12, width, rows, rows + 1, column + 1) end
-            next = next + 1
-        end
-        if column == 0: return (5, width, rows, rows + 1, 1) end
+    if column != 0:
         if width == 0: width = column end
         if column != width: return (4, width, rows, rows + 1, column + 1) end
-        return grid_map_dimensions(b, n, maxw, maxh, next, width, rows + 1, 0)
+        rows = rows + 1
     end
-    if column >= maxw or rows >= maxh: return (3, width, rows, rows + 1, column + 1) end
-    return grid_map_dimensions(b, n, maxw, maxh, p + 1, width, rows, column + 1)
+    if width == 0: return (1, 0, 0, 0, 0) end
+    if width < 3 or rows < 3: return (2, width, rows, 0, 0) end
+    return (0, width, rows, 0, 0)
 end
 
 func grid_map_decode(b, n, cells, width, height, p, cell, spawn, spawns, dots):
-    if p >= n:
-        if spawns == 0: return (9, spawn, dots, 0, 0) end
-        if dots == 0: return (10, spawn, dots, 0, 0) end
-        return (0, spawn, dots, 0, 0)
+    while p < n:
+        let ch = buffer_get(b, p)
+        if ch == 10 or ch == 13:
+            p = p + 1
+        else:
+            let row = cell / width
+            let column = cell % width
+            if ch != 35 and ch != 32 and ch != 46 and ch != 80:
+                return (6, spawn, dots, row + 1, column + 1)
+            end
+            if row == 0 or row + 1 == height or column == 0 or column + 1 == width:
+                if ch != 35: return (7, spawn, dots, row + 1, column + 1) end
+            end
+            if ch == 80:
+                if spawns != 0: return (8, spawn, dots, row + 1, column + 1) end
+                spawn = cell
+                spawns = spawns + 1
+            elif ch == 46:
+                dots = dots + 1
+            end
+            do buffer_set(cells, cell, ch)
+            p = p + 1
+            cell = cell + 1
+        end
     end
-    let ch = buffer_get(b, p)
-    if ch == 10 or ch == 13:
-        return grid_map_decode(b, n, cells, width, height, p + 1, cell, spawn, spawns, dots)
-    end
-    let row = cell / width
-    let column = cell % width
-    if ch != 35 and ch != 32 and ch != 46 and ch != 80:
-        return (6, spawn, dots, row + 1, column + 1)
-    end
-    if row == 0 or row + 1 == height or column == 0 or column + 1 == width:
-        if ch != 35: return (7, spawn, dots, row + 1, column + 1) end
-    end
-    if ch == 80:
-        if spawns != 0: return (8, spawn, dots, row + 1, column + 1) end
-        spawn = cell
-        spawns = spawns + 1
-    elif ch == 46:
-        dots = dots + 1
-    end
-    do buffer_set(cells, cell, ch)
-    return grid_map_decode(b, n, cells, width, height, p + 1, cell + 1, spawn, spawns, dots)
+    if spawns == 0: return (9, spawn, dots, 0, 0) end
+    if dots == 0: return (10, spawn, dots, 0, 0) end
+    return (0, spawn, dots, 0, 0)
 end
 
 -- Enqueue at most once. The caller supplies an in-range adjacent cell.
@@ -84,19 +90,23 @@ func grid_map_visit(cells, visited, queue, cell, tail):
 end
 
 func grid_map_walk(cells, visited, queue, width, height, head, tail):
-    if head >= tail: return 0 end
-    let cell = linux_u32(queue, head * 4)
-    if cell % width != 0: tail = grid_map_visit(cells, visited, queue, cell - 1, tail) end
-    if cell % width + 1 < width: tail = grid_map_visit(cells, visited, queue, cell + 1, tail) end
-    if cell >= width: tail = grid_map_visit(cells, visited, queue, cell - width, tail) end
-    if cell + width < width * height: tail = grid_map_visit(cells, visited, queue, cell + width, tail) end
-    return grid_map_walk(cells, visited, queue, width, height, head + 1, tail)
+    while head < tail:
+        let cell = linux_u32(queue, head * 4)
+        if cell % width != 0: tail = grid_map_visit(cells, visited, queue, cell - 1, tail) end
+        if cell % width + 1 < width: tail = grid_map_visit(cells, visited, queue, cell + 1, tail) end
+        if cell >= width: tail = grid_map_visit(cells, visited, queue, cell - width, tail) end
+        if cell + width < width * height: tail = grid_map_visit(cells, visited, queue, cell + width, tail) end
+        head = head + 1
+    end
+    return 0
 end
 
 func grid_map_unreachable(cells, visited, cell):
-    if cell >= buffer_length(cells): return cell end
-    if buffer_get(cells, cell) == 46 and buffer_get(visited, cell) == 0: return cell end
-    return grid_map_unreachable(cells, visited, cell + 1)
+    while cell < buffer_length(cells):
+        if buffer_get(cells, cell) == 46 and buffer_get(visited, cell) == 0: return cell end
+        cell = cell + 1
+    end
+    return cell
 end
 
 -- maxw/maxh are caller limits, each 3..255; n is actual input bytes, not capacity.

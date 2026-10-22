@@ -9,19 +9,31 @@ func unicode_hex_digit(ch):
 end
 
 func unicode_hex_field(s, at, digits, value):
-    if digits == 0: return value end
-    return unicode_hex_field(s, at + 1, digits - 1, value * 16 + unicode_hex_digit(index(s, at)))
+    while digits != 0:
+        value = value * 16 + unicode_hex_digit(index(s, at))
+        at = at + 1
+        digits = digits - 1
+    end
+    return value
 end
 
 func unicode_grapheme_lookup(s, cp, lo, hi):
-    if lo == hi: return 0 end
-    let middle = lo + (hi - lo) / 2
-    let at = middle * 14
-    let first = unicode_hex_field(s, at, 6, 0)
-    if cp < first: return unicode_grapheme_lookup(s, cp, lo, middle) end
-    let last = unicode_hex_field(s, at + 6, 6, 0)
-    if cp > last: return unicode_grapheme_lookup(s, cp, middle + 1, hi) end
-    return unicode_hex_field(s, at + 12, 2, 0)
+    while lo != hi:
+        let middle = lo + (hi - lo) / 2
+        let at = middle * 14
+        let first = unicode_hex_field(s, at, 6, 0)
+        if cp < first:
+            hi = middle
+        else:
+            let last = unicode_hex_field(s, at + 6, 6, 0)
+            if cp > last:
+                lo = middle + 1
+            else:
+                return unicode_hex_field(s, at + 12, 2, 0)
+            end
+        end
+    end
+    return 0
 end
 
 func unicode_grapheme_property(cp):
@@ -84,33 +96,38 @@ func unicode_grapheme_step(state, props):
 end
 
 func unicode_grapheme_clear(marks, p, stop):
-    if p >= stop: return 0 end
-    do buffer_set(marks, p, 0)
-    return unicode_grapheme_clear(marks, p + 1, stop)
+    while p < stop:
+        do buffer_set(marks, p, 0)
+        p = p + 1
+    end
+    return 0
 end
 
 func unicode_grapheme_mark_loop(bytes, count, marks, p, stop, state):
-    if p == stop:
-        do buffer_set(marks, stop, 1)
-        return 0
+    while p != stop:
+        -- Common prose bytes avoid decoding/property lookup. GB9b is the only
+        -- joining rule whose right side can be printable ASCII (class Other).
+        let first = buffer_get(bytes, p)
+        if first >= 32 and first <= 126:
+            let boundary = 1
+            if state.0 == 7: boundary = 0 end
+            do buffer_set(marks, p, boundary)
+            p = p + 1
+            state = (0, 0, 0, 0)
+        else:
+            let decoded = utf8_decode(bytes, p, count)
+            if linux_error(decoded.0): return decoded.0 end
+            let props = unicode_grapheme_property(decoded.0)
+            let boundary = 0
+            if p == 0 or unicode_grapheme_break(state, props): boundary = 1 end
+            do buffer_set(marks, p, boundary)
+            do unicode_grapheme_clear(marks, p + 1, decoded.1)
+            state = unicode_grapheme_step(state, props)
+            p = decoded.1
+        end
     end
-    -- Common prose bytes avoid decoding/property lookup. GB9b is the only
-    -- joining rule whose right side can be printable ASCII (class Other).
-    let first = buffer_get(bytes, p)
-    if first >= 32 and first <= 126:
-        let boundary = 1
-        if state.0 == 7: boundary = 0 end
-        do buffer_set(marks, p, boundary)
-        return unicode_grapheme_mark_loop(bytes, count, marks, p + 1, stop, (0, 0, 0, 0))
-    end
-    let decoded = utf8_decode(bytes, p, count)
-    if linux_error(decoded.0): return decoded.0 end
-    let props = unicode_grapheme_property(decoded.0)
-    let boundary = 0
-    if p == 0 or unicode_grapheme_break(state, props): boundary = 1 end
-    do buffer_set(marks, p, boundary)
-    do unicode_grapheme_clear(marks, p + 1, decoded.1)
-    return unicode_grapheme_mark_loop(bytes, count, marks, decoded.1, stop, unicode_grapheme_step(state, props))
+    do buffer_set(marks, stop, 1)
+    return 0
 end
 
 -- Fill count+1 byte flags, including start/end boundaries. On bad UTF-8 the
@@ -136,32 +153,35 @@ end
 -- Raw-buffer navigation is intended for small inputs such as a search query.
 -- It scans from zero to retain RI/Indic/emoji context at arbitrary byte offsets.
 -- Document rendering/navigation should instead use text_buffer's cached flags.
-func unicode_grapheme_next_loop(bytes, count, target, p, state):
-    if p == count: return count end
-    let decoded = utf8_decode(bytes, p, count)
-    if linux_error(decoded.0): return decoded.0 end
-    let props = unicode_grapheme_property(decoded.0)
-    if p > target and unicode_grapheme_break(state, props): return p end
-    return unicode_grapheme_next_loop(bytes, count, target, decoded.1, unicode_grapheme_step(state, props))
-end
-
 func unicode_grapheme_next(bytes, count, pos):
     if not linux_range(bytes, 0, count): return 0 - 22 end
     if pos >= count: return count end
-    return unicode_grapheme_next_loop(bytes, count, pos, 0, (0, 0, 0, 0))
-end
-
-func unicode_grapheme_previous_loop(bytes, count, target, p, prior, state):
-    if p >= target: return prior end
-    let decoded = utf8_decode(bytes, p, count)
-    if linux_error(decoded.0): return decoded.0 end
-    let props = unicode_grapheme_property(decoded.0)
-    if p == 0 or unicode_grapheme_break(state, props): prior = p end
-    return unicode_grapheme_previous_loop(bytes, count, target, decoded.1, prior, unicode_grapheme_step(state, props))
+    let p = 0
+    let state = (0, 0, 0, 0)
+    while p != count:
+        let decoded = utf8_decode(bytes, p, count)
+        if linux_error(decoded.0): return decoded.0 end
+        let props = unicode_grapheme_property(decoded.0)
+        if p > pos and unicode_grapheme_break(state, props): return p end
+        state = unicode_grapheme_step(state, props)
+        p = decoded.1
+    end
+    return count
 end
 
 func unicode_grapheme_previous(bytes, count, pos):
     if not linux_range(bytes, 0, count): return 0 - 22 end
     if pos > count: pos = count end
-    return unicode_grapheme_previous_loop(bytes, count, pos, 0, 0, (0, 0, 0, 0))
+    let p = 0
+    let prior = 0
+    let state = (0, 0, 0, 0)
+    while p < pos:
+        let decoded = utf8_decode(bytes, p, count)
+        if linux_error(decoded.0): return decoded.0 end
+        let props = unicode_grapheme_property(decoded.0)
+        if p == 0 or unicode_grapheme_break(state, props): prior = p end
+        state = unicode_grapheme_step(state, props)
+        p = decoded.1
+    end
+    return prior
 end

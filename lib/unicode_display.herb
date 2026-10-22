@@ -181,24 +181,27 @@ func unicode_display_latin(base):
 end
 
 func unicode_display_marks(b, p, limit, base, top, bottom):
-    if p == limit: return (base, top, bottom, true) end
-    let next = utf8_decode(b, p, limit)
-    if next.1 == p: return (0, 0, 0, false) end
-    if not unicode_display_latin(base): return (0, 0, 0, false) end
-    let cp = next.0
-    let accent = 0
-    if cp >= 768 and cp <= 771: accent = cp - 767 end
-    if cp == 776: accent = 5 end
-    if cp == 778: accent = 6 end
-    if accent != 0:
-        if top != 0 or (accent == 6 and bottom != 0): return (0, 0, 0, false) end
-        return unicode_display_marks(b, next.1, limit, base, accent, bottom)
+    while p != limit:
+        let next = utf8_decode(b, p, limit)
+        if next.1 == p: return (0, 0, 0, false) end
+        if not unicode_display_latin(base): return (0, 0, 0, false) end
+        let cp = next.0
+        let accent = 0
+        if cp >= 768 and cp <= 771: accent = cp - 767 end
+        if cp == 776: accent = 5 end
+        if cp == 778: accent = 6 end
+        if accent != 0:
+            if top != 0 or (accent == 6 and bottom != 0): return (0, 0, 0, false) end
+            top = accent
+        elif cp == 807:
+            if bottom != 0 or top == 6: return (0, 0, 0, false) end
+            bottom = 7
+        else:
+            return (0, 0, 0, false)
+        end
+        p = next.1
     end
-    if cp == 807:
-        if bottom != 0 or top == 6: return (0, 0, 0, false) end
-        return unicode_display_marks(b, next.1, limit, base, top, 7)
-    end
-    return (0, 0, 0, false)
+    return (base, top, bottom, true)
 end
 
 func unicode_display_shape(b, start, limit):
@@ -249,15 +252,15 @@ func unicode_display_ink(base, top, bottom, i):
     return unicode_display_cell_ink(unicode_display_body(base), base, top, bottom, i)
 end
 
-func pixel_unicode_cell(c, body, base, top, bottom, x, y, scale, i):
-    if i == 50: return 0 end
-    if unicode_display_cell_ink(body, base, top, bottom, i):
-        do x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
-    end
-    return pixel_unicode_cell(c, body, base, top, bottom, x, y, scale, i + 1)
-end
-
 func pixel_unicode_cluster(c, b, start, limit, x, y, scale):
     let shape = unicode_display_shape(b, start, limit)
-    return pixel_unicode_cell(c, unicode_display_body(shape.0), shape.0, shape.1, shape.2, x, y, scale, 0)
+    let body = unicode_display_body(shape.0)
+    let i = 0
+    while i != 50:
+        if unicode_display_cell_ink(body, shape.0, shape.1, shape.2, i):
+            do x11_rect(c, x + (i % 5) * scale, y + (i / 5) * scale, scale, scale)
+        end
+        i = i + 1
+    end
+    return 0
 end
