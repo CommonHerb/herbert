@@ -69,21 +69,22 @@ func text_file_width(t, cp):
     return utf8_width(cp)
 end
 
-func text_encode(t, p, out):
-    if p == text_length(t): return t.serialized end
-    let ch = buffer_get(t.bytes, p)
-    if ch == 10:
-        do buffer_set(t.serialized, out, 13)
-        out = out + 1
-    end
-    do buffer_set(t.serialized, out, ch)
-    return text_encode(t, p + 1, out + 1)
-end
-
 -- Borrowed output remains valid until the next edit or serialization.
 func text_file_bytes(t):
     if not text_crlf(t): return t.bytes end
-    return text_encode(t, 0, 0)
+    let p = 0
+    let out = 0
+    while p != text_length(t):
+        let ch = buffer_get(t.bytes, p)
+        if ch == 10:
+            do buffer_set(t.serialized, out, 13)
+            out = out + 1
+        end
+        do buffer_set(t.serialized, out, ch)
+        p = p + 1
+        out = out + 1
+    end
+    return t.serialized
 end
 
 -- Retained ASCII predicate for callers with explicitly ASCII-only interfaces.
@@ -95,28 +96,35 @@ end
 -- 2 CRLF, or -EILSEQ (malformed UTF-8, C0/DEL/C1 except TAB/LF/CRLF,
 -- bare CR, mixed endings). Unicode format characters/noncharacters are valid.
 func text_style(bytes, count, p, style):
-    if p >= count: return style end
-    let decoded = utf8_decode(bytes, p, count)
-    if linux_error(decoded.0): return decoded.0 end
-    let cp = decoded.0
-    if cp == 13:
-        if decoded.1 >= count or style == 1: return 0 - 84 end
-        if buffer_get(bytes, decoded.1) != 10: return 0 - 84 end
-        return text_style(bytes, count, decoded.1 + 1, 2)
+    while p < count:
+        let decoded = utf8_decode(bytes, p, count)
+        if linux_error(decoded.0): return decoded.0 end
+        let cp = decoded.0
+        if cp == 13:
+            if decoded.1 >= count or style == 1: return 0 - 84 end
+            if buffer_get(bytes, decoded.1) != 10: return 0 - 84 end
+            p = decoded.1 + 1
+            style = 2
+        else:
+            if not utf8_text_allowed(cp): return 0 - 84 end
+            if cp == 10:
+                if style == 2: return 0 - 84 end
+                style = 1
+            end
+            p = decoded.1
+        end
     end
-    if not utf8_text_allowed(cp): return 0 - 84 end
-    if cp == 10:
-        if style == 2: return 0 - 84 end
-        style = 1
-    end
-    return text_style(bytes, count, decoded.1, style)
+    return style
 end
 
 func text_decode(t, bytes, count, p, out):
-    if p == count: return out end
-    if buffer_get(bytes, p) == 13: p = p + 1 end
-    do buffer_set(t.bytes, out, buffer_get(bytes, p))
-    return text_decode(t, bytes, count, p + 1, out + 1)
+    while p != count:
+        if buffer_get(bytes, p) == 13: p = p + 1 end
+        do buffer_set(t.bytes, out, buffer_get(bytes, p))
+        p = p + 1
+        out = out + 1
+    end
+    return out
 end
 
 func text_refresh(t): return unicode_grapheme_mark(t.bytes, text_length(t), t.marks) end
@@ -151,13 +159,17 @@ func text_boundary(t, pos):
 end
 
 func text_floor(t, pos):
-    if text_boundary(t, pos): return pos end
-    return text_floor(t, pos - 1)
+    while not text_boundary(t, pos):
+        pos = pos - 1
+    end
+    return pos
 end
 
 func text_ceil(t, pos):
-    if text_boundary(t, pos): return pos end
-    return text_ceil(t, pos + 1)
+    while not text_boundary(t, pos):
+        pos = pos + 1
+    end
+    return pos
 end
 
 func text_next(t, pos):
@@ -180,9 +192,11 @@ func text_seek(t, pos):
 end
 
 func text_shift_right(bytes, last, stop, width):
-    if last <= stop: return 0 end
-    do buffer_set(bytes, last - 1 + width, buffer_get(bytes, last - 1))
-    return text_shift_right(bytes, last - 1, stop, width)
+    while last > stop:
+        do buffer_set(bytes, last - 1 + width, buffer_get(bytes, last - 1))
+        last = last - 1
+    end
+    return 0
 end
 
 func text_history_at(t, i): return ((t.state.oldest + i) % 256) * 56 end
@@ -190,8 +204,11 @@ func text_history_kind(t, at): return linux_u64(t.history, at) & 3 end
 func text_history_joined(t, at): return (linux_u64(t.history, at) & 4) != 0 end
 
 func text_history_sum(t, i, stop, total):
-    if i == stop: return total end
-    return text_history_sum(t, i + 1, stop, total + linux_u64(t.history, text_history_at(t, i) + 16))
+    while i != stop:
+        total = total + linux_u64(t.history, text_history_at(t, i) + 16)
+        i = i + 1
+    end
+    return total
 end
 
 -- Truncate redo only once an edit has passed every rejection/capacity check.
@@ -206,25 +223,31 @@ end
 -- A record left continuing an evicted one is evicted too: no half replace stays.
 func text_history_make_room(t, need):
     let st = t.state
-    let used = st.payload_bytes
-    let retained = st.retained
-    let orphan = retained > 0 and text_history_joined(t, text_history_at(t, 0))
-    if retained < 256 and need <= buffer_length(t.payload) - used and not orphan: return 0 end
-    let at = text_history_at(t, 0)
-    let oldcount = linux_u64(t.history, at + 16)
-    let nextbyte = (linux_u64(t.history, at + 40) + oldcount) % buffer_length(t.payload)
-    st.oldest = (st.oldest + 1) % 256
-    st.oldest_payload = nextbyte
-    st.payload_bytes = used - oldcount
-    st.retained = retained - 1
-    st.applied = retained - 1
-    return text_history_make_room(t, need)
+    while true:
+        let used = st.payload_bytes
+        let retained = st.retained
+        let orphan = retained > 0 and text_history_joined(t, text_history_at(t, 0))
+        if retained < 256 and need <= buffer_length(t.payload) - used and not orphan: return 0 end
+        let at = text_history_at(t, 0)
+        let oldcount = linux_u64(t.history, at + 16)
+        let nextbyte = (linux_u64(t.history, at + 40) + oldcount) % buffer_length(t.payload)
+        st.oldest = (st.oldest + 1) % 256
+        st.oldest_payload = nextbyte
+        st.payload_bytes = used - oldcount
+        st.retained = retained - 1
+        st.applied = retained - 1
+    end
+    return 0
 end
 
 func text_history_copy_in(t, at, src, from, count):
-    if count == 0: return 0 end
-    do buffer_set(t.payload, at, buffer_get(src, from))
-    return text_history_copy_in(t, (at + 1) % buffer_length(t.payload), src, from + 1, count - 1)
+    while count != 0:
+        do buffer_set(t.payload, at, buffer_get(src, from))
+        at = (at + 1) % buffer_length(t.payload)
+        from = from + 1
+        count = count - 1
+    end
+    return 0
 end
 
 func text_history_push(t, kind, pos, src, from, count, width, before):
@@ -249,9 +272,13 @@ func text_history_push(t, kind, pos, src, from, count, width, before):
 end
 
 func text_history_copy_out(t, at, to, count):
-    if count == 0: return 0 end
-    do buffer_set(t.bytes, to, buffer_get(t.payload, at))
-    return text_history_copy_out(t, (at + 1) % buffer_length(t.payload), to + 1, count - 1)
+    while count != 0:
+        do buffer_set(t.bytes, to, buffer_get(t.payload, at))
+        at = (at + 1) % buffer_length(t.payload)
+        to = to + 1
+        count = count - 1
+    end
+    return 0
 end
 
 -- Re-mark the lines holding positions from..to after an edit there.
@@ -322,9 +349,11 @@ end
 func text_history_fits(t, need): return need <= buffer_length(t.payload) end
 
 func text_newlines(bytes, p, stop, n):
-    if p >= stop: return n end
-    if buffer_get(bytes, p) == 10: n = n + 1 end
-    return text_newlines(bytes, p + 1, stop, n)
+    while p < stop:
+        if buffer_get(bytes, p) == 10: n = n + 1 end
+        p = p + 1
+    end
+    return n
 end
 
 -- On-disk bytes of count logical bytes: each newline is two bytes in CRLF style.
@@ -389,40 +418,50 @@ end
 
 func text_undo(t):
     let st = t.state
-    let applied = st.applied
-    if applied == 0: return 0 end
-    let at = text_history_at(t, applied - 1)
-    do text_history_apply(t, at, text_history_kind(t, at) == 2)
-    do text_seek(t, linux_u64(t.history, at + 24))
-    st.applied = applied - 1
-    if text_history_joined(t, at): return text_undo(t) end
-    return 1
+    while true:
+        let applied = st.applied
+        if applied == 0: return 0 end
+        let at = text_history_at(t, applied - 1)
+        do text_history_apply(t, at, text_history_kind(t, at) == 2)
+        do text_seek(t, linux_u64(t.history, at + 24))
+        st.applied = applied - 1
+        if not text_history_joined(t, at): return 1 end
+    end
+    return 0
 end
 
 func text_redo(t):
     let st = t.state
-    let applied = st.applied
-    if applied == st.retained: return 0 end
-    let at = text_history_at(t, applied)
-    do text_history_apply(t, at, text_history_kind(t, at) == 1)
-    do text_seek(t, linux_u64(t.history, at + 32))
-    st.applied = applied + 1
-    if applied + 1 < st.retained:
-        if text_history_joined(t, text_history_at(t, applied + 1)): return text_redo(t) end
+    while true:
+        let applied = st.applied
+        if applied == st.retained: return 0 end
+        let at = text_history_at(t, applied)
+        do text_history_apply(t, at, text_history_kind(t, at) == 1)
+        do text_seek(t, linux_u64(t.history, at + 32))
+        st.applied = applied + 1
+        let again = false
+        if applied + 1 < st.retained:
+            if text_history_joined(t, text_history_at(t, applied + 1)): again = true end
+        end
+        if not again: return 1 end
     end
-    return 1
+    return 0
 end
 
 func text_line_start(t, p):
-    if p == 0: return 0 end
-    if buffer_get(t.bytes, p - 1) == 10: return p end
-    return text_line_start(t, p - 1)
+    while p != 0:
+        if buffer_get(t.bytes, p - 1) == 10: return p end
+        p = p - 1
+    end
+    return 0
 end
 
 func text_line_end(t, p):
-    if p >= text_length(t): return text_length(t) end
-    if buffer_get(t.bytes, p) == 10: return p end
-    return text_line_end(t, p + 1)
+    while p < text_length(t):
+        if buffer_get(t.bytes, p) == 10: return p end
+        p = p + 1
+    end
+    return text_length(t)
 end
 
 func text_next_column(column, ch):
@@ -431,8 +470,11 @@ func text_next_column(column, ch):
 end
 
 func text_column_loop(t, p, stop, column):
-    if p >= stop: return column end
-    return text_column_loop(t, text_next(t, p), stop, text_next_column(column, buffer_get(t.bytes, p)))
+    while p < stop:
+        column = text_next_column(column, buffer_get(t.bytes, p))
+        p = text_next(t, p)
+    end
+    return column
 end
 
 func text_column(t, p):
@@ -465,18 +507,24 @@ func text_row_found(t, p, row):
 end
 
 func text_rows_down(t, p, at, row):
-    if at == row: return text_row_found(t, p, at) end
-    let e = text_line_end(t, p)
-    if e >= text_length(t):
-        do text_row_found(t, p, at)
-        return e
+    while at != row:
+        let e = text_line_end(t, p)
+        if e >= text_length(t):
+            do text_row_found(t, p, at)
+            return e
+        end
+        p = e + 1
+        at = at + 1
     end
-    return text_rows_down(t, e + 1, at + 1, row)
+    return text_row_found(t, p, at)
 end
 
 func text_rows_up(t, p, at, row):
-    if at == row: return text_row_found(t, p, at) end
-    return text_rows_up(t, text_line_start(t, p - 1), at - 1, row)
+    while at != row:
+        p = text_line_start(t, p - 1)
+        at = at - 1
+    end
+    return text_row_found(t, p, at)
 end
 
 -- The start of the given row, or the end of the text if it has fewer rows. The
@@ -496,54 +544,64 @@ func text_row_clamp(t, row):
 end
 
 func text_column_position(t, p, target, column):
-    if p >= text_length(t): return p end
-    let ch = buffer_get(t.bytes, p)
-    if ch == 10: return p end
-    let next = text_next_column(column, ch)
-    if next > target: return p end
-    return text_column_position(t, text_next(t, p), target, next)
+    while p < text_length(t):
+        let ch = buffer_get(t.bytes, p)
+        if ch == 10: return p end
+        let next = text_next_column(column, ch)
+        if next > target: return p end
+        column = next
+        p = text_next(t, p)
+    end
+    return p
 end
 
 func text_vertical(t, downward, steps):
-    if steps == 0: return 0 end
-    let p = text_cursor(t)
-    let st = t.state
-    let goal = st.goal
-    if goal == 0 - 1:
-        goal = text_column(t, p)
-        st.goal = goal
+    while steps != 0:
+        let p = text_cursor(t)
+        let st = t.state
+        let goal = st.goal
+        if goal == 0 - 1:
+            goal = text_column(t, p)
+            st.goal = goal
+        end
+        let start = text_line_start(t, p)
+        let target = start
+        if downward:
+            let e = text_line_end(t, p)
+            if e >= text_length(t): return 0 end
+            target = e + 1
+        else:
+            if start == 0: return 0 end
+            target = text_line_start(t, start - 1)
+        end
+        st.cursor = text_column_position(t, target, goal, 0)
+        steps = steps - 1
     end
-    let start = text_line_start(t, p)
-    let target = start
-    if downward:
-        let e = text_line_end(t, p)
-        if e >= text_length(t): return 0 end
-        target = e + 1
-    else:
-        if start == 0: return 0 end
-        target = text_line_start(t, start - 1)
-    end
-    st.cursor = text_column_position(t, target, goal, 0)
-    return text_vertical(t, downward, steps - 1)
+    return 0
 end
 
 -- Literal, case-sensitive, byte-exact search without normalization. A match
 -- must begin AND end at document grapheme boundaries. Interior bytes cannot
 -- match a combining suffix, variation selector, or one scalar of a ZWJ cluster.
 func text_match(t, query, count, pos, i):
-    if i == count: return true end
-    if buffer_get(t.bytes, pos + i) != buffer_get(query, i): return false end
-    return text_match(t, query, count, pos, i + 1)
+    while i != count:
+        if buffer_get(t.bytes, pos + i) != buffer_get(query, i): return false end
+        i = i + 1
+    end
+    return true
 end
 
 func text_find_loop(t, query, count, pos, backward, candidates, remaining):
-    if remaining == 0: return 0 - 1 end
-    if text_boundary(t, pos) and text_boundary(t, pos + count):
-        if text_match(t, query, count, pos, 0): return pos end
+    while remaining != 0:
+        if text_boundary(t, pos) and text_boundary(t, pos + count):
+            if text_match(t, query, count, pos, 0): return pos end
+        end
+        let next = (pos + 1) % candidates
+        if backward: next = (pos + candidates - 1) % candidates end
+        pos = next
+        remaining = remaining - 1
     end
-    let next = (pos + 1) % candidates
-    if backward: next = (pos + candidates - 1) % candidates end
-    return text_find_loop(t, query, count, next, backward, candidates, remaining - 1)
+    return 0 - 1
 end
 
 func text_find(t, query, count, start, backward):
