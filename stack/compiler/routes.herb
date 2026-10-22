@@ -142,14 +142,14 @@ end
 
 -- The route name after "-- emit: ", up to the newline the recognizers require.
 func nc_route_name_loop(buf, source, i):
-    if i >= length(source):
-        return buf
+    while i < length(source):
+        if index(source, i) == 10:
+            return buf
+        end
+        do append(buf, index(source, i))
+        i = i + 1
     end
-    if index(source, i) == 10:
-        return buf
-    end
-    do append(buf, index(source, i))
-    return nc_route_name_loop(buf, source, i + 1)
+    return buf
 end
 
 func nc_route_name(source):
