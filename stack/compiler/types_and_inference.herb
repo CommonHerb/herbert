@@ -221,13 +221,13 @@ end
 -- After a successful retry the first attempt's diagnostic is still in the
 -- pool: phase entry i - 1, the one before phase 2, indexes it.
 func nc_retry_before_index(phases, i, n):
-    if i >= n:
-        return 0 - 1
+    while i < n:
+        if get(phases, i).0 == 2 and i > 0:
+            return i - 1
+        end
+        i = i + 1
     end
-    if get(phases, i).0 == 2 and i > 0:
-        return i - 1
-    end
-    return nc_retry_before_index(phases, i + 1, n)
+    return 0 - 1
 end
 
 func nc_retry_used(pool):
@@ -316,13 +316,13 @@ end
 -- where every leaf is int/bool, and renders byte-identically (the plan below emits
 -- the same primitives at the same word offsets).
 func nc_renderable_kids_loop(pool, kids, i, n):
-    if i >= n:
-        return true
+    while i < n:
+        if not nc_type_renderable_rec(pool, get(kids, i)):
+            return false
+        end
+        i = i + 1
     end
-    if not nc_type_renderable_rec(pool, get(kids, i)):
-        return false
-    end
-    return nc_renderable_kids_loop(pool, kids, i + 1, n)
+    return true
 end
 
 func nc_type_renderable_rec(pool, t):
@@ -373,14 +373,16 @@ end
 -- low->high). A nested tuple flattens contiguously, so the word offset accumulates
 -- by each element's width (int/bool +1, string +2).
 func nc_build_plan_kids(pool, kids, i, n, word, out):
-    if i >= n:
-        return (out, word)
+    while i < n:
+        if i > 0:
+            do add(out, (1, 0))
+        end
+        let r = nc_build_plan_rec(pool, get(kids, i), word, out)
+        i = i + 1
+        word = r.1
+        out = r.0
     end
-    if i > 0:
-        do add(out, (1, 0))
-    end
-    let r = nc_build_plan_rec(pool, get(kids, i), word, out)
-    return nc_build_plan_kids(pool, kids, i + 1, n, r.1, r.0)
+    return (out, word)
 end
 
 func nc_build_plan_rec(pool, t, word, out):
@@ -414,13 +416,13 @@ func nc_build_render_plan(pool, t):
 end
 
 func nc_type_equal_children(pool, a, b, i, n):
-    if i >= n:
-        return true
+    while i < n:
+        if not nc_type_equal(pool, get(a, i), get(b, i)):
+            return false
+        end
+        i = i + 1
     end
-    if not nc_type_equal(pool, get(a, i), get(b, i)):
-        return false
-    end
-    return nc_type_equal_children(pool, a, b, i + 1, n)
+    return true
 end
 
 func nc_type_equal(pool, a, b):
@@ -439,13 +441,13 @@ func nc_type_equal(pool, a, b):
 end
 
 func nc_type_tuple_matches_loop(pool, children, existing, i, n):
-    if i >= n:
-        return true
+    while i < n:
+        if not nc_type_equal(pool, get(children, i), get(existing, i)):
+            return false
+        end
+        i = i + 1
     end
-    if not nc_type_equal(pool, get(children, i), get(existing, i)):
-        return false
-    end
-    return nc_type_tuple_matches_loop(pool, children, existing, i + 1, n)
+    return true
 end
 
 func nc_type_struct_matches(pool, kind, children, type_id):
@@ -460,16 +462,16 @@ func nc_type_struct_matches(pool, kind, children, type_id):
 end
 
 func nc_type_intern_struct_loop(pool, kind, children, i, n):
-    if i >= n:
-        let id = count(pool.0) + nc_type_struct_base()
-        do add(pool.0, (kind, children))
-        return id
+    while i < n:
+        let tid = i + nc_type_struct_base()
+        if nc_type_struct_matches(pool, kind, children, tid):
+            return tid
+        end
+        i = i + 1
     end
-    let tid = i + nc_type_struct_base()
-    if nc_type_struct_matches(pool, kind, children, tid):
-        return tid
-    end
-    return nc_type_intern_struct_loop(pool, kind, children, i + 1, n)
+    let id = count(pool.0) + nc_type_struct_base()
+    do add(pool.0, (kind, children))
+    return id
 end
 
 func nc_type_intern_tuple(pool, children):
@@ -491,10 +493,13 @@ func nc_type_intern_array(pool, elem):
 end
 
 func nc_type_width_tuple(pool, kids, i, n, acc):
-    if i >= n:
-        return acc
+    while i < n:
+        let next_i = i + 1
+        let next_acc = acc + nc_type_width(pool, get(kids, i))
+        i = next_i
+        acc = next_acc
     end
-    return nc_type_width_tuple(pool, kids, i + 1, n, acc + nc_type_width(pool, get(kids, i)))
+    return acc
 end
 
 func nc_type_width(pool, t):
@@ -518,13 +523,13 @@ func nc_type_width(pool, t):
 end
 
 func nc_type_has_unknown_tuple(pool, kids, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if nc_type_has_unknown(pool, get(kids, i)):
+            return true
+        end
+        i = i + 1
     end
-    if nc_type_has_unknown(pool, get(kids, i)):
-        return true
-    end
-    return nc_type_has_unknown_tuple(pool, kids, i + 1, n)
+    return false
 end
 
 func nc_type_has_unknown(pool, t):
@@ -539,23 +544,23 @@ func nc_type_has_unknown(pool, t):
 end
 
 func nc_type_vector_has_unknown(pool, vec, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if nc_type_has_unknown(pool, get(vec, i)):
+            return true
+        end
+        i = i + 1
     end
-    if nc_type_has_unknown(pool, get(vec, i)):
-        return true
-    end
-    return nc_type_vector_has_unknown(pool, vec, i + 1, n)
+    return false
 end
 
 func nc_type_vector_equal_loop(pool, a, b, i, n):
-    if i >= n:
-        return true
+    while i < n:
+        if not nc_type_equal(pool, get(a, i), get(b, i)):
+            return false
+        end
+        i = i + 1
     end
-    if not nc_type_equal(pool, get(a, i), get(b, i)):
-        return false
-    end
-    return nc_type_vector_equal_loop(pool, a, b, i + 1, n)
+    return true
 end
 
 func nc_type_vector_equal(pool, a, b):
@@ -566,23 +571,23 @@ func nc_type_vector_equal(pool, a, b):
 end
 
 func nc_type_embeds_any_child(pool, a, kids, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if nc_type_embeds(pool, a, get(kids, i)):
+            return true
+        end
+        i = i + 1
     end
-    if nc_type_embeds(pool, a, get(kids, i)):
-        return true
-    end
-    return nc_type_embeds_any_child(pool, a, kids, i + 1, n)
+    return false
 end
 
 func nc_type_embeds_tuple_positions(pool, a, b, i, n):
-    if i >= n:
-        return true
+    while i < n:
+        if not nc_type_embeds(pool, get(a, i), get(b, i)):
+            return false
+        end
+        i = i + 1
     end
-    if not nc_type_embeds(pool, get(a, i), get(b, i)):
-        return false
-    end
-    return nc_type_embeds_tuple_positions(pool, a, b, i + 1, n)
+    return true
 end
 
 func nc_type_embeds(pool, a, b):
@@ -614,16 +619,16 @@ func nc_type_embeds(pool, a, b):
 end
 
 func nc_poly_vector_embeds_loop(pool, old_args, new_args, i, n, strict):
-    if i >= n:
-        return strict
+    while i < n:
+        if not nc_type_embeds(pool, get(old_args, i), get(new_args, i)):
+            return false
+        end
+        if not nc_type_equal(pool, get(old_args, i), get(new_args, i)):
+            strict = true
+        end
+        i = i + 1
     end
-    if not nc_type_embeds(pool, get(old_args, i), get(new_args, i)):
-        return false
-    end
-    if not nc_type_equal(pool, get(old_args, i), get(new_args, i)):
-        strict = true
-    end
-    return nc_poly_vector_embeds_loop(pool, old_args, new_args, i + 1, n, strict)
+    return strict
 end
 
 func nc_poly_vector_grows(pool, old_args, new_args):
@@ -634,13 +639,13 @@ func nc_poly_vector_grows(pool, old_args, new_args):
 end
 
 func nc_type_merge_possible_children(pool, a, b, i, n):
-    if i >= n:
-        return true
+    while i < n:
+        if not nc_type_merge_possible(pool, get(a, i), get(b, i)):
+            return false
+        end
+        i = i + 1
     end
-    if not nc_type_merge_possible(pool, get(a, i), get(b, i)):
-        return false
-    end
-    return nc_type_merge_possible_children(pool, a, b, i + 1, n)
+    return true
 end
 
 func nc_type_merge_possible(pool, old, want):
@@ -677,25 +682,26 @@ func nc_type_has_array_unknown(pool, t):
 end
 
 func nc_type_has_array_unknown_children(pool, kids, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if nc_type_has_array_unknown(pool, get(kids, i)):
+            return true
+        end
+        i = i + 1
     end
-    if nc_type_has_array_unknown(pool, get(kids, i)):
-        return true
-    end
-    return nc_type_has_array_unknown_children(pool, kids, i + 1, n)
+    return false
 end
 
 func nc_type_merge_children(pool, a, b, i, n, out, changed, line, cache):
-    if i >= n:
-        return (0, out, changed)
+    while i < n:
+        let m = nc_type_merge_cached(pool, get(a, i), get(b, i), line, cache)
+        if m.0 != 0:
+            return (m.0, out, changed)
+        end
+        do add(out, m.1)
+        i = i + 1
+        changed = nc_or_changed(changed, m.2)
     end
-    let m = nc_type_merge_cached(pool, get(a, i), get(b, i), line, cache)
-    if m.0 != 0:
-        return (m.0, out, changed)
-    end
-    do add(out, m.1)
-    return nc_type_merge_children(pool, a, b, i + 1, n, out, nc_or_changed(changed, m.2), line, cache)
+    return (0, out, changed)
 end
 
 func nc_type_merge_struct(pool, old, want, line, cache):
@@ -734,14 +740,14 @@ end
 -- bound below is reached without expanding the interned DAG into a tree.
 -- Keep the original left-to-right traversal and interning order on first visits.
 func nc_type_merge_cache_find(cache, old, want, i):
-    if i >= count(cache):
-        return 0 - 1
+    while i < count(cache):
+        let entry = get(cache, i)
+        if entry.0 == old and entry.1 == want:
+            return i
+        end
+        i = i + 1
     end
-    let entry = get(cache, i)
-    if entry.0 == old and entry.1 == want:
-        return i
-    end
-    return nc_type_merge_cache_find(cache, old, want, i + 1)
+    return 0 - 1
 end
 
 func nc_type_merge_cached(pool, old, want, line, cache):
@@ -784,39 +790,39 @@ func nc_type_is_int_bool(t):
 end
 
 func nc_type_from_type_expr_children(pool, nodes, kids, i, n, out, line, visiting):
-    if i >= n:
-        return (0, nc_type_intern_tuple(pool, out))
+    while i < n:
+        let r = nc_type_from_type_expr_v(pool, nodes, get(kids, i), visiting)
+        if r.0 != 0:
+            return r
+        end
+        do add(out, r.1)
+        i = i + 1
     end
-    let r = nc_type_from_type_expr_v(pool, nodes, get(kids, i), visiting)
-    if r.0 != 0:
-        return r
-    end
-    do add(out, r.1)
-    return nc_type_from_type_expr_children(pool, nodes, kids, i + 1, n, out, line, visiting)
+    return (0, nc_type_intern_tuple(pool, out))
 end
 
 func nc_record_decl_scan(nodes, name, i):
-    if i >= count(nodes):
-        return 0 - 1
+    while i < count(nodes):
+        let node = get(nodes, i)
+        if is_record_decl_tag(node.0) and equal(get(node.1, 0), name):
+            return i
+        end
+        i = i + 1
     end
-    let node = get(nodes, i)
-    if is_record_decl_tag(node.0) and equal(get(node.1, 0), name):
-        return i
-    end
-    return nc_record_decl_scan(nodes, name, i + 1)
+    return 0 - 1
 end
 
 -- The same search through the program node's list of its records, which is far
 -- shorter than the node pool; construction sites look up their record this way.
 func nc_record_decl_find_loop(nodes, recs, name, i):
-    if i >= count(recs):
-        return 0 - 1
+    while i < count(recs):
+        let decl_idx = parse_decimal(get(recs, i))
+        if equal(get(get(nodes, decl_idx).1, 0), name):
+            return decl_idx
+        end
+        i = i + 1
     end
-    let decl_idx = parse_decimal(get(recs, i))
-    if equal(get(get(nodes, decl_idx).1, 0), name):
-        return decl_idx
-    end
-    return nc_record_decl_find_loop(nodes, recs, name, i + 1)
+    return 0 - 1
 end
 
 func nc_record_decl_find(nodes, prog_idx, name):
@@ -824,13 +830,13 @@ func nc_record_decl_find(nodes, prog_idx, name):
 end
 
 func nc_record_field_index_loop(atoms, field, i):
-    if i >= count(atoms):
-        return 0 - 1
+    while i < count(atoms):
+        if equal(get(atoms, i), field):
+            return i - 1
+        end
+        i = i + 1
     end
-    if equal(get(atoms, i), field):
-        return i - 1
-    end
-    return nc_record_field_index_loop(atoms, field, i + 1)
+    return 0 - 1
 end
 
 -- The field's position, or -1. A record node's atoms are its name, then its fields.
@@ -839,11 +845,11 @@ func nc_record_field_index(nodes, decl_idx, field):
 end
 
 func nc_ints_copy_loop(a, i, out):
-    if i >= count(a):
-        return out
+    while i < count(a):
+        do add(out, get(a, i))
+        i = i + 1
     end
-    do add(out, get(a, i))
-    return nc_ints_copy_loop(a, i + 1, out)
+    return out
 end
 
 func nc_ints_with(a, v):
@@ -853,15 +859,15 @@ func nc_ints_with(a, v):
 end
 
 func nc_record_field_types(pool, nodes, kids, i, out, visiting):
-    if i >= count(kids):
-        return (0, out)
+    while i < count(kids):
+        let r = nc_type_from_type_expr_v(pool, nodes, get(kids, i), visiting)
+        if r.0 != 0:
+            return (r.0, out)
+        end
+        do add(out, r.1)
+        i = i + 1
     end
-    let r = nc_type_from_type_expr_v(pool, nodes, get(kids, i), visiting)
-    if r.0 != 0:
-        return (r.0, out)
-    end
-    do add(out, r.1)
-    return nc_record_field_types(pool, nodes, kids, i + 1, out, visiting)
+    return (0, out)
 end
 
 -- visiting holds the records being built on this path; meeting one again
@@ -1021,48 +1027,48 @@ end
 -- longer copy every local. Entries at count and above are dead; the next local
 -- declared reuses its position. Every environment value stays valid as it was.
 func nc_chunk_copy_int(src, i, n, slot, value, out):
-    if i >= n:
-        if slot == n:
+    while i < n:
+        if i == slot:
             do add(out, value)
+        else:
+            do add(out, get(src, i))
         end
-        return out
+        i = i + 1
     end
-    if i == slot:
+    if slot == n:
         do add(out, value)
-    else:
-        do add(out, get(src, i))
     end
-    return nc_chunk_copy_int(src, i + 1, n, slot, value, out)
+    return out
 end
 
 func nc_chunk_copy_str(src, i, n, slot, value, out):
-    if i >= n:
-        if slot == n:
+    while i < n:
+        if i == slot:
             do add(out, value)
+        else:
+            do add(out, get(src, i))
         end
-        return out
+        i = i + 1
     end
-    if i == slot:
+    if slot == n:
         do add(out, value)
-    else:
-        do add(out, get(src, i))
     end
-    return nc_chunk_copy_str(src, i + 1, n, slot, value, out)
+    return out
 end
 
 func nc_chunks_copy(src, i, n, at, chunk, out):
-    if i >= n:
-        if at == n:
+    while i < n:
+        if i == at:
             do add(out, chunk)
+        else:
+            do add(out, get(src, i))
         end
-        return out
+        i = i + 1
     end
-    if i == at:
+    if at == n:
         do add(out, chunk)
-    else:
-        do add(out, get(src, i))
     end
-    return nc_chunks_copy(src, i + 1, n, at, chunk, out)
+    return out
 end
 
 func nc_pget(chunks, i):
@@ -1115,14 +1121,14 @@ func nc_class_env_prefix(env, keep):
 end
 
 func nc_class_env_lookup_info_loop(env, name, n):
-    if n == 0:
-        return (0, 0, 0)
+    while n != 0:
+        let k = n - 1
+        if equal(nc_pget(env.1, k), name):
+            return (1, k, nc_pget(env.2, k))
+        end
+        n = k
     end
-    let k = n - 1
-    if equal(nc_pget(env.1, k), name):
-        return (1, k, nc_pget(env.2, k))
-    end
-    return nc_class_env_lookup_info_loop(env, name, k)
+    return (0, 0, 0)
 end
 
 func nc_class_env_lookup_info(env, name):
@@ -1130,15 +1136,15 @@ func nc_class_env_lookup_info(env, name):
 end
 
 func nc_int_array_set_loop(src, i, n, target, value, out):
-    if i >= n:
-        return out
+    while i < n:
+        if i == target:
+            do add(out, value)
+        else:
+            do add(out, get(src, i))
+        end
+        i = i + 1
     end
-    if i == target:
-        do add(out, value)
-    else:
-        do add(out, get(src, i))
-    end
-    return nc_int_array_set_loop(src, i + 1, n, target, value, out)
+    return out
 end
 
 func nc_int_array_set(src, target, value):
@@ -1146,15 +1152,15 @@ func nc_int_array_set(src, target, value):
 end
 
 func nc_array_int_set_loop(src, i, n, target, value, out):
-    if i >= n:
-        return out
+    while i < n:
+        if i == target:
+            do add(out, value)
+        else:
+            do add(out, get(src, i))
+        end
+        i = i + 1
     end
-    if i == target:
-        do add(out, value)
-    else:
-        do add(out, get(src, i))
-    end
-    return nc_array_int_set_loop(src, i + 1, n, target, value, out)
+    return out
 end
 
 func nc_array_int_set(src, target, value):
@@ -1166,11 +1172,11 @@ func nc_class_env_set_idx(env, idx, klass):
 end
 
 func nc_make_unknowns_loop(i, n, out):
-    if i >= n:
-        return out
+    while i < n:
+        do add(out, 0)
+        i = i + 1
     end
-    do add(out, 0)
-    return nc_make_unknowns_loop(i + 1, n, out)
+    return out
 end
 
 func nc_make_unknowns(n):
@@ -1178,14 +1184,14 @@ func nc_make_unknowns(n):
 end
 
 func nc_sig_init_loop(func_kids, i, n, nodes, params, returns):
-    if i >= n:
-        return (params, returns)
+    while i < n:
+        let fn = get(nodes, get(func_kids, i))
+        let pn = get(nodes, get(fn.2, 0))
+        do add(params, nc_make_unknowns(count(pn.1)))
+        do add(returns, 0)
+        i = i + 1
     end
-    let fn = get(nodes, get(func_kids, i))
-    let pn = get(nodes, get(fn.2, 0))
-    do add(params, nc_make_unknowns(count(pn.1)))
-    do add(returns, 0)
-    return nc_sig_init_loop(func_kids, i + 1, n, nodes, params, returns)
+    return (params, returns)
 end
 
 func nc_sig_init(nodes, prog_idx):
@@ -1216,16 +1222,16 @@ func nc_poly_max_instances():
 end
 
 func nc_poly_lookup_instance_loop(pool, instances, base_fn_idx, params, i, n):
-    if i >= n:
-        return 0 - 1
-    end
-    let inst = get(instances, i)
-    if inst.0 == base_fn_idx:
-        if nc_type_vector_equal(pool, inst.1, params):
-            return i
+    while i < n:
+        let inst = get(instances, i)
+        if inst.0 == base_fn_idx:
+            if nc_type_vector_equal(pool, inst.1, params):
+                return i
+            end
         end
+        i = i + 1
     end
-    return nc_poly_lookup_instance_loop(pool, instances, base_fn_idx, params, i + 1, n)
+    return 0 - 1
 end
 
 func nc_poly_lookup_instance(pool, instances, base_fn_idx, params):
@@ -1233,16 +1239,16 @@ func nc_poly_lookup_instance(pool, instances, base_fn_idx, params):
 end
 
 func nc_poly_guard_parent_chain(pool, instances, parent_idx, base_fn_idx, params, line):
-    if parent_idx == 0 - 1:
-        return 0
-    end
-    let parent = get(instances, parent_idx)
-    if parent.0 == base_fn_idx:
-        if nc_poly_vector_grows(pool, parent.1, params):
-            return nc_infer_fail(pool, 441, line, "")
+    while parent_idx != 0 - 1:
+        let parent = get(instances, parent_idx)
+        if parent.0 == base_fn_idx:
+            if nc_poly_vector_grows(pool, parent.1, params):
+                return nc_infer_fail(pool, 441, line, "")
+            end
         end
+        parent_idx = parent.5
     end
-    return nc_poly_guard_parent_chain(pool, instances, parent.5, base_fn_idx, params, line)
+    return 0
 end
 
 func nc_poly_make_instance(base_fn_idx, params, ret, depth, lowered_idx, parent_idx):
@@ -1274,14 +1280,14 @@ func nc_poly_get_or_create(pool, poly, base_fn_idx, params, parent_idx, sig, lin
 end
 
 func nc_poly_call_target_find_loop(targets, caller_inst_idx, call_node_idx, i, n):
-    if i >= n:
-        return 0 - 1
+    while i < n:
+        let target = get(targets, i)
+        if target.0 == caller_inst_idx and target.1 == call_node_idx:
+            return i
+        end
+        i = i + 1
     end
-    let target = get(targets, i)
-    if target.0 == caller_inst_idx and target.1 == call_node_idx:
-        return i
-    end
-    return nc_poly_call_target_find_loop(targets, caller_inst_idx, call_node_idx, i + 1, n)
+    return 0 - 1
 end
 
 func nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx):
@@ -1345,15 +1351,15 @@ func nc_or_changed(a, b):
 end
 
 func nc_func_lookup_loop(func_kids, i, n, name, nodes):
-    if i >= n:
-        return (0, 0, 0, 0)
+    while i < n:
+        let fn = get(nodes, get(func_kids, i))
+        if equal(get(fn.1, 0), name):
+            let pn = get(nodes, get(fn.2, 0))
+            return (1, i, count(pn.1), fn.3)
+        end
+        i = i + 1
     end
-    let fn = get(nodes, get(func_kids, i))
-    if equal(get(fn.1, 0), name):
-        let pn = get(nodes, get(fn.2, 0))
-        return (1, i, count(pn.1), fn.3)
-    end
-    return nc_func_lookup_loop(func_kids, i + 1, n, name, nodes)
+    return (0, 0, 0, 0)
 end
 
 func nc_func_lookup(nodes, prog_idx, name):
@@ -1362,31 +1368,31 @@ func nc_func_lookup(nodes, prog_idx, name):
 end
 
 func nc_table_check_loop(func_kids, i, n, seen, nodes, main_count, main_params, main_line):
-    if i >= n:
-        if main_count != 1:
-            return nc_fail(429, 0, "main")
+    while i < n:
+        let fn = get(nodes, get(func_kids, i))
+        let name = get(fn.1, 0)
+        if err_is_builtin_name(name):
+            return nc_fail(429, fn.3, name)
         end
-        if main_params != 0:
-            return nc_fail(429, main_line, "main")
+        if err_name_seen(seen, name):
+            return nc_fail(429, fn.3, name)
         end
-        return 0
+        do add(seen, name)
+        let pn = get(nodes, get(fn.2, 0))
+        if equal(name, "main"):
+            main_count = main_count + 1
+            main_params = count(pn.1)
+            main_line = fn.3
+        end
+        i = i + 1
     end
-    let fn = get(nodes, get(func_kids, i))
-    let name = get(fn.1, 0)
-    if err_is_builtin_name(name):
-        return nc_fail(429, fn.3, name)
+    if main_count != 1:
+        return nc_fail(429, 0, "main")
     end
-    if err_name_seen(seen, name):
-        return nc_fail(429, fn.3, name)
+    if main_params != 0:
+        return nc_fail(429, main_line, "main")
     end
-    do add(seen, name)
-    let pn = get(nodes, get(fn.2, 0))
-    if equal(name, "main"):
-        main_count = main_count + 1
-        main_params = count(pn.1)
-        main_line = fn.3
-    end
-    return nc_table_check_loop(func_kids, i + 1, n, seen, nodes, main_count, main_params, main_line)
+    return 0
 end
 
 func nc_table_check(nodes, prog_idx):
@@ -1474,21 +1480,21 @@ func nc_body_assigns_name(nodes, stmts, i, n, name):
 end
 
 func nc_if_assigns_name(nodes, kids, i, n, name):
-    if i >= n:
-        return false
+    while i < n:
+        let arm = get(nodes, get(kids, i))
+        let body_idx = 0
+        if equal(arm.0, "else"):
+            body_idx = get(arm.2, 0)
+        else:
+            body_idx = get(arm.2, 1)
+        end
+        let body = get(nodes, body_idx)
+        if nc_body_assigns_name(nodes, body.2, 0, count(body.2), name):
+            return true
+        end
+        i = i + 1
     end
-    let arm = get(nodes, get(kids, i))
-    let body_idx = 0
-    if equal(arm.0, "else"):
-        body_idx = get(arm.2, 0)
-    else:
-        body_idx = get(arm.2, 1)
-    end
-    let body = get(nodes, body_idx)
-    if nc_body_assigns_name(nodes, body.2, 0, count(body.2), name):
-        return true
-    end
-    return nc_if_assigns_name(nodes, kids, i + 1, n, name)
+    return false
 end
 
 func nc_body_let_target_count_name(nodes, stmts, i, n, name):
@@ -1527,18 +1533,18 @@ func nc_if_let_target_count_name(nodes, kids, i, n, name):
 end
 
 func nc_top_let_is_new_array(nodes, stmts, i, n, name):
-    if i >= n:
-        return false
-    end
-    let stmt = get(nodes, get(stmts, i))
-    if equal(stmt.0, "let") and equal(get(stmt.1, 0), name):
-        let val = get(nodes, get(stmt.2, 0))
-        if equal(val.0, "call") and equal(get(val.1, 0), "new_array"):
-            return true
+    while i < n:
+        let stmt = get(nodes, get(stmts, i))
+        if equal(stmt.0, "let") and equal(get(stmt.1, 0), name):
+            let val = get(nodes, get(stmt.2, 0))
+            if equal(val.0, "call") and equal(get(val.1, 0), "new_array"):
+                return true
+            end
+            return false
         end
-        return false
+        i = i + 1
     end
-    return nc_top_let_is_new_array(nodes, stmts, i + 1, n, name)
+    return false
 end
 
 func nc_return_is_trap(nodes, top_stmts, before, expr_idx):
@@ -1668,30 +1674,30 @@ func nc_tuple_depth_cached(depths, t):
 end
 
 func nc_tuple_depth_kids(depths, kids, i, n, depth):
-    if i >= n:
-        return depth
+    while i < n:
+        let child = nc_tuple_depth_cached(depths, get(kids, i))
+        if child > depth:
+            depth = child
+        end
+        i = i + 1
     end
-    let child = nc_tuple_depth_cached(depths, get(kids, i))
-    if child > depth:
-        depth = child
-    end
-    return nc_tuple_depth_kids(depths, kids, i + 1, n, depth)
+    return depth
 end
 
 -- Interned types only refer to earlier pool entries. Measure the DAG once,
 -- rather than expanding shared children such as (f(), f()) exponentially.
 -- Arrays carry their element's tuple depth without adding a tuple level.
 func nc_tuple_depth_loop(pool, t, i, depths):
-    if i > t - nc_type_struct_base():
-        return nc_tuple_depth_cached(depths, t)
+    while i <= t - nc_type_struct_base():
+        let entry = get(pool.0, i)
+        let depth = nc_tuple_depth_kids(depths, entry.1, 0, count(entry.1), 0)
+        if entry.0 == 1:
+            depth = depth + 1
+        end
+        do add(depths, depth)
+        i = i + 1
     end
-    let entry = get(pool.0, i)
-    let depth = nc_tuple_depth_kids(depths, entry.1, 0, count(entry.1), 0)
-    if entry.0 == 1:
-        depth = depth + 1
-    end
-    do add(depths, depth)
-    return nc_tuple_depth_loop(pool, t, i + 1, depths)
+    return nc_tuple_depth_cached(depths, t)
 end
 
 -- Record the supplier of a structural return constraint, not its current depth:
@@ -1704,15 +1710,15 @@ func nc_tuple_note_push(funcs, inst, caller, want):
 end
 
 func nc_tuple_note_push_loop(pushes, inst, caller, i, n):
-    if i >= n:
-        do add(pushes, (inst, caller))
-        return 0
+    while i < n:
+        let p = get(pushes, i)
+        if p.0 == inst and p.1 == caller:
+            return 0
+        end
+        i = i + 1
     end
-    let p = get(pushes, i)
-    if p.0 == inst and p.1 == caller:
-        return 0
-    end
-    return nc_tuple_note_push_loop(pushes, inst, caller, i + 1, n)
+    do add(pushes, (inst, caller))
+    return 0
 end
 
 func nc_tuple_sites_node(nodes, idx, acc):
@@ -1730,57 +1736,60 @@ func nc_tuple_sites_node(nodes, idx, acc):
 end
 
 func nc_tuple_sites_kids(nodes, kids, i, n, acc):
-    if i >= n:
-        return acc
+    while i < n:
+        let next_i = i + 1
+        let next_acc = nc_tuple_sites_node(nodes, get(kids, i), acc)
+        i = next_i
+        acc = next_acc
     end
-    return nc_tuple_sites_kids(nodes, kids, i + 1, n, nc_tuple_sites_node(nodes, get(kids, i), acc))
+    return acc
 end
 
 func nc_tuple_int_array_has(a, v, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if get(a, i) == v:
+            return true
+        end
+        i = i + 1
     end
-    if get(a, i) == v:
-        return true
-    end
-    return nc_tuple_int_array_has(a, v, i + 1, n)
+    return false
 end
 
 func nc_tuple_add_callees(targets, cur, i, n, order):
-    if i >= n:
-        return 0
-    end
-    let t = get(targets, i)
-    if t.0 == cur:
-        if not nc_tuple_int_array_has(order, t.2, 0, count(order)):
-            do add(order, t.2)
+    while i < n:
+        let t = get(targets, i)
+        if t.0 == cur:
+            if not nc_tuple_int_array_has(order, t.2, 0, count(order)):
+                do add(order, t.2)
+            end
         end
+        i = i + 1
     end
-    return nc_tuple_add_callees(targets, cur, i + 1, n, order)
+    return 0
 end
 
 func nc_tuple_depth_vec(depths, vec, i, n, best):
-    if i >= n:
-        return best
+    while i < n:
+        let d = nc_tuple_depth_cached(depths, get(vec, i))
+        if d > best:
+            best = d
+        end
+        i = i + 1
     end
-    let d = nc_tuple_depth_cached(depths, get(vec, i))
-    if d > best:
-        best = d
-    end
-    return nc_tuple_depth_vec(depths, vec, i + 1, n, best)
+    return best
 end
 
 func nc_tuple_add_pushers(pushes, inst, i, n, order):
-    if i >= n:
-        return 0
-    end
-    let p = get(pushes, i)
-    if p.0 == inst:
-        if not nc_tuple_int_array_has(order, p.1, 0, count(order)):
-            do add(order, p.1)
+    while i < n:
+        let p = get(pushes, i)
+        if p.0 == inst:
+            if not nc_tuple_int_array_has(order, p.1, 0, count(order)):
+                do add(order, p.1)
+            end
         end
+        i = i + 1
     end
-    return nc_tuple_add_pushers(pushes, inst, i + 1, n, order)
+    return 0
 end
 
 -- A finite return path gains levels only at tuple literals, tuple type
@@ -1792,19 +1801,21 @@ end
 -- A supplier's other syntax and callees can raise this conservative bound.
 -- Stop once the budget reaches the checked depth, since that cannot reject.
 func nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos, sites, edge, depth):
-    if sites + edge >= depth:
-        return sites + edge
+    while sites + edge < depth:
+        if pos >= count(order):
+            return sites + edge
+        end
+        let cur = get(order, pos)
+        let inst = get(funcs.0, cur)
+        let here = nc_tuple_sites_node(nodes, get(fn_nodes, inst.0), 0)
+        let e = nc_tuple_depth_vec(depths, inst.1, 0, count(inst.1), edge)
+        do nc_tuple_add_pushers(funcs.2, cur, 0, count(funcs.2), order)
+        do nc_tuple_add_callees(funcs.1, cur, 0, count(funcs.1), order)
+        pos = pos + 1
+        sites = sites + here
+        edge = e
     end
-    if pos >= count(order):
-        return sites + edge
-    end
-    let cur = get(order, pos)
-    let inst = get(funcs.0, cur)
-    let here = nc_tuple_sites_node(nodes, get(fn_nodes, inst.0), 0)
-    let e = nc_tuple_depth_vec(depths, inst.1, 0, count(inst.1), edge)
-    do nc_tuple_add_pushers(funcs.2, cur, 0, count(funcs.2), order)
-    do nc_tuple_add_callees(funcs.1, cur, 0, count(funcs.1), order)
-    return nc_tuple_local_budget(nodes, fn_nodes, funcs, depths, order, pos + 1, sites + here, e, depth)
+    return sites + edge
 end
 
 func nc_check_recursive_tuple(pool, nodes, prog_idx, funcs, t, line, fn_idx):
@@ -1842,11 +1853,11 @@ func nc_sig_unify_ret(pool, sig, fn_idx, want, line, nodes, prog_idx, funcs):
 end
 
 func nc_seed_params_loop(params, i, n, sig, fn_idx, env):
-    if i >= n:
-        return env
+    while i < n:
+        env = nc_class_env_add(env, get(params, i), nc_sig_get_param(sig, fn_idx, i))
+        i = i + 1
     end
-    env = nc_class_env_add(env, get(params, i), nc_sig_get_param(sig, fn_idx, i))
-    return nc_seed_params_loop(params, i + 1, n, sig, fn_idx, env)
+    return env
 end
 
 func nc_func_env_from_params(nodes, fn_node, sig, fn_idx):
@@ -1976,16 +1987,19 @@ func nc_constrain_array_value(pool, nodes, prog_idx, idx, env, sig, fn_idx, func
 end
 
 func nc_collect_call_arg_types(pool, nodes, prog_idx, kids, i, n, env, sig, fn_idx, funcs, n_params, args, changed):
-    if i >= n:
-        return (0, args, env, sig, changed)
+    while i < n:
+        let arg_idx = get(kids, i)
+        let ar = nc_infer_expr(pool, nodes, prog_idx, arg_idx, env, sig, fn_idx, funcs, n_params)
+        if ar.0 != 0:
+            return (ar.0, args, ar.2, ar.3, nc_or_changed(changed, ar.4))
+        end
+        do add(args, ar.1)
+        i = i + 1
+        env = ar.2
+        sig = ar.3
+        changed = nc_or_changed(changed, ar.4)
     end
-    let arg_idx = get(kids, i)
-    let ar = nc_infer_expr(pool, nodes, prog_idx, arg_idx, env, sig, fn_idx, funcs, n_params)
-    if ar.0 != 0:
-        return (ar.0, args, ar.2, ar.3, nc_or_changed(changed, ar.4))
-    end
-    do add(args, ar.1)
-    return nc_collect_call_arg_types(pool, nodes, prog_idx, kids, i + 1, n, ar.2, ar.3, fn_idx, funcs, n_params, args, nc_or_changed(changed, ar.4))
+    return (0, args, env, sig, changed)
 end
 
 func nc_poly_constrain_user_call(pool, nodes, prog_idx, call_idx, env, want, sig, fn_idx, funcs, n_params):
@@ -2096,22 +2110,28 @@ func nc_constrain_expr(pool, nodes, prog_idx, idx, env, want, sig, fn_idx, funcs
 end
 
 func nc_tuple_type_from_exprs(pool, nodes, prog_idx, kids, i, n, env, sig, fn_idx, funcs, n_params, child_types, changed):
-    if i >= n:
-        return (0, nc_type_intern_tuple(pool, child_types), env, sig, changed)
+    while i < n:
+        let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, i), env, sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.2, r.3, nc_or_changed(changed, r.4))
+        end
+        do add(child_types, r.1)
+        i = i + 1
+        env = r.2
+        sig = r.3
+        changed = nc_or_changed(changed, r.4)
     end
-    let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, i), env, sig, fn_idx, funcs, n_params)
-    if r.0 != 0:
-        return (r.0, 0, r.2, r.3, nc_or_changed(changed, r.4))
-    end
-    do add(child_types, r.1)
-    return nc_tuple_type_from_exprs(pool, nodes, prog_idx, kids, i + 1, n, r.2, r.3, fn_idx, funcs, n_params, child_types, nc_or_changed(changed, r.4))
+    return (0, nc_type_intern_tuple(pool, child_types), env, sig, changed)
 end
 
 func nc_tuple_child_start_loop(pool, kids, i, target, acc):
-    if i >= target:
-        return acc
+    while i < target:
+        let next_i = i + 1
+        let next_acc = acc + nc_type_width(pool, get(kids, i))
+        i = next_i
+        acc = next_acc
     end
-    return nc_tuple_child_start_loop(pool, kids, i + 1, target, acc + nc_type_width(pool, get(kids, i)))
+    return acc
 end
 
 -- Keep the arity metadata shared, but guard only the supported ordinary value
@@ -2146,18 +2166,21 @@ end
 -- to buffer; the syscall's seven arguments and the remaining byte arguments are
 -- ints. Keep this in normal inference so wrappers and polymorphic calls work.
 func nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, i, n, is_buffer, env, sig, fn_idx, funcs, n_params, line, changed):
-    if i >= n:
-        return (0, nc_type_int(), env, sig, changed)
+    while i < n:
+        let want = nc_type_int()
+        if is_buffer and i == 0:
+            want = nc_type_buffer()
+        end
+        let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, i), env, want, sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, 0, r.1, r.2, nc_or_changed(changed, r.3))
+        end
+        i = i + 1
+        env = r.1
+        sig = r.2
+        changed = nc_or_changed(changed, r.3)
     end
-    let want = nc_type_int()
-    if is_buffer and i == 0:
-        want = nc_type_buffer()
-    end
-    let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, i), env, want, sig, fn_idx, funcs, n_params)
-    if r.0 != 0:
-        return (r.0, 0, r.1, r.2, nc_or_changed(changed, r.3))
-    end
-    return nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, i + 1, n, is_buffer, r.1, r.2, fn_idx, funcs, n_params, line, nc_or_changed(changed, r.3))
+    return (0, nc_type_int(), env, sig, changed)
 end
 
 func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params):
@@ -2544,18 +2567,21 @@ func nc_record_value_ok(pool, want, got, line):
 end
 
 func nc_infer_record_args(pool, nodes, prog_idx, kids, fields, i, env, sig, fn_idx, funcs, n_params, changed, line):
-    if i >= count(kids):
-        return (0, env, sig, changed)
+    while i < count(kids):
+        let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, i), env, sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, r.2, r.3, nc_or_changed(changed, r.4))
+        end
+        let ok = nc_record_value_ok(pool, get(fields, i), r.1, line)
+        if ok != 0:
+            return (ok, r.2, r.3, nc_or_changed(changed, r.4))
+        end
+        i = i + 1
+        env = r.2
+        sig = r.3
+        changed = nc_or_changed(changed, r.4)
     end
-    let r = nc_infer_expr(pool, nodes, prog_idx, get(kids, i), env, sig, fn_idx, funcs, n_params)
-    if r.0 != 0:
-        return (r.0, r.2, r.3, nc_or_changed(changed, r.4))
-    end
-    let ok = nc_record_value_ok(pool, get(fields, i), r.1, line)
-    if ok != 0:
-        return (ok, r.2, r.3, nc_or_changed(changed, r.4))
-    end
-    return nc_infer_record_args(pool, nodes, prog_idx, kids, fields, i + 1, r.2, r.3, fn_idx, funcs, n_params, nc_or_changed(changed, r.4), line)
+    return (0, env, sig, changed)
 end
 
 func nc_infer_record_new(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params):
@@ -2770,18 +2796,20 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
 end
 
 func nc_infer_body(pool, nodes, prog_idx, stmts, i, n, env, sig, fn_idx, funcs, n_params, changed):
-    if i >= n:
-        return (0, env, sig, changed)
+    while i < n:
+        let r = nc_infer_stmt(pool, nodes, prog_idx, get(stmts, i), env, sig, fn_idx, funcs, n_params)
+        if r.0 != 0:
+            return (r.0, r.1, r.2, nc_or_changed(changed, r.3))
+        end
+        changed = nc_or_changed(changed, r.3)
+        if r.4 != 0:
+            return (0, r.1, r.2, changed)
+        end
+        i = i + 1
+        env = r.1
+        sig = r.2
     end
-    let r = nc_infer_stmt(pool, nodes, prog_idx, get(stmts, i), env, sig, fn_idx, funcs, n_params)
-    if r.0 != 0:
-        return (r.0, r.1, r.2, nc_or_changed(changed, r.3))
-    end
-    changed = nc_or_changed(changed, r.3)
-    if r.4 != 0:
-        return (0, r.1, r.2, changed)
-    end
-    return nc_infer_body(pool, nodes, prog_idx, stmts, i + 1, n, r.1, r.2, fn_idx, funcs, n_params, changed)
+    return (0, env, sig, changed)
 end
 
 func nc_contrib_add(contribs, env):
@@ -2801,34 +2829,35 @@ func nc_join_merge_class(pool, a, b, line):
 end
 
 func nc_join_one_index(pool, contribs, idx, j, n, cur, line):
-    if j >= n:
-        return (0, cur)
+    while j < n:
+        let env = get(contribs, j)
+        let m = nc_join_merge_class(pool, cur, nc_class_env_class(env, idx), line)
+        if m.0 != 0:
+            return m
+        end
+        j = j + 1
+        cur = m.1
     end
-    let env = get(contribs, j)
-    let m = nc_join_merge_class(pool, cur, nc_class_env_class(env, idx), line)
-    if m.0 != 0:
-        return m
-    end
-    return nc_join_one_index(pool, contribs, idx, j + 1, n, m.1, line)
+    return (0, cur)
 end
 
 -- The joined environment keeps the entry's names and count; a slot whose
 -- merged class differs from the entry's is the only one copied.
 func nc_join_build_loop(pool, entry_env, contribs, i, n, env, line):
-    if i >= n:
-        return (0, env)
-    end
-    let klass = nc_class_env_class(entry_env, i)
-    if count(contribs) > 0:
-        let m = nc_join_one_index(pool, contribs, i, 0, count(contribs), 0, line)
-        if m.0 != 0:
-            return (m.0, env)
+    while i < n:
+        let klass = nc_class_env_class(entry_env, i)
+        if count(contribs) > 0:
+            let m = nc_join_one_index(pool, contribs, i, 0, count(contribs), 0, line)
+            if m.0 != 0:
+                return (m.0, env)
+            end
+            if m.1 != klass:
+                env = nc_class_env_set_idx(env, i, m.1)
+            end
         end
-        if m.1 != klass:
-            env = nc_class_env_set_idx(env, i, m.1)
-        end
+        i = i + 1
     end
-    return nc_join_build_loop(pool, entry_env, contribs, i + 1, n, env, line)
+    return (0, env)
 end
 
 func nc_join_env(pool, entry_env, contribs, line):
@@ -2876,34 +2905,34 @@ func nc_if_has_else(nodes, kids):
 end
 
 func nc_infer_if_arms(pool, nodes, prog_idx, kids, i, n, entry_env, sig, fn_idx, funcs, n_params, contribs, changed):
-    if i >= n:
-        return (0, contribs, sig, changed)
-    end
-    let arm = get(nodes, get(kids, i))
-    let body_idx = 0
-    let env_for_body = nc_class_env_clone(entry_env)
-    if equal(arm.0, "else"):
-        body_idx = get(arm.2, 0)
-    else:
-        let c = nc_constrain_expr(pool, nodes, prog_idx, get(arm.2, 0), entry_env, nc_type_bool(), sig, fn_idx, funcs, n_params)
-        if c.0 != 0:
-            return (c.0, contribs, c.2, nc_or_changed(changed, c.3))
+    while i < n:
+        let arm = get(nodes, get(kids, i))
+        let body_idx = 0
+        let env_for_body = nc_class_env_clone(entry_env)
+        if equal(arm.0, "else"):
+            body_idx = get(arm.2, 0)
+        else:
+            let c = nc_constrain_expr(pool, nodes, prog_idx, get(arm.2, 0), entry_env, nc_type_bool(), sig, fn_idx, funcs, n_params)
+            if c.0 != 0:
+                return (c.0, contribs, c.2, nc_or_changed(changed, c.3))
+            end
+            sig = c.2
+            changed = nc_or_changed(changed, c.3)
+            body_idx = get(arm.2, 1)
         end
-        sig = c.2
-        changed = nc_or_changed(changed, c.3)
-        body_idx = get(arm.2, 1)
+        let body = get(nodes, body_idx)
+        let br = nc_infer_body(pool, nodes, prog_idx, body.2, 0, count(body.2), env_for_body, sig, fn_idx, funcs, n_params, 0)
+        if br.0 != 0:
+            return (br.0, contribs, br.2, nc_or_changed(changed, br.3))
+        end
+        sig = br.2
+        changed = nc_or_changed(changed, br.3)
+        if not body_ends_return(body_idx, nodes):
+            contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, entry_env.0))
+        end
+        i = i + 1
     end
-    let body = get(nodes, body_idx)
-    let br = nc_infer_body(pool, nodes, prog_idx, body.2, 0, count(body.2), env_for_body, sig, fn_idx, funcs, n_params, 0)
-    if br.0 != 0:
-        return (br.0, contribs, br.2, nc_or_changed(changed, br.3))
-    end
-    sig = br.2
-    changed = nc_or_changed(changed, br.3)
-    if not body_ends_return(body_idx, nodes):
-        contribs = nc_contrib_add(contribs, nc_class_env_prefix(br.1, entry_env.0))
-    end
-    return nc_infer_if_arms(pool, nodes, prog_idx, kids, i + 1, n, entry_env, sig, fn_idx, funcs, n_params, contribs, changed)
+    return (0, contribs, sig, changed)
 end
 
 func nc_infer_if(pool, nodes, prog_idx, kids, env, sig, fn_idx, funcs, n_params, line):
@@ -2941,14 +2970,16 @@ func nc_poly_infer_instance(pool, nodes, prog_idx, funcs, inst_idx, sig):
 end
 
 func nc_poly_infer_instances_loop(pool, nodes, prog_idx, funcs, i, sig, changed):
-    if i >= count(funcs.0):
-        return (0, sig, changed)
+    while i < count(funcs.0):
+        let r = nc_poly_infer_instance(pool, nodes, prog_idx, funcs, i, sig)
+        if r.0 != 0:
+            return r
+        end
+        i = i + 1
+        sig = r.1
+        changed = nc_or_changed(changed, r.2)
     end
-    let r = nc_poly_infer_instance(pool, nodes, prog_idx, funcs, i, sig)
-    if r.0 != 0:
-        return r
-    end
-    return nc_poly_infer_instances_loop(pool, nodes, prog_idx, funcs, i + 1, r.1, nc_or_changed(changed, r.2))
+    return (0, sig, changed)
 end
 
 func nc_poly_sig_solve_loop(pool, nodes, prog_idx, funcs, sig, remaining):
@@ -2966,47 +2997,47 @@ func nc_poly_sig_solve_loop(pool, nodes, prog_idx, funcs, sig, remaining):
 end
 
 func nc_sig_check_params_loop(pool, sig, fn_idx, i, n):
-    if i >= n:
-        return 0
+    while i < n:
+        let t = nc_sig_get_param(sig, fn_idx, i)
+        if nc_type_has_array_unknown(pool, t):
+            return nc_infer_fail(pool, 438, 0, "")
+        end
+        if nc_type_has_unknown(pool, t):
+            return nc_infer_fail(pool, 424, 0, "")
+        end
+        i = i + 1
     end
-    let t = nc_sig_get_param(sig, fn_idx, i)
-    if nc_type_has_array_unknown(pool, t):
-        return nc_infer_fail(pool, 438, 0, "")
-    end
-    if nc_type_has_unknown(pool, t):
-        return nc_infer_fail(pool, 424, 0, "")
-    end
-    return nc_sig_check_params_loop(pool, sig, fn_idx, i + 1, n)
+    return 0
 end
 
 func nc_poly_sig_check_concrete_loop(pool, nodes, prog_idx, funcs, i, sig):
-    if i >= count(funcs.0):
-        return 0
-    end
-    let prog = get(nodes, prog_idx)
-    let inst = get(funcs.0, i)
-    let fn = get(nodes, get(prog.2, inst.0))
-    let pn = get(nodes, get(fn.2, 0))
-    let pr = nc_sig_check_params_loop(pool, sig, i, 0, count(pn.1))
-    if pr != 0:
-        return pr
-    end
-    let nret = nc_func_never_returns_node(nodes, fn)
-    let ret = nc_sig_get_ret(sig, i)
-    if not nret:
-        if nc_type_has_array_unknown(pool, ret):
-            return nc_infer_fail(pool, 438, fn.3, "")
+    while i < count(funcs.0):
+        let prog = get(nodes, prog_idx)
+        let inst = get(funcs.0, i)
+        let fn = get(nodes, get(prog.2, inst.0))
+        let pn = get(nodes, get(fn.2, 0))
+        let pr = nc_sig_check_params_loop(pool, sig, i, 0, count(pn.1))
+        if pr != 0:
+            return pr
         end
-        if nc_type_has_unknown(pool, ret):
-            return nc_infer_fail(pool, 424, fn.3, "")
+        let nret = nc_func_never_returns_node(nodes, fn)
+        let ret = nc_sig_get_ret(sig, i)
+        if not nret:
+            if nc_type_has_array_unknown(pool, ret):
+                return nc_infer_fail(pool, 438, fn.3, "")
+            end
+            if nc_type_has_unknown(pool, ret):
+                return nc_infer_fail(pool, 424, fn.3, "")
+            end
         end
-    end
-    if i == 0 and equal(get(fn.1, 0), "main"):
-        if ret != nc_type_int() and ret != nc_type_bool() and not nc_type_is_renderable_aggregate(pool, ret):
-            return nc_infer_fail(pool, 432, fn.3, "")
+        if i == 0 and equal(get(fn.1, 0), "main"):
+            if ret != nc_type_int() and ret != nc_type_bool() and not nc_type_is_renderable_aggregate(pool, ret):
+                return nc_infer_fail(pool, 432, fn.3, "")
+            end
         end
+        i = i + 1
     end
-    return nc_poly_sig_check_concrete_loop(pool, nodes, prog_idx, funcs, i + 1, sig)
+    return 0
 end
 
 -- Scan EVERY parsed node (the whole pool) for an `nc_class_mix` poison node and
@@ -3016,13 +3047,13 @@ end
 -- not -- matching the C reference, which rejects class-mix syntactically for all
 -- functions.
 func nc_class_mix_scan_loop(nodes, i, n):
-    if i >= n:
-        return 0
+    while i < n:
+        if equal(get(nodes, i).0, "nc_class_mix"):
+            return get(nodes, i).3
+        end
+        i = i + 1
     end
-    if equal(get(nodes, i).0, "nc_class_mix"):
-        return get(nodes, i).3
-    end
-    return nc_class_mix_scan_loop(nodes, i + 1, n)
+    return 0
 end
 
 func nc_class_mix_line(nodes):
@@ -3032,11 +3063,11 @@ end
 -- Downstream of inference a record is the tuple of its fields, so lowering,
 -- metadata and the emitter see exactly the program written with tuples.
 func nc_type_erase_list(pool, kids, i, out):
-    if i >= count(kids):
-        return out
+    while i < count(kids):
+        do add(out, nc_type_erase(pool, get(kids, i)))
+        i = i + 1
     end
-    do add(out, nc_type_erase(pool, get(kids, i)))
-    return nc_type_erase_list(pool, kids, i + 1, out)
+    return out
 end
 
 func nc_type_erase(pool, t):
@@ -3054,11 +3085,11 @@ func nc_type_erase(pool, t):
 end
 
 func nc_erase_param_lists(pool, lists, i, out):
-    if i >= count(lists):
-        return out
+    while i < count(lists):
+        do add(out, nc_type_erase_list(pool, get(lists, i), 0, new_array(int)))
+        i = i + 1
     end
-    do add(out, nc_type_erase_list(pool, get(lists, i), 0, new_array(int)))
-    return nc_erase_param_lists(pool, lists, i + 1, out)
+    return out
 end
 
 func nc_erase_verified(pool, nodes, prog_idx, verified):
@@ -3071,64 +3102,64 @@ func nc_erase_verified(pool, nodes, prog_idx, verified):
 end
 
 func nc_record_names_dup_loop(nodes, recs, name, i, seen):
-    if i >= count(recs):
-        return seen
+    while i < count(recs):
+        if equal(get(get(nodes, parse_decimal(get(recs, i))).1, 0), name):
+            seen = seen + 1
+        end
+        i = i + 1
     end
-    if equal(get(get(nodes, parse_decimal(get(recs, i))).1, 0), name):
-        seen = seen + 1
-    end
-    return nc_record_names_dup_loop(nodes, recs, name, i + 1, seen)
+    return seen
 end
 
 func nc_record_fields_dup_loop(atoms, i):
-    if i >= count(atoms):
-        return ""
+    while i < count(atoms):
+        if nc_record_field_index_loop(atoms, get(atoms, i), 1) != i - 1:
+            return get(atoms, i)
+        end
+        i = i + 1
     end
-    if nc_record_field_index_loop(atoms, get(atoms, i), 1) != i - 1:
-        return get(atoms, i)
-    end
-    return nc_record_fields_dup_loop(atoms, i + 1)
+    return ""
 end
 
 -- Declaration checks, before inference: a record's name is its own, its
 -- fields are distinct, and its field types exist and do not contain it (ERR 447,
 -- or 434 for an unknown type name).
 func nc_records_check(pool, nodes, prog_idx, recs, i):
-    if i >= count(recs):
-        return 0
+    while i < count(recs):
+        let decl_idx = parse_decimal(get(recs, i))
+        let decl = get(nodes, decl_idx)
+        let name = get(decl.1, 0)
+        if nc_func_lookup(nodes, prog_idx, name).0 != 0:
+            return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' has the name of a function"))
+        end
+        if err_is_builtin_name(name):
+            return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' has the name of a builtin"))
+        end
+        if nc_record_names_dup_loop(nodes, recs, name, 0, 0) > 1:
+            return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' is declared more than once"))
+        end
+        let dup = nc_record_fields_dup_loop(decl.1, 1)
+        if length(dup) > 0:
+            return nc_fail(447, decl.3, diagnostic_with_payload("field '", dup, "' is declared more than once"))
+        end
+        let rt = nc_record_type(pool, nodes, decl_idx, new_array(int))
+        if rt.0 != 0:
+            return rt.0
+        end
+        i = i + 1
     end
-    let decl_idx = parse_decimal(get(recs, i))
-    let decl = get(nodes, decl_idx)
-    let name = get(decl.1, 0)
-    if nc_func_lookup(nodes, prog_idx, name).0 != 0:
-        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' has the name of a function"))
-    end
-    if err_is_builtin_name(name):
-        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' has the name of a builtin"))
-    end
-    if nc_record_names_dup_loop(nodes, recs, name, 0, 0) > 1:
-        return nc_fail(447, decl.3, diagnostic_with_payload("record '", name, "' is declared more than once"))
-    end
-    let dup = nc_record_fields_dup_loop(decl.1, 1)
-    if length(dup) > 0:
-        return nc_fail(447, decl.3, diagnostic_with_payload("field '", dup, "' is declared more than once"))
-    end
-    let rt = nc_record_type(pool, nodes, decl_idx, new_array(int))
-    if rt.0 != 0:
-        return rt.0
-    end
-    return nc_records_check(pool, nodes, prog_idx, recs, i + 1)
+    return 0
 end
 
 func nc_poly_field_find_loop(fields, inst, node, i):
-    if i >= count(fields):
-        return 0 - 1
+    while i < count(fields):
+        let f = get(fields, i)
+        if f.0 == inst and f.1 == node:
+            return i
+        end
+        i = i + 1
     end
-    let f = get(fields, i)
-    if f.0 == inst and f.1 == node:
-        return i
-    end
-    return nc_poly_field_find_loop(fields, inst, node, i + 1)
+    return 0 - 1
 end
 
 -- Field resolutions per instance: (instance, node, field index, field count,
