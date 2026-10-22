@@ -649,22 +649,27 @@ func nc_type_merge_possible_children(pool, a, b, i, n):
 end
 
 func nc_type_merge_possible(pool, old, want):
-    if old == nc_type_unknown() or want == nc_type_unknown():
-        return true
-    end
-    if nc_type_equal(pool, old, want):
-        return true
-    end
-    if nc_type_is_array(pool, old) and nc_type_is_array(pool, want):
-        return nc_type_merge_possible(pool, nc_type_array_elem(pool, old), nc_type_array_elem(pool, want))
-    end
-    if nc_type_is_tuple(pool, old) and nc_type_is_tuple(pool, want):
-        let oa = nc_type_tuple_children(pool, old)
-        let wa = nc_type_tuple_children(pool, want)
-        if count(oa) != count(wa):
+    while true:
+        if old == nc_type_unknown() or want == nc_type_unknown():
+            return true
+        end
+        if nc_type_equal(pool, old, want):
+            return true
+        end
+        if nc_type_is_array(pool, old) and nc_type_is_array(pool, want):
+            old = nc_type_array_elem(pool, old)
+            want = nc_type_array_elem(pool, want)
+        else:
+            if nc_type_is_tuple(pool, old) and nc_type_is_tuple(pool, want):
+                let oa = nc_type_tuple_children(pool, old)
+                let wa = nc_type_tuple_children(pool, want)
+                if count(oa) != count(wa):
+                    return false
+                end
+                return nc_type_merge_possible_children(pool, oa, wa, 0, count(oa))
+            end
             return false
         end
-        return nc_type_merge_possible_children(pool, oa, wa, 0, count(oa))
     end
     return false
 end
@@ -2983,17 +2988,21 @@ func nc_poly_infer_instances_loop(pool, nodes, prog_idx, funcs, i, sig, changed)
 end
 
 func nc_poly_sig_solve_loop(pool, nodes, prog_idx, funcs, sig, remaining):
-    let r = nc_poly_infer_instances_loop(pool, nodes, prog_idx, funcs, 0, sig, 0)
-    if r.0 != 0:
-        return r
+    while true:
+        let r = nc_poly_infer_instances_loop(pool, nodes, prog_idx, funcs, 0, sig, 0)
+        if r.0 != 0:
+            return r
+        end
+        if r.2 == 0:
+            return r
+        end
+        if remaining <= 0:
+            return (nc_infer_fail(pool, 424, 0, ""), r.1, 0)
+        end
+        sig = r.1
+        remaining = remaining - 1
     end
-    if r.2 == 0:
-        return r
-    end
-    if remaining <= 0:
-        return (nc_infer_fail(pool, 424, 0, ""), r.1, 0)
-    end
-    return nc_poly_sig_solve_loop(pool, nodes, prog_idx, funcs, r.1, remaining - 1)
+    return (0, sig, 0)
 end
 
 func nc_sig_check_params_loop(pool, sig, fn_idx, i, n):
