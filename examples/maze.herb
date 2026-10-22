@@ -62,37 +62,42 @@ end
 -- Command presses survive a quick press/release between animation frames.
 -- Movement still uses held state. Result: 0 ordinary, 1 close, 2 restarted.
 func maze_commands(c, map, cells, state, event, result):
-    if not x11_next_key(c, event): return result end
-    let key = linux_u32(event, 0)
-    if key == 65307: return 1 end
-    if key == 114 or key == 82:
-        do maze_restart(map, cells, state)
-        result = 2
+    while x11_next_key(c, event):
+        let key = linux_u32(event, 0)
+        if key == 65307: return 1 end
+        if key == 114 or key == 82:
+            do maze_restart(map, cells, state)
+            result = 2
+        end
     end
-    return maze_commands(c, map, cells, state, event, result)
+    return result
 end
 
 -- Two drawing passes keep wall colors grouped and the X11 batch bounded.
 func maze_walls(c, map, cells, ox, oy, cell, accent):
-    if cell >= map.width * map.height: return 0 end
-    if buffer_get(cells, cell) == 35:
-        let x = ox + (cell % map.width) * 24
-        let y = oy + (cell / map.width) * 24
-        if accent:
-            do x11_rect(c, x + 3, y + 3, 18, 2)
-        else:
-            do x11_rect(c, x + 1, y + 1, 22, 22)
+    while cell < map.width * map.height:
+        if buffer_get(cells, cell) == 35:
+            let x = ox + (cell % map.width) * 24
+            let y = oy + (cell / map.width) * 24
+            if accent:
+                do x11_rect(c, x + 3, y + 3, 18, 2)
+            else:
+                do x11_rect(c, x + 1, y + 1, 22, 22)
+            end
         end
+        cell = cell + 1
     end
-    return maze_walls(c, map, cells, ox, oy, cell + 1, accent)
+    return 0
 end
 
 func maze_dots(c, map, cells, ox, oy, cell):
-    if cell >= map.width * map.height: return 0 end
-    if buffer_get(cells, cell) == 46:
-        do x11_ellipse(c, ox + (cell % map.width) * 24 + 9, oy + (cell / map.width) * 24 + 9, 6, 6)
+    while cell < map.width * map.height:
+        if buffer_get(cells, cell) == 46:
+            do x11_ellipse(c, ox + (cell % map.width) * 24 + 9, oy + (cell / map.width) * 24 + 9, 6, 6)
+        end
+        cell = cell + 1
     end
-    return maze_dots(c, map, cells, ox, oy, cell + 1)
+    return 0
 end
 
 func maze_draw(c, map, cells, state, tick):
@@ -161,28 +166,32 @@ func maze_draw(c, map, cells, state, tick):
 end
 
 func maze_loop(c, map, cells, state, event, tick, last):
-    do x11_events(c)
-    let command = maze_commands(c, map, cells, state, event, 0)
-    if x11_closed(c) or command == 1:
-        let closed = x11_close(c)
-        do x11_need(closed == 0, "maze: display close failed\n")
-        do process_exit(0)
-        return 0
+    while true:
+        do x11_events(c)
+        let command = maze_commands(c, map, cells, state, event, 0)
+        if x11_closed(c) or command == 1:
+            let closed = x11_close(c)
+            do x11_need(closed == 0, "maze: display close failed\n")
+            do process_exit(0)
+            return 0
+        end
+        let now = linux_clock_ms(c.clock)
+        do x11_need(not linux_error(now), "maze: monotonic clock failed\n")
+        if command == 2:
+            do maze_draw(c, map, cells, state, 0)
+            tick = 1
+            last = now
+        elif now - last < 16:
+            let waited = linux_poll(c.state.fd, c.poll, 1, 16 - (now - last))
+            do x11_need(not linux_error(waited) or waited == 0 - 4, "maze: input wait failed\n")
+        else:
+            do maze_update(c, map, cells, state)
+            do maze_draw(c, map, cells, state, tick)
+            tick = (tick + 1) % 180
+            last = now
+        end
     end
-    let now = linux_clock_ms(c.clock)
-    do x11_need(not linux_error(now), "maze: monotonic clock failed\n")
-    if command == 2:
-        do maze_draw(c, map, cells, state, 0)
-        return maze_loop(c, map, cells, state, event, 1, now)
-    end
-    if now - last < 16:
-        let waited = linux_poll(c.state.fd, c.poll, 1, 16 - (now - last))
-        do x11_need(not linux_error(waited) or waited == 0 - 4, "maze: input wait failed\n")
-        return maze_loop(c, map, cells, state, event, tick, last)
-    end
-    do maze_update(c, map, cells, state)
-    do maze_draw(c, map, cells, state, tick)
-    return maze_loop(c, map, cells, state, event, (tick + 1) % 180, now)
+    return 0
 end
 
 -- Startup diagnostics only; no number-to-string allocation in the game loop.

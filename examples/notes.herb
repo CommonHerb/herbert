@@ -236,24 +236,29 @@ end
 -- Pasted text follows the file rules: valid UTF-8, TAB and LF or CRLF (in any
 -- mix); each CRLF becomes LF. Returns the count copied to dst, or -1 to refuse.
 func notes_normalize(src, p, stop, dst, out):
-    if p >= stop: return out end
-    let decoded = utf8_decode(src, p, stop)
-    if linux_error(decoded.0): return 0 - 1 end
-    if decoded.0 == 13:
-        if decoded.1 >= stop or buffer_get(src, decoded.1) != 10: return 0 - 1 end
-        return notes_normalize(src, decoded.1, stop, dst, out)
+    while p < stop:
+        let decoded = utf8_decode(src, p, stop)
+        if linux_error(decoded.0): return 0 - 1 end
+        if decoded.0 == 13:
+            if decoded.1 >= stop or buffer_get(src, decoded.1) != 10: return 0 - 1 end
+        else:
+            if not utf8_text_allowed(decoded.0): return 0 - 1 end
+            do linux_copy(dst, out, src, p, decoded.1 - p)
+            out = out + decoded.1 - p
+        end
+        p = decoded.1
     end
-    if not utf8_text_allowed(decoded.0): return 0 - 1 end
-    do linux_copy(dst, out, src, p, decoded.1 - p)
-    return notes_normalize(src, decoded.1, stop, dst, out + decoded.1 - p)
+    return out
 end
 
 -- One line for the Open and Find fields: valid text without TAB or newline.
 func notes_line_valid(bytes, p, count):
-    if p >= count: return true end
-    let decoded = utf8_decode(bytes, p, count)
-    if linux_error(decoded.0) or decoded.0 == 9 or decoded.0 == 10 or not utf8_text_allowed(decoded.0): return false end
-    return notes_line_valid(bytes, decoded.1, count)
+    while p < count:
+        let decoded = utf8_decode(bytes, p, count)
+        if linux_error(decoded.0) or decoded.0 == 9 or decoded.0 == 10 or not utf8_text_allowed(decoded.0): return false end
+        p = decoded.1
+    end
+    return true
 end
 
 -- Fields take one line: one trailing newline is dropped, and anything else
@@ -399,10 +404,12 @@ end
 
 -- Paths are bytes; offer only a prefix the Open field can show and edit.
 func notes_path_valid(bytes, p, count):
-    if p >= count: return true end
-    let decoded = utf8_decode(bytes, p, count)
-    if linux_error(decoded.0) or decoded.0 == 9 or decoded.0 == 10 or not utf8_text_allowed(decoded.0): return false end
-    return notes_path_valid(bytes, decoded.1, count)
+    while p < count:
+        let decoded = utf8_decode(bytes, p, count)
+        if linux_error(decoded.0) or decoded.0 == 9 or decoded.0 == 10 or not utf8_text_allowed(decoded.0): return false end
+        p = decoded.1
+    end
+    return true
 end
 
 -- The Open field starts with the open document's folder, absolute when the
@@ -722,16 +729,17 @@ end
 func notes_modifier(key): return (key >= 65505 and key <= 65518) or key == 65027 end
 
 func notes_keys(c, t, s, recovery, query, event):
-    if not x11_next_key(c, event): return 0 end
-    s.time = linux_u32(event, 12)
-    let symbol = linux_u32(event, 0)
-    if symbol >= 4294967041:
-        do notes_pointer(t, s, symbol, linux_u32(event, 4), linux_u32(event, 8))
-        return notes_keys(c, t, s, recovery, query, event)
+    while x11_next_key(c, event):
+        s.time = linux_u32(event, 12)
+        let symbol = linux_u32(event, 0)
+        if symbol >= 4294967041:
+            do notes_pointer(t, s, symbol, linux_u32(event, 4), linux_u32(event, 8))
+        else:
+            if not notes_modifier(symbol): do notes_attach(s) end
+            do notes_key(c, t, s, recovery, query, symbol, linux_u32(event, 4))
+        end
     end
-    if not notes_modifier(symbol): do notes_attach(s) end
-    do notes_key(c, t, s, recovery, query, symbol, linux_u32(event, 4))
-    return notes_keys(c, t, s, recovery, query, event)
+    return 0
 end
 
 -- The view follows the cursor every frame, except while the wheel has moved it
@@ -759,51 +767,68 @@ func notes_view(t, s):
 end
 
 func notes_draw_line(c, t, s, p, col, left, y):
-    if p >= text_length(t) or col >= left + 70: return 0 end
-    let ch = buffer_get(t.bytes, p)
-    if ch == 10: return 0 end
-    let next = text_next(t, p)
-    if col >= left and ch != 9:
-        if not unicode_display_supported(t.bytes, p, next):
-            s.missing_glyphs = true
+    while p < text_length(t) and col < left + 70:
+        let ch = buffer_get(t.bytes, p)
+        if ch == 10: return 0 end
+        let next = text_next(t, p)
+        if col >= left and ch != 9:
+            if not unicode_display_supported(t.bytes, p, next):
+                s.missing_glyphs = true
+            end
+            do pixel_unicode_cluster(c, t.bytes, p, next, 28 + (col - left) * 12, y, 2)
         end
-        do pixel_unicode_cluster(c, t.bytes, p, next, 28 + (col - left) * 12, y, 2)
+        col = text_next_column(col, ch)
+        p = next
     end
-    return notes_draw_line(c, t, s, next, text_next_column(col, ch), left, y)
+    return 0
 end
 
 func notes_draw_rows(c, t, s, p, left, row):
-    if row == 21: return 0 end
-    do notes_draw_line(c, t, s, p, 0, left, 102 + row * 20)
-    let e = text_line_end(t, p)
-    if e >= text_length(t): return 0 end
-    return notes_draw_rows(c, t, s, e + 1, left, row + 1)
+    while row != 21:
+        do notes_draw_line(c, t, s, p, 0, left, 102 + row * 20)
+        let e = text_line_end(t, p)
+        if e >= text_length(t): return 0 end
+        p = e + 1
+        row = row + 1
+    end
+    return 0
 end
 
 func notes_draw_query(c, query, count, p, x):
-    if p >= count: return 0 end
-    let next = unicode_grapheme_next(query, count, p)
-    do pixel_unicode_cluster(c, query, p, next, x, 578, 1)
-    return notes_draw_query(c, query, count, next, x + 6)
+    while p < count:
+        let next = unicode_grapheme_next(query, count, p)
+        do pixel_unicode_cluster(c, query, p, next, x, 578, 1)
+        p = next
+        x = x + 6
+    end
+    return 0
 end
 
 -- Inspect the query before drawing the status line so its fallback label is
 -- current in the same frame. Call only while the Find field is visible.
 func notes_query_missing(query, count, p):
-    if p >= count: return false end
-    let next = unicode_grapheme_next(query, count, p)
-    if not unicode_display_supported(query, p, next): return true end
-    return notes_query_missing(query, count, next)
+    while p < count:
+        let next = unicode_grapheme_next(query, count, p)
+        if not unicode_display_supported(query, p, next): return true end
+        p = next
+    end
+    return false
 end
 
 func notes_graphemes(bytes, count, p, n):
-    if p >= count: return n end
-    return notes_graphemes(bytes, count, unicode_grapheme_next(bytes, count, p), n + 1)
+    while p < count:
+        p = unicode_grapheme_next(bytes, count, p)
+        n = n + 1
+    end
+    return n
 end
 
 func notes_skip(bytes, count, p, n):
-    if n == 0 or p >= count: return p end
-    return notes_skip(bytes, count, unicode_grapheme_next(bytes, count, p), n - 1)
+    while n != 0 and p < count:
+        p = unicode_grapheme_next(bytes, count, p)
+        n = n - 1
+    end
+    return p
 end
 
 -- The Open field shows the path's last 130 characters.
@@ -814,12 +839,15 @@ func notes_path_start(bytes, count):
 end
 
 func notes_draw_hex(c, value, digits, x):
-    if digits == 0: return 0 end
-    let digit = value % 16
-    let ch = 48 + digit
-    if digit >= 10: ch = 65 + digit - 10 end
-    do pixel_letter(c, pixel_glyph(ch), x + (digits - 1) * 6, 580, 1, 0)
-    return notes_draw_hex(c, value / 16, digits - 1, x)
+    while digits != 0:
+        let digit = value % 16
+        let ch = 48 + digit
+        if digit >= 10: ch = 65 + digit - 10 end
+        do pixel_letter(c, pixel_glyph(ch), x + (digits - 1) * 6, 580, 1, 0)
+        value = value / 16
+        digits = digits - 1
+    end
+    return 0
 end
 
 func notes_warning(message):
@@ -830,24 +858,27 @@ end
 -- Highlight [a, b) behind the visible rows: the selection, or Find's match. A
 -- selected newline shows as a half-cell stub at the end of its line.
 func notes_draw_marks(c, t, p, left, row, a, b):
-    if row == 21 or p > b: return 0 end
-    let e = text_line_end(t, p)
-    if b > p and a <= e:
-        let from = a
-        if from < p: from = p end
-        let to = b
-        if to > e: to = e end
-        let c0 = text_column_loop(t, p, from, 0)
-        let c1 = text_column_loop(t, from, to, c0)
-        if c0 < left: c0 = left end
-        if c1 > left + 70: c1 = left + 70 end
-        let width = 0
-        if c1 > c0: width = (c1 - c0) * 12 end
-        if b > e and e < text_length(t) and c1 >= c0 and c1 < left + 70: width = width + 6 end
-        if width > 0: let mark = x11_rect(c, 28 + (c0 - left) * 12, 100 + row * 20, width, 20) end
+    while row != 21 and p <= b:
+        let e = text_line_end(t, p)
+        if b > p and a <= e:
+            let from = a
+            if from < p: from = p end
+            let to = b
+            if to > e: to = e end
+            let c0 = text_column_loop(t, p, from, 0)
+            let c1 = text_column_loop(t, from, to, c0)
+            if c0 < left: c0 = left end
+            if c1 > left + 70: c1 = left + 70 end
+            let width = 0
+            if c1 > c0: width = (c1 - c0) * 12 end
+            if b > e and e < text_length(t) and c1 >= c0 and c1 < left + 70: width = width + 6 end
+            if width > 0: let mark = x11_rect(c, 28 + (c0 - left) * 12, 100 + row * 20, width, 20) end
+        end
+        if e >= text_length(t): return 0 end
+        p = e + 1
+        row = row + 1
     end
-    if e >= text_length(t): return 0 end
-    return notes_draw_marks(c, t, e + 1, left, row + 1, a, b)
+    return 0
 end
 
 func notes_status(c, f, t, s, query):
@@ -1022,36 +1053,39 @@ func notes_draw(c, f, t, s, recovery, query, blink):
 end
 
 func notes_loop(c, t, s, recovery, query, event, lastblink):
-    do x11_events(c)
-    do x11_serve(c)
-    -- Accepted typing belongs to the document before a batched WM close is
-    -- considered. In particular, a queued ordinary Y must not confirm discard.
-    do notes_keys(c, t, s, recovery, query, event)
-    do notes_checkpoint(recovery, s.doc, t, s)
-    if x11_closed(c): let requested = notes_request_close(c, s.doc, t, s, recovery) end
-    let now = linux_clock_ms(c.clock)
-    do x11_need(not linux_error(now), "notes: monotonic clock failed\n")
-    -- A drag held past the text's edge scrolls one row or column per 50 ms.
-    let held = s.dragging and not notes_in_text(s.drag_x, s.drag_y)
-    if held and now - s.scrolled_at >= 50:
-        s.scrolled_at = now
-        do text_seek(t, notes_point(t, s, s.drag_x, s.drag_y))
-        do notes_redraw(s)
+    while true:
+        do x11_events(c)
+        do x11_serve(c)
+        -- Accepted typing belongs to the document before a batched WM close is
+        -- considered. In particular, a queued ordinary Y must not confirm discard.
+        do notes_keys(c, t, s, recovery, query, event)
+        do notes_checkpoint(recovery, s.doc, t, s)
+        if x11_closed(c): let requested = notes_request_close(c, s.doc, t, s, recovery) end
+        let now = linux_clock_ms(c.clock)
+        do x11_need(not linux_error(now), "notes: monotonic clock failed\n")
+        -- A drag held past the text's edge scrolls one row or column per 50 ms.
+        let held = s.dragging and not notes_in_text(s.drag_x, s.drag_y)
+        if held and now - s.scrolled_at >= 50:
+            s.scrolled_at = now
+            do text_seek(t, notes_point(t, s, s.drag_x, s.drag_y))
+            do notes_redraw(s)
+        end
+        let blink = (now / 500) % 2
+        if s.needs_draw or blink != lastblink:
+            do notes_draw(c, s.doc, t, s, recovery, query, blink == 0)
+        elif x11_exposed(c):
+            -- Refresh the retained pixmap after uncovering/expose without rebuilding
+            -- all glyphs. Repainting and blinking allocate no new objects.
+            do x11_present(c)
+        end
+        do x11_ack_expose(c)
+        let wait = 500 - now % 500
+        if held and wait > 50: wait = 50 end
+        let waited = linux_poll(c.state.fd, c.poll, 1, wait)
+        do x11_need(not linux_error(waited) or waited == 0 - 4, "notes: input wait failed\n")
+        lastblink = blink
     end
-    let blink = (now / 500) % 2
-    if s.needs_draw or blink != lastblink:
-        do notes_draw(c, s.doc, t, s, recovery, query, blink == 0)
-    elif x11_exposed(c):
-        -- Refresh the retained pixmap after uncovering/expose without rebuilding
-        -- all glyphs. Repainting and blinking allocate no new objects.
-        do x11_present(c)
-    end
-    do x11_ack_expose(c)
-    let wait = 500 - now % 500
-    if held and wait > 50: wait = 50 end
-    let waited = linux_poll(c.state.fd, c.poll, 1, wait)
-    do x11_need(not linux_error(waited) or waited == 0 - 4, "notes: input wait failed\n")
-    return notes_loop(c, t, s, recovery, query, event, blink)
+    return 0
 end
 
 func main():

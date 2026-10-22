@@ -4,15 +4,19 @@
 -- World coordinates remain bounded; every frame reuses the same byte buffers.
 
 func first_grid_columns(c, x):
-    if x >= 614: return 0 end
-    do x11_rect(c, x, 102, 1, 316)
-    return first_grid_columns(c, x + 32)
+    while x < 614:
+        do x11_rect(c, x, 102, 1, 316)
+        x = x + 32
+    end
+    return 0
 end
 
 func first_grid_rows(c, y):
-    if y >= 418: return 0 end
-    do x11_rect(c, 26, y, 588, 1)
-    return first_grid_rows(c, y + 32)
+    while y < 418:
+        do x11_rect(c, 26, y, 588, 1)
+        y = y + 32
+    end
+    return 0
 end
 
 func first_draw(c, x, y, tick):
@@ -68,30 +72,37 @@ end
 -- held-key state alone can miss it. Ordered presses survive that; movement
 -- keys still read held state below.
 func first_escape(c, event):
-    if not x11_next_key(c, event): return false end
-    if linux_u32(event, 0) == 65307: return true end
-    return first_escape(c, event)
+    while x11_next_key(c, event):
+        if linux_u32(event, 0) == 65307: return true end
+    end
+    return false
 end
 
 func first_loop(c, x, y, tick, last, event):
-    do x11_events(c)
-    if x11_closed(c) or first_escape(c, event):
-        let closed = x11_close(c)
-        do x11_need(closed == 0, "desktop: display close failed\n")
-        do process_exit(0)
-        return 0
+    while true:
+        do x11_events(c)
+        if x11_closed(c) or first_escape(c, event):
+            let closed = x11_close(c)
+            do x11_need(closed == 0, "desktop: display close failed\n")
+            do process_exit(0)
+            return 0
+        end
+        let now = linux_clock_ms(c.clock)
+        do x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
+        if now - last < 16:
+            let waited = linux_poll(c.state.fd, c.poll, 1, 16 - (now - last))
+            do x11_need(not linux_error(waited) or waited == 0 - 4, "desktop: input wait failed\n")
+        else:
+            let nx = first_position(x, x11_key(c, 65361) or x11_key(c, 97), x11_key(c, 65363) or x11_key(c, 100), 42, 598)
+            let ny = first_position(y, x11_key(c, 65362) or x11_key(c, 119), x11_key(c, 65364) or x11_key(c, 115), 118, 402)
+            do first_draw(c, nx, ny, tick)
+            x = nx
+            y = ny
+            tick = (tick + 1) % 180
+            last = now
+        end
     end
-    let now = linux_clock_ms(c.clock)
-    do x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
-    if now - last < 16:
-        let waited = linux_poll(c.state.fd, c.poll, 1, 16 - (now - last))
-        do x11_need(not linux_error(waited) or waited == 0 - 4, "desktop: input wait failed\n")
-        return first_loop(c, x, y, tick, last, event)
-    end
-    let nx = first_position(x, x11_key(c, 65361) or x11_key(c, 97), x11_key(c, 65363) or x11_key(c, 100), 42, 598)
-    let ny = first_position(y, x11_key(c, 65362) or x11_key(c, 119), x11_key(c, 65364) or x11_key(c, 115), 118, 402)
-    do first_draw(c, nx, ny, tick)
-    return first_loop(c, nx, ny, (tick + 1) % 180, now, event)
+    return 0
 end
 
 func main():
