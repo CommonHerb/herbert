@@ -90,35 +90,39 @@ end
 func x11_pad(n): return ((n + 3) / 4) * 4 end
 
 func x11_zero(b, p, n):
-    if n == 0: return 0 end
-    do buffer_set(b, p, 0)
-    return x11_zero(b, p + 1, n - 1)
+    while n != 0:
+        do buffer_set(b, p, 0)
+        p = p + 1
+        n = n - 1
+    end
+    return 0
 end
 
 func x11_match(b, p, n, text):
     if n != length(text): return false end
-    return x11_match_loop(b, p, text, 0)
-end
-
-func x11_match_loop(b, p, text, i):
-    if i == length(text): return true end
-    if buffer_get(b, p + i) != index(text, i): return false end
-    return x11_match_loop(b, p, text, i + 1)
+    let i = 0
+    while i != length(text):
+        if buffer_get(b, p + i) != index(text, i): return false end
+        i = i + 1
+    end
+    return true
 end
 
 func x11_display_digits(text, p, out):
-    if p == length(text): return freeze(out) end
-    let ch = index(text, p)
-    if ch == 46:
-        let ok = p + 2 == length(text)
-        do x11_need(ok, "desktop: only local DISPLAY screen 0 is supported\n")
-        do x11_need(index(text, p + 1) == 48, "desktop: only screen 0 is supported\n")
-        return freeze(out)
+    while p != length(text):
+        let ch = index(text, p)
+        if ch == 46:
+            let ok = p + 2 == length(text)
+            do x11_need(ok, "desktop: only local DISPLAY screen 0 is supported\n")
+            do x11_need(index(text, p + 1) == 48, "desktop: only screen 0 is supported\n")
+            return freeze(out)
+        end
+        do x11_need(ch >= 48 and ch <= 57, "desktop: DISPLAY must be :N or unix:N (screen 0)\n")
+        do x11_need(length(freeze(out)) < 5, "desktop: DISPLAY number is too long\n")
+        do append(out, ch)
+        p = p + 1
     end
-    do x11_need(ch >= 48 and ch <= 57, "desktop: DISPLAY must be :N or unix:N (screen 0)\n")
-    do x11_need(length(freeze(out)) < 5, "desktop: DISPLAY number is too long\n")
-    do append(out, ch)
-    return x11_display_digits(text, p + 1, out)
+    return freeze(out)
 end
 
 func x11_display(text):
@@ -144,20 +148,22 @@ func x11_auth_field(b, p, n):
 end
 
 func x11_auth_find(b, p, n, display, hostname):
-    if p == n: return (0, 0) end
-    do x11_need(p < n and n - p >= 2, "desktop: malformed Xauthority record\n")
-    let family = buffer_get(b, p) * 256 + buffer_get(b, p + 1)
-    let address = x11_auth_field(b, p + 2, n)
-    let number = x11_auth_field(b, address.2, n)
-    let name = x11_auth_field(b, number.2, n)
-    let cookie = x11_auth_field(b, name.2, n)
-    let local = family == 65535 or (family == 256 and x11_match(b, address.0, address.1, hostname))
-    -- An empty display number is a wildcard, used by this machine's Mutter.
-    -- FamilyWild skips address matching; FamilyLocal requires the hostname.
-    if local and (number.1 == 0 or x11_match(b, number.0, number.1, display)) and x11_match(b, name.0, name.1, "MIT-MAGIC-COOKIE-1") and cookie.1 == 16:
-        return (cookie.0, cookie.1)
+    while p != n:
+        do x11_need(p < n and n - p >= 2, "desktop: malformed Xauthority record\n")
+        let family = buffer_get(b, p) * 256 + buffer_get(b, p + 1)
+        let address = x11_auth_field(b, p + 2, n)
+        let number = x11_auth_field(b, address.2, n)
+        let name = x11_auth_field(b, number.2, n)
+        let cookie = x11_auth_field(b, name.2, n)
+        let local = family == 65535 or (family == 256 and x11_match(b, address.0, address.1, hostname))
+        -- An empty display number is a wildcard, used by this machine's Mutter.
+        -- FamilyWild skips address matching; FamilyLocal requires the hostname.
+        if local and (number.1 == 0 or x11_match(b, number.0, number.1, display)) and x11_match(b, name.0, name.1, "MIT-MAGIC-COOKIE-1") and cookie.1 == 16:
+            return (cookie.0, cookie.1)
+        end
+        p = cookie.2
     end
-    return x11_auth_find(b, cookie.2, n, display, hostname)
+    return (0, 0)
 end
 
 func x11_auth_path(env):
@@ -171,9 +177,11 @@ func x11_auth_path(env):
 end
 
 func x11_append_text(b, text, i):
-    if i == length(text): return 0 end
-    do append(b, index(text, i))
-    return x11_append_text(b, text, i + 1)
+    while i != length(text):
+        do append(b, index(text, i))
+        i = i + 1
+    end
+    return 0
 end
 
 func x11_connect(display, pollbuf, clockbuf):
@@ -198,21 +206,27 @@ func x11_connect(display, pollbuf, clockbuf):
 end
 
 func x11_visuals(b, p, n, count_left, visual):
-    if count_left == 0: return false end
-    do x11_need(p <= n and n - p >= 24, "desktop: truncated X11 visual information\n")
-    if linux_u32(b, p) == visual:
-        return buffer_get(b, p + 4) == 4 and linux_u32(b, p + 8) == 16711680 and linux_u32(b, p + 12) == 65280 and linux_u32(b, p + 16) == 255
+    while count_left != 0:
+        do x11_need(p <= n and n - p >= 24, "desktop: truncated X11 visual information\n")
+        if linux_u32(b, p) == visual:
+            return buffer_get(b, p + 4) == 4 and linux_u32(b, p + 8) == 16711680 and linux_u32(b, p + 12) == 65280 and linux_u32(b, p + 16) == 255
+        end
+        p = p + 24
+        count_left = count_left - 1
     end
-    return x11_visuals(b, p + 24, n, count_left - 1, visual)
+    return false
 end
 
 func x11_depths(b, p, n, left, visual):
-    if left == 0: return false end
-    do x11_need(p <= n and n - p >= 8, "desktop: truncated X11 depth information\n")
-    let count_visuals = linux_u16(b, p + 2)
-    do x11_need(count_visuals <= (n - p - 8) / 24, "desktop: invalid X11 visual count\n")
-    if buffer_get(b, p) == 24 and x11_visuals(b, p + 8, n, count_visuals, visual): return true end
-    return x11_depths(b, p + 8 + count_visuals * 24, n, left - 1, visual)
+    while left != 0:
+        do x11_need(p <= n and n - p >= 8, "desktop: truncated X11 depth information\n")
+        let count_visuals = linux_u16(b, p + 2)
+        do x11_need(count_visuals <= (n - p - 8) / 24, "desktop: invalid X11 visual count\n")
+        if buffer_get(b, p) == 24 and x11_visuals(b, p + 8, n, count_visuals, visual): return true end
+        p = p + 8 + count_visuals * 24
+        left = left - 1
+    end
+    return false
 end
 
 func x11_setup(c, env, display):
@@ -372,18 +386,20 @@ end
 
 func x11_reply(c, sequence):
     let st = c.state
-    let got = linux_read_exact(st.fd, c.replies, 0, 32, c.poll, c.clock)
-    do x11_need(got == 0, "desktop: incomplete X11 reply\n")
-    if buffer_get(c.replies, 0) != 1:
+    while true:
+        let got = linux_read_exact(st.fd, c.replies, 0, 32, c.poll, c.clock)
+        do x11_need(got == 0, "desktop: incomplete X11 reply\n")
+        if buffer_get(c.replies, 0) == 1:
+            do x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
+            let extra = linux_u32(c.replies, 4) * 4
+            do x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
+            let rest = linux_read_exact(st.fd, c.replies, 32, extra, c.poll, c.clock)
+            do x11_need(rest == 0, "desktop: truncated X11 reply body\n")
+            return extra
+        end
         do x11_dispatch(c)
-        return x11_reply(c, sequence)
     end
-    do x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
-    let extra = linux_u32(c.replies, 4) * 4
-    do x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
-    let rest = linux_read_exact(st.fd, c.replies, 32, extra, c.poll, c.clock)
-    do x11_need(rest == 0, "desktop: truncated X11 reply body\n")
-    return extra
+    return 0
 end
 
 func x11_intern(c, name):
@@ -410,17 +426,19 @@ end
 
 func x11_keyboard_fill(c, i, n, stride):
     let st = c.state
-    if i == n: return 0 end
-    let symbol = linux_u32(c.replies, 32 + i * stride * 4)
-    do linux_put32(c.keymap, (st.min_keycode + i) * 4, symbol)
-    let shifted = 0
-    if stride > 1: shifted = linux_u32(c.replies, 36 + i * stride * 4) end
-    if shifted == 0:
-        shifted = symbol
-        if symbol >= 97 and symbol <= 122: shifted = symbol - 32 end
+    while i != n:
+        let symbol = linux_u32(c.replies, 32 + i * stride * 4)
+        do linux_put32(c.keymap, (st.min_keycode + i) * 4, symbol)
+        let shifted = 0
+        if stride > 1: shifted = linux_u32(c.replies, 36 + i * stride * 4) end
+        if shifted == 0:
+            shifted = symbol
+            if symbol >= 97 and symbol <= 122: shifted = symbol - 32 end
+        end
+        do linux_put32(c.shifted, (st.min_keycode + i) * 4, shifted)
+        i = i + 1
     end
-    do linux_put32(c.shifted, (st.min_keycode + i) * 4, shifted)
-    return x11_keyboard_fill(c, i + 1, n, stride)
+    return 0
 end
 
 func x11_keyboard_request(c):
@@ -531,24 +549,27 @@ end
 -- A bounded drain prevents a busy event source from starving screen updates.
 func x11_events_loop(c, budget):
     let st = c.state
-    if budget == 0 or st.queue_count >= 256: return 0 end
-    let have = st.partial
-    let n = linux_syscall6(45, st.fd, buffer_address(c.replies) + have, 32 - have, 64, 0, 0)
-    if n == 0 - 11: return 0 end
-    if n == 0 - 4: return x11_events_loop(c, budget - 1) end
-    do x11_need(not linux_error(n) and n > 0 and n <= 32 - have, "desktop: display connection closed\n")
-    let total = have + n
-    if total == 32:
-        if buffer_get(c.replies, 0) == 1:
-            do x11_keyboard_reply(c)
-        else:
-            do x11_dispatch(c)
+    while budget != 0 and st.queue_count < 256:
+        let have = st.partial
+        let n = linux_syscall6(45, st.fd, buffer_address(c.replies) + have, 32 - have, 64, 0, 0)
+        if n == 0 - 11: return 0 end
+        if n != 0 - 4:
+            do x11_need(not linux_error(n) and n > 0 and n <= 32 - have, "desktop: display connection closed\n")
+            let total = have + n
+            if total == 32:
+                if buffer_get(c.replies, 0) == 1:
+                    do x11_keyboard_reply(c)
+                else:
+                    do x11_dispatch(c)
+                end
+                st.partial = 0
+            else:
+                st.partial = total
+            end
         end
-        st.partial = 0
-    else:
-        st.partial = total
+        budget = budget - 1
     end
-    return x11_events_loop(c, budget - 1)
+    return 0
 end
 
 func x11_events(c):
@@ -560,17 +581,15 @@ func x11_events(c):
     return 0
 end
 
-func x11_key_loop(c, keysym, code):
-    let st = c.state
-    if code > st.max_keycode: return false end
-    if buffer_get(c.pressed, code) != 0 and linux_u32(c.keymap, code * 4) == keysym: return true end
-    return x11_key_loop(c, keysym, code + 1)
-end
-
 func x11_key(c, keysym):
     let st = c.state
     if not st.focused: return false end
-    return x11_key_loop(c, keysym, st.min_keycode)
+    let code = st.min_keycode
+    while code <= st.max_keycode:
+        if buffer_get(c.pressed, code) != 0 and linux_u32(c.keymap, code * 4) == keysym: return true end
+        code = code + 1
+    end
+    return false
 end
 
 func x11_closed(c):

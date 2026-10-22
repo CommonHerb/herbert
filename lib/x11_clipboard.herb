@@ -28,12 +28,16 @@ end
 -- Text goes out in 32 KiB pieces, the first replacing the property and the rest
 -- appending, so each request fits the fixed request buffer.
 func x11_put_text(c, cb, window, property, kind, offset, mode):
-    let n = cb.count - offset
-    if n > 32768: n = 32768 end
-    let q = x11_change_property(c, window, property, kind, 8, mode, n)
-    do linux_copy(c.requests, q, cb.data, offset, n)
-    if offset + n >= cb.count: return 0 end
-    return x11_put_text(c, cb, window, property, kind, offset + n, 2)
+    while true:
+        let n = cb.count - offset
+        if n > 32768: n = 32768 end
+        let q = x11_change_property(c, window, property, kind, 8, mode, n)
+        do linux_copy(c.requests, q, cb.data, offset, n)
+        if offset + n >= cb.count: return 0 end
+        offset = offset + n
+        mode = 2
+    end
+    return 0
 end
 
 func x11_notify(c, requestor, selection, target, property, time):
@@ -77,18 +81,16 @@ func x11_serve_one(c, cb, at):
     return x11_notify(c, requestor, selection, target, answer, linux_u32(p, at + 4))
 end
 
-func x11_serve_loop(c, cb, i):
-    if i == cb.pending_count: return 0 end
-    do x11_serve_one(c, cb, i * 32)
-    return x11_serve_loop(c, cb, i + 1)
-end
-
 func x11_serve(c):
     let st = c.state
     let cb = st.clip
     if not cb.on or cb.pending_count == 0: return 0 end
     let from = (st.sequence + 1) % 65536
-    do x11_serve_loop(c, cb, 0)
+    let i = 0
+    while i != cb.pending_count:
+        do x11_serve_one(c, cb, i * 32)
+        i = i + 1
+    end
     cb.pending_count = 0
     cb.tolerant_from = from
     cb.tolerant_to = st.sequence
@@ -133,33 +135,36 @@ end
 -- keyboard-map reply is completed on the way, unlike startup's x11_reply.
 func x11_reply_runtime(c, sequence):
     let st = c.state
-    let got = linux_read_exact(st.fd, c.replies, 0, 32, c.poll, c.clock)
-    do x11_need(got == 0, "desktop: incomplete X11 reply\n")
-    if buffer_get(c.replies, 0) != 1:
-        do x11_dispatch(c)
-        return x11_reply_runtime(c, sequence)
+    while true:
+        let got = linux_read_exact(st.fd, c.replies, 0, 32, c.poll, c.clock)
+        do x11_need(got == 0, "desktop: incomplete X11 reply\n")
+        if buffer_get(c.replies, 0) != 1:
+            do x11_dispatch(c)
+        elif st.reply_pending != 0 and linux_u16(c.replies, 2) == st.reply_pending - 1:
+            do x11_keyboard_reply(c)
+        else:
+            do x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
+            let extra = linux_u32(c.replies, 4) * 4
+            do x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
+            let rest = linux_read_exact(st.fd, c.replies, 32, extra, c.poll, c.clock)
+            do x11_need(rest == 0, "desktop: truncated X11 reply body\n")
+            return extra
+        end
     end
-    if st.reply_pending != 0 and linux_u16(c.replies, 2) == st.reply_pending - 1:
-        do x11_keyboard_reply(c)
-        return x11_reply_runtime(c, sequence)
-    end
-    do x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
-    let extra = linux_u32(c.replies, 4) * 4
-    do x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
-    let rest = linux_read_exact(st.fd, c.replies, 32, extra, c.poll, c.clock)
-    do x11_need(rest == 0, "desktop: truncated X11 reply body\n")
-    return extra
+    return 0
 end
 
 func x11_clip_wait(c, cb, start, wait_ms):
     let st = c.state
-    do x11_events_loop(c, 512)
-    if cb.notified: return 0 end
-    let now = linux_clock_ms(c.clock)
-    do x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
-    if now - start >= wait_ms: return 0 end
-    do linux_poll(st.fd, c.poll, 1, wait_ms - (now - start))
-    return x11_clip_wait(c, cb, start, wait_ms)
+    while true:
+        do x11_events_loop(c, 512)
+        if cb.notified: return 0 end
+        let now = linux_clock_ms(c.clock)
+        do x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
+        if now - start >= wait_ms: return 0 end
+        do linux_poll(st.fd, c.poll, 1, wait_ms - (now - start))
+    end
+    return 0
 end
 
 func x11_clip_fetch(c, cb):
