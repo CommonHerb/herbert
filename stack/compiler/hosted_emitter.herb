@@ -1,26 +1,26 @@
 
 func nc_code_has_faultable_loop(code, i, n):
-    if i >= n:
-        return 0
+    while i < n:
+        let op = get(code, i).0
+        -- 23/29/31 = index/get/append OOB faults; 43/44 = div/mod by-zero fault.
+        -- A faultable op forces the fault-helper block (incl. the exit1 routine the
+        -- div/mod zero-check jumps to) to be emitted. op_mul (42) never faults.
+        if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61:
+            return 1
+        end
+        i = i + 1
     end
-    let op = get(code, i).0
-    -- 23/29/31 = index/get/append OOB faults; 43/44 = div/mod by-zero fault.
-    -- A faultable op forces the fault-helper block (incl. the exit1 routine the
-    -- div/mod zero-check jumps to) to be emitted. op_mul (42) never faults.
-    if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61:
-        return 1
-    end
-    return nc_code_has_faultable_loop(code, i + 1, n)
+    return 0
 end
 
 func nc_funcs_have_faultable_loop(funcs, i, n):
-    if i >= n:
-        return 0
+    while i < n:
+        if nc_code_has_faultable_loop(get(funcs, i).4, 0, count(get(funcs, i).4)) != 0:
+            return 1
+        end
+        i = i + 1
     end
-    if nc_code_has_faultable_loop(get(funcs, i).4, 0, count(get(funcs, i).4)) != 0:
-        return 1
-    end
-    return nc_funcs_have_faultable_loop(funcs, i + 1, n)
+    return 0
 end
 
 func nc_prog_has_faultable(prog):
@@ -134,10 +134,11 @@ func nc_append_rel32(buf, target, base):
 end
 
 func nc_mul8_loop(acc, n):
-    if n <= 0:
-        return acc
+    while n > 0:
+        acc = acc + 8
+        n = n - 1
     end
-    return nc_mul8_loop(acc + 8, n - 1)
+    return acc
 end
 
 func nc_mul8(n):
@@ -145,10 +146,10 @@ func nc_mul8(n):
 end
 
 func nc_mod16_loop(v):
-    if v < 16:
-        return v
+    while v >= 16:
+        v = v - 16
     end
-    return nc_mod16_loop(v - 16)
+    return v
 end
 
 func nc_mod16(v):
@@ -224,12 +225,13 @@ func nc_tail_dst_pair(ng, k):
 end
 
 func nc_tail_copy_len_loop(k, nf, ng, acc):
-    if k >= nf:
-        return acc
+    while k < nf:
+        let src = nc_mul8(nf - 1 - k)
+        let dst = nc_tail_dst_pair(ng, k)
+        k = k + 1
+        acc = acc + nc_disp_len_rsp(src) + nc_disp_len_rbp(dst.0, dst.1)
     end
-    let src = nc_mul8(nf - 1 - k)
-    let dst = nc_tail_dst_pair(ng, k)
-    return nc_tail_copy_len_loop(k + 1, nf, ng, acc + nc_disp_len_rsp(src) + nc_disp_len_rbp(dst.0, dst.1))
+    return acc
 end
 
 func nc_tail_len(ng, nf):
@@ -408,19 +410,23 @@ func nc_fault_just_nl_off():
 end
 
 func nc_arg_copy_len_loop(k, nwords, acc):
-    if k >= nwords:
-        return acc
+    while k < nwords:
+        let src_mag = 16 + nc_mul8(nwords - 1 - k)
+        let dst_mag = nc_local_mag(k)
+        k = k + 1
+        acc = acc + nc_disp_len_rbp(0, src_mag) + nc_disp_len_rbp(1, dst_mag)
     end
-    let src_mag = 16 + nc_mul8(nwords - 1 - k)
-    let dst_mag = nc_local_mag(k)
-    return nc_arg_copy_len_loop(k + 1, nwords, acc + nc_disp_len_rbp(0, src_mag) + nc_disp_len_rbp(1, dst_mag))
+    return acc
 end
 
 func nc_load_local_len_loop(base, j, width, acc):
-    if j >= width:
-        return acc
+    while j < width:
+        let next_j = j + 1
+        let next_acc = acc + nc_disp_len_rbp(1, nc_local_mag(base + j)) + 1
+        j = next_j
+        acc = next_acc
     end
-    return nc_load_local_len_loop(base, j + 1, width, acc + nc_disp_len_rbp(1, nc_local_mag(base + j)) + 1)
+    return acc
 end
 
 func nc_load_local_len(base, width):
@@ -428,10 +434,13 @@ func nc_load_local_len(base, width):
 end
 
 func nc_store_local_len_loop(base, j, acc):
-    if j == 0 - 1:
-        return acc
+    while j != 0 - 1:
+        let next_j = j - 1
+        let next_acc = acc + 1 + nc_disp_len_rbp(1, nc_local_mag(base + j))
+        j = next_j
+        acc = next_acc
     end
-    return nc_store_local_len_loop(base, j - 1, acc + 1 + nc_disp_len_rbp(1, nc_local_mag(base + j)))
+    return acc
 end
 
 func nc_store_local_len(base, width):
@@ -564,10 +573,13 @@ func nc_group_single_len(op):
 end
 
 func nc_get_loads_len(width, j, acc):
-    if j >= width:
-        return acc
+    while j < width:
+        let next_j = j + 1
+        let next_acc = acc + nc_disp_len_rsi(nc_mul8(j)) + 1
+        j = next_j
+        acc = next_acc
     end
-    return nc_get_loads_len(width, j + 1, acc + nc_disp_len_rsi(nc_mul8(j)) + 1)
+    return acc
 end
 
 func nc_get_len(width):
@@ -578,10 +590,13 @@ func nc_get_len(width):
 end
 
 func nc_arr_add_store_len(width, k, acc):
-    if k == 0 - 1:
-        return acc
+    while k != 0 - 1:
+        let next_k = k - 1
+        let next_acc = acc + 1 + nc_disp_len_rsi(nc_mul8(k))
+        k = next_k
+        acc = next_acc
     end
-    return nc_arr_add_store_len(width, k - 1, acc + 1 + nc_disp_len_rsi(nc_mul8(k)))
+    return acc
 end
 
 -- SET_FIELD (op 64): [array, w value words] -> stores the words into the
@@ -601,12 +616,12 @@ func nc_emit_rax_field_store(buf, mag):
 end
 
 func nc_emit_set_field_stores(buf, off, j):
-    if j == 0 - 1:
-        return buf
+    while j != 0 - 1:
+        do append(buf, 89)
+        buf = nc_emit_rax_field_store(buf, nc_mul8(off + j))
+        j = j - 1
     end
-    do append(buf, 89)
-    buf = nc_emit_rax_field_store(buf, nc_mul8(off + j))
-    return nc_emit_set_field_stores(buf, off, j - 1)
+    return buf
 end
 
 func nc_emit_set_field(buf, off, w):
@@ -635,15 +650,16 @@ func nc_emit_set_field(buf, off, w):
 end
 
 func nc_set_field_store_len(off, j, acc):
-    if j == 0 - 1:
-        return acc
+    while j != 0 - 1:
+        let mag = nc_mul8(off + j)
+        let one = 7
+        if mag <= 127:
+            one = 4
+        end
+        j = j - 1
+        acc = acc + 1 + one
     end
-    let mag = nc_mul8(off + j)
-    let one = 7
-    if mag <= 127:
-        one = 4
-    end
-    return nc_set_field_store_len(off, j - 1, acc + 1 + one)
+    return acc
 end
 
 -- GET_FIELD (op 65): [ref record] -> the field's w words, read from the
@@ -651,19 +667,19 @@ end
 -- element exists by construction, so there is no check.
 --   pop rax; mov rax, [rax + 16]; push qword [rax + 8(s + j)] for j = 0..w-1
 func nc_emit_get_field_loads(buf, s, j, w):
-    if j >= w:
-        return buf
+    while j < w:
+        let mag = nc_mul8(s + j)
+        do append(buf, 255)
+        if mag <= 127:
+            do append(buf, 112)
+            do append(buf, mag)
+        else:
+            do append(buf, 176)
+            buf = nc_append_le32(buf, mag)
+        end
+        j = j + 1
     end
-    let mag = nc_mul8(s + j)
-    do append(buf, 255)
-    if mag <= 127:
-        do append(buf, 112)
-        do append(buf, mag)
-    else:
-        do append(buf, 176)
-        buf = nc_append_le32(buf, mag)
-    end
-    return nc_emit_get_field_loads(buf, s, j + 1, w)
+    return buf
 end
 
 func nc_emit_get_field(buf, meta, pc):
@@ -677,14 +693,15 @@ func nc_emit_get_field(buf, meta, pc):
 end
 
 func nc_get_field_loads_len(s, j, w, acc):
-    if j >= w:
-        return acc
+    while j < w:
+        let one = 6
+        if nc_mul8(s + j) <= 127:
+            one = 3
+        end
+        j = j + 1
+        acc = acc + one
     end
-    let one = 6
-    if nc_mul8(s + j) <= 127:
-        one = 3
-    end
-    return nc_get_field_loads_len(s, j + 1, w, acc + one)
+    return acc
 end
 
 func nc_get_field_len(meta, pc):
@@ -709,12 +726,13 @@ func nc_rsp_store_len(mag):
 end
 
 func nc_tuple_get_copy_len_loop(j, f, w, s, acc):
-    if j >= f:
-        return acc
+    while j < f:
+        let src = nc_mul8(w - 1 - (s + j))
+        let dst = nc_mul8(w - 1 - j)
+        j = j + 1
+        acc = acc + nc_disp_len_rsp(src) + nc_rsp_store_len(dst)
     end
-    let src = nc_mul8(w - 1 - (s + j))
-    let dst = nc_mul8(w - 1 - j)
-    return nc_tuple_get_copy_len_loop(j + 1, f, w, s, acc + nc_disp_len_rsp(src) + nc_rsp_store_len(dst))
+    return acc
 end
 
 func nc_tuple_get_len(meta, pc):
@@ -732,10 +750,13 @@ func nc_sret_scratch_mag(base_word, ret_width, k):
 end
 
 func nc_call_ret_push_len_loop(base_word, ret_width, k, n, acc):
-    if k >= n:
-        return acc
+    while k < n:
+        let next_k = k + 1
+        let next_acc = acc + nc_disp_len_rbp(1, nc_sret_scratch_mag(base_word, ret_width, k)) + 1
+        k = next_k
+        acc = next_acc
     end
-    return nc_call_ret_push_len_loop(base_word, ret_width, k + 1, n, acc + nc_disp_len_rbp(1, nc_sret_scratch_mag(base_word, ret_width, k)) + 1)
+    return acc
 end
 
 func nc_normal_call_len(meta, pc):
@@ -756,10 +777,13 @@ func nc_tail_len_for_meta(meta, pc):
 end
 
 func nc_aggregate_ret_store_len_loop(k, retw, acc):
-    if k == 0 - 1:
-        return acc
+    while k != 0 - 1:
+        let next_k = k - 1
+        let next_acc = acc + 1 + nc_disp_len_rdi(nc_mul8(k))
+        k = next_k
+        acc = next_acc
     end
-    return nc_aggregate_ret_store_len_loop(k - 1, retw, acc + 1 + nc_disp_len_rdi(nc_mul8(k)))
+    return acc
 end
 
 func nc_ret_len(meta):
@@ -817,27 +841,30 @@ func nc_group(code, i, n, fn, funcs, meta, metas):
 end
 
 func nc_pass1_fill_group(offs, bounds, j, next_i, cur, start):
-    if j >= next_i:
-        return (offs, bounds)
+    while j < next_i:
+        do add(offs, cur)
+        if j == start:
+            do add(bounds, 1)
+        else:
+            do add(bounds, 0)
+        end
+        j = j + 1
     end
-    do add(offs, cur)
-    if j == start:
-        do add(bounds, 1)
-    else:
-        do add(bounds, 0)
-    end
-    return nc_pass1_fill_group(offs, bounds, j + 1, next_i, cur, start)
+    return (offs, bounds)
 end
 
 func nc_pass1_layout_loop(code, i, n, cur, offs, bounds, fn, funcs, meta, metas):
-    if i >= n:
-        do add(offs, cur)
-        do add(bounds, 0)
-        return (offs, bounds, cur)
+    while i < n:
+        let g = nc_group(code, i, n, fn, funcs, meta, metas)
+        let filled = nc_pass1_fill_group(offs, bounds, i, g.1, cur, i)
+        i = g.1
+        cur = cur + g.0
+        offs = filled.0
+        bounds = filled.1
     end
-    let g = nc_group(code, i, n, fn, funcs, meta, metas)
-    let filled = nc_pass1_fill_group(offs, bounds, i, g.1, cur, i)
-    return nc_pass1_layout_loop(code, g.1, n, cur + g.0, filled.0, filled.1, fn, funcs, meta, metas)
+    do add(offs, cur)
+    do add(bounds, 0)
+    return (offs, bounds, cur)
 end
 
 func nc_pass1_layout(fn, funcs, meta, metas, prefix_len):
@@ -855,68 +882,68 @@ func nc_branch_end_delta(op):
 end
 
 func nc_branch_and_rel_verify_loop(code, i, n, fn, funcs, meta, metas, layout, layouts):
-    if i >= n:
-        return 0
+    while i < n:
+        let instr = get(code, i)
+        let op = instr.0
+        let g = nc_group(code, i, n, fn, funcs, meta, metas)
+        if op == 16 or op == 17 or op == 18 or op == 19:
+            let target = instr.1
+            if target >= n or target == i:
+                return nc_fail(415, 0, int_to_str(target))
+            end
+            -- Only an unconditional branch may go backward: a loop's branch back
+            -- to its condition.
+            if target < i and op != 16:
+                return nc_fail(415, 0, int_to_str(target))
+            end
+            if get(layout.2, target) == 0:
+                return nc_fail(415, 0, int_to_str(target))
+            end
+            let base = layout.0 + get(layout.1, i) + nc_branch_end_delta(op)
+            let dest = layout.0 + get(layout.1, target)
+            if target > i and dest <= base:
+                return nc_fail(415, 0, int_to_str(target))
+            end
+            if target < i and dest >= base:
+                return nc_fail(415, 0, int_to_str(target))
+            end
+            if not nc_rel_ok(dest, base):
+                return nc_fail(427, 0, "")
+            end
+        end
+        if op == 20:
+            let callee_layout = get(layouts, instr.1)
+            let target_entry = callee_layout.0
+            let base = 0
+            let cm = get(meta.call_meta, i)
+            if cm.2 == 2 or cm.2 == 3:
+                base = layout.0 + get(layout.1, i) + g.0
+            elif cm.2 == 1:
+                base = layout.0 + get(layout.1, i) + nc_disp_len_rbp(1, nc_sret_scratch_mag(meta.scratch_base, cm.1, 0)) + 5
+            else:
+                base = layout.0 + get(layout.1, i) + 5
+            end
+            if not nc_rel_ok(target_entry, base):
+                return nc_fail(427, 0, "")
+            end
+        end
+        i = g.1
     end
-    let instr = get(code, i)
-    let op = instr.0
-    let g = nc_group(code, i, n, fn, funcs, meta, metas)
-    if op == 16 or op == 17 or op == 18 or op == 19:
-        let target = instr.1
-        if target >= n or target == i:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        -- Only an unconditional branch may go backward: a loop's branch back
-        -- to its condition.
-        if target < i and op != 16:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        if get(layout.2, target) == 0:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        let base = layout.0 + get(layout.1, i) + nc_branch_end_delta(op)
-        let dest = layout.0 + get(layout.1, target)
-        if target > i and dest <= base:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        if target < i and dest >= base:
-            return nc_fail(415, 0, int_to_str(target))
-        end
-        if not nc_rel_ok(dest, base):
-            return nc_fail(427, 0, "")
-        end
-    end
-    if op == 20:
-        let callee_layout = get(layouts, instr.1)
-        let target_entry = callee_layout.0
-        let base = 0
-        let cm = get(meta.call_meta, i)
-        if cm.2 == 2 or cm.2 == 3:
-            base = layout.0 + get(layout.1, i) + g.0
-        elif cm.2 == 1:
-            base = layout.0 + get(layout.1, i) + nc_disp_len_rbp(1, nc_sret_scratch_mag(meta.scratch_base, cm.1, 0)) + 5
-        else:
-            base = layout.0 + get(layout.1, i) + 5
-        end
-        if not nc_rel_ok(target_entry, base):
-            return nc_fail(427, 0, "")
-        end
-    end
-    return nc_branch_and_rel_verify_loop(code, g.1, n, fn, funcs, meta, metas, layout, layouts)
+    return 0
 end
 
 func nc_verify_layout_rels_loop(funcs, metas, layouts, i, n):
-    if i >= n:
-        return 0
+    while i < n:
+        let fn = get(funcs, i)
+        let meta = get(metas, i)
+        let layout = get(layouts, i)
+        let r = nc_branch_and_rel_verify_loop(fn.4, 0, count(fn.4), fn, funcs, meta, metas, layout, layouts)
+        if r != 0:
+            return r
+        end
+        i = i + 1
     end
-    let fn = get(funcs, i)
-    let meta = get(metas, i)
-    let layout = get(layouts, i)
-    let r = nc_branch_and_rel_verify_loop(fn.4, 0, count(fn.4), fn, funcs, meta, metas, layout, layouts)
-    if r != 0:
-        return r
-    end
-    return nc_verify_layout_rels_loop(funcs, metas, layouts, i + 1, n)
+    return 0
 end
 
 func nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret, rplan):
@@ -924,17 +951,18 @@ func nc_entry_stub_len(has_clogger, has_heap, has_faultable, main_ret, rplan):
 end
 
 func nc_pass1_program_loop(funcs, metas, i, n, entry, layouts):
-    if i >= n:
-        return (0, layouts, entry)
+    while i < n:
+        let fn = get(funcs, i)
+        let meta = get(metas, i)
+        let frame_sz = nc_frame_total(meta)
+        let prefix_len = nc_prologue_len(frame_sz) + nc_sret_save_len(meta) + nc_arg_copy_len_loop(0, meta.pwords, 0)
+        let lay = nc_pass1_layout(fn, funcs, meta, metas, prefix_len)
+        let fn_len = lay.2
+        do add(layouts, (entry, lay.0, lay.1, frame_sz, prefix_len, fn_len))
+        i = i + 1
+        entry = entry + fn_len
     end
-    let fn = get(funcs, i)
-    let meta = get(metas, i)
-    let frame_sz = nc_frame_total(meta)
-    let prefix_len = nc_prologue_len(frame_sz) + nc_sret_save_len(meta) + nc_arg_copy_len_loop(0, meta.pwords, 0)
-    let lay = nc_pass1_layout(fn, funcs, meta, metas, prefix_len)
-    let fn_len = lay.2
-    do add(layouts, (entry, lay.0, lay.1, frame_sz, prefix_len, fn_len))
-    return nc_pass1_program_loop(funcs, metas, i + 1, n, entry + fn_len, layouts)
+    return (0, layouts, entry)
 end
 
 func nc_pass1_program(prog, metas, has_clogger, has_heap, has_faultable, rplan):
@@ -1078,23 +1106,23 @@ func nc_emit_phdr(buf, img, align_hi):
 end
 
 func nc_code_has_call_loop(code, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if get(code, i).0 == 20:
+            return true
+        end
+        i = i + 1
     end
-    if get(code, i).0 == 20:
-        return true
-    end
-    return nc_code_has_call_loop(code, i + 1, n)
+    return false
 end
 
 func nc_funcs_have_call_loop(funcs, i, n):
-    if i >= n:
-        return false
+    while i < n:
+        if nc_code_has_call_loop(get(funcs, i).4, 0, count(get(funcs, i).4)):
+            return true
+        end
+        i = i + 1
     end
-    if nc_code_has_call_loop(get(funcs, i).4, 0, count(get(funcs, i).4)):
-        return true
-    end
-    return nc_funcs_have_call_loop(funcs, i + 1, n)
+    return false
 end
 
 func nc_funcs_have_call(funcs):
@@ -1102,10 +1130,10 @@ func nc_funcs_have_call(funcs):
 end
 
 func nc_mod4096_loop(v):
-    if v < 4096:
-        return v
+    while v >= 4096:
+        v = v - 4096
     end
-    return nc_mod4096_loop(v - 4096)
+    return v
 end
 
 func nc_roundup_page(v):
@@ -1764,10 +1792,13 @@ func nc_rtok_len(kind):
 end
 
 func nc_rplan_body_len_loop(rplan, i, n, acc):
-    if i >= n:
-        return acc
+    while i < n:
+        let next_i = i + 1
+        let next_acc = acc + nc_rtok_len(get(rplan, i).0)
+        i = next_i
+        acc = next_acc
     end
-    return nc_rplan_body_len_loop(rplan, i + 1, n, acc + nc_rtok_len(get(rplan, i).0))
+    return acc
 end
 
 func nc_rplan_body_len(rplan):
@@ -1787,15 +1818,16 @@ func nc_rtok_words(tok):
 end
 
 func nc_rplan_words_loop(rplan, i, n, acc):
-    if i >= n:
-        return acc
+    while i < n:
+        let w = nc_rtok_words(get(rplan, i))
+        let m = acc
+        if w > m:
+            m = w
+        end
+        i = i + 1
+        acc = m
     end
-    let w = nc_rtok_words(get(rplan, i))
-    let m = acc
-    if w > m:
-        m = w
-    end
-    return nc_rplan_words_loop(rplan, i + 1, n, m)
+    return acc
 end
 
 func nc_rplan_words(rplan):
@@ -2186,26 +2218,26 @@ end
 -- link12: emit the render-plan body (the inline render in the entry stub). Walks the
 -- SAME flat token list the length pass sums, so the two cannot drift.
 func nc_emit_rplan(buf, rplan, i, n, stage, int_off, bool_off, str_off, write_off):
-    if i >= n:
-        return buf
+    while i < n:
+        let tok = get(rplan, i)
+        if tok.0 == 0:
+            buf = nc_emit_render_putc(buf, tok.1, stage, write_off)
+        end
+        if tok.0 == 1:
+            buf = nc_emit_render_putsep(buf, stage, write_off)
+        end
+        if tok.0 == 2:
+            buf = nc_emit_render_word_elem(buf, tok.1, int_off)
+        end
+        if tok.0 == 3:
+            buf = nc_emit_render_word_elem(buf, tok.1, bool_off)
+        end
+        if tok.0 == 4:
+            buf = nc_emit_render_str_elem(buf, tok.1, str_off)
+        end
+        i = i + 1
     end
-    let tok = get(rplan, i)
-    if tok.0 == 0:
-        buf = nc_emit_render_putc(buf, tok.1, stage, write_off)
-    end
-    if tok.0 == 1:
-        buf = nc_emit_render_putsep(buf, stage, write_off)
-    end
-    if tok.0 == 2:
-        buf = nc_emit_render_word_elem(buf, tok.1, int_off)
-    end
-    if tok.0 == 3:
-        buf = nc_emit_render_word_elem(buf, tok.1, bool_off)
-    end
-    if tok.0 == 4:
-        buf = nc_emit_render_str_elem(buf, tok.1, str_off)
-    end
-    return nc_emit_rplan(buf, rplan, i + 1, n, stage, int_off, bool_off, str_off, write_off)
+    return buf
 end
 
 func nc_emit_fault_exit1(buf):
@@ -2253,14 +2285,14 @@ func nc_emit_rdi_store_rax(buf, mag):
 end
 
 func nc_emit_arg_copies_loop(buf, k, nwords):
-    if k >= nwords:
-        return buf
+    while k < nwords:
+        let src_mag = 16 + nc_mul8(nwords - 1 - k)
+        let dst_mag = nc_local_mag(k)
+        buf = nc_emit_disp_rbp_load_rax(buf, 0, src_mag)
+        buf = nc_emit_disp_rbp_store_rax(buf, 1, dst_mag)
+        k = k + 1
     end
-    let src_mag = 16 + nc_mul8(nwords - 1 - k)
-    let dst_mag = nc_local_mag(k)
-    buf = nc_emit_disp_rbp_load_rax(buf, 0, src_mag)
-    buf = nc_emit_disp_rbp_store_rax(buf, 1, dst_mag)
-    return nc_emit_arg_copies_loop(buf, k + 1, nwords)
+    return buf
 end
 
 func nc_emit_sret_save(buf, meta):
@@ -2285,10 +2317,13 @@ func nc_emit_push_bool(buf, n):
 end
 
 func nc_string_offset_loop(strings, i, target, acc):
-    if i >= target:
-        return acc
+    while i < target:
+        let next_i = i + 1
+        let next_acc = acc + length(get(strings, i))
+        i = next_i
+        acc = next_acc
     end
-    return nc_string_offset_loop(strings, i + 1, target, acc + length(get(strings, i)))
+    return acc
 end
 
 func nc_string_offset(strings, idx):
@@ -2296,10 +2331,13 @@ func nc_string_offset(strings, idx):
 end
 
 func nc_rodata_len_loop(strings, i, n, acc):
-    if i >= n:
-        return acc
+    while i < n:
+        let next_i = i + 1
+        let next_acc = acc + length(get(strings, i))
+        i = next_i
+        acc = next_acc
     end
-    return nc_rodata_len_loop(strings, i + 1, n, acc + length(get(strings, i)))
+    return acc
 end
 
 func nc_rodata_len(strings):
@@ -2323,12 +2361,12 @@ func nc_emit_push_str(buf, strings, idx, instr_off, code_len):
 end
 
 func nc_emit_load_local_loop(buf, base, j, width):
-    if j >= width:
-        return buf
+    while j < width:
+        buf = nc_emit_disp_rbp_load_rax(buf, 1, nc_local_mag(base + j))
+        do append(buf, 80)
+        j = j + 1
     end
-    buf = nc_emit_disp_rbp_load_rax(buf, 1, nc_local_mag(base + j))
-    do append(buf, 80)
-    return nc_emit_load_local_loop(buf, base, j + 1, width)
+    return buf
 end
 
 func nc_emit_load_local(buf, base, width):
@@ -2336,12 +2374,12 @@ func nc_emit_load_local(buf, base, width):
 end
 
 func nc_emit_store_local_loop(buf, base, j):
-    if j == 0 - 1:
-        return buf
+    while j != 0 - 1:
+        do append(buf, 88)
+        buf = nc_emit_disp_rbp_store_rax(buf, 1, nc_local_mag(base + j))
+        j = j - 1
     end
-    do append(buf, 88)
-    buf = nc_emit_disp_rbp_store_rax(buf, 1, nc_local_mag(base + j))
-    return nc_emit_store_local_loop(buf, base, j - 1)
+    return buf
 end
 
 func nc_emit_store_local(buf, base, width):
@@ -2671,12 +2709,12 @@ func nc_emit_call_rel(buf, target, base):
 end
 
 func nc_emit_call_ret_words(buf, base_word, ret_width, k, n):
-    if k >= n:
-        return buf
+    while k < n:
+        buf = nc_emit_disp_rbp_load_rax(buf, 1, nc_sret_scratch_mag(base_word, ret_width, k))
+        do append(buf, 80)
+        k = k + 1
     end
-    buf = nc_emit_disp_rbp_load_rax(buf, 1, nc_sret_scratch_mag(base_word, ret_width, k))
-    do append(buf, 80)
-    return nc_emit_call_ret_words(buf, base_word, ret_width, k + 1, n)
+    return buf
 end
 
 func nc_emit_normal_call(buf, target, base, meta, cm):
@@ -2693,14 +2731,14 @@ func nc_emit_normal_call(buf, target, base, meta, cm):
 end
 
 func nc_emit_tail_copy_loop(buf, k, nf, ng):
-    if k >= nf:
-        return buf
+    while k < nf:
+        let src = nc_mul8(nf - 1 - k)
+        let dst = nc_tail_dst_pair(ng, k)
+        buf = nc_emit_rsp_load_rax(buf, src)
+        buf = nc_emit_disp_rbp_store_rax(buf, dst.0, dst.1)
+        k = k + 1
     end
-    let src = nc_mul8(nf - 1 - k)
-    let dst = nc_tail_dst_pair(ng, k)
-    buf = nc_emit_rsp_load_rax(buf, src)
-    buf = nc_emit_disp_rbp_store_rax(buf, dst.0, dst.1)
-    return nc_emit_tail_copy_loop(buf, k + 1, nf, ng)
+    return buf
 end
 
 func nc_emit_tail_call(buf, target, base, ng, nf, sret_word, aggregate):
@@ -2727,14 +2765,14 @@ func nc_emit_tail_call(buf, target, base, ng, nf, sret_word, aggregate):
 end
 
 func nc_emit_tuple_get_copy_loop(buf, j, f, w, s):
-    if j >= f:
-        return buf
+    while j < f:
+        let src = nc_mul8(w - 1 - (s + j))
+        let dst = nc_mul8(w - 1 - j)
+        buf = nc_emit_rsp_load_rax(buf, src)
+        buf = nc_emit_rsp_store_rax(buf, dst)
+        j = j + 1
     end
-    let src = nc_mul8(w - 1 - (s + j))
-    let dst = nc_mul8(w - 1 - j)
-    buf = nc_emit_rsp_load_rax(buf, src)
-    buf = nc_emit_rsp_store_rax(buf, dst)
-    return nc_emit_tuple_get_copy_loop(buf, j + 1, f, w, s)
+    return buf
 end
 
 func nc_emit_tuple_get(buf, meta, pc):
@@ -2762,12 +2800,12 @@ func nc_emit_ret(buf, meta):
 end
 
 func nc_emit_aggregate_ret_stores(buf, k):
-    if k == 0 - 1:
-        return buf
+    while k != 0 - 1:
+        do append(buf, 88)
+        buf = nc_emit_rdi_store_rax(buf, nc_mul8(k))
+        k = k - 1
     end
-    do append(buf, 88)
-    buf = nc_emit_rdi_store_rax(buf, nc_mul8(k))
-    return nc_emit_aggregate_ret_stores(buf, k - 1)
+    return buf
 end
 
 func nc_emit_clogger(buf):
@@ -3888,12 +3926,12 @@ func nc_emit_count(buf):
 end
 
 func nc_emit_get_loads(buf, width, j):
-    if j >= width:
-        return buf
+    while j < width:
+        buf = nc_emit_rsi_load_rax(buf, nc_mul8(j))
+        do append(buf, 80)
+        j = j + 1
     end
-    buf = nc_emit_rsi_load_rax(buf, nc_mul8(j))
-    do append(buf, 80)
-    return nc_emit_get_loads(buf, width, j + 1)
+    return buf
 end
 
 func nc_emit_get(buf, width, line, diag_get_off, instr_off):
@@ -3935,12 +3973,12 @@ func nc_emit_get(buf, width, line, diag_get_off, instr_off):
 end
 
 func nc_emit_arr_add_stores(buf, k):
-    if k == 0 - 1:
-        return buf
+    while k != 0 - 1:
+        do append(buf, 88)
+        buf = nc_emit_rsi_store_rax(buf, nc_mul8(k))
+        k = k - 1
     end
-    do append(buf, 88)
-    buf = nc_emit_rsi_store_rax(buf, nc_mul8(k))
-    return nc_emit_arr_add_stores(buf, k - 1)
+    return buf
 end
 
 func nc_emit_arr_add(buf, width):
@@ -4369,137 +4407,137 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
 end
 
 func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, i, n, buf):
-    if i >= n:
-        return buf
-    end
-    let code = fn.4
-    let instr = get(code, i)
-    let op = instr.0
-    let a = instr.1
-    let g = nc_group(code, i, n, fn, funcs, meta, metas)
-    let instr_off = layout.0 + get(layout.1, i)
-    if op == 0:
-        buf = nc_emit_push_int(buf, a)
-    elif op == 1:
-        buf = nc_emit_push_bool(buf, a)
-    elif op == 2:
-        buf = nc_emit_push_str(buf, strings, a, instr_off, code_len)
-    elif op == 3:
-        buf = nc_emit_load_local(buf, get(meta.bases, a), get(meta.widths, a))
-    elif op == 4:
-        buf = nc_emit_store_local(buf, get(meta.bases, a), get(meta.widths, a))
-    elif op == 5:
-        buf = nc_emit_add(buf)
-    elif op == 6:
-        buf = nc_emit_sub(buf)
-    elif op == 7:
-        buf = nc_emit_cmp_setcc(buf, 146)
-    elif op == 8:
-        buf = nc_emit_cmp_setcc(buf, 150)
-    elif op == 9:
-        buf = nc_emit_cmp_setcc(buf, 151)
-    elif op == 10:
-        buf = nc_emit_cmp_setcc(buf, 147)
-    elif op == 11:
-        buf = nc_emit_cmp_setcc(buf, 148)
-    elif op == 12:
-        buf = nc_emit_cmp_setcc(buf, 149)
-    elif op == 13:
-        buf = nc_emit_not(buf)
-    elif op == 36:
-        buf = nc_emit_band(buf)
-    elif op == 37:
-        buf = nc_emit_bor(buf)
-    elif op == 38:
-        buf = nc_emit_bxor(buf)
-    elif op == 39:
-        buf = nc_emit_shl(buf)
-    elif op == 40:
-        buf = nc_emit_shr(buf)
-    elif op == 41:
-        buf = nc_emit_bnot(buf)
-    elif op == 42:
-        buf = nc_emit_mul(buf)
-    elif op == 43:
-        buf = nc_emit_div_or_mod(buf, 0, diag_base + nc_fault_exit1_rel(), instr_off)
-    elif op == 44:
-        buf = nc_emit_div_or_mod(buf, 1, diag_base + nc_fault_exit1_rel(), instr_off)
-    elif op == 15:
-        buf = nc_emit_tuple_get(buf, meta, i)
-    elif op == 16:
-        buf = nc_emit_br(buf, layout.0 + get(layout.1, a), instr_off + 5)
-    elif op == 17:
-        buf = nc_emit_br_if_false(buf, layout.0 + get(layout.1, a), instr_off + 10)
-    elif op == 18:
-        buf = nc_emit_br_and(buf, layout.0 + get(layout.1, a), instr_off + 13)
-    elif op == 19:
-        buf = nc_emit_br_or(buf, layout.0 + get(layout.1, a), instr_off + 13)
-    elif op == 20:
-        let callee_layout = get(layouts, instr.1)
-        let cm = get(meta.call_meta, i)
-        if cm.2 == 2:
-            buf = nc_emit_tail_call(buf, callee_layout.0, instr_off + g.0, meta.pwords, cm.0, meta.sret_word, 0)
-        elif cm.2 == 3:
-            buf = nc_emit_tail_call(buf, callee_layout.0, instr_off + g.0, meta.pwords, cm.0, meta.sret_word, 1)
-        else:
-            let call_base = instr_off + 5
-            if cm.2 == 1:
-                call_base = instr_off + nc_disp_len_rbp(1, nc_sret_scratch_mag(meta.scratch_base, cm.1, 0)) + 5
+    while i < n:
+        let code = fn.4
+        let instr = get(code, i)
+        let op = instr.0
+        let a = instr.1
+        let g = nc_group(code, i, n, fn, funcs, meta, metas)
+        let instr_off = layout.0 + get(layout.1, i)
+        if op == 0:
+            buf = nc_emit_push_int(buf, a)
+        elif op == 1:
+            buf = nc_emit_push_bool(buf, a)
+        elif op == 2:
+            buf = nc_emit_push_str(buf, strings, a, instr_off, code_len)
+        elif op == 3:
+            buf = nc_emit_load_local(buf, get(meta.bases, a), get(meta.widths, a))
+        elif op == 4:
+            buf = nc_emit_store_local(buf, get(meta.bases, a), get(meta.widths, a))
+        elif op == 5:
+            buf = nc_emit_add(buf)
+        elif op == 6:
+            buf = nc_emit_sub(buf)
+        elif op == 7:
+            buf = nc_emit_cmp_setcc(buf, 146)
+        elif op == 8:
+            buf = nc_emit_cmp_setcc(buf, 150)
+        elif op == 9:
+            buf = nc_emit_cmp_setcc(buf, 151)
+        elif op == 10:
+            buf = nc_emit_cmp_setcc(buf, 147)
+        elif op == 11:
+            buf = nc_emit_cmp_setcc(buf, 148)
+        elif op == 12:
+            buf = nc_emit_cmp_setcc(buf, 149)
+        elif op == 13:
+            buf = nc_emit_not(buf)
+        elif op == 36:
+            buf = nc_emit_band(buf)
+        elif op == 37:
+            buf = nc_emit_bor(buf)
+        elif op == 38:
+            buf = nc_emit_bxor(buf)
+        elif op == 39:
+            buf = nc_emit_shl(buf)
+        elif op == 40:
+            buf = nc_emit_shr(buf)
+        elif op == 41:
+            buf = nc_emit_bnot(buf)
+        elif op == 42:
+            buf = nc_emit_mul(buf)
+        elif op == 43:
+            buf = nc_emit_div_or_mod(buf, 0, diag_base + nc_fault_exit1_rel(), instr_off)
+        elif op == 44:
+            buf = nc_emit_div_or_mod(buf, 1, diag_base + nc_fault_exit1_rel(), instr_off)
+        elif op == 15:
+            buf = nc_emit_tuple_get(buf, meta, i)
+        elif op == 16:
+            buf = nc_emit_br(buf, layout.0 + get(layout.1, a), instr_off + 5)
+        elif op == 17:
+            buf = nc_emit_br_if_false(buf, layout.0 + get(layout.1, a), instr_off + 10)
+        elif op == 18:
+            buf = nc_emit_br_and(buf, layout.0 + get(layout.1, a), instr_off + 13)
+        elif op == 19:
+            buf = nc_emit_br_or(buf, layout.0 + get(layout.1, a), instr_off + 13)
+        elif op == 20:
+            let callee_layout = get(layouts, instr.1)
+            let cm = get(meta.call_meta, i)
+            if cm.2 == 2:
+                buf = nc_emit_tail_call(buf, callee_layout.0, instr_off + g.0, meta.pwords, cm.0, meta.sret_word, 0)
+            elif cm.2 == 3:
+                buf = nc_emit_tail_call(buf, callee_layout.0, instr_off + g.0, meta.pwords, cm.0, meta.sret_word, 1)
+            else:
+                let call_base = instr_off + 5
+                if cm.2 == 1:
+                    call_base = instr_off + nc_disp_len_rbp(1, nc_sret_scratch_mag(meta.scratch_base, cm.1, 0)) + 5
+                end
+                buf = nc_emit_normal_call(buf, callee_layout.0, call_base, meta, cm)
             end
-            buf = nc_emit_normal_call(buf, callee_layout.0, call_base, meta, cm)
+        elif op == 21:
+            buf = nc_emit_ret(buf, meta)
+        elif op == 22:
+            buf = nc_emit_length(buf)
+        elif op == 23:
+            buf = nc_emit_index(buf, get(fn.6, i), diag_base + nc_fault_diag_index_rel(), instr_off)
+        elif op == 25:
+            buf = nc_emit_equal(buf)
+        elif op == 26:
+            buf = nc_emit_new_buffer(buf)
+        elif op == 27:
+            buf = nc_emit_freeze(buf)
+        elif op == 28:
+            buf = nc_emit_new_array(buf, get(meta.heap_meta, i).1)
+        elif op == 29:
+            buf = nc_emit_get(buf, get(meta.heap_meta, i).1, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
+        elif op == 30:
+            buf = nc_emit_count(buf)
+        elif op == 31:
+            buf = nc_emit_buf_append(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
+        elif op == 32:
+            buf = nc_emit_arr_add(buf, get(meta.heap_meta, i).1)
+        elif op == 63:
+            buf = nc_emit_arr_add_keep(buf, get(meta.heap_meta, i).1)
+        elif op == 64:
+            buf = nc_emit_set_field(buf, a, instr.2)
+        elif op == 65:
+            buf = nc_emit_get_field(buf, meta, i)
+        elif op == 33:
+            buf = nc_emit_clogger(buf)
+        elif op == 34:
+            buf = nc_emit_flogger(buf)
+        elif op == 35:
+            buf = nc_emit_fwriter(buf)
+        elif op == 54:
+            buf = nc_emit_process_exit(buf)
+        elif op == 55:
+            buf = nc_emit_stderr_write(buf)
+        elif op == 56:
+            buf = nc_emit_stdin_read(buf)
+        elif op == 58:
+            buf = nc_emit_linux_syscall6(buf)
+        elif op == 59:
+            buf = nc_emit_buffer_address(buf)
+        elif op == 60:
+            buf = nc_emit_buffer_get(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
+        elif op == 61:
+            buf = nc_emit_buffer_set(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), diag_base + nc_fault_diag_append_rel(), instr_off)
+        elif op == 62:
+            buf = nc_emit_count(buf)
         end
-    elif op == 21:
-        buf = nc_emit_ret(buf, meta)
-    elif op == 22:
-        buf = nc_emit_length(buf)
-    elif op == 23:
-        buf = nc_emit_index(buf, get(fn.6, i), diag_base + nc_fault_diag_index_rel(), instr_off)
-    elif op == 25:
-        buf = nc_emit_equal(buf)
-    elif op == 26:
-        buf = nc_emit_new_buffer(buf)
-    elif op == 27:
-        buf = nc_emit_freeze(buf)
-    elif op == 28:
-        buf = nc_emit_new_array(buf, get(meta.heap_meta, i).1)
-    elif op == 29:
-        buf = nc_emit_get(buf, get(meta.heap_meta, i).1, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
-    elif op == 30:
-        buf = nc_emit_count(buf)
-    elif op == 31:
-        buf = nc_emit_buf_append(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
-    elif op == 32:
-        buf = nc_emit_arr_add(buf, get(meta.heap_meta, i).1)
-    elif op == 63:
-        buf = nc_emit_arr_add_keep(buf, get(meta.heap_meta, i).1)
-    elif op == 64:
-        buf = nc_emit_set_field(buf, a, instr.2)
-    elif op == 65:
-        buf = nc_emit_get_field(buf, meta, i)
-    elif op == 33:
-        buf = nc_emit_clogger(buf)
-    elif op == 34:
-        buf = nc_emit_flogger(buf)
-    elif op == 35:
-        buf = nc_emit_fwriter(buf)
-    elif op == 54:
-        buf = nc_emit_process_exit(buf)
-    elif op == 55:
-        buf = nc_emit_stderr_write(buf)
-    elif op == 56:
-        buf = nc_emit_stdin_read(buf)
-    elif op == 58:
-        buf = nc_emit_linux_syscall6(buf)
-    elif op == 59:
-        buf = nc_emit_buffer_address(buf)
-    elif op == 60:
-        buf = nc_emit_buffer_get(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
-    elif op == 61:
-        buf = nc_emit_buffer_set(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), diag_base + nc_fault_diag_append_rel(), instr_off)
-    elif op == 62:
-        buf = nc_emit_count(buf)
+        i = g.1
     end
-    return nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, g.1, n, buf)
+    return buf
 end
 
 func nc_emit_function(buf, fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base):
@@ -4517,30 +4555,31 @@ func nc_emit_function(buf, fn, funcs, meta, metas, layout, layouts, strings, cod
 end
 
 func nc_emit_functions_loop(buf, funcs, metas, layouts, strings, code_len, diag_base, i, n):
-    if i >= n:
-        return (0, buf)
+    while i < n:
+        let r = nc_emit_function(buf, get(funcs, i), funcs, get(metas, i), metas, get(layouts, i), layouts, strings, code_len, diag_base)
+        if r.0 != 0:
+            return r
+        end
+        buf = r.1
+        i = i + 1
     end
-    let r = nc_emit_function(buf, get(funcs, i), funcs, get(metas, i), metas, get(layouts, i), layouts, strings, code_len, diag_base)
-    if r.0 != 0:
-        return r
-    end
-    return nc_emit_functions_loop(r.1, funcs, metas, layouts, strings, code_len, diag_base, i + 1, n)
+    return (0, buf)
 end
 
 func nc_emit_zeroes_loop(buf, n):
-    if n <= 0:
-        return buf
+    while n > 0:
+        do append(buf, 0)
+        n = n - 1
     end
-    do append(buf, 0)
-    return nc_emit_zeroes_loop(buf, n - 1)
+    return buf
 end
 
 func nc_emit_rodata_loop(buf, strings, i, n):
-    if i >= n:
-        return buf
+    while i < n:
+        buf = append_str(buf, get(strings, i))
+        i = i + 1
     end
-    buf = append_str(buf, get(strings, i))
-    return nc_emit_rodata_loop(buf, strings, i + 1, n)
+    return buf
 end
 
 func nc_emit_rodata(buf, strings):
