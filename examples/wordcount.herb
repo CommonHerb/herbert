@@ -1,21 +1,22 @@
 -- Byte-oriented word counter for ordinary Linux/x86_64 Herbert.
 -- Result: (LF line endings, ASCII-whitespace-delimited words, bytes).
--- One input allocation; the scan makes no per-byte heap allocations.
+-- One input allocation; the scan is one loop with no per-byte heap allocations.
 
 func scan(s, i, lines, words, in_word):
-    if i == length(s):
-        return (lines, words, i)
+    while i < length(s):
+        let c = index(s, i)
+        if c == 10:
+            lines = lines + 1
+            in_word = false
+        elif c == 32 or (c >= 9 and c <= 13):
+            in_word = false
+        elif not in_word:
+            words = words + 1
+            in_word = true
+        end
+        i = i + 1
     end
-    let c = index(s, i)
-    if c == 10:
-        return scan(s, i + 1, lines + 1, words, false)
-    elif c == 32 or (c >= 9 and c <= 13):
-        return scan(s, i + 1, lines, words, false)
-    elif in_word:
-        return scan(s, i + 1, lines, words, true)
-    else:
-        return scan(s, i + 1, lines, words + 1, true)
-    end
+    return (lines, words, i)
 end
 
 func main():

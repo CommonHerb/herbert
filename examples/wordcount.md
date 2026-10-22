@@ -22,10 +22,9 @@ preserves an existing output, so that file alone is not evidence of success.
 The program reports failed input reads on standard error and exits with status 1.
 
 This is a useful exercise of the hosted compiler's supported operating model:
-checked input, byte indexing, decisions, tuple results and a long tail-recursive
-scan. The scan calls itself with the same argument widths, which the current
-compiler lowers to constant-stack iteration. It creates no per-byte buffers,
-arrays or strings. `make wordcount` checks exact results, binary input, a closed input descriptor, and multi-megabyte pipe input under a fixed
+checked input, byte indexing, decisions, tuple results and one `while` loop
+over every byte. The loop rebinds its counters in place, so the scan uses no
+stack per byte. It creates no per-byte buffers, arrays or strings. `make wordcount` checks exact results, binary input, a closed input descriptor, and multi-megabyte pipe input under a fixed
 8 MiB stack limit.
 
 The program reads the entire input into memory before scanning. It is not a
