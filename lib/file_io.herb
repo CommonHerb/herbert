@@ -50,10 +50,12 @@ func file_result(f, result):
 end
 
 func file_path_scan(path, count, p, slash):
-    if p >= count: return slash end
-    if buffer_get(path, p) == 0: return 0 - 2 end
-    if buffer_get(path, p) == 47: slash = p end
-    return file_path_scan(path, count, p + 1, slash)
+    while p < count:
+        if buffer_get(path, p) == 0: return 0 - 2 end
+        if buffer_get(path, p) == 47: slash = p end
+        p = p + 1
+    end
+    return slash
 end
 
 func file_dot_leaf(path, leaf, count):
@@ -87,13 +89,17 @@ end
 
 func file_read_bytes(f, fd, used):
     let st = f.state
-    let got = linux_syscall6(0, fd, buffer_address(f.bytes) + used, buffer_length(f.bytes) - used, 0, 0, 0)
-    if got == 0 - 4: return file_read_bytes(f, fd, used) end
-    if linux_error(got): return got end
-    st.count = used + got
-    if used + got >= buffer_length(f.bytes): return 0 - 27 end
-    if got == 0: return 0 end
-    return file_read_bytes(f, fd, used + got)
+    while true:
+        let got = linux_syscall6(0, fd, buffer_address(f.bytes) + used, buffer_length(f.bytes) - used, 0, 0, 0)
+        if got != 0 - 4:
+            if linux_error(got): return got end
+            st.count = used + got
+            if used + got >= buffer_length(f.bytes): return 0 - 27 end
+            if got == 0: return 0 end
+            used = used + got
+        end
+    end
+    return 0
 end
 
 func file_read(f):
@@ -191,27 +197,33 @@ end
 
 func file_temp(f, tries):
     let st = f.state
-    if tries == 0: return 0 - 17 end
-    let serial = st.serial + 1
-    st.serial = serial
-    do linux_text(f.temp, 0, ".herbert-save-")
-    let pidend = linux_decimal(f.temp, 14, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
-    do buffer_set(f.temp, pidend, 45)
-    let serialend = linux_decimal(f.temp, pidend + 1, serial)
-    do linux_text(f.temp, serialend, ".tmp")
-    do buffer_set(f.temp, serialend + 4, 0)
-    let fd = linux_syscall6(257, st.dirfd, buffer_address(f.temp), 655553, 384, 0, 0)
-    if fd == 0 - 17: return file_temp(f, tries - 1) end
-    return fd
+    while tries != 0:
+        let serial = st.serial + 1
+        st.serial = serial
+        do linux_text(f.temp, 0, ".herbert-save-")
+        let pidend = linux_decimal(f.temp, 14, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
+        do buffer_set(f.temp, pidend, 45)
+        let serialend = linux_decimal(f.temp, pidend + 1, serial)
+        do linux_text(f.temp, serialend, ".tmp")
+        do buffer_set(f.temp, serialend + 4, 0)
+        let fd = linux_syscall6(257, st.dirfd, buffer_address(f.temp), 655553, 384, 0, 0)
+        if fd != 0 - 17: return fd end
+        tries = tries - 1
+    end
+    return 0 - 17
 end
 
 func file_write_bytes(fd, bytes, offset, count):
-    if count == 0: return 0 end
-    let sent = linux_syscall6(1, fd, buffer_address(bytes) + offset, count, 0, 0, 0)
-    if sent == 0 - 4: return file_write_bytes(fd, bytes, offset, count) end
-    if linux_error(sent): return sent end
-    if sent == 0: return 0 - 5 end
-    return file_write_bytes(fd, bytes, offset + sent, count - sent)
+    while count != 0:
+        let sent = linux_syscall6(1, fd, buffer_address(bytes) + offset, count, 0, 0, 0)
+        if sent != 0 - 4:
+            if linux_error(sent): return sent end
+            if sent == 0: return 0 - 5 end
+            offset = offset + sent
+            count = count - sent
+        end
+    end
+    return 0
 end
 
 -- Prepare and close an already exclusively created temporary file. A rescue
@@ -227,9 +239,11 @@ func file_fill_temp(f, fd, bytes, count, mode, record_version):
 end
 
 func file_bytes_same(a, b, count, p):
-    if p >= count: return true end
-    if buffer_get(a, p) != buffer_get(b, p): return false end
-    return file_bytes_same(a, b, count, p + 1)
+    while p < count:
+        if buffer_get(a, p) != buffer_get(b, p): return false end
+        p = p + 1
+    end
+    return true
 end
 
 -- A failed post-publication stat must not turn our own successful rename into
@@ -307,19 +321,19 @@ end
 
 func file_copy_publish(f, tries):
     let st = f.state
-    if tries == 0: return 0 - 17 end
-    do linux_text(f.copy_name, 0, "herbert-rescue-")
-    let pidend = linux_decimal(f.copy_name, 15, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
-    do buffer_set(f.copy_name, pidend, 45)
-    let serialend = linux_decimal(f.copy_name, pidend + 1, st.serial)
-    do linux_text(f.copy_name, serialend, ".txt")
-    do buffer_set(f.copy_name, serialend + 4, 0)
-    let status = linux_syscall6(316, st.dirfd, buffer_address(f.temp), st.dirfd, buffer_address(f.copy_name), 1, 0)
-    if status == 0 - 17:
+    while tries != 0:
+        do linux_text(f.copy_name, 0, "herbert-rescue-")
+        let pidend = linux_decimal(f.copy_name, 15, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
+        do buffer_set(f.copy_name, pidend, 45)
+        let serialend = linux_decimal(f.copy_name, pidend + 1, st.serial)
+        do linux_text(f.copy_name, serialend, ".txt")
+        do buffer_set(f.copy_name, serialend + 4, 0)
+        let status = linux_syscall6(316, st.dirfd, buffer_address(f.temp), st.dirfd, buffer_address(f.copy_name), 1, 0)
+        if status != 0 - 17: return status end
         st.serial = st.serial + 1
-        return file_copy_publish(f, tries - 1)
+        tries = tries - 1
     end
-    return status
+    return 0 - 17
 end
 
 -- Persist edits to a new private sibling without replacing or adopting the

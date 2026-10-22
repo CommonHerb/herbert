@@ -12,43 +12,53 @@ func recovery_new(capacity):
 end
 
 func recovery_open(r, original, tries):
-    if tries == 0: return 0 - 17 end
     let parent = original.state.dirfd
-    if linux_u64(r.1, 16) == 0:
-        let serial = linux_u64(r.1, 0) + 1
-        do linux_put64(r.1, 0, serial)
-        do linux_text(r.2, 0, ".herbert-notes-")
-        let pidend = linux_decimal(r.2, 15, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
-        do buffer_set(r.2, pidend, 45)
-        let last = linux_decimal(r.2, pidend + 1, serial)
-        do buffer_set(r.2, last, 0)
-        let created = linux_syscall6(258, parent, buffer_address(r.2), 448, 0, 0, 0)
-        if created == 0 - 17: return recovery_open(r, original, tries - 1) end
-        if created != 0: return created end
-        do linux_put64(r.1, 16, 1)
+    while tries != 0:
+        let retry = false
+        if linux_u64(r.1, 16) == 0:
+            let serial = linux_u64(r.1, 0) + 1
+            do linux_put64(r.1, 0, serial)
+            do linux_text(r.2, 0, ".herbert-notes-")
+            let pidend = linux_decimal(r.2, 15, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
+            do buffer_set(r.2, pidend, 45)
+            let last = linux_decimal(r.2, pidend + 1, serial)
+            do buffer_set(r.2, last, 0)
+            let created = linux_syscall6(258, parent, buffer_address(r.2), 448, 0, 0, 0)
+            if created == 0 - 17:
+                retry = true
+            elif created != 0:
+                return created
+            else:
+                do linux_put64(r.1, 16, 1)
+            end
+        end
+        if not retry:
+            -- After mkdir succeeds, retry that same candidate. Open/stat/mode failures
+            -- must never create another empty directory on every subsequent edit.
+            let last = linux_nul_end(r.2, 0, buffer_length(r.2))
+            -- O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC: never follow a replaced link.
+            let fd = linux_syscall6(257, parent, buffer_address(r.2), 720896, 0, 0, 0)
+            if linux_error(fd): return fd end
+            let snapshot = r.0
+            let snapshot_state = snapshot.state
+            let checked = linux_syscall6(5, fd, buffer_address(snapshot.stat), 0, 0, 0, 0)
+            if checked == 0:
+                if (linux_u32(snapshot.stat, 24) & 61951) != 16832 or linux_u32(snapshot.stat, 28) != linux_syscall6(107, 0, 0, 0, 0, 0, 0): checked = 0 - 13 end
+            end
+            -- mkdir mode never grants group/other access, even with permissive umask.
+            -- A restrictive umask that removes owner access is a visible refusal.
+            if checked != 0:
+                do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+                return checked
+            end
+            snapshot_state.dirfd = fd
+            do linux_text(r.2, last, "/recovery.txt")
+            do buffer_set(r.2, last + 13, 0)
+            return 0
+        end
+        tries = tries - 1
     end
-    -- After mkdir succeeds, retry that same candidate. Open/stat/mode failures
-    -- must never create another empty directory on every subsequent edit.
-    let last = linux_nul_end(r.2, 0, buffer_length(r.2))
-    -- O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC: never follow a replaced link.
-    let fd = linux_syscall6(257, parent, buffer_address(r.2), 720896, 0, 0, 0)
-    if linux_error(fd): return fd end
-    let snapshot = r.0
-    let snapshot_state = snapshot.state
-    let checked = linux_syscall6(5, fd, buffer_address(snapshot.stat), 0, 0, 0, 0)
-    if checked == 0:
-        if (linux_u32(snapshot.stat, 24) & 61951) != 16832 or linux_u32(snapshot.stat, 28) != linux_syscall6(107, 0, 0, 0, 0, 0, 0): checked = 0 - 13 end
-    end
-    -- mkdir mode never grants group/other access, even with permissive umask.
-    -- A restrictive umask that removes owner access is a visible refusal.
-    if checked != 0:
-        do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
-        return checked
-    end
-    snapshot_state.dirfd = fd
-    do linux_text(r.2, last, "/recovery.txt")
-    do buffer_set(r.2, last + 13, 0)
-    return 0
+    return 0 - 17
 end
 
 -- A completed checkpoint uses file_save's write/fsync/rename/directory-fsync

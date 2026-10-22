@@ -18,18 +18,16 @@ func linux_die(message):
     return 0
 end
 
-func linux_buffer_fill(b, size, i):
-    if i >= size:
-        return b
-    end
-    do append(b, 0)
-    return linux_buffer_fill(b, size, i + 1)
-end
-
 -- Startup allocation only. Its size never changes unless the caller appends.
 -- Take buffer_address only after the last append; growth can relocate storage.
 func linux_buffer(size):
-    return linux_buffer_fill(new_buffer(), size, 0)
+    let b = new_buffer()
+    let i = 0
+    while i < size:
+        do append(b, 0)
+        i = i + 1
+    end
+    return b
 end
 
 func linux_range(b, offset, size):
@@ -83,32 +81,27 @@ func linux_put64(b, o, v):
     return 0
 end
 
-func linux_copy_loop(dst, offset, src, from, n):
-    if n == 0:
-        return 0
-    end
-    do buffer_set(dst, offset, buffer_get(src, from))
-    return linux_copy_loop(dst, offset + 1, src, from + 1, n - 1)
-end
-
 -- Forward byte copy; overlapping ranges require destination <= source offset.
 func linux_copy(dst, offset, src, from, n):
     do linux_require_range(dst, offset, n)
     do linux_require_range(src, from, n)
-    return linux_copy_loop(dst, offset, src, from, n)
-end
-
-func linux_text_loop(dst, offset, s, i):
-    if i >= length(s):
-        return 0
+    while n != 0:
+        do buffer_set(dst, offset, buffer_get(src, from))
+        offset = offset + 1
+        from = from + 1
+        n = n - 1
     end
-    do buffer_set(dst, offset + i, index(s, i))
-    return linux_text_loop(dst, offset, s, i + 1)
+    return 0
 end
 
 func linux_text(dst, offset, s):
     do linux_require_range(dst, offset, length(s))
-    return linux_text_loop(dst, offset, s, 0)
+    let i = 0
+    while i < length(s):
+        do buffer_set(dst, offset + i, index(s, i))
+        i = i + 1
+    end
+    return 0
 end
 
 func linux_cstring(s):
@@ -147,42 +140,40 @@ end
 -- EINTR, shares one five-second monotonic deadline. No heap allocation here.
 -- Send uses MSG_NOSIGNAL|MSG_DONTWAIT; receive uses MSG_DONTWAIT.
 func linux_transfer(fd, b, offset, remaining, pollbuf, clockbuf, started, sending):
-    if remaining == 0:
-        return 0
-    end
-    let now = linux_clock_ms(clockbuf)
-    if linux_error(now):
-        return now
-    elif now - started >= 5000:
-        return 0 - 110
-    end
-    let number = 45
-    let flags = 64
-    let events = 1
-    if sending:
-        number = 44
-        flags = 16448
-        events = 4
-    end
-    let result = linux_syscall6(number, fd, buffer_address(b) + offset, remaining, flags, 0, 0)
-    if result == 0 - 4:
-        return linux_transfer(fd, b, offset, remaining, pollbuf, clockbuf, started, sending)
-    elif result == 0 - 11:
-        let waited = linux_poll(fd, pollbuf, events, 5000 - (now - started))
-        if linux_error(waited) and waited != 0 - 4:
-            return waited
-        elif waited == 0 - 4:
-            return linux_transfer(fd, b, offset, remaining, pollbuf, clockbuf, started, sending)
-        elif (waited & 32) != 0:
-            return 0 - 9
+    while remaining != 0:
+        let now = linux_clock_ms(clockbuf)
+        if linux_error(now):
+            return now
+        elif now - started >= 5000:
+            return 0 - 110
         end
-        return linux_transfer(fd, b, offset, remaining, pollbuf, clockbuf, started, sending)
-    elif linux_error(result):
-        return result
-    elif result == 0:
-        return 0 - 104
+        let number = 45
+        let flags = 64
+        let events = 1
+        if sending:
+            number = 44
+            flags = 16448
+            events = 4
+        end
+        let result = linux_syscall6(number, fd, buffer_address(b) + offset, remaining, flags, 0, 0)
+        if result == 0 - 11:
+            let waited = linux_poll(fd, pollbuf, events, 5000 - (now - started))
+            if linux_error(waited) and waited != 0 - 4:
+                return waited
+            elif waited != 0 - 4 and (waited & 32) != 0:
+                return 0 - 9
+            end
+        elif result != 0 - 4:
+            if linux_error(result):
+                return result
+            elif result == 0:
+                return 0 - 104
+            end
+            offset = offset + result
+            remaining = remaining - result
+        end
     end
-    return linux_transfer(fd, b, offset + result, remaining - result, pollbuf, clockbuf, started, sending)
+    return 0
 end
 
 -- Connected stream sockets only. Zero means ALL requested bytes transferred;
@@ -211,17 +202,20 @@ func linux_read_exact(fd, b, offset, count, pollbuf, clockbuf):
 end
 
 func linux_read_file_loop(fd, b, used, cap):
-    let result = linux_syscall6(0, fd, buffer_address(b) + used, cap + 1 - used, 0, 0, 0)
-    if result == 0 - 4:
-        return linux_read_file_loop(fd, b, used, cap)
-    elif linux_error(result):
-        return (result, used)
-    elif result == 0:
-        return (0, used)
-    elif used + result > cap:
-        return (0 - 27, used + result)
+    while true:
+        let result = linux_syscall6(0, fd, buffer_address(b) + used, cap + 1 - used, 0, 0, 0)
+        if result != 0 - 4:
+            if linux_error(result):
+                return (result, used)
+            elif result == 0:
+                return (0, used)
+            elif used + result > cap:
+                return (0 - 27, used + result)
+            end
+            used = used + result
+        end
     end
-    return linux_read_file_loop(fd, b, used + result, cap)
+    return (0, 0)
 end
 
 -- Startup whole-file reader for regular files and /proc/self/environ.
@@ -260,50 +254,43 @@ func linux_environment():
 end
 
 func linux_nul_end(b, from, limit):
-    if from >= limit:
-        return limit
-    elif buffer_get(b, from) == 0:
-        return from
+    while from < limit:
+        if buffer_get(b, from) == 0: return from end
+        from = from + 1
     end
-    return linux_nul_end(b, from + 1, limit)
+    return limit
 end
 
 func linux_name_matches(b, offset, limit, name, i):
-    if i >= length(name):
-        return offset + i < limit and buffer_get(b, offset + i) == 61
-    elif offset + i >= limit:
-        return false
-    elif buffer_get(b, offset + i) != index(name, i):
-        return false
+    while i < length(name):
+        if offset + i >= limit: return false end
+        if buffer_get(b, offset + i) != index(name, i): return false end
+        i = i + 1
     end
-    return linux_name_matches(b, offset, limit, name, i + 1)
+    return offset + i < limit and buffer_get(b, offset + i) == 61
 end
 
 func linux_string_loop(b, from, limit, out):
-    if from >= limit:
-        return freeze(out)
+    while from < limit:
+        do append(out, buffer_get(b, from))
+        from = from + 1
     end
-    do append(out, buffer_get(b, from))
-    return linux_string_loop(b, from + 1, limit, out)
-end
-
-func linux_env_loop(env, name, offset):
-    if offset >= buffer_length(env):
-        return ""
-    elif buffer_get(env, offset) == 0:
-        return ""
-    end
-    let limit = linux_nul_end(env, offset, buffer_length(env))
-    if linux_name_matches(env, offset, limit, name, 0):
-        return linux_string_loop(env, offset + length(name) + 1, limit, new_buffer())
-    end
-    return linux_env_loop(env, name, limit + 1)
+    return freeze(out)
 end
 
 -- Startup lookup only; absent and empty values both return the empty string.
 -- Scans without allocation, then copies only the first matching value.
 func linux_env(env, name):
-    return linux_env_loop(env, name, 0)
+    let offset = 0
+    while offset < buffer_length(env):
+        if buffer_get(env, offset) == 0: return "" end
+        let limit = linux_nul_end(env, offset, buffer_length(env))
+        if linux_name_matches(env, offset, limit, name, 0):
+            return linux_string_loop(env, offset + length(name) + 1, limit, new_buffer())
+        end
+        offset = limit + 1
+    end
+    return ""
 end
 
 func linux_hostname():
@@ -325,15 +312,16 @@ func linux_arguments():
     return (incoming.1, incoming.2)
 end
 
-func linux_argument_at(args, wanted, current, offset):
-    if offset >= args.1: return "" end
-    let limit = linux_nul_end(args.0, offset, args.1)
-    if wanted == current: return linux_string_loop(args.0, offset, limit, new_buffer()) end
-    return linux_argument_at(args, wanted, current + 1, limit + 1)
-end
-
 func linux_argument(args, wanted):
-    return linux_argument_at(args, wanted, 0, 0)
+    let current = 0
+    let offset = 0
+    while offset < args.1:
+        let limit = linux_nul_end(args.0, offset, args.1)
+        if wanted == current: return linux_string_loop(args.0, offset, limit, new_buffer()) end
+        current = current + 1
+        offset = limit + 1
+    end
+    return ""
 end
 
 -- Write unsigned decimal into caller-owned storage; return the next offset.
