@@ -314,25 +314,24 @@ end
 -- Walk s[1 .. length(s)-1) decoding \n \\ \" into a buffer; returns the
 -- frozen byte string.
 func decode_string_loop(s, i, end_i, buf):
-    if i >= end_i:
-        return buf
-    end
-    let c = index(s, i)
-    if c == '\\':
-        let c2 = index(s, i + 1)
-        if c2 == 'n':
-            do append(buf, 10)
-            return decode_string_loop(s, i + 2, end_i, buf)
+    while i < end_i:
+        let c = index(s, i)
+        if c == '\\':
+            let c2 = index(s, i + 1)
+            if c2 == 'n':
+                do append(buf, 10)
+            elif c2 == '\\':
+                do append(buf, 92)
+            else:
+                do append(buf, 34)
+            end
+            i = i + 2
+        else:
+            do append(buf, c)
+            i = i + 1
         end
-        if c2 == '\\':
-            do append(buf, 92)
-            return decode_string_loop(s, i + 2, end_i, buf)
-        end
-        do append(buf, 34)
-        return decode_string_loop(s, i + 2, end_i, buf)
     end
-    do append(buf, c)
-    return decode_string_loop(s, i + 1, end_i, buf)
+    return buf
 end
 
 func decode_string(s):
@@ -487,22 +486,26 @@ func parse_bitwise(tokens, pos, pool):
 end
 
 func parse_bitwise_loop(tokens, pos, pool, lidx, cls):
-    let oc = bin_op_class(tokens, pos)
-    if oc == 0:
-        -- End of the expression (`)`, `,`, `:`, `.`, `end`, EOF, ...).
-        return (lidx, pos)
+    while true:
+        let oc = bin_op_class(tokens, pos)
+        if oc == 0:
+            -- End of the expression (`)`, `,`, `:`, `.`, `end`, EOF, ...).
+            return (lidx, pos)
+        end
+        if oc == 5:
+            -- A classless binary op after a committed bitwise chain: mix.
+            return plant_class_mix(tokens, pool, get(tokens, pos).2)
+        end
+        if oc != cls:
+            -- A different bitwise class without parentheses: mix.
+            return plant_class_mix(tokens, pool, get(tokens, pos).2)
+        end
+        let op_tok = get(tokens, pos)
+        let r = parse_not(tokens, pos + 1, pool)
+        lidx = make_binop(pool, bit_tag(op_tok.1), lidx, r.0, op_tok.2)
+        pos = r.1
     end
-    if oc == 5:
-        -- A classless binary op after a committed bitwise chain: mix.
-        return plant_class_mix(tokens, pool, get(tokens, pos).2)
-    end
-    if oc != cls:
-        -- A different bitwise class without parentheses: mix.
-        return plant_class_mix(tokens, pool, get(tokens, pos).2)
-    end
-    let op_tok = get(tokens, pos)
-    let r = parse_not(tokens, pos + 1, pool)
-    return parse_bitwise_loop(tokens, r.1, pool, make_binop(pool, bit_tag(op_tok.1), lidx, r.0, op_tok.2), cls)
+    return (lidx, pos)
 end
 
 func parse_or_loop(tokens, pos, pool, lidx):
@@ -558,16 +561,18 @@ func parse_cmp(tokens, pos, pool):
 end
 
 func parse_cmp_loop(tokens, pos, pool, lidx):
-    if pos >= count(tokens):
-        return (lidx, pos)
-    end
-    let t = get(tokens, pos)
-    if t.0 == 5:
-        let tag = cmp_tag(t.1)
-        if not equal(tag, ""):
-            let r = parse_add(tokens, pos + 1, pool)
-            return parse_cmp_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
+    while pos < count(tokens):
+        let t = get(tokens, pos)
+        if t.0 != 5:
+            return (lidx, pos)
         end
+        let tag = cmp_tag(t.1)
+        if equal(tag, ""):
+            return (lidx, pos)
+        end
+        let r = parse_add(tokens, pos + 1, pool)
+        lidx = make_binop(pool, tag, lidx, r.0, t.2)
+        pos = r.1
     end
     return (lidx, pos)
 end
@@ -681,16 +686,18 @@ func parse_add(tokens, pos, pool):
 end
 
 func parse_add_loop(tokens, pos, pool, lidx):
-    if pos >= count(tokens):
-        return (lidx, pos)
-    end
-    let t = get(tokens, pos)
-    if t.0 == 5:
-        let tag = add_tag(t.1)
-        if not equal(tag, ""):
-            let r = parse_mul(tokens, pos + 1, pool)
-            return parse_add_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
+    while pos < count(tokens):
+        let t = get(tokens, pos)
+        if t.0 != 5:
+            return (lidx, pos)
         end
+        let tag = add_tag(t.1)
+        if equal(tag, ""):
+            return (lidx, pos)
+        end
+        let r = parse_mul(tokens, pos + 1, pool)
+        lidx = make_binop(pool, tag, lidx, r.0, t.2)
+        pos = r.1
     end
     return (lidx, pos)
 end
@@ -704,16 +711,18 @@ func parse_mul(tokens, pos, pool):
 end
 
 func parse_mul_loop(tokens, pos, pool, lidx):
-    if pos >= count(tokens):
-        return (lidx, pos)
-    end
-    let t = get(tokens, pos)
-    if t.0 == 5:
-        let tag = mul_tag(t.1)
-        if not equal(tag, ""):
-            let r = parse_not(tokens, pos + 1, pool)
-            return parse_mul_loop(tokens, r.1, pool, make_binop(pool, tag, lidx, r.0, t.2))
+    while pos < count(tokens):
+        let t = get(tokens, pos)
+        if t.0 != 5:
+            return (lidx, pos)
         end
+        let tag = mul_tag(t.1)
+        if equal(tag, ""):
+            return (lidx, pos)
+        end
+        let r = parse_not(tokens, pos + 1, pool)
+        lidx = make_binop(pool, tag, lidx, r.0, t.2)
+        pos = r.1
     end
     return (lidx, pos)
 end
@@ -810,12 +819,15 @@ func parse_call(tokens, pos, pool):
 end
 
 func parse_args_loop(tokens, pos, pool, kids):
-    let r = parse_expr(tokens, pos, pool)
-    do add(kids, r.0)
-    if tok_is_punct_text(tokens, r.1, ","):
-        return parse_args_loop(tokens, r.1 + 1, pool, kids)
+    while true:
+        let r = parse_expr(tokens, pos, pool)
+        do add(kids, r.0)
+        if not tok_is_punct_text(tokens, r.1, ","):
+            return r.1
+        end
+        pos = r.1 + 1
     end
-    return r.1
+    return pos
 end
 
 func parse_group_or_tuple(tokens, pos, pool, line):
@@ -834,12 +846,15 @@ func parse_group_or_tuple(tokens, pos, pool, line):
 end
 
 func parse_tuple_tail(tokens, pos, pool, kids):
-    let r = parse_expr(tokens, pos, pool)
-    do add(kids, r.0)
-    if tok_is_punct_text(tokens, r.1, ","):
-        return parse_tuple_tail(tokens, r.1 + 1, pool, kids)
+    while true:
+        let r = parse_expr(tokens, pos, pool)
+        do add(kids, r.0)
+        if not tok_is_punct_text(tokens, r.1, ","):
+            return r.1
+        end
+        pos = r.1 + 1
     end
-    return r.1
+    return pos
 end
 
 -- ====================================================================
@@ -1017,22 +1032,22 @@ func parse_program(tokens, pos, pool):
 end
 
 func parse_funcs(tokens, pos, pool, kids, recs):
-    if pos >= count(tokens):
-        return pos
+    while pos < count(tokens):
+        if err_is_ref_record_head(tokens, pos):
+            let rf = parse_recorddef(tokens, pos + 1, pool, "ref-record")
+            do add(recs, int_to_str(rf.0))
+            pos = rf.1
+        elif err_is_record_head(tokens, pos):
+            let rr = parse_recorddef(tokens, pos, pool, "record")
+            do add(recs, int_to_str(rr.0))
+            pos = rr.1
+        else:
+            let r = parse_funcdef(tokens, pos, pool)
+            do add(kids, r.0)
+            pos = r.1
+        end
     end
-    if err_is_ref_record_head(tokens, pos):
-        let rf = parse_recorddef(tokens, pos + 1, pool, "ref-record")
-        do add(recs, int_to_str(rf.0))
-        return parse_funcs(tokens, rf.1, pool, kids, recs)
-    end
-    if err_is_record_head(tokens, pos):
-        let rr = parse_recorddef(tokens, pos, pool, "record")
-        do add(recs, int_to_str(rr.0))
-        return parse_funcs(tokens, rr.1, pool, kids, recs)
-    end
-    let r = parse_funcdef(tokens, pos, pool)
-    do add(kids, r.0)
-    return parse_funcs(tokens, r.1, pool, kids, recs)
+    return pos
 end
 
 -- record NAME: FIELD: TYPE ... end -> ("record", [NAME, FIELD...], [type...]);
@@ -1076,16 +1091,16 @@ func record_decl_names(nodes, prog_idx):
 end
 
 func retag_record_calls_loop(nodes, names, out, i):
-    if i >= count(nodes):
-        return out
+    while i < count(nodes):
+        let node = get(nodes, i)
+        if equal(node.0, "call") and err_name_seen(names, get(node.1, 0)):
+            do add(out, ("record-new", node.1, node.2, node.3))
+        else:
+            do add(out, node)
+        end
+        i = i + 1
     end
-    let node = get(nodes, i)
-    if equal(node.0, "call") and err_name_seen(names, get(node.1, 0)):
-        do add(out, ("record-new", node.1, node.2, node.3))
-        return retag_record_calls_loop(nodes, names, out, i + 1)
-    end
-    do add(out, node)
-    return retag_record_calls_loop(nodes, names, out, i + 1)
+    return out
 end
 
 func retag_record_calls(nodes, prog_idx):
@@ -1118,17 +1133,17 @@ func do_calls_any(nodes, i):
 end
 
 func retag_do_calls_loop(nodes, out, i):
-    if i >= count(nodes):
-        return out
+    while i < count(nodes):
+        let node = get(nodes, i)
+        if do_call_needs_let(nodes, node):
+            let name = freeze(emit_decimal(append_str(new_buffer(), "do "), i))
+            do add(out, ("let", atoms1(name), node.2, node.3))
+        else:
+            do add(out, node)
+        end
+        i = i + 1
     end
-    let node = get(nodes, i)
-    if do_call_needs_let(nodes, node):
-        let name = freeze(emit_decimal(append_str(new_buffer(), "do "), i))
-        do add(out, ("let", atoms1(name), node.2, node.3))
-        return retag_do_calls_loop(nodes, out, i + 1)
-    end
-    do add(out, node)
-    return retag_do_calls_loop(nodes, out, i + 1)
+    return out
 end
 
 func retag_do_calls(nodes):
@@ -1163,12 +1178,15 @@ func parse_param_list(tokens, pos, pool):
 end
 
 func parse_param_loop(tokens, pos, atoms):
-    let t = get(tokens, pos)
-    do add(atoms, t.1)
-    if tok_is_punct_text(tokens, pos + 1, ","):
-        return parse_param_loop(tokens, pos + 2, atoms)
+    while true:
+        let t = get(tokens, pos)
+        do add(atoms, t.1)
+        if not tok_is_punct_text(tokens, pos + 1, ","):
+            return pos + 1
+        end
+        pos = pos + 2
     end
-    return pos + 1
+    return pos
 end
 
 -- ====================================================================
@@ -1679,15 +1697,16 @@ func make_label(prefix, n):
 end
 
 func collect_labels_loop(ir, i, n, pc, labels):
-    if i >= n:
-        return labels
+    while i < n:
+        let item = get(ir, i)
+        if item.0 == 1:
+            do add(labels, (item.5, pc))
+        else:
+            pc = pc + 1
+        end
+        i = i + 1
     end
-    let item = get(ir, i)
-    if item.0 == 1:
-        do add(labels, (item.5, pc))
-        return collect_labels_loop(ir, i + 1, n, pc, labels)
-    end
-    return collect_labels_loop(ir, i + 1, n, pc + 1, labels)
+    return labels
 end
 
 func collect_labels(ir):
@@ -1710,19 +1729,18 @@ func find_label_pos(labels, name):
 end
 
 func resolve_ir_loop(ir, i, n, labels, out):
-    if i >= n:
-        return out
+    while i < n:
+        let item = get(ir, i)
+        if item.0 != 1:
+            if equal(item.5, ""):
+                do add(out, (item.1, item.2, item.3))
+            else:
+                do add(out, (item.1, find_label_pos(labels, item.5), item.3))
+            end
+        end
+        i = i + 1
     end
-    let item = get(ir, i)
-    if item.0 == 1:
-        return resolve_ir_loop(ir, i + 1, n, labels, out)
-    end
-    if equal(item.5, ""):
-        do add(out, (item.1, item.2, item.3))
-    else:
-        do add(out, (item.1, find_label_pos(labels, item.5), item.3))
-    end
-    return resolve_ir_loop(ir, i + 1, n, labels, out)
+    return out
 end
 
 func resolve_ir(ir):
@@ -1731,15 +1749,14 @@ func resolve_ir(ir):
 end
 
 func resolve_new_array_meta_loop(ir, i, n, out):
-    if i >= n:
-        return out
+    while i < n:
+        let item = get(ir, i)
+        if item.0 != 1:
+            do add(out, item.4)
+        end
+        i = i + 1
     end
-    let item = get(ir, i)
-    if item.0 == 1:
-        return resolve_new_array_meta_loop(ir, i + 1, n, out)
-    end
-    do add(out, item.4)
-    return resolve_new_array_meta_loop(ir, i + 1, n, out)
+    return out
 end
 
 func resolve_new_array_meta(ir):
@@ -1747,15 +1764,14 @@ func resolve_new_array_meta(ir):
 end
 
 func resolve_instr_lines_loop(ir, i, n, out):
-    if i >= n:
-        return out
+    while i < n:
+        let item = get(ir, i)
+        if item.0 != 1:
+            do add(out, item.6)
+        end
+        i = i + 1
     end
-    let item = get(ir, i)
-    if item.0 == 1:
-        return resolve_instr_lines_loop(ir, i + 1, n, out)
-    end
-    do add(out, item.6)
-    return resolve_instr_lines_loop(ir, i + 1, n, out)
+    return out
 end
 
 func resolve_instr_lines(ir):
@@ -2248,16 +2264,16 @@ func lowered_field(poly, nodes, inst_idx, node_idx, node):
 end
 
 func emit_field_update(k, n, i, slot, value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
-    if i >= n:
-        return ir
+    while i < n:
+        if i == k:
+            ir = emit_expr(value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        else:
+            ir = emit_instr(ir, op_load_local(), slot, 0)
+            ir = emit_instr(ir, op_tuple_get(), i, 0)
+        end
+        i = i + 1
     end
-    if i == k:
-        ir = emit_expr(value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_field_update(k, n, i + 1, slot, value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-    end
-    ir = emit_instr(ir, op_load_local(), slot, 0)
-    ir = emit_instr(ir, op_tuple_get(), i, 0)
-    return emit_field_update(k, n, i + 1, slot, value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+    return ir
 end
 
 func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -2812,12 +2828,13 @@ func err_parse_type(tokens, pos, ctx):
 end
 
 func err_parse_type_tuple_tail(tokens, pos, ctx, n_items, tuple_line):
-    if tok_is_punct_text(tokens, pos, ","):
+    while tok_is_punct_text(tokens, pos, ","):
         let r = err_parse_type(tokens, pos + 1, ctx)
         if r.0 == err_err_tag():
             return r
         end
-        return err_parse_type_tuple_tail(tokens, r.2, ctx, n_items + 1, tuple_line)
+        pos = r.2
+        n_items = n_items + 1
     end
     if not tok_is_punct_text(tokens, pos, ")"):
         return err_parse_fail_current(211, tokens, pos, ctx)
@@ -2873,18 +2890,21 @@ func err_parse_dot(tokens, pos, ctx):
 end
 
 func err_parse_dot_loop(tokens, pos, ctx, root_kind):
-    if tok_is_punct_text(tokens, pos, "."):
+    while tok_is_punct_text(tokens, pos, "."):
         if pos + 1 >= count(tokens):
             return err_parse_fail_current(206, tokens, pos + 1, ctx)
         end
         let idx_tok = get(tokens, pos + 1)
         if idx_tok.0 == 0 and err_has_records(ctx) and err_is_valid_name_token(tokens, pos + 1):
-            return err_parse_dot_loop(tokens, pos + 2, ctx, err_expr_other())
+            pos = pos + 2
+            root_kind = err_expr_other()
+        else:
+            if idx_tok.0 != 1:
+                return err_parse_fail_at(206, idx_tok.2)
+            end
+            pos = pos + 2
+            root_kind = err_expr_other()
         end
-        if idx_tok.0 != 1:
-            return err_parse_fail_at(206, idx_tok.2)
-        end
-        return err_parse_dot_loop(tokens, pos + 2, ctx, err_expr_other())
     end
     return err_parse_ok_extra(pos, root_kind)
 end
@@ -2950,14 +2970,17 @@ func err_parse_call(tokens, pos, ctx):
 end
 
 func err_parse_args_loop(tokens, pos, ctx):
-    let r = err_parse_expr(tokens, pos, ctx)
-    if r.0 == err_err_tag():
-        return r
+    while true:
+        let r = err_parse_expr(tokens, pos, ctx)
+        if r.0 == err_err_tag():
+            return r
+        end
+        if not tok_is_punct_text(tokens, r.2, ","):
+            return err_parse_ok(r.2)
+        end
+        pos = r.2 + 1
     end
-    if tok_is_punct_text(tokens, r.2, ","):
-        return err_parse_args_loop(tokens, r.2 + 1, ctx)
-    end
-    return err_parse_ok(r.2)
+    return err_parse_ok(pos)
 end
 
 func err_parse_group_or_tuple(tokens, pos, ctx):
@@ -2982,14 +3005,17 @@ func err_parse_group_or_tuple(tokens, pos, ctx):
 end
 
 func err_parse_tuple_tail(tokens, pos, ctx):
-    let r = err_parse_expr(tokens, pos, ctx)
-    if r.0 == err_err_tag():
-        return r
+    while true:
+        let r = err_parse_expr(tokens, pos, ctx)
+        if r.0 == err_err_tag():
+            return r
+        end
+        if not tok_is_punct_text(tokens, r.2, ","):
+            return err_parse_ok(r.2)
+        end
+        pos = r.2 + 1
     end
-    if tok_is_punct_text(tokens, r.2, ","):
-        return err_parse_tuple_tail(tokens, r.2 + 1, ctx)
-    end
-    return err_parse_ok(r.2)
+    return err_parse_ok(pos)
 end
 
 func err_parse_body(tokens, pos, ctx, seen_count):
@@ -3179,19 +3205,22 @@ func err_parse_else(tokens, pos, ctx, if_line):
 end
 
 func err_parse_param_loop(tokens, pos, ctx, params):
-    if not err_is_valid_name_token(tokens, pos):
-        return err_parse_fail_current(202, tokens, pos, ctx)
+    while true:
+        if not err_is_valid_name_token(tokens, pos):
+            return err_parse_fail_current(202, tokens, pos, ctx)
+        end
+        let param_tok = get(tokens, pos)
+        let name = param_tok.1
+        if err_name_seen(params, name):
+            return err_parse_fail_payload(311, param_tok.2, name)
+        end
+        do add(params, name)
+        if not tok_is_punct_text(tokens, pos + 1, ","):
+            return err_parse_ok_extra(pos + 1, count(params))
+        end
+        pos = pos + 2
     end
-    let param_tok = get(tokens, pos)
-    let name = param_tok.1
-    if err_name_seen(params, name):
-        return err_parse_fail_payload(311, param_tok.2, name)
-    end
-    do add(params, name)
-    if tok_is_punct_text(tokens, pos + 1, ","):
-        return err_parse_param_loop(tokens, pos + 2, ctx, params)
-    end
-    return err_parse_ok_extra(pos + 1, count(params))
+    return err_parse_ok_extra(pos, count(params))
 end
 
 func err_parse_param_list(tokens, pos, ctx):
@@ -3234,31 +3263,31 @@ func err_parse_func(tokens, pos, ctx):
 end
 
 func err_parse_program_loop(tokens, pos, ctx):
-    if pos >= count(tokens):
-        return err_parse_ok(pos)
-    end
-    if err_is_ref_record_head(tokens, pos):
-        let rf = err_parse_record(tokens, pos + 1, ctx)
-        if rf.0 == err_err_tag():
-            return rf
+    while pos < count(tokens):
+        if err_is_ref_record_head(tokens, pos):
+            let rf = err_parse_record(tokens, pos + 1, ctx)
+            if rf.0 == err_err_tag():
+                return rf
+            end
+            pos = rf.2
+        elif err_is_record_head(tokens, pos):
+            let rr = err_parse_record(tokens, pos, ctx)
+            if rr.0 == err_err_tag():
+                return rr
+            end
+            pos = rr.2
+        else:
+            if not tok_is_ident_text(tokens, pos, "func"):
+                return err_parse_fail_current(201, tokens, pos, ctx)
+            end
+            let r = err_parse_func(tokens, pos, ctx)
+            if r.0 == err_err_tag():
+                return r
+            end
+            pos = r.2
         end
-        return err_parse_program_loop(tokens, rf.2, ctx)
     end
-    if err_is_record_head(tokens, pos):
-        let rr = err_parse_record(tokens, pos, ctx)
-        if rr.0 == err_err_tag():
-            return rr
-        end
-        return err_parse_program_loop(tokens, rr.2, ctx)
-    end
-    if not tok_is_ident_text(tokens, pos, "func"):
-        return err_parse_fail_current(201, tokens, pos, ctx)
-    end
-    let r = err_parse_func(tokens, pos, ctx)
-    if r.0 == err_err_tag():
-        return r
-    end
-    return err_parse_program_loop(tokens, r.2, ctx)
+    return err_parse_ok(pos)
 end
 
 -- A program that declares records may use their names as types and may use
@@ -3283,24 +3312,26 @@ func err_is_ref_record_head(tokens, pos):
 end
 
 func err_record_names_scan(tokens, pos, names, depth):
-    if pos >= count(tokens):
-        return names
+    while pos < count(tokens):
+        if depth == 0 and err_is_ref_record_head(tokens, pos):
+            do add(names, get(tokens, pos + 2).1)
+            pos = pos + 4
+            depth = 1
+        elif depth == 0 and err_is_record_head(tokens, pos):
+            do add(names, get(tokens, pos + 1).1)
+            pos = pos + 3
+            depth = 1
+        elif tok_is_ident_text(tokens, pos, "func") or tok_is_ident_text(tokens, pos, "if") or tok_is_ident_text(tokens, pos, "while"):
+            pos = pos + 1
+            depth = depth + 1
+        elif depth > 0 and tok_is_ident_text(tokens, pos, "end"):
+            pos = pos + 1
+            depth = depth - 1
+        else:
+            pos = pos + 1
+        end
     end
-    if depth == 0 and err_is_ref_record_head(tokens, pos):
-        do add(names, get(tokens, pos + 2).1)
-        return err_record_names_scan(tokens, pos + 4, names, 1)
-    end
-    if depth == 0 and err_is_record_head(tokens, pos):
-        do add(names, get(tokens, pos + 1).1)
-        return err_record_names_scan(tokens, pos + 3, names, 1)
-    end
-    if tok_is_ident_text(tokens, pos, "func") or tok_is_ident_text(tokens, pos, "if") or tok_is_ident_text(tokens, pos, "while"):
-        return err_record_names_scan(tokens, pos + 1, names, depth + 1)
-    end
-    if depth > 0 and tok_is_ident_text(tokens, pos, "end"):
-        return err_record_names_scan(tokens, pos + 1, names, depth - 1)
-    end
-    return err_record_names_scan(tokens, pos + 1, names, depth)
+    return names
 end
 
 func err_is_record_name(ctx, name):
