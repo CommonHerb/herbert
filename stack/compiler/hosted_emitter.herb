@@ -5,7 +5,7 @@ func nc_code_has_faultable_loop(code, i, n):
         -- 23/29/31 = index/get/append OOB faults; 43/44 = div/mod by-zero fault.
         -- A faultable op forces the fault-helper block (incl. the exit1 routine the
         -- div/mod zero-check jumps to) to be emitted. op_mul (42) never faults.
-        if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61:
+        if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61 or op == 66:
             return 1
         end
         i = i + 1
@@ -544,6 +544,9 @@ func nc_group_single_len(op):
     end
     if op == 62:
         return 5
+    end
+    if op == 66:
+        return 171
     end
     -- Bitwise / shift (36-41). LOAD-BEARING for branch-displacement layout:
     -- pass 1 sizes every instruction here; a missing arm would give the new
@@ -3177,6 +3180,157 @@ func nc_emit_buffer_set(buf, line, diag_get_off, diag_append_off, instr_off):
     return buf
 end
 
+-- buffer_copy(dst, at, src, from, n), op 66: n bytes from src[from..from+n)
+-- to dst[at..at+n). Both spans are checked against the initialized lengths
+-- before any byte moves, the destination first, as `at <= length` and
+-- `n <= length - at` (no wrap); a span outside its buffer takes the located
+-- get route with the first position of the span outside the buffer (at, or
+-- the length) and that buffer's count. Overlap-safe: when the destination lies
+-- inside the source span and above it the move runs backward. Scratch
+-- registers only (rax rcx rdx rsi rdi r8 r9 r11, as linux_syscall6 clobbers).
+-- No growth, no allocation; pushes n. 171 bytes (nc_group_single_len).
+func nc_emit_buffer_copy(buf, line, diag_get_off, instr_off):
+    -- pop rdx (n); pop rsi (from); pop r11 (src header); pop rcx (at); pop r8 (dst header).
+    do append(buf, 90)
+    do append(buf, 94)
+    do append(buf, 65)
+    do append(buf, 91)
+    do append(buf, 89)
+    do append(buf, 65)
+    do append(buf, 88)
+    -- r9 = destination length; at <= r9 or fault with rcx = at, r9 = count (offset 15).
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 118)
+    do append(buf, 12)
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 27)
+    -- rax = r9 - at; n <= rax or fault with rcx = the length (offset 41).
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 200)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 200)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 194)
+    do append(buf, 118)
+    do append(buf, 15)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 201)
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 53)
+    -- r9 = source length; from <= r9 or fault with rcx = from (offset 64).
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 11)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 206)
+    do append(buf, 118)
+    do append(buf, 15)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 241)
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 76)
+    -- rax = r9 - from; n <= rax or fault with rcx = the length (offset 90).
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 200)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 240)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 194)
+    do append(buf, 118)
+    do append(buf, 15)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 201)
+    buf = nc_emit_fault_route(buf, line, diag_get_off, instr_off + 102)
+    -- rdi = destination data + at; rsi = source data + from; rcx = n (offset 102).
+    do append(buf, 73)
+    do append(buf, 139)
+    do append(buf, 120)
+    do append(buf, 16)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 207)
+    do append(buf, 73)
+    do append(buf, 139)
+    do append(buf, 67)
+    do append(buf, 16)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 198)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 209)
+    -- rax = rdi - rsi; below n (unsigned) means the destination lies inside the source span, above it: backward (offset 119).
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 248)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 240)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 208)
+    do append(buf, 114)
+    do append(buf, 4)
+    -- forward: rep movsb (the direction flag is clear by the process ABI and never set); jmp done (offset 130).
+    do append(buf, 243)
+    do append(buf, 164)
+    do append(buf, 235)
+    do append(buf, 36)
+    -- backward, 8 bytes at a time from the end: while rcx >= 8: rcx -= 8; rax = [rsi+rcx]; [rdi+rcx] = rax (offset 134).
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 249)
+    do append(buf, 8)
+    do append(buf, 114)
+    do append(buf, 14)
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 233)
+    do append(buf, 8)
+    do append(buf, 72)
+    do append(buf, 139)
+    do append(buf, 4)
+    do append(buf, 14)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 4)
+    do append(buf, 15)
+    do append(buf, 235)
+    do append(buf, 236)
+    -- the byte tail: while rcx != 0: rcx -= 1; al = [rsi+rcx]; [rdi+rcx] = al (offset 154).
+    do append(buf, 72)
+    do append(buf, 133)
+    do append(buf, 201)
+    do append(buf, 116)
+    do append(buf, 11)
+    do append(buf, 72)
+    do append(buf, 255)
+    do append(buf, 201)
+    do append(buf, 138)
+    do append(buf, 4)
+    do append(buf, 14)
+    do append(buf, 136)
+    do append(buf, 4)
+    do append(buf, 15)
+    do append(buf, 235)
+    do append(buf, 240)
+    -- done: push rdx (n, the count moved) (offset 170; 171 bytes in all).
+    do append(buf, 82)
+    return buf
+end
+
 func nc_emit_process_exit(buf):
     -- 10 bytes: pop rdi; mov eax,231; syscall; ud2. Linux exit_group
     -- supplies the low eight status bits to the parent. Never fall through
@@ -4534,6 +4688,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
             buf = nc_emit_buffer_set(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), diag_base + nc_fault_diag_append_rel(), instr_off)
         elif op == 62:
             buf = nc_emit_count(buf)
+        elif op == 66:
+            buf = nc_emit_buffer_copy(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
         end
         i = g.1
     end

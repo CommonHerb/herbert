@@ -2167,13 +2167,17 @@ func nc_has_value_arity_guard(name):
     return equal(name, "index") or equal(name, "equal") or equal(name, "get")
 end
 
--- All five hosted calls return int. Buffer calls constrain their first argument
--- to buffer; the syscall's seven arguments and the remaining byte arguments are
--- ints. Keep this in normal inference so wrappers and polymorphic calls work.
-func nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, i, n, is_buffer, env, sig, fn_idx, funcs, n_params, line, changed):
+-- All six hosted calls return int. Buffer calls constrain their first argument
+-- to buffer (buffer_copy its third as well); the syscall's seven arguments and
+-- the remaining byte arguments are ints. Keep this in normal inference so
+-- wrappers and polymorphic calls work.
+func nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, i, n, is_buffer, two_buffers, env, sig, fn_idx, funcs, n_params, line, changed):
     while i < n:
         let want = nc_type_int()
         if is_buffer and i == 0:
+            want = nc_type_buffer()
+        end
+        if two_buffers and i == 2:
             want = nc_type_buffer()
         end
         let r = nc_constrain_expr(pool, nodes, prog_idx, get(kids, i), env, want, sig, fn_idx, funcs, n_params)
@@ -2308,7 +2312,7 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
             return (nc_infer_fail(pool, 420, node.3, name), 0, env, sig, 0)
         end
         if nc_is_hosted_memory_builtin(name):
-            return nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, 0, count(kids), not equal(name, "linux_syscall6"), env, sig, fn_idx, funcs, n_params, node.3, 0)
+            return nc_infer_hosted_memory_args(pool, nodes, prog_idx, kids, 0, count(kids), not equal(name, "linux_syscall6"), equal(name, "buffer_copy"), env, sig, fn_idx, funcs, n_params, node.3, 0)
         end
         if equal(name, "clogger"):
             return (0, nc_type_string(), env, sig, 0)

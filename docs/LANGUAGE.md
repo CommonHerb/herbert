@@ -441,6 +441,15 @@ used under `do` to discard its result:
 - `buffer_set(b, i, v)` replaces an existing byte, checks the index and 0..255
   value, and returns the written byte. It does not grow or allocate. Aliases see
   mutation; strings previously obtained with `freeze` remain independent copies.
+- `buffer_copy(dst, at, src, from, n)` moves `n` bytes from `src[from..from+n)`
+  to `dst[at..at+n)` and returns `n`. Both spans must lie inside each buffer's
+  initialized length; both are checked before any byte moves, the destination
+  first, and a span outside its buffer is a located fault in the `get` wording,
+  naming the first position of the span outside the buffer and that buffer's
+  count. `n = 0` is allowed and moves nothing (`at` or `from` may then equal the
+  length, never exceed it). Overlapping spans within one buffer, or through
+  aliases, are moved correctly in either direction. It does not grow or allocate.
+  Added 2026-10-23 (LEDGER D29); the only bulk byte move in the language.
 - `buffer_address(b)` borrows the backing-storage address as an integer. This is
   **unsafe**: appending may relocate storage; reacquire after growth. An empty
   buffer supplies no permission to dereference.

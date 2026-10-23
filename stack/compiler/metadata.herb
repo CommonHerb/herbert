@@ -58,6 +58,9 @@ func nc_opcode_name_for_diag(op):
     if op == 65:
         return "GET_FIELD"
     end
+    if op == 66:
+        return "BUFFER_COPY"
+    end
     if op == 57:
         return "BOOT_READ"
     end
@@ -338,10 +341,13 @@ func nc_meta_call_arg_words(pool, funcs, sig, callee_idx):
     return nc_meta_call_arg_words_loop(pool, sig, callee_idx, 0, fn.2, 0)
 end
 
-func nc_meta_pop_hosted_memory(pool, stack, remaining, is_buffer):
+func nc_meta_pop_hosted_memory(pool, stack, remaining, is_buffer, two_buffers):
     while remaining != 0:
         let want = nc_type_int()
         if is_buffer and remaining == 1:
+            want = nc_type_buffer()
+        end
+        if two_buffers and remaining == 3:
             want = nc_type_buffer()
         end
         let p = nc_meta_pop_expect(pool, stack, want, 0)
@@ -982,7 +988,9 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
                 return MetaScan(sw.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(sw.1, nc_type_int())
-        elif op >= 58 and op <= 62:
+        elif (op >= 58 and op <= 62) or op == 66:
+            -- buffer_copy (66) pops dst, at, src, from, n: buffers at the first
+            -- and third argument (remaining 1 and 3), ints elsewhere; pushes n.
             let arity = 1
             if op == 58:
                 arity = 7
@@ -990,8 +998,10 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
                 arity = 2
             elif op == 61:
                 arity = 3
+            elif op == 66:
+                arity = 5
             end
-            let hm = nc_meta_pop_hosted_memory(pool, stack, arity, op != 58)
+            let hm = nc_meta_pop_hosted_memory(pool, stack, arity, op != 58, op == 66)
             if hm.0 != 0:
                 return MetaScan(hm.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
