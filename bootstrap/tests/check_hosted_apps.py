@@ -1429,7 +1429,7 @@ def notes_big_checks(args, x, display, evidence, passed):
         app.finish()
     assert over.read_bytes() == initial + b'!'
     assert not list(d.glob('.herbert-save-*.tmp')), 'big saves leaked temporary files'
-    passed('notes-1mib-limit-refusals-edits-at-both-ends-paging-clipboard-refusal-recovery-memory',
+    passed('notes-size-limit-refusals-edits-at-both-ends-paging-clipboard-refusal-recovery-memory',
            document_bytes=limit, typed=len(typed), cpu_seconds_typing_at_start=round(cpu, 3), samples=samples)
 
 
