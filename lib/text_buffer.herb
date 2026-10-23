@@ -191,11 +191,10 @@ func text_seek(t, pos):
     return 0
 end
 
+-- Move [stop, last) up by width within one buffer; the spans overlap and the
+-- builtin walks backward for that.
 func text_shift_right(bytes, last, stop, width):
-    while last > stop:
-        do buffer_set(bytes, last - 1 + width, buffer_get(bytes, last - 1))
-        last = last - 1
-    end
+    if last > stop: do buffer_copy(bytes, stop + width, bytes, stop, last - stop) end
     return 0
 end
 
@@ -240,13 +239,14 @@ func text_history_make_room(t, need):
     return 0
 end
 
+-- The payload is a ring: a span that reaches its end wraps to the start, so a
+-- copy is at most two block moves (callers keep count within the ring).
 func text_history_copy_in(t, at, src, from, count):
-    while count != 0:
-        do buffer_set(t.payload, at, buffer_get(src, from))
-        at = (at + 1) % buffer_length(t.payload)
-        from = from + 1
-        count = count - 1
-    end
+    let room = buffer_length(t.payload) - at
+    let first = count
+    if room < first: first = room end
+    do buffer_copy(t.payload, at, src, from, first)
+    if count > first: do buffer_copy(t.payload, 0, src, from + first, count - first) end
     return 0
 end
 
@@ -272,12 +272,11 @@ func text_history_push(t, kind, pos, src, from, count, width, before):
 end
 
 func text_history_copy_out(t, at, to, count):
-    while count != 0:
-        do buffer_set(t.bytes, to, buffer_get(t.payload, at))
-        at = (at + 1) % buffer_length(t.payload)
-        to = to + 1
-        count = count - 1
-    end
+    let room = buffer_length(t.payload) - at
+    let first = count
+    if room < first: first = room end
+    do buffer_copy(t.bytes, to, t.payload, at, first)
+    if count > first: do buffer_copy(t.bytes, to + first, t.payload, 0, count - first) end
     return 0
 end
 

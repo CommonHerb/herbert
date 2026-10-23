@@ -81,16 +81,13 @@ func linux_put64(b, o, v):
     return 0
 end
 
--- Forward byte copy; overlapping ranges require destination <= source offset.
+-- Byte copy between spans, overlap-safe in either direction (buffer_copy moves
+-- backward when the destination lies inside the source above it). The range
+-- checks in front keep this function's own message for a bad span.
 func linux_copy(dst, offset, src, from, n):
     do linux_require_range(dst, offset, n)
     do linux_require_range(src, from, n)
-    while n != 0:
-        do buffer_set(dst, offset, buffer_get(src, from))
-        offset = offset + 1
-        from = from + 1
-        n = n - 1
-    end
+    do buffer_copy(dst, offset, src, from, n)
     return 0
 end
 

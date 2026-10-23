@@ -101,8 +101,8 @@ handles. Higher-level helpers check the spans they expose to Linux.
 
 No new memory collector is claimed. `linux_buffer(n)` creates an initialized
 fixed-size byte buffer; the app and its I/O routines reuse those buffers. File
-and environment helpers allocate at startup. `linux_copy` is forward copying;
-overlapping ranges need destination at or below the source offset.
+and environment helpers allocate at startup. `linux_copy` moves its span with
+`buffer_copy`, so overlapping ranges are safe in either direction.
 
 The hosted implementation owns the compiler, emitted runtime, these source
 units and the application. Linux syscall services, procfs, X11/XWayland, the
