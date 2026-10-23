@@ -44,7 +44,7 @@ a supported starting point. Qualification commands and their limits live in
 
 Gulpin's selected Notes workflow is opening and editing existing files. Notes
 preserves UTF-8 bytes and uniform LF/CRLF endings, with grapheme-aware editing.
-Its 1 MiB disk-byte limit, 64 KiB clipboard and limited bitmap font/input coverage remain explicit. Compiler qualification includes composed conditionals, early returns,
+Its 4 MiB disk-byte limit, 64 KiB clipboard and limited bitmap font/input coverage remain explicit. Compiler qualification includes composed conditionals, early returns,
 rebinding, short-circuit expressions and aggregate values. Existing-file qualification uses copied project guides, common accented prose,
 joined characters and the Unicode segmentation oracle. Notes opens another file
 in the same window from a typed path (Ctrl+O), selects with the keyboard and the

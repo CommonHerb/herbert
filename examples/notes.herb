@@ -54,7 +54,32 @@ ref record NotesState:
 end
 
 -- The largest document, in bytes on disk.
-func notes_capacity(): return 1048576 end
+func notes_capacity(): return 4194304 end
+
+-- The limit's number appears in the startup refusal, two status messages and the Bytes line; each writes it from
+-- notes_capacity(), so the capacity has one source. The status messages draw it in place (notes_status) so a frame
+-- allocates nothing; this helper builds the one-time startup message.
+func notes_limit_text(prefix, suffix):
+    let digits = linux_buffer(20)
+    let count = linux_decimal(digits, 0, notes_capacity())
+    let b = new_buffer()
+    let i = 0
+    while i < length(prefix):
+        do append(b, index(prefix, i))
+        i = i + 1
+    end
+    i = 0
+    while i < count:
+        do append(b, buffer_get(digits, i))
+        i = i + 1
+    end
+    i = 0
+    while i < length(suffix):
+        do append(b, index(suffix, i))
+        i = i + 1
+    end
+    return freeze(b)
+end
 
 func notes_redraw(s):
     s.needs_draw = true
@@ -889,7 +914,8 @@ func notes_status(c, f, t, s, query):
     do pixel_number(c, text_column(t, text_cursor(t)) + 1, 170, 542, 1)
     do pixel_text(c, "Bytes", 248, 542, 1)
     let bytes = pixel_number(c, text_file_length(t), 288, 542, 1)
-    do pixel_text(c, "/ 1048576", 336, 542, 1)
+    do pixel_text(c, "/", 336, 542, 1)
+    do pixel_number(c, notes_capacity(), 348, 542, 1)
     let style = "LF"
     if text_crlf(t): style = "CRLF" end
     do pixel_text(c, style, 402, 542, 1)
@@ -903,7 +929,7 @@ func notes_status(c, f, t, s, query):
     let status = "Ready. UTF-8 text; original bytes and newline style are preserved."
     if message == 1 and s.dirty: status = "Edited. Ctrl+S saves this document." end
     if message == 2: status = "Saved. File and containing directory synced." end
-    if message == 3: status = "Not enough space (1048576-byte limit). Delete text before inserting more." end
+    if message == 3: status = "Not enough space (" end
     if message == 4: status = "Save failed; no replacement this attempt. Ctrl+Shift+S saves a rescue copy." end
     if message == 5:
         status = "Unsaved: Y discards edits; latest recovery INCOMPLETE. Esc returns | Ctrl+S saves."
@@ -927,7 +953,7 @@ func notes_status(c, f, t, s, query):
     if message == 20: status = "Opened. Original bytes and newline style are preserved." end
     if message == 21: status = "New file. It is created when you save with Ctrl+S." end
     if message == 22: status = "Unsaved edits. Ctrl+S saves (or Ctrl+Shift+S rescues) before Ctrl+O opens another file." end
-    if message == 23: status = "Not opened: the file exceeds the 1048576-byte limit. This document is unchanged." end
+    if message == 23: status = "Not opened: the file exceeds the " end
     if message == 24: status = "Not opened: symbolic links are refused. Open the intended file directly." end
     if message == 25: status = "Not opened: multiply hardlinked files are refused to preserve their links." end
     if message == 26: status = "Not opened: the file changed while opening. Try again." end
@@ -957,6 +983,12 @@ func notes_status(c, f, t, s, query):
     end
     if notes_warning(message): let warning = x11_color(c, 16173151) end
     do pixel_text(c, status, 28, 560, 1)
+    if message == 3 or message == 23:
+        -- the limit's number and the rest of the sentence follow the prefix, drawn in place
+        let after = pixel_number(c, notes_capacity(), 28 + 6 * length(status), 560, 1)
+        if message == 3: do pixel_text(c, "-byte limit). Delete text before inserting more.", after, 560, 1) end
+        if message == 23: do pixel_text(c, "-byte limit. This document is unchanged.", after, 560, 1) end
+    end
     if message == 4 or message == 9:
         do pixel_number(c, 0 - s.save_result, 830, 560, 1)
     end
@@ -1097,7 +1129,7 @@ func main():
     if file_status(opened) != 0:
         let status = file_status(opened)
         do file_close(opened)
-        if status == 0 - 27: return linux_die("notes: file exceeds the 1048576-byte limit. No file changed.\n") end
+        if status == 0 - 27: return linux_die(notes_limit_text("notes: file exceeds the ", "-byte limit. No file changed.\n")) end
         if status == 0 - 40: return linux_die("notes: symbolic-link documents are refused. Open the intended regular file directly.\n") end
         if status == 0 - 31: return linux_die("notes: multiply hardlinked documents are refused to preserve their link structure.\n") end
         if status == 0 - 116: return linux_die("notes: file changed while opening. Try again after the other writer finishes.\n") end

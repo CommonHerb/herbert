@@ -1346,7 +1346,7 @@ def cpu_seconds(pid):
 
 def notes_big_checks(args, x, display, evidence, passed):
     d = evidence/'big'; d.mkdir()
-    limit = 1048576
+    limit = 4194304  # Notes' capacity (examples/notes.herb notes_capacity)
     warning = (16173151).to_bytes(3,'big')
     def warned():
         return warning in region(app.frame(),28,560,810,7)
@@ -1367,7 +1367,7 @@ def notes_big_checks(args, x, display, evidence, passed):
                              capture_output=True, timeout=30)
     (d/'over.stderr').write_bytes(refused.stderr)
     assert refused.returncode != 0 and refused.stdout == b'', refused
-    assert refused.stderr == b'notes: file exceeds the 1048576-byte limit. No file changed.\n', refused.stderr
+    assert refused.stderr == f'notes: file exceeds the {limit}-byte limit. No file changed.\n'.encode(), refused.stderr
     assert over.read_bytes() == initial + b'!' and not list(d.glob('.herbert-notes-*'))
     with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'notes-big') as app:
         top = region(app.frame('opened'),28,102,838,14)
@@ -1379,7 +1379,7 @@ def notes_big_checks(args, x, display, evidence, passed):
         for _ in range(20): app.tap('BackSpace')
         app.type('Q')
         expected = initial[:-20] + b'Q'
-        saved(doc, expected, 'an edit at the end of a 1 MiB document saved')
+        saved(doc, expected, 'an edit at the end of a 4 MiB document saved')
         app.tap('Home','Control_L')
         wait_for(lambda: region(app.frame(),28,102,838,14) == top, 'Ctrl+Home shows the first line again')
         cpu = cpu_seconds(app.p.pid)
@@ -1390,7 +1390,7 @@ def notes_big_checks(args, x, display, evidence, passed):
         cpu = cpu_seconds(app.p.pid) - cpu
         for _ in range(len(typed) - 1): app.tap('z','Control_L')
         expected = typed[:1].encode() + expected[len(typed):]
-        saved(doc, expected, 'undo at the start of a 1 MiB document saved')
+        saved(doc, expected, 'undo at the start of a 4 MiB document saved')
         for _ in range(12): app.tap('Next')
         app.tap('Down'); app.type('M')
         moved = region(app.frame('paged'),28,102,838,14)
@@ -1421,7 +1421,7 @@ def notes_big_checks(args, x, display, evidence, passed):
             app.tap('BackSpace'); saved(doc, expected, 'its deletion saved')
             if cycle % 2 == 0: samples.append(memory(app.p.pid))
         (d/'notes-big-memory.json').write_text(json.dumps(samples, indent=2)+'\n')
-        stable_memory(samples, '1 MiB document edits and saves')
+        stable_memory(samples, '4 MiB document edits and saves')
         # A batch's checkpoint follows its keys, a save among them included.
         recoveries = lambda: sorted(p.read_bytes() for p in d.glob(f'.herbert-notes-{app.p.pid}-*/recovery.txt'))
         wait_for(lambda: recoveries() == [expected], 'the recovery copy holds the latest text', timeout=10)
