@@ -148,12 +148,55 @@ end
             source = "func main():\n    let b = new_buffer()\n    do append(b, 0)\n    do append(b, 0)\n    return " + expression + "\nend\n"
             run_probe(label, source, b"", stderr=f"herbert: line 5: {diagnostic}\n".encode(), status=1)
 
+        # buffer_copy(dst, at, src, from, n): both spans are checked before any byte moves, the destination first;
+        # a span outside its buffer reports the first position of the span that lies outside it, with that
+        # buffer's count, through the located get fault. b holds 2 bytes, c holds 3.
+        for label, expression, diagnostic in [
+            ("copy-dst-span-past-end", "buffer_copy(b, 1, c, 0, 2)", "get: position 2 out of range (count 2)"),
+            ("copy-src-span-past-end", "buffer_copy(b, 0, c, 2, 2)", "get: position 3 out of range (count 3)"),
+            ("copy-dst-start-past-end-empty", "buffer_copy(b, 3, c, 0, 0)", "get: position 3 out of range (count 2)"),
+            ("copy-src-start-past-end-empty", "buffer_copy(c, 0, b, 3, 0)", "get: position 3 out of range (count 2)"),
+            ("copy-dst-checked-first", "buffer_copy(b, 5, c, 7, 1)", "get: position 5 out of range (count 2)"),
+            ("copy-start-wraps", "buffer_copy(b, 0 - 1, c, 0, 2)", "get: position 18446744073709551615 out of range (count 2)"),
+            ("copy-count-wraps", "buffer_copy(b, 1, c, 0, 0 - 1)", "get: position 2 out of range (count 2)"),
+        ]:
+            source = ("func main():\n    let b = new_buffer()\n    do append(b, 0)\n    do append(b, 0)\n"
+                      "    let c = new_buffer()\n    do append(c, 0)\n    do append(c, 0)\n    do append(c, 0)\n"
+                      "    return " + expression + "\nend\n")
+            run_probe(label, source, b"", stderr=f"herbert: line 9: {diagnostic}\n".encode(), status=1)
+
+        # The moved bytes: between buffers, a backward overlap (destination above the source), a forward
+        # overlap, the same span onto itself, and an empty move at both ends. Expected bytes are worked by hand.
+        run_probe("copy-bytes", """func text(s):
+    let b = new_buffer()
+    let i = 0
+    while i < length(s):
+        do append(b, index(s, i))
+        i = i + 1
+    end
+    return b
+end
+func main():
+    let a = text("abcdefgh")
+    let b = text("......")
+    let n1 = buffer_copy(b, 1, a, 2, 4)
+    let n2 = buffer_copy(a, 2, a, 0, 5)
+    let n3 = buffer_copy(a, 0, a, 3, 5)
+    let n4 = buffer_copy(a, 1, a, 1, 3)
+    let n0 = buffer_copy(a, 8, b, 6, 0)
+    do flogger(freeze(a))
+    do flogger(freeze(b))
+    return (n1, n2, n3, n4, n0)
+end
+""", b"bcdehdeh.cdef.(4, 5, 5, 3, 0)\n")
+
         builtins = {
             "linux_syscall6": ["1", "1", "0", "0", "0", "0", "0"],
             "buffer_address": ["new_buffer()"],
             "buffer_length": ["new_buffer()"],
             "buffer_get": ["new_buffer()", "0"],
             "buffer_set": ["new_buffer()", "0", "0"],
+            "buffer_copy": ["new_buffer()", "0", "new_buffer()", "0", "0"],
         }
         for name, valid_args in builtins.items():
             for suffix, arglist in [("too-few", valid_args[:-1]), ("too-many", valid_args + ["0"])]:
@@ -186,12 +229,22 @@ end
             # syscall alone excludes rejection merely due to new_buffer.
             source = f"-- emit: {target}\nfunc main():\n    return linux_syscall6(39, 0, 0, 0, 0, 0, 0)\nend\n"
             compile_probe("reject-target-" + target, source, code, built_by)
+            source = f"-- emit: {target}\nfunc main():\n    return buffer_copy(new_buffer(), 0, new_buffer(), 0, 0)\nend\n"
+            compile_probe("reject-target-copy-" + target, source, code, built_by)
         compile_probe("reject-target-module-chiefturbo", """-- emit: module-chiefturbo
 func main():
     let input = sys_read()
     let sent = sys_write(input)
     let read = bufget(bufbase(), 0)
     return linux_syscall6(39, 0, 0, 0, 0, 0, 0)
+end
+""", 595, oracle)
+        compile_probe("reject-target-copy-module-chiefturbo", """-- emit: module-chiefturbo
+func main():
+    let input = sys_read()
+    let sent = sys_write(input)
+    let read = bufget(bufbase(), 0)
+    return buffer_copy(new_buffer(), 0, new_buffer(), 0, 0)
 end
 """, 595, oracle)
 
