@@ -56,8 +56,8 @@ end
 -- The largest document, in bytes on disk.
 func notes_capacity(): return 4194304 end
 
--- The limit's number appears in the startup refusal, two status messages and the Bytes line; each writes it from
--- notes_capacity(), so the capacity has one source. The status messages draw it in place (notes_status) so a frame
+-- The limit's number appears in the startup refusal, two status messages and the Bytes line, and the history
+-- budget (twice it) in a third message; each writes it from notes_capacity(), so the capacity has one source. The status messages draw it in place (notes_status) so a frame
 -- allocates nothing; this helper builds the one-time startup message.
 func notes_limit_text(prefix, suffix):
     let digits = linux_buffer(20)
@@ -939,7 +939,7 @@ func notes_status(c, f, t, s, query):
     if message == 6: status = "Written; sync/verification failed. Ctrl+S retries; Ctrl+Shift+S rescues." end
     if message == 7: status = "Rescue copy saved. Original stays open; its unsaved state is unchanged." end
     if message == 8: status = "Rescue copy written, but directory sync failed. Keep this window open." end
-    if message == 10: status = "No more undo history (up to 256 edits / 2097152 history bytes)." end
+    if message == 10: status = "No more undo history (up to 256 edits / " end
     if message == 11: status = "No more redo history." end
     if message == 12: status = "Match. F3 next | Shift+F3 previous | Ctrl+F new search" end
     if message == 13: status = "No matching text. Search is case-sensitive and wraps at either end." end
@@ -983,11 +983,14 @@ func notes_status(c, f, t, s, query):
     end
     if notes_warning(message): let warning = x11_color(c, 16173151) end
     do pixel_text(c, status, 28, 560, 1)
-    if message == 3 or message == 23:
-        -- the limit's number and the rest of the sentence follow the prefix, drawn in place
-        let after = pixel_number(c, notes_capacity(), 28 + 6 * length(status), 560, 1)
+    if message == 3 or message == 23 or message == 10:
+        -- the limit's number (or the history budget, twice it) and the rest of the sentence follow the prefix, drawn in place
+        let number = notes_capacity()
+        if message == 10: number = 2 * notes_capacity() end
+        let after = pixel_number(c, number, 28 + 6 * length(status), 560, 1)
         if message == 3: do pixel_text(c, "-byte limit). Delete text before inserting more.", after, 560, 1) end
         if message == 23: do pixel_text(c, "-byte limit. This document is unchanged.", after, 560, 1) end
+        if message == 10: do pixel_text(c, " history bytes).", after, 560, 1) end
     end
     if message == 4 or message == 9:
         do pixel_number(c, 0 - s.save_result, 830, 560, 1)

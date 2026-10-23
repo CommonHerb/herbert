@@ -47,7 +47,7 @@ the text, brings the view back to the cursor before it is handled (the click
 lands on the line it was seen on).
 Tabs advance to the next four-column stop. Backspace/Delete remove a whole grapheme cluster, so accents and joined emoji
 are not split into broken fragments.
-**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 2,097,152 bytes of inserted/deleted text in
+**Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 8,388,608 bytes of inserted/deleted text in
 fixed storage, enough for one replace of a whole document. Large edits can evict older complete history records sooner;
 a replace is kept or evicted whole. Navigation is not an edit. A new edit after
 undo drops the redo branch; the oldest edits fall off the bounded history.
