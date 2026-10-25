@@ -1667,8 +1667,15 @@ func op_buffer_copy():
     return 66
 end
 
+-- Bulk growth (the startup fill). buffer_fill(b, n, v) appends n copies of
+-- the byte v in one allocation sized to the need; v is checked first, as
+-- buffer_set checks its value; returns n.
+func op_buffer_fill():
+    return 67
+end
+
 func nc_is_hosted_memory_builtin(name):
-    return equal(name, "linux_syscall6") or equal(name, "buffer_address") or equal(name, "buffer_get") or equal(name, "buffer_set") or equal(name, "buffer_length") or equal(name, "buffer_copy")
+    return equal(name, "linux_syscall6") or equal(name, "buffer_address") or equal(name, "buffer_get") or equal(name, "buffer_set") or equal(name, "buffer_length") or equal(name, "buffer_copy") or equal(name, "buffer_fill")
 end
 
 func emit_instr(ir, op, a, b):
@@ -1938,6 +1945,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "buffer_copy"):
         return emit_instr_line(ir, op_buffer_copy(), 0, 0, call_line)
+    end
+    if equal(name, "buffer_fill"):
+        return emit_instr_line(ir, op_buffer_fill(), 0, 0, call_line)
     end
     if equal(name, "clogger"):
         return emit_instr(ir, op_clogger(), 0, 0)
@@ -3432,6 +3442,9 @@ func err_value_builtin_arity(name):
     end
     if equal(name, "buffer_copy"):
         return 5
+    end
+    if equal(name, "buffer_fill"):
+        return 3
     end
     if equal(name, "boot_read"):
         return 0

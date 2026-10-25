@@ -71,7 +71,7 @@ source; the retained source map identifies its original units.
   `file_open(path, capacity)` does both from a path string.
 - `../examples/first_steps.herb`: the application's position, controls and scene.
 
-The compiler has no game/window-specific operation. Six hosted-only primitives
+The compiler has no game/window-specific operation. Seven hosted-only primitives
 provide general reusable memory and the Linux x86-64 boundary:
 
 | Primitive | Contract |
@@ -80,10 +80,11 @@ provide general reusable memory and the Linux x86-64 boundary:
 | `buffer_get(b, i)` | Byte at `i`; fails with a located bounds diagnostic outside the logical length. |
 | `buffer_set(b, i, byte)` | Replace an existing byte; validates index and 0..255 value, returns the byte; does not grow or allocate. Aliases see the change. |
 | `buffer_copy(dst, at, src, from, n)` | Move `n` bytes from `src[from..)` to `dst[at..)`, returning `n`; both spans are checked against the initialized lengths before any byte moves (destination first; a located bounds diagnostic names the first position outside the buffer); overlap-safe in both directions; does not grow or allocate. |
+| `buffer_fill(b, n, v)` | Append `n` copies of the byte `v` (what `n` appends would leave), returning `n`; the value is checked first (0..255, the located append diagnostic); one allocation sized to the need when the capacity is exceeded, so a fresh buffer filled once takes exactly its size. |
 | `buffer_address(b)` | **Unsafe borrowed address** of its backing storage. Appending can relocate it; reacquire after growth. An empty buffer gives no permission to dereference. |
 | `linux_syscall6(n, a1, a2, a3, a4, a5, a6)` | **Unsafe** raw Linux/x86-64 system call, all arguments and result are unsigned 64-bit integers. Unused arguments are normally zero. |
 
-All six names are reserved builtin function names. They are value expressions;
+All seven names are reserved builtin function names. They are value expressions;
 `do buffer_set(b, i, v)` discards the result, as `do` does for any call. They
 are refused by the specialized kernel/module targets.
 Existing scalar/collection behavior is unchanged. A `freeze` snapshot is still

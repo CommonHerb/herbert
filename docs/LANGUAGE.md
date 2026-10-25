@@ -450,6 +450,17 @@ used under `do` to discard its result:
   length, never exceed it). Overlapping spans within one buffer, or through
   aliases, are moved correctly in either direction. It does not grow or allocate.
   Added 2026-10-23 (LEDGER D29); the only bulk byte move in the language.
+- `buffer_fill(b, n, v)` appends `n` copies of the byte `v` to `b` and returns
+  `n`: what `n` calls of `append(b, v)` would leave, byte for byte, in one step.
+  `v` must be 0..255 and is checked first, whether or not `n` is zero; a bad
+  value is the located fault in the `append` wording. `n = 0` changes nothing.
+  When the length plus `n` exceeds the capacity, one new storage of
+  `max(2 * capacity, length + n)` bytes is taken and the old bytes moved over,
+  so a fresh buffer filled once takes exactly its size; the old storage is left
+  behind as `append` leaves it. A count that wraps, or storage past the heap,
+  ends the process as `append` would (exit status 1). Aliases see the new
+  length and bytes; `buffer_address` may change, as after `append`. Added
+  2026-10-25 for the startup fill of fixed buffers.
 - `buffer_address(b)` borrows the backing-storage address as an integer. This is
   **unsafe**: appending may relocate storage; reacquire after growth. An empty
   buffer supplies no permission to dereference.
@@ -459,8 +470,8 @@ used under `do` to discard its result:
   the primitive does not validate pointer spans or update buffer lengths. Raw
   errors occupy `0 - 4095` through `0 - 1`; use that unsigned range, not `< 0`.
 
-Create a buffer and append its full initialized capacity once, then reuse those
-bytes. This solves repeated updates with bounded storage; it does not introduce
+Create a buffer and fill its full initialized capacity once (`buffer_fill`, or
+appends), then reuse those bytes. This solves repeated updates with bounded storage; it does not introduce
 general garbage collection. `freeze` still copies and should not be used as a
 per-update view. These primitives do not extend the kernel/module targets.
 The support code and programs remain Herbert-authored; Linux and the desktop

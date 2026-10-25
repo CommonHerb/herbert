@@ -61,6 +61,9 @@ func nc_opcode_name_for_diag(op):
     if op == 66:
         return "BUFFER_COPY"
     end
+    if op == 67:
+        return "BUFFER_FILL"
+    end
     if op == 57:
         return "BOOT_READ"
     end
@@ -602,7 +605,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         elif na_type != 0:
             return MetaScan(nc_fail(439, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        if op >= 26 and op <= 32:
+        if (op >= 26 and op <= 32) or op == 67:
             has_heap = 1
         end
         max_stack = nc_max_i(max_stack, nc_stack_word_depth(pool, stack))
@@ -988,9 +991,10 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
                 return MetaScan(sw.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(sw.1, nc_type_int())
-        elif (op >= 58 and op <= 62) or op == 66:
+        elif (op >= 58 and op <= 62) or op == 66 or op == 67:
             -- buffer_copy (66) pops dst, at, src, from, n: buffers at the first
             -- and third argument (remaining 1 and 3), ints elsewhere; pushes n.
+            -- buffer_fill (67) pops b, n, v: a buffer first, ints after; pushes n.
             let arity = 1
             if op == 58:
                 arity = 7
@@ -1000,6 +1004,8 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
                 arity = 3
             elif op == 66:
                 arity = 5
+            elif op == 67:
+                arity = 3
             end
             let hm = nc_meta_pop_hosted_memory(pool, stack, arity, op != 58, op == 66)
             if hm.0 != 0:

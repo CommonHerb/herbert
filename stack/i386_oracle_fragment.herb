@@ -1667,8 +1667,15 @@ func op_buffer_copy():
     return 66
 end
 
+-- Bulk growth (the startup fill). buffer_fill(b, n, v) appends n copies of
+-- the byte v in one allocation sized to the need; v is checked first, as
+-- buffer_set checks its value; returns n.
+func op_buffer_fill():
+    return 67
+end
+
 func nc_is_hosted_memory_builtin(name):
-    return equal(name, "linux_syscall6") or equal(name, "buffer_address") or equal(name, "buffer_get") or equal(name, "buffer_set") or equal(name, "buffer_length") or equal(name, "buffer_copy")
+    return equal(name, "linux_syscall6") or equal(name, "buffer_address") or equal(name, "buffer_get") or equal(name, "buffer_set") or equal(name, "buffer_length") or equal(name, "buffer_copy") or equal(name, "buffer_fill")
 end
 
 func emit_instr(ir, op, a, b):
@@ -1938,6 +1945,9 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "buffer_copy"):
         return emit_instr_line(ir, op_buffer_copy(), 0, 0, call_line)
+    end
+    if equal(name, "buffer_fill"):
+        return emit_instr_line(ir, op_buffer_fill(), 0, 0, call_line)
     end
     if equal(name, "clogger"):
         return emit_instr(ir, op_clogger(), 0, 0)
@@ -3432,6 +3442,9 @@ func err_value_builtin_arity(name):
     end
     if equal(name, "buffer_copy"):
         return 5
+    end
+    if equal(name, "buffer_fill"):
+        return 3
     end
     if equal(name, "boot_read"):
         return 0
@@ -6807,6 +6820,9 @@ func nc_opcode_name_for_diag(op):
     if op == 66:
         return "BUFFER_COPY"
     end
+    if op == 67:
+        return "BUFFER_FILL"
+    end
     if op == 57:
         return "BOOT_READ"
     end
@@ -7348,7 +7364,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         elif na_type != 0:
             return MetaScan(nc_fail(439, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        if op >= 26 and op <= 32:
+        if (op >= 26 and op <= 32) or op == 67:
             has_heap = 1
         end
         max_stack = nc_max_i(max_stack, nc_stack_word_depth(pool, stack))
@@ -7734,9 +7750,10 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
                 return MetaScan(sw.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(sw.1, nc_type_int())
-        elif (op >= 58 and op <= 62) or op == 66:
+        elif (op >= 58 and op <= 62) or op == 66 or op == 67:
             -- buffer_copy (66) pops dst, at, src, from, n: buffers at the first
             -- and third argument (remaining 1 and 3), ints elsewhere; pushes n.
+            -- buffer_fill (67) pops b, n, v: a buffer first, ints after; pushes n.
             let arity = 1
             if op == 58:
                 arity = 7
@@ -7746,6 +7763,8 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
                 arity = 3
             elif op == 66:
                 arity = 5
+            elif op == 67:
+                arity = 3
             end
             let hm = nc_meta_pop_hosted_memory(pool, stack, arity, op != 58, op == 66)
             if hm.0 != 0:
@@ -7891,7 +7910,7 @@ func nc_code_has_faultable_loop(code, i, n):
         -- 23/29/31 = index/get/append OOB faults; 43/44 = div/mod by-zero fault.
         -- A faultable op forces the fault-helper block (incl. the exit1 routine the
         -- div/mod zero-check jumps to) to be emitted. op_mul (42) never faults.
-        if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61 or op == 66:
+        if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61 or op == 66 or op == 67:
             return 1
         end
         i = i + 1
@@ -8433,6 +8452,9 @@ func nc_group_single_len(op):
     end
     if op == 66:
         return 171
+    end
+    if op == 67:
+        return 142
     end
     -- Bitwise / shift (36-41). LOAD-BEARING for branch-displacement layout:
     -- pass 1 sizes every instruction here; a missing arm would give the new
@@ -11217,6 +11239,126 @@ func nc_emit_buffer_copy(buf, line, diag_get_off, instr_off):
     return buf
 end
 
+-- buffer_fill(b, n, v), op 67: appends n copies of the byte v and pushes n.
+-- v is checked first (the located append fault, whether or not n is zero);
+-- n = 0 changes nothing. When length + n exceeds the capacity, new storage of
+-- max(2 * capacity, length + n) bytes comes from the bump heap in one piece,
+-- the old bytes move over with the forward string instruction and the header
+-- takes the new pointer and capacity (the old storage stays, as after append);
+-- a need that wraps, or storage past the heap limit, takes the heap trap as
+-- append does. The new bytes are stored by rep stosb, never assumed zero.
+-- Scratch registers only (rax rcx rdx rsi rdi r8 r9 r10 r11); the direction
+-- flag is clear by the process ABI. 142 bytes (nc_group_single_len).
+func nc_emit_buffer_fill(buf, line, diag_append_off, instr_off):
+    -- pop rcx (v); v <= 255 or fault through the located append route (base instr_off + 22).
+    do append(buf, 89)
+    do append(buf, 72)
+    do append(buf, 129)
+    do append(buf, 249)
+    do append(buf, 255)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 118)
+    do append(buf, 12)
+    buf = nc_emit_fault_route(buf, line, diag_append_off, instr_off + 22)
+    -- pop rdx (n); pop r8 (header); r9 = v (offset 22).
+    do append(buf, 90)
+    do append(buf, 65)
+    do append(buf, 88)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 201)
+    -- r10 = length; rax = length + n, the need; a carry (a count that wraps) takes the heap trap (offset 28).
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 16)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 208)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 208)
+    do append(buf, 115)
+    do append(buf, 12)
+    buf = nc_emit_heap_trap(buf)
+    -- r11 = capacity; room when capacity >= need: jump to offset 123 (offset 51).
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 88)
+    do append(buf, 8)
+    do append(buf, 73)
+    do append(buf, 57)
+    do append(buf, 195)
+    do append(buf, 115)
+    do append(buf, 63)
+    -- grow: r11 = 2 * capacity, or the need when the doubling wraps or falls short of it (offset 60).
+    do append(buf, 73)
+    do append(buf, 209)
+    do append(buf, 227)
+    do append(buf, 114)
+    do append(buf, 5)
+    do append(buf, 73)
+    do append(buf, 57)
+    do append(buf, 195)
+    do append(buf, 115)
+    do append(buf, 3)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 195)
+    -- rdi = r11 bytes from the bump heap (rax), trapping past the limit (offset 73).
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 223)
+    buf = nc_emit_heap_alloc(buf)
+    -- the old bytes move to the new storage: rsi = old data, rdi = new, rcx = length; rep movsb leaves rdi at new data + length (offset 101).
+    do append(buf, 73)
+    do append(buf, 139)
+    do append(buf, 112)
+    do append(buf, 16)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 199)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 209)
+    do append(buf, 243)
+    do append(buf, 164)
+    -- the header takes the new data pointer and capacity; jump to the fill at offset 130 (offset 113).
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 64)
+    do append(buf, 16)
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 88)
+    do append(buf, 8)
+    do append(buf, 235)
+    do append(buf, 7)
+    -- room: rdi = data + length (offset 123).
+    do append(buf, 73)
+    do append(buf, 139)
+    do append(buf, 120)
+    do append(buf, 16)
+    do append(buf, 76)
+    do append(buf, 1)
+    do append(buf, 215)
+    -- fill: rcx = n, al = v, rep stosb; the length grows by n; push n (offset 130, end 142).
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 209)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 200)
+    do append(buf, 243)
+    do append(buf, 170)
+    do append(buf, 73)
+    do append(buf, 1)
+    do append(buf, 16)
+    do append(buf, 82)
+    return buf
+end
+
 func nc_emit_process_exit(buf):
     -- 10 bytes: pop rdi; mov eax,231; syscall; ud2. Linux exit_group
     -- supplies the low eight status bits to the parent. Never fall through
@@ -12576,6 +12718,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
             buf = nc_emit_count(buf)
         elif op == 66:
             buf = nc_emit_buffer_copy(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
+        elif op == 67:
+            buf = nc_emit_buffer_fill(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
         end
         i = g.1
     end
