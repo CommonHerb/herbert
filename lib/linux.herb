@@ -18,15 +18,12 @@ func linux_die(message):
     return 0
 end
 
--- Startup allocation only. Its size never changes unless the caller appends.
+-- Startup allocation only: one block of exactly size zero bytes (buffer_fill,
+-- not a byte at a time). Its size never changes unless the caller appends.
 -- Take buffer_address only after the last append; growth can relocate storage.
 func linux_buffer(size):
     let b = new_buffer()
-    let i = 0
-    while i < size:
-        do append(b, 0)
-        i = i + 1
-    end
+    do buffer_fill(b, size, 0)
     return b
 end
 
