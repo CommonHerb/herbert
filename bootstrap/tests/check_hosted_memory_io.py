@@ -144,6 +144,10 @@ end
             ("set-negative", "buffer_set(b, 0 - 1, 7)", "get: position 18446744073709551615 out of range (count 2)"),
             ("set-nonbyte", "buffer_set(b, 0, 256)", "append: byte value 256 out of range 0..255"),
             ("set-negative-byte", "buffer_set(b, 0, 0 - 1)", "append: byte value 18446744073709551615 out of range 0..255"),
+            # buffer_fill(b, n, v): the value is checked first, whether or not n is zero; the buffer is unchanged.
+            ("fill-nonbyte", "buffer_fill(b, 1, 256)", "append: byte value 256 out of range 0..255"),
+            ("fill-negative-byte", "buffer_fill(b, 1, 0 - 1)", "append: byte value 18446744073709551615 out of range 0..255"),
+            ("fill-nonbyte-zero-count", "buffer_fill(b, 0, 256)", "append: byte value 256 out of range 0..255"),
         ]:
             source = "func main():\n    let b = new_buffer()\n    do append(b, 0)\n    do append(b, 0)\n    return " + expression + "\nend\n"
             run_probe(label, source, b"", stderr=f"herbert: line 5: {diagnostic}\n".encode(), status=1)
@@ -190,6 +194,76 @@ func main():
 end
 """, b"bcdehdeh.cdef.(4, 5, 5, 3, 0)\n")
 
+        # buffer_fill(b, n, v) appends n copies of v: on an empty buffer, across a capacity boundary (a fresh buffer
+        # holds 2 bytes; "ab" plus five is 7), a fill of zero, an append after a fill, and through an alias; the
+        # returned counts and the length. Expected output is worked by hand.
+        run_probe("fill-bytes", """func text(s):
+    let b = new_buffer()
+    let i = 0
+    while i < length(s):
+        do append(b, index(s, i))
+        i = i + 1
+    end
+    return b
+end
+func main():
+    let a = new_buffer()
+    let n1 = buffer_fill(a, 3, 120)
+    let b = text("ab")
+    let n2 = buffer_fill(b, 5, 46)
+    let n0 = buffer_fill(b, 0, 65)
+    do append(b, 33)
+    let c = b
+    let n3 = buffer_fill(c, 2, 63)
+    do flogger(freeze(a))
+    do flogger(freeze(b))
+    return (n1, n2, n0, n3, buffer_length(b))
+end
+""", b"xxxab.....!??(3, 5, 0, 2, 10)\n")
+
+        # A fill far beyond a doubling: the storage is sized to the need; the old bytes survive the move; the last
+        # byte is in place.
+        run_probe("fill-large", """func text(s):
+    let b = new_buffer()
+    let i = 0
+    while i < length(s):
+        do append(b, index(s, i))
+        i = i + 1
+    end
+    return b
+end
+func main():
+    let b = text("abc")
+    let n = buffer_fill(b, 1000000, 7)
+    return (n, buffer_length(b), buffer_get(b, 0), buffer_get(b, 2), buffer_get(b, 3), buffer_get(b, 1000002))
+end
+""", b"(1000000, 1000003, 97, 99, 7, 7)\n")
+
+        # The header's capacity after a fill: "ab" plus five fills a storage of exactly 7 bytes; the witness buffer is
+        # allocated right after it on the bump heap; the appends and the second fill that follow must grow (or exactly
+        # fit) the first buffer's storage and never write into the witness.
+        run_probe("fill-then-append-keeps-neighbours", """func text(s):
+    let b = new_buffer()
+    let i = 0
+    while i < length(s):
+        do append(b, index(s, i))
+        i = i + 1
+    end
+    return b
+end
+func main():
+    let a = text("ab")
+    let n1 = buffer_fill(a, 5, 46)
+    let w = text("WITNESS")
+    do append(a, 33)
+    let n2 = buffer_fill(a, 6, 43)
+    do append(a, 35)
+    do flogger(freeze(a))
+    do flogger(freeze(w))
+    return (n1, n2, buffer_length(a), buffer_length(w))
+end
+""", b"ab.....!++++++#WITNESS(5, 6, 15, 7)\n")
+
         builtins = {
             "linux_syscall6": ["1", "1", "0", "0", "0", "0", "0"],
             "buffer_address": ["new_buffer()"],
@@ -197,6 +271,7 @@ end
             "buffer_get": ["new_buffer()", "0"],
             "buffer_set": ["new_buffer()", "0", "0"],
             "buffer_copy": ["new_buffer()", "0", "new_buffer()", "0", "0"],
+            "buffer_fill": ["new_buffer()", "0", "0"],
         }
         for name, valid_args in builtins.items():
             for suffix, arglist in [("too-few", valid_args[:-1]), ("too-many", valid_args + ["0"])]:
@@ -231,6 +306,8 @@ end
             compile_probe("reject-target-" + target, source, code, built_by)
             source = f"-- emit: {target}\nfunc main():\n    return buffer_copy(new_buffer(), 0, new_buffer(), 0, 0)\nend\n"
             compile_probe("reject-target-copy-" + target, source, code, built_by)
+            source = f"-- emit: {target}\nfunc main():\n    return buffer_fill(new_buffer(), 0, 0)\nend\n"
+            compile_probe("reject-target-fill-" + target, source, code, built_by)
         compile_probe("reject-target-module-chiefturbo", """-- emit: module-chiefturbo
 func main():
     let input = sys_read()
@@ -245,6 +322,14 @@ func main():
     let sent = sys_write(input)
     let read = bufget(bufbase(), 0)
     return buffer_copy(new_buffer(), 0, new_buffer(), 0, 0)
+end
+""", 595, oracle)
+        compile_probe("reject-target-fill-module-chiefturbo", """-- emit: module-chiefturbo
+func main():
+    let input = sys_read()
+    let sent = sys_write(input)
+    let read = bufget(bufbase(), 0)
+    return buffer_fill(new_buffer(), 0, 0)
 end
 """, 595, oracle)
 

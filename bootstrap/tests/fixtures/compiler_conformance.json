@@ -2962,6 +2962,103 @@
       "id": "buffer-copy-reserved-name", "profile": "reject",
       "source": "func buffer_copy(a, b, c, d, e):\n    return e\nend\nfunc main():\n    return 0\nend\n",
       "diagnostic": "line 1: native-subset: invalid function table (ERR 429)"
+    },
+    {
+      "id": "buffer-fill-grows-empty", "profile": "run",
+      "source": "func main():\n    let a = new_buffer()\n    let n = buffer_fill(a, 3, 120)\n    do flogger(freeze(a))\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "xxx3\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-fill-crosses-capacity", "profile": "run",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let b = text(\"ab\")\n    let n = buffer_fill(b, 5, 46)\n    do flogger(freeze(b))\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "ab.....5\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-fill-zero-count", "profile": "run",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let b = text(\"ab\")\n    let n = buffer_fill(b, 0, 65)\n    do flogger(freeze(b))\n    return (n, buffer_length(b))\nend\n",
+      "stdin": "",
+      "stdout": "ab(0, 2)\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-fill-then-append", "profile": "run",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let b = text(\"ab\")\n    let n1 = buffer_fill(b, 5, 46)\n    do append(b, 33)\n    let n2 = buffer_fill(b, 2, 63)\n    do flogger(freeze(b))\n    return (n1, n2, buffer_length(b))\nend\n",
+      "stdin": "",
+      "stdout": "ab.....!??(5, 2, 10)\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-fill-alias-sees-change", "profile": "run",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let b = text(\"ab\")\n    let c = b\n    let before = freeze(b)\n    do buffer_fill(c, 2, 45)\n    do flogger(freeze(b))\n    do flogger(before)\n    return buffer_length(b)\nend\n",
+      "stdin": "",
+      "stdout": "ab--ab4\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-fill-statement", "profile": "run",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let b = text(\"ab\")\n    do buffer_fill(b, 2, 45)\n    do flogger(freeze(b))\n    return 0\nend\n",
+      "stdin": "",
+      "stdout": "ab--0\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-fill-byte-255", "profile": "run",
+      "source": "func main():\n    let b = new_buffer()\n    let n = buffer_fill(b, 2, 255)\n    return (n, buffer_get(b, 0), buffer_get(b, 1), buffer_length(b))\nend\n",
+      "stdin": "",
+      "stdout": "(2, 255, 255, 2)\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-fill-large", "profile": "run",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let b = text(\"abc\")\n    let n = buffer_fill(b, 1000000, 7)\n    return (n, buffer_length(b), buffer_get(b, 0), buffer_get(b, 2), buffer_get(b, 3), buffer_get(b, 1000002))\nend\n",
+      "stdin": "",
+      "stdout": "(1000000, 1000003, 97, 99, 7, 7)\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-fill-byte-fault", "profile": "run-stdio",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let b = text(\"ab\")\n    let n = buffer_fill(b, 1, 256)\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 12: append: byte value 256 out of range 0..255\n",
+      "status": 1
+    },
+    {
+      "id": "buffer-fill-byte-fault-zero-count", "profile": "run-stdio",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let b = text(\"ab\")\n    let n = buffer_fill(b, 0, 256)\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 12: append: byte value 256 out of range 0..255\n",
+      "status": 1
+    },
+    {
+      "id": "arity-buffer-fill-under-2", "profile": "reject",
+      "source": "func main():\n    return buffer_fill(new_buffer(), 0)\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'buffer_fill' (ERR 420)"
+    },
+    {
+      "id": "arity-buffer-fill-over-4", "profile": "reject",
+      "source": "func main():\n    return buffer_fill(new_buffer(), 0, 0, 0)\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'buffer_fill' (ERR 420)"
+    },
+    {
+      "id": "buffer-fill-buffer-not-buffer", "profile": "reject",
+      "source": "func main():\n    return buffer_fill(7, 0, 0)\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "buffer-fill-value-not-int", "profile": "reject",
+      "source": "func main():\n    return buffer_fill(new_buffer(), 0, true)\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "buffer-fill-reserved-name", "profile": "reject",
+      "source": "func buffer_fill(a, b, c):\n    return c\nend\nfunc main():\n    return 0\nend\n",
+      "diagnostic": "line 1: native-subset: invalid function table (ERR 429)"
     }
   ]
 }
