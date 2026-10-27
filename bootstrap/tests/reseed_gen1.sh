@@ -38,6 +38,7 @@ finish() {
     fi
 }
 trap finish EXIT
+trap 'exit 130' INT; trap 'exit 143' TERM
 cp -- "$seed" "$work/previous.seed"
 cp -- "$pin" "$work/previous.sha256"
 cp -- "$backend" "$work/source.herb"
@@ -93,6 +94,14 @@ if ! python3 "$here/compiler_conformance.py" --compiler "$work/gen1/a.out" > "$w
     die 'candidate conformance failed; seed unchanged'
 fi
 tail -n 1 "$work/conformance.log"
+echo 'reseed: checking changed candidate against hosted memory/I/O, wordcount and stack headroom before publication...'
+for gate in check_hosted_memory_io check_wordcount check_stack_headroom; do
+    if ! python3 "$here/$gate.py" --compiler "$work/gen1/a.out" > "$work/$gate.log" 2>&1; then
+        cat "$work/$gate.log" >&2
+        die "candidate $gate failed; seed unchanged"
+    fi
+    tail -n 1 "$work/$gate.log"
+done
 # This recipe has one writer. Refuse to replace inputs edited during qualification.
 require_unchanged_inputs
 stage="$(mktemp -d "$root/bootstrap/seed/.reseed.XXXXXXXX")"

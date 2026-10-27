@@ -878,6 +878,14 @@ int main(void) {
             raise RuntimeError(f'cannot build reseed invocation fixture: {result.stderr!r}')
         cls.image = image.read_bytes()
 
+    CANDIDATE_GATES = (
+        ('check_hosted_memory_io', 'hosted memory/I/O: 84 checks passed',
+         "AssertionError: controlled-probe: expected b'', got b'unexpected'"),
+        ('check_wordcount', 'wordcount: 11 cases passed; runtime checks 0.00s; stack limit 8388608 bytes',
+         "AssertionError: expected b'', got b'unexpected'"),
+        ('check_stack_headroom', 'stack-headroom: 4/4 passed at 8192 KB stack',
+         'stack-headroom: 1 of 4 cases failed'))
+
     def prepare(self, directory, changed=False):
         root = directory/'repo'
         tests = root/'bootstrap/tests'; tests.mkdir(parents=True)
@@ -901,6 +909,25 @@ if edit:
 print('controlled candidate conformance ' + os.environ.get('RESEED_TEST_GATE', 'pass'))
 raise SystemExit(1 if os.environ.get('RESEED_TEST_GATE') == 'reject' else 0)
 ''')
+        # The three candidate gates the recipe runs after conformance. Each
+        # checks the same candidate and that it is not yet the seed, records its
+        # call and ends with one line in the real script's shape;
+        # RESEED_TEST_FAIL_GATE names the one that fails.
+        for gate, passed, failed in self.CANDIDATE_GATES:
+            (tests/f'{gate}.py').write_text(f'''import os, sys
+from pathlib import Path
+root = Path(__file__).resolve().parents[2]
+candidate = Path(sys.argv[2])
+if sys.argv[1] != '--compiler' or candidate.read_bytes() != Path(os.environ['RESEED_TEST_NEXT']).read_bytes():
+    raise SystemExit('wrong candidate passed to {gate}')
+if (root/'bootstrap/seed/gen1.seed').read_bytes() == candidate.read_bytes():
+    raise SystemExit('seed published before {gate}')
+with Path(os.environ['RESEED_TEST_GATE_CALLS']).open('a') as f: f.write('{gate}\\n')
+if os.environ.get('RESEED_TEST_FAIL_GATE') == '{gate}':
+    print({failed!r}, file=sys.stderr)
+    raise SystemExit(1)
+print({passed!r})
+''')
         seed = seeds/'gen1.seed'; seed.write_bytes(self.image)
         pin = seeds/'gen1.seed.sha256'
         pin.write_text(hashlib.sha256(self.image).hexdigest() + '  gen1.seed\n')
@@ -911,7 +938,7 @@ raise SystemExit(1 if os.environ.get('RESEED_TEST_GATE') == 'reject' else 0)
         temporary = directory/'tmp'; temporary.mkdir()
         env = dict(os.environ, TMPDIR=str(temporary), RESEED_TEST_NEXT=str(candidate),
                    RESEED_TEST_ORIGINAL=str(original), RESEED_TEST_CALLS=str(directory/'calls'),
-                   RESEED_TEST_GATE_RECEIPT=str(directory/'gate'))
+                   RESEED_TEST_GATE_RECEIPT=str(directory/'gate'), RESEED_TEST_GATE_CALLS=str(directory/'gates'))
         inputs = {seed: seed.read_bytes(), pin: pin.read_bytes(), backend: backend.read_bytes()}
         return tests/'reseed_gen1.sh', env, inputs
 
@@ -989,6 +1016,28 @@ raise SystemExit(1 if os.environ.get('RESEED_TEST_GATE') == 'reject' else 0)
                     self.assertEqual(seed.read_bytes(), Path(env['RESEED_TEST_NEXT']).read_bytes())
                     self.assertEqual(pin.read_text(), hashlib.sha256(seed.read_bytes()).hexdigest() + '  gen1.seed\n')
                     self.assertEqual(backend.read_bytes(), inputs[backend])
+
+    def test_failing_candidate_gate_refuses_before_publication(self):
+        gates = [gate for gate, _, _ in self.CANDIDATE_GATES]
+        for index, (gate, _, failed) in enumerate(self.CANDIDATE_GATES):
+            with self.subTest(gate=gate), tempfile.TemporaryDirectory() as d:
+                script, env, inputs = self.prepare(Path(d), changed=True)
+                env['RESEED_TEST_FAIL_GATE'] = gate
+                result = self.invoke(script, env)
+                work = self.retained(result, env, inputs); self.unchanged(inputs)
+                self.assertEqual(Path(env['RESEED_TEST_CALLS']).read_text(), 'gen1\ngen2\n')
+                self.assertEqual(Path(env['RESEED_TEST_GATE_RECEIPT']).read_text(),
+                                 hashlib.sha256(Path(env['RESEED_TEST_NEXT']).read_bytes()).hexdigest())
+                self.assertIn(b'controlled candidate conformance pass', result.stdout)
+                self.assertEqual(Path(env['RESEED_TEST_GATE_CALLS']).read_text(), ''.join(g + '\n' for g in gates[:index + 1]))
+                self.assertIn(f'candidate {gate} failed; seed unchanged'.encode(), result.stderr)
+                self.assertIn(failed.encode(), result.stderr)
+                self.assertEqual((work/f'{gate}.log').read_text(), failed + '\n')
+                for later in gates[index + 1:]:
+                    self.assertFalse((work/f'{later}.log').exists(), later)
+                self.assertNotIn(b'inputs changed during qualification', result.stderr)
+                seed = next(iter(inputs))
+                self.assertFalse(list(seed.parent.glob('.reseed.*')))
 
     def test_input_edits_refused_before_current_exit_and_after_gate(self):
         for changed in (False, True):

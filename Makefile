@@ -26,10 +26,13 @@ check: $(SCANNER) compiler-source-check oracle-source-check
 
 test:
 	@bash tools/check_full_test_host.sh
-	@PATH=$(abspath tools):$$PATH bash bootstrap/tests/run_tests.sh
+	@PATH="$(abspath tools):$$PATH" bash bootstrap/tests/run_tests.sh
 	@python3 bootstrap/tests/compiler_conformance.py
 	@python3 bootstrap/tests/stdin_contract.py
 	@python3 bootstrap/tests/compiler_cli_contract.py
+	@python3 bootstrap/tests/check_hosted_memory_io.py
+	@python3 bootstrap/tests/check_wordcount.py
+	@python3 bootstrap/tests/check_stack_headroom.py
 
 # Hosted language behavior through the ordinary seed, independently counted from
 # the historical 43-test bootstrap/switchover suite. CI reaches it via make test.
@@ -192,6 +195,11 @@ $(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes: bootstrap/seed/gen1.seed boot
 
 hosted-memory-io:
 	@python3 bootstrap/tests/check_hosted_memory_io.py
+
+# Stack-headroom guard: generated 1,950-term and 300-deep programs at an explicit 8 MiB stack.
+.PHONY: stack-headroom
+stack-headroom:
+	@python3 bootstrap/tests/check_stack_headroom.py
 
 # Xvfb/libX11/libXtst are independent TEST tools, never program dependencies.
 check-desktop: first-steps
@@ -427,7 +435,7 @@ reseed: compiler-source-check
 # make test already dispatches the six fragment/mutation pairs and both
 # switchover-cfree scripts. Preserve their standalone targets above for diagnosis;
 # the C-free proof's absent/tombstone phases still run as distinct environments.
-verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-dry-run compiler-cli-contract wordcount hosted-memory-io check-desktop check-app-support check-hosted-apps
+verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-dry-run compiler-cli-contract check-desktop check-app-support check-hosted-apps
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<
