@@ -3212,6 +3212,16 @@
       "id": "record-diamond-too-wide", "profile": "reject",
       "source": "record R0:\n    a: R1\n    b: R1\nend\nrecord R1:\n    a: R2\n    b: R2\nend\nrecord R2:\n    a: R3\n    b: R3\nend\nrecord R3:\n    a: R4\n    b: R4\nend\nrecord R4:\n    a: R5\n    b: R5\nend\nrecord R5:\n    a: R6\n    b: R6\nend\nrecord R6:\n    a: R7\n    b: R7\nend\nrecord R7:\n    a: R8\n    b: R8\nend\nrecord R8:\n    a: R9\n    b: R9\nend\nrecord R9:\n    a: R10\n    b: R10\nend\nrecord R10:\n    a: R11\n    b: R11\nend\nrecord R11:\n    a: R12\n    b: R12\nend\nrecord R12:\n    a: R13\n    b: R13\nend\nrecord R13:\n    a: R14\n    b: R14\nend\nrecord R14:\n    a: R15\n    b: R15\nend\nrecord R15:\n    a: R16\n    b: R16\nend\nrecord R16:\n    a: R17\n    b: R17\nend\nrecord R17:\n    a: R18\n    b: R18\nend\nrecord R18:\n    a: R19\n    b: R19\nend\nrecord R19:\n    a: R20\n    b: R20\nend\nrecord R20:\n    x: int\n    y: int\nend\nfunc main():\n    let a = new_array(R0)\n    return count(a)\nend\n",
       "diagnostic": "line 1: native-subset: record 'R0' is wider than the compiler's limit of 1048576 words (ERR 657)"
+    },
+    {
+      "id": "record-ambiguous-field-never-returning", "profile": "reject",
+      "source": "record A:\n    shared: int\n    other: int\nend\n\nrecord B:\n    more: int\n    shared: int\nend\n\nfunc fault():\n    let a = new_array(int)\n    return get(a, 0)\nend\n\nfunc helper(flag):\n    if flag:\n        return A(1, 2)\n    end\n    let p = fault()\n    return A(p.shared, p.other)\nend\n\nfunc main():\n    let p = helper(true)\n    return p.shared\nend\n",
+      "diagnostic": "line 21: native-subset: field 'shared' used on a value that is not a record (ERR 446)"
+    },
+    {
+      "id": "record-free-while-before-record-token", "profile": "reject",
+      "source": "func main():\n    let t = (1, 2)\n    let v = t.x\n    while true:\n    end\n    record Foo:\n    return v\nend\n",
+      "diagnostic": "line 3: expected integer after '.' (ERR 206)"
     }
   ]
 }
