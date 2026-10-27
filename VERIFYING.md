@@ -25,6 +25,8 @@ Runs:
 - `make test`: the full non-emulator harness (see below). This already includes
   all six fragment/mutation pairs (`evaluator-native`, `vm-native`, `parser-native`,
   `lexer-native`, `klondike-native`, `emitter-native`) and `switchover-cfree`.
+  Since 2026-10-27 it also runs the hosted memory/I/O check, the word counter and the
+  stack-headroom guard.
   Each fragment is compiled to ELF by the committed gen-1 seed, runs with **no C**,
   and is compared to its independently authored oracle; the mutations must compile
   and run before producing a wrong runtime value. These fragment checks, plus the aggregate-render and error-vocabulary gates, require compiler success status
@@ -37,9 +39,10 @@ Runs:
 - `make native-codegen-diagnostics`: checks the local helper used to enrich kernel QEMU mismatch logs.
 - `make switchover-dry-run`: checks that the existing C-free mutation proofs still detect faults with the retired C toolchain absent.
 - `make compiler-cli-contract`: checks atomic output publication, including syscall fault injection and the emitted writer's instruction layout (tools described below).
-- `make wordcount`: compiles the maintained word counter with the committed seed and checks its output, input failures, and sustained input processing.
+- `make wordcount`: compiles the maintained word counter with the committed seed and checks its output, input failures, and sustained input processing (also run by `make test`).
 - `make hosted-memory-io`: checks the general hosted byte-buffer/syscall interfaces,
-  including Linux ABI arguments, rejection and sustained mutation memory use.
+  including Linux ABI arguments, rejection and sustained mutation memory use (also run by `make test`).
+- `make stack-headroom`: compiles generated 1,950-term and 300-deep programs with the committed seed at an explicit 8 MiB stack and runs each image; red if the compiler loses about a third of its headroom (also run by `make test`).
 - `make check-desktop`: builds First steps, then observes pixels, real keyboard
   events, focus/shutdown and sustained memory on a private Xvfb display. Python,
   libX11, libXtst and Xvfb are independent test tooling, not program dependencies.
