@@ -3699,12 +3699,14 @@ func nc_type_struct_base():
     return 5
 end
 
--- Pool fields: interned types, inference phases, retained diagnostics.
--- Phase 3 keeps the usual immediate errors outside signature inference.
+-- Pool fields: interned types, inference phases, retained diagnostics, erased
+-- record types by record type (nc_type_erase), widths by pool entry
+-- (nc_type_width). Phase 3 keeps the usual immediate errors outside signature
+-- inference.
 func nc_type_pool_new():
     let phases = new_array((int, int))
     do add(phases, (3, 0))
-    return (new_array((int, array(int))), phases, new_array((int, int, string)))
+    return (new_array((int, array(int))), phases, new_array((int, int, string)), new_array((int, int)), new_array(int))
 end
 
 func nc_infer_phase(pool):
@@ -4029,13 +4031,42 @@ func nc_type_width(pool, t):
     if nc_type_is_array(pool, t) or nc_type_is_ref_record(pool, t):
         return 1
     end
-    let kids = nc_type_tuple_children(pool, t)
-    return nc_type_width_tuple(pool, kids, 0, count(kids), 0)
+    let i = t - nc_type_struct_base()
+    if i >= count(pool.4):
+        do nc_type_width_fill(pool, i)
+    end
+    return get(pool.4, i)
 end
 
-func nc_type_has_unknown_tuple(pool, kids, i, n):
+-- Widths by pool entry, filled in pool order up to and including entry upto.
+-- A struct's children are interned before it, so each entry's width needs only
+-- entries already filled. A tuple or value record shared by many paths (a
+-- diamond of records, erased or not) is otherwise walked once per path, which
+-- is exponential in its depth.
+func nc_type_width_fill(pool, upto):
+    while count(pool.4) <= upto:
+        let t = count(pool.4) + nc_type_struct_base()
+        let w = 1
+        if nc_type_is_tuple(pool, t) or nc_type_is_record(pool, t):
+            let kids = nc_type_tuple_children(pool, t)
+            w = nc_type_width_tuple(pool, kids, 0, count(kids), 0)
+        end
+        do add(pool.4, w)
+    end
+    return 0
+end
+
+-- A value record is laid out as the tuple of its fields, so a record type
+-- shared by two fields doubles the width per level. A value record wider than
+-- this many words is refused at its declaration (ERR 657), before any use of
+-- it is erased or laid out.
+func nc_record_width_limit():
+    return 1048576
+end
+
+func nc_type_has_unknown_tuple(pool, kids, i, n, seen):
     while i < n:
-        if nc_type_has_unknown(pool, get(kids, i)):
+        if nc_type_has_unknown_seen(pool, get(kids, i), seen):
             return true
         end
         i = i + 1
@@ -4043,15 +4074,27 @@ func nc_type_has_unknown_tuple(pool, kids, i, n):
     return false
 end
 
-func nc_type_has_unknown(pool, t):
+-- seen lists the types already walked without finding an unknown, so a type
+-- shared by many paths (a diamond of records, erased or not) is walked once.
+func nc_type_has_unknown_seen(pool, t, seen):
     if t == nc_type_unknown():
         return true
     end
     if nc_type_kind(pool, t) != 0:
+        if nc_tuple_int_array_has(seen, t, 0, count(seen)):
+            return false
+        end
         let kids = nc_type_children(pool, t)
-        return nc_type_has_unknown_tuple(pool, kids, 0, count(kids))
+        if nc_type_has_unknown_tuple(pool, kids, 0, count(kids), seen):
+            return true
+        end
+        do add(seen, t)
     end
     return false
+end
+
+func nc_type_has_unknown(pool, t):
+    return nc_type_has_unknown_seen(pool, t, new_array(int))
 end
 
 func nc_type_vector_has_unknown(pool, vec, i, n):
@@ -4186,20 +4229,34 @@ func nc_type_merge_possible(pool, old, want):
 end
 
 func nc_type_has_array_unknown(pool, t):
+    return nc_type_has_array_unknown_seen(pool, t, new_array(int), new_array(int))
+end
+
+-- Two seen lists, one per predicate: seen_arr holds tuples already walked
+-- without finding an array of unknown, seen_unk holds types already walked
+-- without finding any unknown. They mean different things, so a tuple that
+-- holds a bare unknown must not be taken as free of unknowns by the other walk.
+func nc_type_has_array_unknown_seen(pool, t, seen_arr, seen_unk):
     if nc_type_is_array(pool, t):
-        if nc_type_has_unknown(pool, nc_type_array_elem(pool, t)):
+        if nc_type_has_unknown_seen(pool, nc_type_array_elem(pool, t), seen_unk):
             return true
         end
     end
     if nc_type_is_tuple(pool, t):
-        return nc_type_has_array_unknown_children(pool, nc_type_tuple_children(pool, t), 0, count(nc_type_tuple_children(pool, t)))
+        if nc_tuple_int_array_has(seen_arr, t, 0, count(seen_arr)):
+            return false
+        end
+        if nc_type_has_array_unknown_children(pool, nc_type_tuple_children(pool, t), 0, count(nc_type_tuple_children(pool, t)), seen_arr, seen_unk):
+            return true
+        end
+        do add(seen_arr, t)
     end
     return false
 end
 
-func nc_type_has_array_unknown_children(pool, kids, i, n):
+func nc_type_has_array_unknown_children(pool, kids, i, n, seen_arr, seen_unk):
     while i < n:
-        if nc_type_has_array_unknown(pool, get(kids, i)):
+        if nc_type_has_array_unknown_seen(pool, get(kids, i), seen_arr, seen_unk):
             return true
         end
         i = i + 1
@@ -4386,6 +4443,19 @@ func nc_record_field_types(pool, nodes, kids, i, out, visiting):
     return (0, out)
 end
 
+-- A record's kind names its declaration, so a pool entry of that kind is the
+-- record's type already built; a diamond of shared records would otherwise be
+-- rebuilt once per path, which is exponential in its depth.
+func nc_type_find_kind(pool, kind, i, n):
+    while i < n:
+        if nc_type_kind(pool, i + nc_type_struct_base()) == kind:
+            return i + nc_type_struct_base()
+        end
+        i = i + 1
+    end
+    return 0 - 1
+end
+
 -- visiting holds the records being built on this path; meeting one again
 -- means a record contains itself, which would make it infinitely wide.
 func nc_record_type(pool, nodes, decl_idx, visiting):
@@ -4393,15 +4463,29 @@ func nc_record_type(pool, nodes, decl_idx, visiting):
     if nc_tuple_int_array_has(visiting, decl_idx, 0, count(visiting)):
         return (nc_infer_fail(pool, 447, decl.3, diagnostic_with_payload("record '", get(decl.1, 0), "' contains itself")), 0)
     end
-    let fields = nc_record_field_types(pool, nodes, decl.2, 0, new_array(int), nc_ints_with(visiting, decl_idx))
-    if fields.0 != 0:
-        return (fields.0, 0)
-    end
     let base = nc_record_kind_base()
     if equal(decl.0, "ref-record"):
         base = nc_ref_record_kind_base()
     end
-    return (0, nc_type_intern_struct_loop(pool, base + decl_idx, fields.1, 0, count(pool.0)))
+    let known = nc_type_find_kind(pool, base + decl_idx, 0, count(pool.0))
+    if known != 0 - 1:
+        return (0, known)
+    end
+    let fields = nc_record_field_types(pool, nodes, decl.2, 0, new_array(int), nc_ints_with(visiting, decl_idx))
+    if fields.0 != 0:
+        return (fields.0, 0)
+    end
+    let built = nc_type_intern_struct_loop(pool, base + decl_idx, fields.1, 0, count(pool.0))
+    -- The fields' records are built and checked first, so each field is at most
+    -- the limit wide and the sum cannot wrap; the innermost record past the
+    -- limit is the one named. A ref record is one word wherever it goes.
+    if base == nc_record_kind_base():
+        if nc_type_width(pool, built) > nc_record_width_limit():
+            let limit = diagnostic_with_payload("' is wider than the compiler's limit of ", int_to_str(nc_record_width_limit()), " words")
+            return (nc_infer_fail(pool, 657, decl.3, diagnostic_with_payload("record '", get(decl.1, 0), limit)), 0)
+        end
+    end
+    return (0, built)
 end
 
 func nc_type_from_type_expr(pool, nodes, type_idx):
@@ -6594,6 +6678,19 @@ func nc_type_erase_list(pool, kids, i, out):
     return out
 end
 
+-- Erased record types, by record type: a diamond of shared records would
+-- otherwise be erased once per path, which is exponential in its depth.
+func nc_type_erase_memo_find(memo, t, i):
+    while i < count(memo):
+        let e = get(memo, i)
+        if e.0 == t:
+            return e.1
+        end
+        i = i + 1
+    end
+    return 0 - 1
+end
+
 func nc_type_erase(pool, t):
     if t < nc_type_struct_base():
         return t
@@ -6601,11 +6698,22 @@ func nc_type_erase(pool, t):
     if nc_type_is_array(pool, t):
         return nc_type_intern_array(pool, nc_type_erase(pool, nc_type_array_elem(pool, t)))
     end
-    let fields = nc_type_intern_tuple(pool, nc_type_erase_list(pool, nc_type_children(pool, t), 0, new_array(int)))
-    if nc_type_is_ref_record(pool, t):
-        return nc_type_intern_array(pool, fields)
+    let is_rec = nc_type_any_record(pool, t)
+    if is_rec:
+        let known = nc_type_erase_memo_find(pool.3, t, 0)
+        if known != 0 - 1:
+            return known
+        end
     end
-    return fields
+    let fields = nc_type_intern_tuple(pool, nc_type_erase_list(pool, nc_type_children(pool, t), 0, new_array(int)))
+    let out = fields
+    if nc_type_is_ref_record(pool, t):
+        out = nc_type_intern_array(pool, fields)
+    end
+    if is_rec:
+        do add(pool.3, (t, out))
+    end
+    return out
 end
 
 func nc_erase_param_lists(pool, lists, i, out):
