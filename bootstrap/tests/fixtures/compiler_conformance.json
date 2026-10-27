@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have. Two more cases the same day pin what that batch's review found still unpinned: an upward overlapping buffer_copy of twelve bytes, which runs the eight-byte backward step once and the byte tail four times, and a buffer_copy destination start past the destination's length.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -3156,6 +3156,21 @@
       "stdin": "",
       "stdout": "",
       "stderr": "herbert: line 13: get: position 5 out of range (count 3)\n",
+      "status": 1
+    },
+    {
+      "id": "buffer-copy-overlap-upward-twelve", "profile": "run",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let a = text(\"abcdefghijklmnop\")\n    let n = buffer_copy(a, 2, a, 0, 12)\n    do flogger(freeze(a))\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "ababcdefghijklop12\n",
+      "status": 0
+    },
+    {
+      "id": "buffer-copy-dest-start-fault", "profile": "run-stdio",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let a = text(\"abcdefgh\")\n    let c = text(\"xyz\")\n    let n = buffer_copy(c, 4, a, 0, 0)\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 13: get: position 4 out of range (count 3)\n",
       "status": 1
     },
     {
