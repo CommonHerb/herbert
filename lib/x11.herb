@@ -40,12 +40,22 @@ ref record X11State:
     pointer_on: bool
 end
 
--- The desktop clipboard (opt-in, x11_enable_clipboard). owned: this window holds
--- CLIPBOARD with count bytes of data since time. pending queues up to eight
--- SelectionRequest events, answered by x11_serve (lib/x11_clipboard.herb). notified/answer carry the
--- SelectionNotify for this window's own request. X11 errors for the sequence
--- range tolerant_from..tolerant_to (requests answering other windows, which can
--- vanish at any moment) are ignored; every other error still stops the program.
+-- The desktop clipboard (opt-in, x11_enable_clipboard). owned: this window claimed
+-- CLIPBOARD, with count bytes of data since time, and has not heard otherwise
+-- (x11_clip_owned asks the server before trusting it). asking is the 16-bit
+-- sequence plus one of that question while unanswered (zero none, as for
+-- reply_pending); heed says no claim was made since it was asked, so its answer
+-- still tells whether this window owns the clipboard. pending queues up to eight
+-- SelectionRequest events, answered by x11_serve (lib/x11_clipboard.herb).
+-- notified/answer carry the SelectionNotify that answers this window's own
+-- request, made at server time asked into property, the next in turn of the eight
+-- in properties (turn is the next one's index). While tolerant,
+-- the request range tolerant_from..tolerant_to holds requests answering other
+-- windows, which can vanish or misbehave at any moment: x11_tolerated names the
+-- errors those can cause, which are ignored; every other error still stops the
+-- program. The range closes once the server has passed it (x11_seen). Requests
+-- are counted in full, not in 16 bits: sent is the last one sent, read the one
+-- the last message read names, synced the last x11_sync.
 ref record X11Clip:
     on: bool
     owned: bool
@@ -66,6 +76,14 @@ ref record X11Clip:
     tolerant: bool
     tolerant_from: int
     tolerant_to: int
+    asked: int
+    sent: int
+    read: int
+    synced: int
+    properties: buffer
+    turn: int
+    asking: int
+    heed: bool
 end
 
 record X11:
@@ -288,6 +306,8 @@ end
 
 func x11_request(c, opcode, detail, bytes):
     let st = c.state
+    let cb = st.clip
+    if cb.on and cb.sent >= cb.synced + 65534: do x11_sync(c) end
     let p = st.batch
     do x11_need(bytes >= 4 and bytes % 4 == 0 and bytes <= buffer_length(c.requests) and p <= buffer_length(c.requests), "desktop: request batch capacity exceeded\n")
     if bytes > buffer_length(c.requests) - p:
@@ -300,7 +320,25 @@ func x11_request(c, opcode, detail, bytes):
     do linux_put16(c.requests, p + 2, bytes / 4)
     st.batch = p + bytes
     st.sequence = (st.sequence + 1) % 65536
+    if cb.on: cb.sent = cb.sent + 1 end
     return p
+end
+
+-- While the clipboard is on, the server must send this connection something at
+-- least every 65,535 requests, so that x11_seen can widen each message's 16-bit
+-- sequence exactly. x11_request sends this first when one is due: a ClientMessage
+-- of type None to this window with no event mask, which the server delivers to
+-- this connection alone, numbered with this request, and which nothing here acts
+-- on. Nothing waits for it, so queued input is read in its usual order.
+func x11_sync(c):
+    let st = c.state
+    let cb = st.clip
+    cb.synced = cb.sent + 1
+    let p = x11_request(c, 25, 0, 44)
+    do linux_put32(c.requests, p + 4, st.window)
+    do buffer_set(c.requests, p + 12, 33)
+    do buffer_set(c.requests, p + 13, 32)
+    return linux_put32(c.requests, p + 16, st.window)
 end
 
 func x11_flush(c):
@@ -318,9 +356,13 @@ func x11_dispatch(c):
     let r = c.replies
     let kind = (buffer_get(r, 0) & 127)
     if kind == 0:
-        if x11_tolerated(c, linux_u16(r, 2)): return 0 end
+        -- An error carries its code at byte 1 and the request's major opcode at byte 10.
+        let failed = x11_seen(c, linux_u16(r, 2))
+        if x11_tolerated(c, buffer_get(r, 1), failed, buffer_get(r, 10)): return 0 end
         return linux_die("desktop: X11 rejected a request\n")
     end
+    -- Every event but KeymapNotify carries the last sequence the server reached.
+    if kind != 11: do x11_seen(c, linux_u16(r, 2)) end
     let cb = st.clip
     if cb.on:
         if kind == 29 and linux_u32(r, 8) == st.window and linux_u32(r, 12) == cb.clipboard:
@@ -330,7 +372,9 @@ func x11_dispatch(c):
             do linux_copy(cb.pending, cb.pending_count * 32, r, 0, 32)
             cb.pending_count = cb.pending_count + 1
         end
-        if kind == 31 and linux_u32(r, 8) == st.window and linux_u32(r, 12) == cb.clipboard:
+        -- Only the answer to the request in flight: its time, and the property it
+        -- asked for or None (a refusal). A late answer to an earlier one is dropped.
+        if kind == 31 and linux_u32(r, 8) == st.window and linux_u32(r, 12) == cb.clipboard and linux_u32(r, 4) == cb.asked and (linux_u32(r, 20) == cb.property or linux_u32(r, 20) == 0):
             cb.notified = true
             cb.answer = linux_u32(r, 20)
         end
@@ -391,6 +435,7 @@ func x11_reply(c, sequence):
         do x11_need(got == 0, "desktop: incomplete X11 reply\n")
         if buffer_get(c.replies, 0) == 1:
             do x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
+            do x11_seen(c, sequence)
             let extra = linux_u32(c.replies, 4) * 4
             do x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
             let rest = linux_read_exact(st.fd, c.replies, 32, extra, c.poll, c.clock)
@@ -480,6 +525,7 @@ func x11_keyboard_reply(c):
     let st = c.state
     let pending = st.reply_pending
     do x11_need(pending != 0 and linux_u16(c.replies, 2) == pending - 1, "desktop: unexpected X11 keyboard reply\n")
+    do x11_seen(c, pending - 1)
     let bytes = linux_u32(c.replies, 4) * 4
     do x11_need(bytes <= buffer_length(c.replies) - 32, "desktop: keyboard reply exceeds fixed buffer\n")
     let got = linux_read_exact(st.fd, c.replies, 32, bytes, c.poll, c.clock)
@@ -489,7 +535,7 @@ end
 
 func x11_open(width, height, title):
     do x11_need(width > 0 and width <= 32767 and height > 0 and height <= 32767 and length(title) <= 1024, "desktop: invalid window size or title\n")
-    let idle = X11Clip(false, false, 0, 0, 0, 0, 0, 0, 0, 0, new_buffer(), 0, new_buffer(), 0, false, 0, false, 0, 0)
+    let idle = X11Clip(false, false, 0, 0, 0, 0, 0, 0, 0, 0, new_buffer(), 0, new_buffer(), 0, false, 0, false, 0, 0, 0, 0, 0, 0, new_buffer(), 0, 0, false)
     let c = X11(X11State(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, 0, false, false, 0, 0, 0, false, idle, false), linux_buffer(65536), linux_buffer(65536), linux_buffer(8), linux_buffer(16), linux_buffer(256), linux_buffer(1024), linux_buffer(1024), linux_buffer(4096))
     let st = c.state
     let env = linux_environment()
@@ -558,7 +604,7 @@ func x11_events_loop(c, budget):
             let total = have + n
             if total == 32:
                 if buffer_get(c.replies, 0) == 1:
-                    do x11_keyboard_reply(c)
+                    do x11_loop_reply(c)
                 else:
                     do x11_dispatch(c)
                 end
@@ -569,6 +615,20 @@ func x11_events_loop(c, budget):
         end
         budget = budget - 1
     end
+    return 0
+end
+
+-- A reply the event loop reads: the clipboard owner the server names for
+-- x11_clip_owned (lib/x11_clipboard.herb), or the keyboard map. The owner's
+-- answer counts only if no claim was made after the question (heed).
+func x11_loop_reply(c):
+    let st = c.state
+    let cb = st.clip
+    if cb.asking == 0 or linux_u16(c.replies, 2) != cb.asking - 1: return x11_keyboard_reply(c) end
+    do x11_need(linux_u32(c.replies, 4) == 0, "desktop: invalid GetSelectionOwner reply\n")
+    do x11_seen(c, cb.asking - 1)
+    cb.asking = 0
+    if cb.heed: cb.owned = linux_u32(c.replies, 8) == st.window end
     return 0
 end
 
@@ -776,10 +836,33 @@ func x11_ack_expose(c):
     return 0
 end
 
-func x11_tolerated(c, sequence):
+-- An error inside the tolerant range is ignored only if a vanished or misbehaving
+-- requestor can cause it on what x11_serve sends there: BadWindow (3) on
+-- ChangeProperty (18) or SendEvent (25), a gone window; BadAtom (5) on
+-- ChangeProperty, a property name that is no atom; BadMatch (8) on
+-- ChangeProperty, the requestor changing the property between appended pieces.
+-- request is the failed request's full number (x11_seen).
+func x11_tolerated(c, code, request, major):
     let cb = c.state.clip
-    if not cb.tolerant: return false end
-    return (sequence + 65536 - cb.tolerant_from) % 65536 <= (cb.tolerant_to + 65536 - cb.tolerant_from) % 65536
+    if not cb.tolerant or request < cb.tolerant_from or request > cb.tolerant_to: return false end
+    if major == 25: return code == 3 end
+    return major == 18 and (code == 3 or code == 5 or code == 8)
+end
+
+-- Every reply, event (but KeymapNotify) and error names, in 16 bits, the last
+-- request the server reached. While the clipboard is on, this widens it to the
+-- request's full number: the first one, from the last message read on, that ends
+-- in those bits. That is exact because x11_sync keeps messages at most 65,535
+-- requests apart. A message numbered after tolerant_to shows the server has
+-- finished the range, so any error from it has already been read: the range
+-- closes. An event numbered tolerant_to itself can still come before that
+-- request's error. The result is the full number (0 with the clipboard off).
+func x11_seen(c, sequence):
+    let cb = c.state.clip
+    if not cb.on: return 0 end
+    cb.read = cb.read + (sequence + 65536 - cb.read % 65536) % 65536
+    if cb.tolerant and cb.read > cb.tolerant_to: cb.tolerant = false end
+    return cb.read
 end
 
 -- Core Latin-1 and directly encoded Unicode keysyms, independent of modifiers.

@@ -27,9 +27,23 @@ source; the retained source map identifies its original units.
   CLIPBOARD and answers other applications' requests (UTF8_STRING and
   text/plain;charset=utf-8, with TARGETS and TIMESTAMP), and asks the current owner
   for UTF-8 text with a bounded wait. Incremental transfers are refused, which
-  bounds a paste to 65,504 bytes. X11 errors from answering a window that has
-  already gone are ignored; any other X11 error still stops the program. Call
-  `x11_enable_clipboard` at startup and `x11_serve` after each `x11_events`.
+  bounds a paste to 65,504 bytes. Taking the clipboard waits for nothing;
+  `x11_clip_owned` then asks the server, which silently ignores a claim older than
+  the clipboard's last change, and is true only once the server names this window.
+  If 256 keys queue first or two seconds pass, it returns false without knowing:
+  the window goes on answering for the clipboard as before until the server's
+  answer is read and settles it (unless the window has taken the clipboard again
+  since), and the paste asks the clipboard's owner as any paste does. When that
+  owner is this window, it answers its own request only once the paste has stopped
+  waiting, so that paste gets no answer in time. Each paste asks for the
+  text in the next of eight properties, emptied first; only an answer carrying
+  that paste's time and property (or none, a refusal) counts. Until the server
+  has passed this window's answers to other windows, BadWindow on ChangeProperty
+  or SendEvent and BadAtom or BadMatch on ChangeProperty are ignored for every
+  request sent in that span, which includes an application's own ChangeProperty
+  or SendEvent there (Notes sends none that can fail); any other X11 error still
+  stops the program. Call `x11_enable_clipboard` at startup and `x11_serve` after
+  each `x11_events`.
 - `pixel_text.herb`: original 5×7 printable ASCII glyphs, strings, buffer spans
   and decimal numbers, rendered without temporary per-frame strings.
 - `grid_map.herb`: bounded rectangular ASCII tile maps with enclosure, unique

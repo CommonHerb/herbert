@@ -83,7 +83,18 @@ own style when saved. Text with other control characters, a bare CR or invalid
 UTF-8 is refused whole, as is text over 65,504 bytes or more than the document
 has room for. A copy or cut of more than 65,536 bytes is refused, and the
 selection stays. If no application offers text, or the one that does fails to
-answer within two seconds, the footer says so and nothing changes. As with any
+answer within two seconds, the footer says so and nothing changes; an answer
+that comes later is not taken for the next paste. Before pasting its own copy,
+Notes asks the X server whether that copy still holds the clipboard. If the
+server has not answered within two seconds, the paste asks the clipboard's
+owner as any paste does: if Notes' copy has lost the clipboard, the real
+owner's text is pasted when it answers, and if no answer comes within the next
+two seconds, as when Notes still holds the clipboard and cannot answer itself
+while it waits, the footer says the owner did not answer in time. While a paste
+waits, for the server or for the owner, Notes' input queue filling (256 waiting
+key presses) ends the wait at once: nothing is pasted, whether or not the owner
+has answered, and the footer says the owner did not answer in time. Nothing
+typed is lost. As with any
 X11 application, copied text stays available while Notes is running; whether it
 outlives Notes depends on the desktop. Ctrl+V also pastes into the Open and Find
 fields when the text is one line without tabs that fits; one trailing newline

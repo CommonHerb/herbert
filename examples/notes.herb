@@ -369,8 +369,11 @@ func notes_paste_text(t, s, query, bytes, count):
     return notes_edited(s, text_replace(t, start, stop, bytes, 0, count))
 end
 
--- Text this window copied is pasted directly; otherwise the clipboard's owner
--- is asked, for at most two seconds.
+-- Text this window copied is pasted directly once the X server confirms the copy
+-- still holds the clipboard; otherwise the clipboard's owner is asked, for at most
+-- two seconds. If the server's answer is held up (256 keys waiting, or two
+-- seconds), the owner is asked too, and when that owner is Notes itself it answers
+-- only after this paste has stopped waiting, so the paste reports message 37.
 func notes_paste(c, t, s, query):
     if x11_clip_owned(c): return notes_paste_text(t, s, query, x11_clip_data(c), x11_clip_count(c)) end
     let got = x11_clip_request(c, s.time, 2000)

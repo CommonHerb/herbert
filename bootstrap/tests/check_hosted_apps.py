@@ -23,7 +23,7 @@ import tempfile
 import time
 
 from check_grid_map import DEFAULT_MAP
-from check_desktop import XConnection, center, memory, private_display, save_png
+from check_desktop import XConnection, XKeyEvent, center, memory, private_display, save_png
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -200,8 +200,19 @@ class XSelectionEvent(C.Structure):
                 ('property', C.c_ulong), ('time', C.c_ulong)]
 
 
+class XPropertyEvent(C.Structure):
+    _fields_ = [('type', C.c_int), ('serial', C.c_ulong), ('send_event', C.c_int), ('display', C.c_void_p),
+                ('window', C.c_ulong), ('atom', C.c_ulong), ('time', C.c_ulong), ('state', C.c_int)]
+
+
+class XKeymapEvent(C.Structure):
+    _fields_ = [('type', C.c_int), ('serial', C.c_ulong), ('send_event', C.c_int), ('display', C.c_void_p),
+                ('window', C.c_ulong), ('key_vector', C.c_ubyte * 32)]
+
+
 class PeerEvent(C.Union):
     _fields_ = [('type', C.c_int), ('request', XSelectionRequestEvent), ('selection', XSelectionEvent),
+                ('key', XKeyEvent), ('property', XPropertyEvent), ('keymap', XKeymapEvent),
                 ('pad', C.c_long * 24)]
 
 
@@ -233,6 +244,11 @@ class ClipboardPeer:
             'XFlush': (C.c_int, [C.c_void_p]),
             'XSync': (C.c_int, [C.c_void_p, C.c_int]),
             'XFree': (C.c_int, [C.c_void_p]),
+            'XGrabServer': (C.c_int, [C.c_void_p]),
+            'XUngrabServer': (C.c_int, [C.c_void_p]),
+            'XSelectInput': (C.c_int, [C.c_void_p, C.c_ulong, C.c_long]),
+            'XStringToKeysym': (C.c_ulong, [C.c_char_p]),
+            'XKeysymToKeycode': (C.c_ubyte, [C.c_void_p, C.c_ulong]),
         }
         for name, (restype, argtypes) in specs.items():
             function = getattr(x, name)
@@ -321,6 +337,18 @@ class ClipboardPeer:
             time.sleep(.01)
         raise AssertionError('timed out: the clipboard owner never answered')
 
+    def window_property(self, window, atom, delete=False):
+        """The bytes of window's property atom (8-bit), or None if it has none; delete removes it."""
+        kind, fmt = C.c_ulong(), C.c_int()
+        count, after, data = C.c_ulong(), C.c_ulong(), C.c_void_p()
+        assert self.x.XGetWindowProperty(self.d, window, atom, 0, 1 << 20, int(delete), 0, C.byref(kind), C.byref(fmt),
+                                         C.byref(count), C.byref(after), C.byref(data)) == 0
+        try:
+            return C.string_at(data, count.value) if kind.value and fmt.value == 8 else None
+        finally:
+            if data:
+                self.x.XFree(data)
+
     def request_from_gone_window(self, owner):
         """Send owner a request whose requestor window no longer exists."""
         gone = self.x.XCreateSimpleWindow(self.d, self.root, 0, 0, 1, 1, 0, 0, 0)
@@ -330,6 +358,134 @@ class ClipboardPeer:
         r.type, r.display, r.owner, r.requestor = 30, self.d, owner, gone
         r.selection, r.target, r.property, r.time = self.clipboard, self.utf8, self.prop, 0
         assert self.x.XSendEvent(self.d, owner, 0, 0, C.byref(event))
+        self.x.XSync(self.d, 0)
+
+    # The protocol cases below take each step themselves, in an order they choose.
+    def keycode(self, name):
+        return self.x.XKeysymToKeycode(self.d, self.x.XStringToKeysym(name.encode()))
+
+    def gone_window(self):
+        gone = self.x.XCreateSimpleWindow(self.d, self.root, 0, 0, 1, 1, 0, 0, 0)
+        self.x.XDestroyWindow(self.d, gone)
+        self.x.XSync(self.d, 0)
+        return gone
+
+    def send_request(self, owner, requestor, prop=None):
+        """Queue, without flushing, a request to owner on requestor's behalf (into prop, default PEER_PASTE)."""
+        event = PeerEvent()
+        r = event.request
+        r.type, r.display, r.owner, r.requestor = 30, self.d, owner, requestor
+        r.selection, r.target, r.property, r.time = self.clipboard, self.utf8, self.prop if prop is None else prop, 0
+        assert self.x.XSendEvent(self.d, owner, 0, 0, C.byref(event))
+
+    def send_key(self, window, keycode, state=0, stamp=0, down=True):
+        """Queue, without flushing, a key event addressed to window, with the server time stamp."""
+        event = PeerEvent()
+        k = event.key
+        k.type, k.display, k.window, k.root = 2 if down else 3, self.d, window, self.root
+        k.time, k.state, k.keycode, k.same_screen = stamp, state, keycode, 1
+        assert self.x.XSendEvent(self.d, window, 0, 0, C.byref(event))
+
+    def send_presses(self, window, count, keys=()):
+        """Queue, without flushing, count key presses addressed to window: Shift presses, which type
+        nothing, then keys, (keysym name, state) pairs, each pressed and released."""
+        shift = self.keycode('Shift_L')
+        for _ in range(count - len(keys)): self.send_key(window, shift)
+        for name, state in keys:
+            code = self.keycode(name)
+            self.send_key(window, code, state=state)
+            self.send_key(window, code, state=state, down=False)
+
+    def send_keymap_notify(self, window, sixteen):
+        """Queue, without flushing, a KeymapNotify to window whose bytes 2-3 (where every other event
+        carries the last request the server reached) hold sixteen: the server stamps no sequence on a
+        KeymapNotify, so a SendEvent leaves those bytes as sent."""
+        event = PeerEvent()
+        k = event.keymap
+        k.type, k.display, k.window = 11, self.d, window
+        # Xlib sends key_vector[1..31] as the event's bytes 1-31.
+        k.key_vector[2], k.key_vector[3] = sixteen & 255, sixteen >> 8
+        assert self.x.XSendEvent(self.d, window, 0, 0, C.byref(event))
+
+    def grab(self):
+        self.x.XGrabServer(self.d)
+        self.x.XSync(self.d, 0)
+
+    def ungrab(self):
+        self.x.XUngrabServer(self.d)
+        self.x.XSync(self.d, 0)
+
+    def rewrite_keyboard_mapping(self):
+        """Write one keycode's keysyms back unchanged: the server sends every client MappingNotify."""
+        x = self.x
+        x.XGetKeyboardMapping.restype = C.POINTER(C.c_ulong)
+        x.XGetKeyboardMapping.argtypes = [C.c_void_p, C.c_ubyte, C.c_int, C.POINTER(C.c_int)]
+        x.XChangeKeyboardMapping.restype = C.c_int
+        x.XChangeKeyboardMapping.argtypes = [C.c_void_p, C.c_int, C.c_int, C.POINTER(C.c_ulong), C.c_int]
+        code, per = self.keycode('F12'), C.c_int()
+        symbols = x.XGetKeyboardMapping(self.d, code, 1, C.byref(per))
+        assert symbols and per.value > 0, 'peer could not read the keyboard mapping'
+        try:
+            x.XChangeKeyboardMapping(self.d, code, per.value, symbols, 1)
+        finally:
+            x.XFree(symbols)
+        x.XFlush(self.d)
+
+    def watch_properties(self, window):
+        self.x.XSelectInput(self.d, window, 1 << 22)
+        self.x.XSync(self.d, 0)
+
+    def next_event(self, wanted, seconds=4):
+        """The next event wanted(event) accepts, or None after seconds; others are dropped."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            while self.x.XPending(self.d):
+                event = PeerEvent()
+                self.x.XNextEvent(self.d, C.byref(event))
+                if wanted(event):
+                    return event
+            time.sleep(.005)
+        return None
+
+    def drain(self):
+        """Drop every event the server has queued for the peer so far."""
+        self.x.XSync(self.d, 0)
+        while self.x.XPending(self.d):
+            self.x.XNextEvent(self.d, C.byref(PeerEvent()))
+
+    def next_request(self, seconds=4):
+        event = self.next_event(lambda e: e.type == 30, seconds)
+        return event.request if event else None
+
+    def deleted(self, window, atom, seconds):
+        """Whether window's property atom is deleted within seconds (watch_properties first)."""
+        return self.next_event(lambda e: e.type == 28 and e.property.window == window and e.property.atom == atom
+                               and e.property.state == 1, seconds) is not None
+
+    def refuse(self, request):
+        """Refuse request, as an owner may: a SelectionNotify with property None and the request's time."""
+        reply = PeerEvent()
+        s = reply.selection
+        s.type, s.display, s.requestor = 31, self.d, request.requestor
+        s.selection, s.target, s.time, s.property = request.selection, request.target, request.time, 0
+        self.x.XSendEvent(self.d, request.requestor, 0, 0, C.byref(reply))
+        self.x.XSync(self.d, 0)
+
+    def reply(self, request, data, prop=None, time=None, mode=0, requestor=None, selection=None):
+        """Answer request whenever the case says: data in prop (default: the property asked for),
+        written in mode (0 replace, 2 append), the answer stamped time (default: the request's).
+        The notice goes to the request's requestor, naming requestor and selection (default: the
+        request's own)."""
+        prop = request.property if prop is None else prop
+        self.x.XChangeProperty(self.d, request.requestor, prop, self.utf8, 8, mode, data, len(data))
+        reply = PeerEvent()
+        s = reply.selection
+        s.type, s.display = 31, self.d
+        s.requestor = request.requestor if requestor is None else requestor
+        s.selection = request.selection if selection is None else selection
+        s.target = request.target
+        s.time, s.property = request.time if time is None else time, prop
+        self.x.XSendEvent(self.d, request.requestor, 0, 0, C.byref(reply))
         self.x.XSync(self.d, 0)
 
 
@@ -1460,6 +1616,1396 @@ def notes_clipboard_checks(args, x, display, evidence, passed):
         peer.close()
     passed('notes-desktop-clipboard-copy-offer-paste-crlf-refusals-timeout-ownership-vanished-requestor-64kib-field-memory',
            samples=samples)
+
+
+def notes_clipboard_vanished_pair_checks(args, x, display, evidence, passed):
+    """A second request answered before the first, vanished, requestor's errors are read."""
+    d = evidence/'clipboard-vanished-pair'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'vanished-pair') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            gone, shift = peer.gone_window(), peer.keycode('Shift_L')
+            # Under a server grab the whole batch reaches Notes before the server handles
+            # any answer: the gone window's request, 256 key presses (all Notes queues at
+            # once), a live request, 256 more. So Notes answers the live request before it
+            # can read the BadWindow errors of its answer to the gone window.
+            peer.grab()
+            try:
+                peer.send_request(app.window, gone)
+                for _ in range(256): peer.send_key(app.window, shift)
+                peer.send_request(app.window, peer.w)
+                for _ in range(256): peer.send_key(app.window, shift)
+            finally:
+                peer.ungrab()
+            assert peer.next_event(lambda e: e.type == 31 and e.selection.requestor == peer.w, 6), \
+                'Notes answered the live request'
+            # Typed after both answers reached the server, so read after their errors.
+            app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==b'copy me\n!', 'Notes saved after both answers')
+            assert app.p.poll() is None, ('answering a vanished window, then a live one, stopped Notes',
+                                          app.p.returncode, (d/'vanished-pair.stderr').read_bytes())
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-vanished-requestor-then-live-request-before-errors-read')
+
+
+def notes_clipboard_two_vanished_checks(args, x, display, evidence, passed):
+    """Two answers to windows already gone, the second made before the first one's errors are read."""
+    d = evidence/'clipboard-two-vanished'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'two-vanished') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            first, second, shift = peer.gone_window(), peer.gone_window(), peer.keycode('Shift_L')
+            # As in the vanished-pair case, but both requestors are gone: the second answer's
+            # errors come after the first one's, from a range the second answer extended.
+            peer.grab()
+            try:
+                peer.send_request(app.window, first)
+                for _ in range(256): peer.send_key(app.window, shift)
+                peer.send_request(app.window, second)
+                for _ in range(256): peer.send_key(app.window, shift)
+            finally:
+                peer.ungrab()
+            # Asked after both answers, so answered only once both answers' errors are read.
+            try:
+                offered = peer.request()
+            except AssertionError as error:
+                offered = repr(error)
+            assert app.p.poll() is None, ('two vanished requestors stopped Notes', app.p.returncode,
+                                          (d/'two-vanished.stderr').read_bytes())
+            assert offered == (peer.utf8, 8, b'copy'), offered
+            app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==b'copy me\n!', 'Notes saved after both answers')
+            assert app.p.poll() is None, ('Notes stopped after two vanished requestors', app.p.returncode)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-two-vanished-requestors-before-errors-read-both-ignored')
+
+
+def notes_clipboard_lap_flood_checks(args, x, display, evidence, passed):
+    """A vanished requestor's errors still ignored when Notes reads them only after more than
+    65,536 further requests (typing queued ahead of them, and the screens drawn for it)."""
+    d = evidence/'clipboard-lap-flood'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; original = (b'M' * 69 + b'\n') * 40; doc.write_bytes(original)
+        typed = bytes(10 if i % 70 == 69 else 77 for i in range(1500))
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'lap-flood') as app:
+            app.key('Shift_L', True); app.tap('Right'); app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            app.tap('End','Control_L')
+            gone, m, enter = peer.gone_window(), peer.keycode('m'), peer.keycode('Return')
+            # Under a server grab all of this reaches Notes before the server handles its answer
+            # to the gone window. Every lit glyph pixel Notes draws is one request, so the
+            # screens it draws for these keys come to far more than 65,536 requests before it
+            # reads that answer's errors.
+            peer.grab()
+            try:
+                peer.send_request(app.window, gone)
+                for byte in typed:
+                    code, state = (enter, 0) if byte == 10 else (m, 1)
+                    peer.send_key(app.window, code, state=state)
+                    peer.send_key(app.window, code, state=state, down=False)
+            finally:
+                peer.ungrab()
+            app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==original + typed, 'the typing saved', timeout=60)
+            assert app.p.poll() is None, ('errors of an answer read after 65,536 requests stopped Notes', app.p.returncode,
+                                          (d/'lap-flood.stderr').read_bytes(), len(doc.read_bytes()) - len(original))
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-vanished-requestor-errors-read-after-65536-requests-still-ignored')
+
+
+def notes_clipboard_refusal_checks(args, x, display, evidence, passed):
+    """No owner, and an owner's refusal (property None, the paste's time), are reported at once
+    as nothing to paste, not as an owner that did not answer."""
+    d = evidence/'clipboard-refusal'; d.mkdir()
+    warning = (16173151).to_bytes(3,'big')
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'unchanged\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'refusal') as app:
+            def footer():
+                return region(app.frame(),28,560,810,7)
+            footers, seconds = {}, {}
+            for name in ['no-owner', 'refused', 'unanswered']:
+                app.tap('s','Control_L')
+                wait_for(lambda: warning not in footer(), name + ': footer back to normal before the paste')
+                if name == 'no-owner':
+                    peer.disown()
+                else:
+                    peer.own(b'never')
+                started = time.monotonic()
+                app.tap('v','Control_L')
+                if name != 'no-owner':
+                    request = peer.next_request()
+                    assert request is not None, name + ': Ctrl+V asks the owner'
+                    if name == 'refused':
+                        peer.refuse(request)
+                wait_for(lambda: warning in footer(), name + ' paste reported', timeout=6)
+                seconds[name] = round(time.monotonic() - started, 2)
+                footers[name] = footer(); app.frame('reported-' + name)
+            assert doc.read_bytes() == b'unchanged\n'
+            timeout = [name for name in ('no-owner', 'refused') if footers[name] == footers['unanswered']]
+            assert not timeout and footers['refused'] == footers['no-owner'], ('reported as the timeout message', timeout, seconds)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-no-owner-and-refusal-reported-at-once-not-as-timeout', seconds=seconds)
+
+
+def notes_clipboard_late_answer_checks(args, x, display, evidence, passed):
+    """An answer arriving after its paste gave up, naming another property, carrying another
+    paste's time, or naming another requestor or selection, is not the answer."""
+    d = evidence/'clipboard-late-answer'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'start:')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'late-answer') as app:
+            def saved(wanted, what):
+                app.tap('s','Control_L')
+                try:
+                    wait_for(lambda: doc.read_bytes()==wanted, what)
+                except AssertionError:
+                    raise AssertionError(what, doc.read_bytes())
+            peer.watch_properties(app.window)
+            peer.own(b'unused')
+            app.tap('End','Control_L'); app.tap('v','Control_L')
+            first = peer.next_request()
+            assert first is not None, 'the first paste asks the owner'
+            app.tap('v','Control_L')
+            # Notes asks again only after the first paste gave up (two seconds).
+            second = peer.next_request(seconds=6)
+            assert second is not None and second.time != first.time, 'the second paste asks with its own time'
+            peer.reply(first, b'STALE_FROM_REQ1')
+            # A build that takes the late answer reads, so deletes, the property it names now;
+            # the peer waits for that at most half a second before answering the second paste.
+            peer.deleted(app.window, first.property, .5)
+            peer.reply(second, b'FRESH_FROM_REQ2')
+            saved(b'start:FRESH_FROM_REQ2', 'the second paste inserts the second answer')
+            app.tap('v','Control_L')
+            third = peer.next_request()
+            assert third is not None, 'the third paste asks the owner'
+            peer.reply(third, b'ELSEWHERE', prop=peer.atom(b'PEER_ELSEWHERE'))
+            peer.deleted(app.window, third.property, .5)
+            peer.reply(third, b'+ON_TIME')
+            saved(b'start:FRESH_FROM_REQ2+ON_TIME', 'an answer naming another property is not the answer')
+            # The property this paste asked for, but the first paste's time.
+            app.tap('v','Control_L')
+            fourth = peer.next_request()
+            assert fourth is not None, 'the fourth paste asks the owner'
+            peer.reply(fourth, b'WRONG_TIME', time=first.time)
+            peer.deleted(app.window, fourth.property, .5)
+            peer.reply(fourth, b'+OWN_TIME')
+            saved(b'start:FRESH_FROM_REQ2+ON_TIME+OWN_TIME', 'an answer carrying another paste\'s time is not the answer')
+            # This paste's time and property, sent to Notes' window, but naming another requestor, then
+            # PRIMARY: neither answers Notes' request for CLIPBOARD.
+            app.tap('v','Control_L')
+            fifth = peer.next_request()
+            assert fifth is not None, 'the fifth paste asks the owner'
+            peer.reply(fifth, b'OTHER_REQUESTOR', requestor=peer.w)
+            peer.deleted(app.window, fifth.property, .5)
+            peer.reply(fifth, b'OTHER_SELECTION', selection=peer.atom(b'PRIMARY'))
+            peer.deleted(app.window, fifth.property, .5)
+            peer.reply(fifth, b'+OWN_NOTICE')
+            saved(b'start:FRESH_FROM_REQ2+ON_TIME+OWN_TIME+OWN_NOTICE',
+                  'a notice naming another requestor or another selection is not the answer')
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-late-answer-other-property-time-requestor-or-selection-dropped-own-answer-pasted')
+
+
+def notes_clipboard_late_refusal_checks(args, x, display, evidence, passed):
+    """A refusal answers a paste only if it carries that paste's time: an owner's late refusal of
+    a paste that gave up is not taken for the next one."""
+    d = evidence/'clipboard-late-refusal'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'start:')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'late-refusal') as app:
+            peer.own(b'unused')
+            app.tap('End','Control_L'); app.tap('v','Control_L')
+            first = peer.next_request()
+            assert first is not None, 'the first paste asks the owner'
+            app.tap('v','Control_L')
+            # Notes asks again only after the first paste gave up (two seconds).
+            second = peer.next_request(seconds=6)
+            assert second is not None and second.time != first.time, 'the second paste asks with its own time'
+            # Both reach Notes in this order while it waits for the second answer.
+            peer.refuse(first)
+            peer.reply(second, b'FRESH_FROM_REQ2')
+            app.tap('s','Control_L')
+            try:
+                wait_for(lambda: doc.read_bytes()==b'start:FRESH_FROM_REQ2', 'saved')
+            except AssertionError:
+                raise AssertionError('a late refusal was taken for the second paste', doc.read_bytes())
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-late-refusal-of-an-earlier-paste-dropped-own-answer-pasted')
+
+
+def notes_clipboard_stale_after_fresh_checks(args, x, display, evidence, passed):
+    """Each paste asks for its text in a property of its own. An owner's late text for a paste that
+    gave up, written after the next paste's answer and before Notes reads that answer, lands on
+    the earlier paste's property and is never pasted."""
+    d = evidence/'clipboard-stale-after-fresh'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'start:')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'stale-after-fresh') as app:
+            peer.own(b'unused')
+            app.tap('End','Control_L'); app.tap('v','Control_L')
+            first = peer.next_request()
+            assert first is not None, 'the first paste asks the owner'
+            app.tap('v','Control_L')
+            second = peer.next_request(seconds=6)
+            assert second is not None and second.time != first.time, 'the second paste asks with its own time'
+            # Under a server grab both writes are handled before Notes' read of the answer it
+            # accepts, whenever Notes reads the two notices: the right answer, then the late one.
+            peer.grab()
+            try:
+                peer.reply(second, b'FRESH_FROM_REQ2')
+                peer.reply(first, b'STALE_FROM_REQ1')
+            finally:
+                peer.ungrab()
+            app.tap('s','Control_L')
+            try:
+                wait_for(lambda: doc.read_bytes()==b'start:FRESH_FROM_REQ2', 'saved')
+            except AssertionError:
+                raise AssertionError('the late text written after the right answer was pasted', doc.read_bytes())
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-late-text-written-after-the-right-answer-lands-elsewhere-never-pasted')
+
+
+def notes_clipboard_leftover_property_checks(args, x, display, evidence, passed):
+    """Pastes take turns over eight properties, each emptied before its paste asks: the late text
+    left in one is not part of the answer when that property's turn comes round again."""
+    d = evidence/'clipboard-leftover-property'; d.mkdir()
+    warning = (16173151).to_bytes(3,'big')
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'start:')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'leftover-property') as app:
+            def saved(wanted, what):
+                app.tap('s','Control_L')
+                try:
+                    wait_for(lambda: doc.read_bytes()==wanted, what)
+                except AssertionError:
+                    raise AssertionError(what, doc.read_bytes())
+            peer.watch_properties(app.window)
+            peer.own(b'unused')
+            app.tap('End','Control_L'); app.tap('v','Control_L')
+            first = peer.next_request()
+            assert first is not None, 'the first paste asks the owner'
+            wait_for(lambda: warning in region(app.frame(),28,560,810,7), 'the first paste gives up', timeout=6)
+            # Too late: Notes no longer waits, and nothing reads this property for now.
+            peer.reply(first, b'STALE_FROM_REQ1')
+            properties, wanted = [first.property], b'start:'
+            for turn in range(1, 8):
+                app.tap('v','Control_L')
+                request = peer.next_request()
+                assert request is not None, ('paste', turn + 1, 'asks the owner')
+                properties.append(request.property)
+                peer.reply(request, b'%d' % turn); wanted += b'%d' % turn
+                saved(wanted, 'paste %d pasted' % (turn + 1))
+            # The peer sees Notes' requests' effects in the order the server handled them: the ninth
+            # paste must empty the property holding the late text before its request reaches the owner.
+            peer.drain()
+            app.tap('v','Control_L')
+            emptied, ninth = [], None
+            while ninth is None:
+                event = peer.next_event(lambda e: e.type == 30 or (e.type == 28 and e.property.window == app.window
+                                                                   and e.property.state == 1))
+                assert event is not None, 'the ninth paste asks the owner'
+                if event.type == 30:
+                    ninth = event.request
+                else:
+                    emptied.append(event.property.atom)
+            assert len(set(properties)) == 8 and ninth.property == first.property, \
+                ('eight properties in turn, then the first again', properties, ninth.property)
+            assert emptied == [first.property], ('the ninth paste empties its own property, and only that, before it asks',
+                                                 emptied, first.property)
+            # An owner that appends to what it finds, as a careless one might.
+            peer.reply(ninth, b'+NINTH', mode=2)
+            saved(wanted + b'+NINTH', 'the ninth paste has its own answer and nothing left over')
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-eight-properties-in-turn-each-emptied-before-its-paste-asks')
+
+
+def notes_clipboard_bad_atom_checks(args, x, display, evidence, passed):
+    """A requestor naming a property that is no atom (only a request sent directly can) makes
+    Notes' answer fail with BadAtom on ChangeProperty, which is ignored."""
+    d = evidence/'clipboard-bad-atom'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'bad-atom') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            peer.send_request(app.window, peer.w, prop=0x1ffffff0)
+            peer.x.XFlush(peer.d)
+            answer = peer.next_event(lambda e: e.type == 31 and e.selection.requestor == peer.w)
+            assert answer is not None and answer.selection.property == 0x1ffffff0, 'Notes answered the request'
+            try:
+                offered = peer.request()
+            except AssertionError as error:
+                offered = repr(error)
+            assert app.p.poll() is None, ('a property that is no atom stopped Notes', app.p.returncode,
+                                          (d/'bad-atom.stderr').read_bytes())
+            assert offered == (peer.utf8, 8, b'copy'), offered
+            app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==b'copy me\n!', 'saved')
+            assert app.p.poll() is None, ('Notes stopped after a property that is no atom', app.p.returncode)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-request-naming-no-atom-badatom-ignored')
+
+
+def notes_clipboard_copy_flood_checks(args, x, display, evidence, passed):
+    """A copy waits for nothing from the server: more key presses than Notes queues at once (256),
+    already waiting behind a Ctrl+C or a Ctrl+X, are all read and Notes stays up."""
+    d = evidence/'clipboard-copy-flood'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        for key, label, wanted, offered in [('c', 'copy-flood', b'copy me\n!', b'copy'),
+                                            ('x', 'cut-flood', b' me\n!', b'copy')]:
+            doc = d/(label + '.txt'); doc.write_bytes(b'copy me\n')
+            with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, label) as app:
+                app.key('Shift_L', True)
+                for _ in range(4): app.tap('Right')
+                app.key('Shift_L', False)
+                code, shift = peer.keycode(key), peer.keycode('Shift_L')
+                # Under a server grab the whole batch is waiting before Notes reads the first key:
+                # Ctrl+key (server time 0), then 300 Shift presses, which type nothing.
+                peer.grab()
+                try:
+                    peer.send_key(app.window, code, state=4)
+                    peer.send_key(app.window, code, state=4, down=False)
+                    for _ in range(300): peer.send_key(app.window, shift)
+                finally:
+                    peer.ungrab()
+                app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+                wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==wanted, label + ' saved')
+                assert app.p.poll() is None, (label + ': keys queued behind it stopped Notes', app.p.returncode,
+                                              (d/(label + '.stderr')).read_bytes())
+                assert peer.owner()==app.window and peer.request()==(peer.utf8, 8, offered), label + ' took the clipboard'
+                app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-copy-and-cut-with-300-keys-queued-behind-them-wait-for-nothing')
+
+
+def notes_clipboard_paste_flood_checks(args, x, display, evidence, passed):
+    """Ctrl+V while Notes believes it owns the clipboard asks the server, whose answer comes after
+    all input already waiting. With more key presses waiting than Notes queues at once (256),
+    the paste gives up on that answer instead of overflowing the queue: Notes stays up, keeps
+    every key, and settles ownership when the answer arrives, unless it copied again since."""
+    d = evidence/'clipboard-paste-flood'; d.mkdir()
+    peer = ClipboardPeer(display)
+    seconds = {}
+    try:
+        for label, claimed in [('paste-flood', True), ('paste-flood-recopy', False)]:
+            doc = d/(label + '.txt'); doc.write_bytes(b'copy me\n')
+            with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, label) as app:
+                app.key('Shift_L', True)
+                for _ in range(4): app.tap('Right')
+                app.key('Shift_L', False)
+                v, c, shift = peer.keycode('v'), peer.keycode('c'), peer.keycode('Shift_L')
+                if claimed:
+                    app.tap('c','Control_L')
+                    wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+                else:
+                    # Notes believes it owns the clipboard, but its claim (server time 1) lost to the
+                    # peer's; then Ctrl+V, Ctrl+A and a new Ctrl+C (server time 0, now) wait behind each
+                    # other, so the copy is made before the paste's answer, which names the peer, is read.
+                    peer.own(b'PEER')
+                    peer.send_key(app.window, c, state=4, stamp=1)
+                    peer.send_key(app.window, c, state=4, stamp=1, down=False)
+                    peer.x.XSync(peer.d, 0)
+                peer.grab()
+                try:
+                    peer.send_key(app.window, v, state=4)
+                    peer.send_key(app.window, v, state=4, down=False)
+                    if not claimed:
+                        for code in [peer.keycode('a'), c]:
+                            peer.send_key(app.window, code, state=4)
+                            peer.send_key(app.window, code, state=4, down=False)
+                    for _ in range(300): peer.send_key(app.window, shift)
+                finally:
+                    peer.ungrab()
+                started = time.monotonic()
+                app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+                wait_for(lambda: app.p.poll() is not None or doc.read_bytes().endswith(b'!'), label + ' saved', timeout=10)
+                seconds[label] = round(time.monotonic() - started, 2)
+                assert app.p.poll() is None, (label + ': keys queued behind Ctrl+V stopped Notes', app.p.returncode,
+                                              (d/(label + '.stderr')).read_bytes())
+                assert doc.read_bytes() in (b'copy me\n!', b'copy me\ncopy!'), (label, doc.read_bytes())
+                # Once the queue is full nothing more can be read before the keys are handled, so
+                # neither the owner question nor the paste's wait for the owner's text waits on.
+                assert seconds[label] < 1, (label + ': a wait held up a full key queue', seconds)
+                try:
+                    offered = peer.request()
+                except AssertionError as error:
+                    offered = repr(error)
+                assert peer.owner()==app.window and offered==(peer.utf8, 8, b'copy' if claimed else b'copy me\n'), \
+                    (label + ': Notes still answers for the clipboard it holds', peer.owner()==app.window, offered)
+                app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-paste-asks-ownership-with-300-keys-queued-gives-up-on-the-answer-stays-up', seconds=seconds)
+
+
+def notes_clipboard_two_pastes_flood_checks(args, x, display, evidence, passed):
+    """One owner question at a time: a second Ctrl+V while the first paste's question is still
+    unanswered (each paste given up on with 300 key presses waiting behind it) asks no second
+    question, so the one answer, read later, is taken for the question it answers."""
+    d = evidence/'clipboard-two-pastes-flood'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'two-pastes-flood') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            v, shift = peer.keycode('v'), peer.keycode('Shift_L')
+            # Under a server grab both batches are waiting before Notes reads the first key, and the
+            # answer to the first paste's question comes after all of them: each Ctrl+V finds 300
+            # presses behind it, so each gives up, the second with the first question unanswered.
+            peer.grab()
+            try:
+                for _ in range(2):
+                    peer.send_key(app.window, v, state=4)
+                    peer.send_key(app.window, v, state=4, down=False)
+                    for _ in range(300): peer.send_key(app.window, shift)
+            finally:
+                peer.ungrab()
+            app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes().endswith(b'!'), 'two-pastes-flood saved', timeout=10)
+            try:
+                offered = peer.request()
+            except AssertionError as error:
+                offered = repr(error)
+            assert app.p.poll() is None, ('a second Ctrl+V while the first owner question was unanswered stopped Notes',
+                                          app.p.returncode, (d/'two-pastes-flood.stderr').read_bytes())
+            # The copy's selection is still there: a first paste of Notes' own text replaces it with the same
+            # text, a second goes in after it.
+            assert doc.read_bytes() in (b'copy me\n!', b'copycopy me\n!'), doc.read_bytes()
+            assert peer.owner()==app.window and offered==(peer.utf8, 8, b'copy'), \
+                ('Notes still answers for the clipboard it holds', peer.owner()==app.window, offered)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-second-paste-while-the-owner-question-is-unanswered-asks-no-second-question')
+
+
+def notes_clipboard_late_owner_answer_checks(args, x, display, evidence, passed):
+    """A paste that gave up on its owner question (256 keys queued first) still learns from the
+    answer: read later, an answer naming another application ends Notes' belief that it owns the
+    clipboard, so a request sent to Notes directly is refused."""
+    d = evidence/'clipboard-late-owner-answer'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'late-owner-answer') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            peer.own(b'PEER')
+            # Ctrl+C stamped at server time 1, older than the peer's claim: the server keeps the peer
+            # as owner and says nothing, so Notes believes it owns the clipboard (ICCCM 2.1).
+            c, v, shift = peer.keycode('c'), peer.keycode('v'), peer.keycode('Shift_L')
+            peer.send_key(app.window, c, state=4, stamp=1)
+            peer.send_key(app.window, c, state=4, stamp=1, down=False)
+            peer.drain()
+            peer.grab()
+            try:
+                peer.send_key(app.window, v, state=4)
+                peer.send_key(app.window, v, state=4, down=False)
+                for _ in range(300): peer.send_key(app.window, shift)
+            finally:
+                peer.ungrab()
+            # The paste gives up on its question with the key queue full, then asks the clipboard's
+            # owner. The server handles that request after the question, so the answer naming the
+            # peer is on its way to Notes before the peer hears the request, and so before the
+            # request the peer then sends Notes directly.
+            asked = peer.next_request()
+            assert asked is not None and asked.requestor == app.window, 'the paste that gave up asks the clipboard\'s owner'
+            peer.send_request(app.window, peer.w)
+            peer.x.XFlush(peer.d)
+            answer = peer.next_event(lambda e: e.type == 31 and e.selection.requestor == peer.w)
+            assert app.p.poll() is None, ('a late owner answer stopped Notes', app.p.returncode,
+                                          (d/'late-owner-answer.stderr').read_bytes())
+            assert answer is not None and answer.selection.property == 0, \
+                ('a request sent to Notes directly after the late answer is refused',
+                 None if answer is None else answer.selection.property)
+            app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==b'copy me\n!', 'late-owner-answer saved')
+            assert app.p.poll() is None and peer.owner()==peer.w, ('Notes after the late answer', app.p.returncode)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-owner-answer-read-after-the-paste-gave-up-still-ends-ownership')
+
+
+def notes_clipboard_copy_between_pastes_flood_checks(args, x, display, evidence, passed):
+    """One owner question at a time, also with a copy between two pastes: the copy makes the
+    unanswered question's answer moot for ownership, but that answer is still on its way, so the
+    second Ctrl+V asks no new question while it is (each paste given up on with 300 key presses
+    waiting behind it)."""
+    d = evidence/'clipboard-copy-between-pastes'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'copy-between-pastes') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            c, v, shift = peer.keycode('c'), peer.keycode('v'), peer.keycode('Shift_L')
+            # Under a server grab all of it is waiting before Notes reads the first key, and the first
+            # question's answer comes after all of it: Ctrl+V, 300 presses, Ctrl+C, Ctrl+V, 300 presses.
+            peer.grab()
+            try:
+                for code, presses in [(v, 300), (c, 0), (v, 300)]:
+                    peer.send_key(app.window, code, state=4)
+                    peer.send_key(app.window, code, state=4, down=False)
+                    for _ in range(presses): peer.send_key(app.window, shift)
+            finally:
+                peer.ungrab()
+            app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes().endswith(b'!'), 'copy-between-pastes saved', timeout=10)
+            try:
+                offered = peer.request()
+            except AssertionError as error:
+                offered = repr(error)
+            assert app.p.poll() is None, ('a paste after a copy, with the first owner question unanswered, stopped Notes',
+                                          app.p.returncode, (d/'copy-between-pastes.stderr').read_bytes())
+            # As in two-pastes-flood: given up, nothing is pasted; fc09dc3 pastes its own text twice.
+            assert doc.read_bytes() in (b'copy me\n!', b'copycopy me\n!'), doc.read_bytes()
+            assert peer.owner()==app.window and offered==(peer.utf8, 8, b'copy'), \
+                ('Notes still answers for the clipboard it holds', peer.owner()==app.window, offered)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-copy-between-two-pastes-with-the-owner-question-unanswered-asks-no-second-question')
+
+
+def notes_clipboard_late_owner_answer_time_checks(args, x, display, evidence, passed):
+    """As late-owner-answer, on the other give-up: the owner question unanswered under a server grab
+    held 3.5 s is given up (the bound is two seconds), and its answer, read after the grab, still
+    ends Notes' belief that it owns the clipboard, so a request sent to Notes directly is refused."""
+    d = evidence/'clipboard-late-owner-answer-time'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'late-owner-answer-time') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            peer.own(b'PEER')
+            # Ctrl+C stamped at server time 1, older than the peer's claim: the server keeps the peer
+            # as owner and says nothing, so Notes believes it owns the clipboard (ICCCM 2.1).
+            c, v = peer.keycode('c'), peer.keycode('v')
+            peer.send_key(app.window, c, state=4, stamp=1)
+            peer.send_key(app.window, c, state=4, stamp=1, down=False)
+            peer.drain()
+            # The server delivers Ctrl+V during the grab but handles none of Notes' requests until it
+            # ends: the question goes unanswered for 3.5 s, so Notes gives it up and asks the owner.
+            peer.grab()
+            try:
+                peer.send_key(app.window, v, state=4)
+                peer.send_key(app.window, v, state=4, down=False)
+                peer.x.XFlush(peer.d)
+                time.sleep(3.5)
+            finally:
+                peer.ungrab()
+            # The server handles the question before the paste's ConvertSelection, so the answer naming
+            # the peer is on its way to Notes before the peer hears the request, and so before the
+            # request the peer then sends Notes directly.
+            asked = peer.next_request(seconds=6)
+            assert asked is not None and asked.requestor == app.window, 'the paste that gave up asks the clipboard\'s owner'
+            peer.send_request(app.window, peer.w)
+            peer.x.XFlush(peer.d)
+            peer.refuse(asked)
+            answer = peer.next_event(lambda e: e.type == 31 and e.selection.requestor == peer.w)
+            assert app.p.poll() is None, ('a late owner answer stopped Notes', app.p.returncode,
+                                          (d/'late-owner-answer-time.stderr').read_bytes())
+            assert answer is not None and answer.selection.property == 0, \
+                ('a request sent to Notes directly after the late answer is refused',
+                 None if answer is None else answer.selection.property)
+            app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==b'copy me\n!', 'late-owner-answer-time saved')
+            assert app.p.poll() is None and peer.owner()==peer.w, ('Notes after the late answer', app.p.returncode)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-owner-answer-read-after-the-time-bound-gave-up-still-ends-ownership')
+
+
+def notes_clipboard_given_up_still_owner_checks(args, x, display, evidence, passed):
+    """A paste that gave up on its owner question learns nothing until the answer is read: Notes
+    keeps answering for the clipboard it believes it holds, so a request it serves before the server
+    has even answered the question gets its text, and the paste's own request, which the server
+    sends to Notes as the owner, is answered by Notes too. Both give-ups: 256 keys queued first,
+    and the two-second bound."""
+    d = evidence/'clipboard-given-up-still-owner'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        # The server handles none of Notes' requests while the peer holds a grab, so the question's
+        # answer is made only when the grab ends. queue: Ctrl+V, 300 presses and a request from the
+        # peer's live window, held 1.5 s, which outlasts Notes' work through those events, the serve
+        # of that request included (the whole input takes well under a second: paste-flood). time:
+        # Ctrl+V; Notes gives the question up at two seconds and waits two more for the paste's answer,
+        # which cannot come; the request, sent 2.6 s in, is read during that wait and served at the
+        # next half-second tick after it (by 4.5 s); the grab ends at 4.9 s. Sent with Ctrl+V, the
+        # request would be read and served before the paste even asked.
+        for label, presses, request_at, hold in [('given-up-still-owner', 300, 0, 1.5),
+                                                 ('given-up-still-owner-time', 0, 2.6, 4.9)]:
+            doc = d/(label + '.txt'); doc.write_bytes(b'copy me\n')
+            with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, label) as app:
+                app.key('Shift_L', True)
+                for _ in range(4): app.tap('Right')
+                app.key('Shift_L', False)
+                app.tap('c','Control_L')
+                wait_for(lambda: peer.owner()==app.window, label + ': Notes owns the clipboard')
+                v, shift = peer.keycode('v'), peer.keycode('Shift_L')
+                peer.window_property(peer.w, peer.prop, delete=True)
+                peer.grab()
+                try:
+                    peer.send_key(app.window, v, state=4)
+                    peer.send_key(app.window, v, state=4, down=False)
+                    for _ in range(presses): peer.send_key(app.window, shift)
+                    peer.x.XFlush(peer.d)
+                    time.sleep(request_at)
+                    peer.send_request(app.window, peer.w)
+                    peer.x.XFlush(peer.d)
+                    time.sleep(hold - request_at)
+                finally:
+                    peer.ungrab()
+                answer = peer.next_event(lambda e: e.type == 31 and e.selection.requestor == peer.w)
+                assert app.p.poll() is None, (label + ': a request after a given-up question stopped Notes',
+                                              app.p.returncode, (d/(label + '.stderr')).read_bytes())
+                assert answer is not None and answer.selection.property == peer.prop, \
+                    (label + ': a request served before the question\'s answer gets Notes\' text',
+                     None if answer is None else answer.selection.property)
+                got = peer.window_property(peer.w, peer.prop)
+                assert got == b'copy', (label, got)
+                mine = peer.atom(b'HERBERT_CLIPBOARD_0')
+                wait_for(lambda: app.p.poll() is not None or peer.window_property(app.window, mine) == b'copy',
+                         label + ': Notes answers the paste\'s own request, sent to it as the owner')
+                app.tap('End','Control_L'); app.type('!'); app.tap('s','Control_L')
+                wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==b'copy me\n!', label + ' saved')
+                assert app.p.poll() is None and peer.owner()==app.window, (label + ': Notes after the given-up question',
+                                                                          app.p.returncode)
+                app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-owner-question-given-up-either-way-ownership-stands-until-the-answer-own-request-answered')
+
+
+def notes_clipboard_idle_then_vanished_checks(args, x, display, evidence, passed):
+    """Requests are counted exactly before any ignored-error range has ever opened, and after Notes
+    has lost the clipboard: whenever the clipboard is on, x11_sync makes the server send something
+    at least every 65,535 requests. Notes idles while each caret blink redraws a full screen (far
+    more than 65,536 requests, and no input to read); then a requestor whose window is already gone
+    asks, and the errors of Notes' answer (its text, then, after losing the clipboard, a refusal)
+    are ignored."""
+    d = evidence/'clipboard-idle-then-vanished'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; original = (b'M' * 69 + b'\n') * 40; doc.write_bytes(original)
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'idle-then-vanished') as app:
+            def idle_then_vanished(what, typed, wanted):
+                # Every lit glyph pixel is one request; four seconds is eight blinks.
+                time.sleep(4)
+                peer.request_from_gone_window(app.window)
+                time.sleep(.3)
+                app.type(typed); app.tap('s','Control_L')
+                wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==wanted, what + ' saved')
+                assert app.p.poll() is None, (what + ' stopped Notes', app.p.returncode,
+                                              (d/'idle-then-vanished.stderr').read_bytes())
+            app.key('Shift_L', True); app.tap('Right'); app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            app.tap('End','Control_L')
+            idle_then_vanished('a vanished requestor after idling, before any answer', '!', original + b'!')
+            peer.own(b'PEER')
+            idle_then_vanished('a vanished requestor after idling, the clipboard lost', '?', original + b'!?')
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-vanished-requestor-after-65536-idle-requests-before-any-range-and-after-losing-ignored')
+
+
+def notes_clipboard_owned_paste_grab_checks(args, x, display, evidence, passed):
+    """The owner question's wait is bounded (two seconds in the library; this case pins only that
+    the bound is under 3.5 s): Ctrl+V while Notes owns the clipboard, under a server grab held 3.5
+    seconds, gives up on the answer and reports that nothing was pasted instead of waiting for the
+    grab to end; the answer, read after the grab, still names Notes, which keeps answering for the
+    clipboard."""
+    d = evidence/'clipboard-owned-paste-grab'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'owned-paste-grab') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            app.tap('End','Control_L')
+            v = peer.keycode('v')
+            # The server delivers the peer's Ctrl+V during the grab but handles none of Notes'
+            # requests until it ends: the question goes unanswered for 3.5 s. Notes gives up after
+            # two, asks the owner (itself, which it cannot serve while it waits) and, two seconds
+            # later, after the grab, reports that nothing was pasted.
+            peer.grab()
+            try:
+                peer.send_key(app.window, v, state=4)
+                peer.send_key(app.window, v, state=4, down=False)
+                peer.x.XFlush(peer.d)
+                time.sleep(3.5)
+            finally:
+                peer.ungrab()
+            app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes().endswith(b'!'), 'owned-paste-grab saved', timeout=8)
+            try:
+                offered = peer.request()
+            except AssertionError as error:
+                offered = repr(error)
+            assert app.p.poll() is None, ('an owned paste under a grab stopped Notes', app.p.returncode,
+                                          (d/'owned-paste-grab.stderr').read_bytes())
+            assert doc.read_bytes() == b'copy me\n!', ('the owner question waited out a 3.5 s grab', doc.read_bytes())
+            assert peer.owner()==app.window and offered==(peer.utf8, 8, b'copy'), \
+                ('Notes still answers for the clipboard it holds', peer.owner()==app.window, offered)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-owner-question-gives-up-before-a-3.5s-grab-ends')
+
+
+def notes_clipboard_second_paste_waits_checks(args, x, display, evidence, passed):
+    """One owner question at a time, and a paste that finds one unanswered waits for it: a second
+    Ctrl+V while the first paste's question is in flight waits for that answer, asks again, and
+    pastes Notes' own text. Ordered by the key queue, not by time: under a server grab Notes' stream
+    holds Ctrl+V, Ctrl+V and 255 more presses (the last '!' and Ctrl+S) before the answer, which the
+    server makes only after the grab. The first paste reads until the queue is full (256 keys) and
+    gives up; the second is handled with the answer still unread and room for it in the queue."""
+    d = evidence/'clipboard-second-paste-waits'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'second-paste-waits') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            app.tap('End','Control_L')
+            v = peer.keycode('v')
+            peer.grab()
+            try:
+                for _ in range(2):
+                    peer.send_key(app.window, v, state=4)
+                    peer.send_key(app.window, v, state=4, down=False)
+                peer.send_presses(app.window, 255, [('1', 1), ('s', 4)])
+            finally:
+                peer.ungrab()
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes().endswith(b'!'), 'second-paste-waits saved', timeout=10)
+            try:
+                offered = peer.request()
+            except AssertionError as error:
+                offered = repr(error)
+            assert app.p.poll() is None, ('a second Ctrl+V while the owner question was unanswered stopped Notes',
+                                          app.p.returncode, (d/'second-paste-waits.stderr').read_bytes())
+            # The first paste gave up (message 37); the second waited and pasted. fc09dc3 pastes twice.
+            assert doc.read_bytes() == b'copy me\ncopy!', ('the second paste waits for the answer in flight',
+                                                           doc.read_bytes())
+            assert peer.owner()==app.window and offered==(peer.utf8, 8, b'copy'), \
+                ('Notes still answers for the clipboard it holds', peer.owner()==app.window, offered)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-second-paste-waits-for-the-owner-question-in-flight-then-pastes-its-own-text')
+
+
+def notes_clipboard_copy_during_question_checks(args, x, display, evidence, passed):
+    """A copy made while an owner question is in flight is asked about again: its claim is newer
+    than the question, so the answer, read by the next paste, settles nothing, and that paste asks
+    the server before trusting the copy. Here the server ignored both of Notes' claims (each
+    stamped server time 1, older than the peer's), so the paste gets the peer's text. Ordered by
+    the key queue: under a grab Notes' stream holds Ctrl+V, Ctrl+C, Ctrl+V and 255 more presses
+    (the last Ctrl+End, '!' and Ctrl+S) before the answer; the first paste gives up with the queue
+    full, and the second is handled with the answer unread and room for it."""
+    d = evidence/'clipboard-copy-during-question'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'copy-during-question') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            peer.own(b'PEER')
+            c, v = peer.keycode('c'), peer.keycode('v')
+            peer.send_key(app.window, c, state=4, stamp=1)
+            peer.send_key(app.window, c, state=4, stamp=1, down=False)
+            peer.drain()
+            peer.grab()
+            try:
+                for code, stamp in [(v, 0), (c, 1), (v, 0)]:
+                    peer.send_key(app.window, code, state=4, stamp=stamp)
+                    peer.send_key(app.window, code, state=4, stamp=stamp, down=False)
+                peer.send_presses(app.window, 255, [('End', 4), ('1', 1), ('s', 4)])
+            finally:
+                peer.ungrab()
+            # The first paste, given up, asks the peer; so does the second, once the server names the peer.
+            served = [peer.serve(), peer.serve()]
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes().endswith(b'!'), 'copy-during-question saved', timeout=10)
+            assert app.p.poll() is None, ('a paste after a copy made during the owner question stopped Notes',
+                                          app.p.returncode, (d/'copy-during-question.stderr').read_bytes())
+            assert doc.read_bytes() == b'PEER me\n!' and served == [True, True], \
+                ('the paste after a copy made during the question asks the server, then the peer',
+                 doc.read_bytes(), served)
+            assert peer.owner()==peer.w, 'the peer still owns the clipboard'
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-copy-made-while-the-owner-question-is-in-flight-is-asked-about-again-at-paste')
+
+
+def notes_clipboard_remap_during_question_checks(args, x, display, evidence, passed):
+    """A keyboard map reply read while an owner question is in flight is the keyboard's, not the
+    question's answer: replies are told apart by sequence. Under a grab the peer rewrites one
+    keycode's keysyms (the server sends Notes MappingNotify, so Notes asks for the map), then sends
+    Ctrl+V and 255 more presses (the last '!' and Ctrl+S). The server answers neither request until
+    the grab ends, and the map's reply, made first, cannot be read while Ctrl+V and those presses
+    fill the key queue, so it is read during the paste's question; then the answer names Notes."""
+    d = evidence/'clipboard-remap-during-question'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'remap-during-question') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            app.tap('End','Control_L')
+            v = peer.keycode('v')
+            peer.grab()
+            try:
+                peer.rewrite_keyboard_mapping()
+                peer.send_key(app.window, v, state=4)
+                peer.send_key(app.window, v, state=4, down=False)
+                peer.send_presses(app.window, 255, [('1', 1), ('s', 4)])
+            finally:
+                peer.ungrab()
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes().endswith(b'!'), 'remap-during-question saved', timeout=10)
+            try:
+                offered = peer.request()
+            except AssertionError as error:
+                offered = repr(error)
+            assert app.p.poll() is None, ('a keyboard map reply during the owner question stopped Notes',
+                                          app.p.returncode, (d/'remap-during-question.stderr').read_bytes())
+            assert doc.read_bytes() == b'copy me\ncopy!', doc.read_bytes()
+            assert peer.owner()==app.window and offered==(peer.utf8, 8, b'copy'), \
+                ('Notes still answers for the clipboard it holds', peer.owner()==app.window, offered)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-keyboard-map-reply-during-the-owner-question-is-not-taken-for-its-answer')
+
+
+def notes_clipboard_answer_during_remap_checks(args, x, display, evidence, passed):
+    """The other direction: the owner question's answer, read while a keyboard map request is
+    pending, is the question's answer, not the map's reply. Ordered by the key queue: under a grab
+    the peer sends Ctrl+V and 256 Shift presses, rewrites one keycode's keysyms (the server sends
+    Notes MappingNotify), then 256 more presses (the last '!' and Ctrl+S). The paste asks the
+    server and gives up when the first 256 presses fill the key queue, so nothing is pasted. The
+    server answers only after the grab, behind the second 256 presses, so the drain that reads
+    MappingNotify stops at a full queue before the answer: Notes asks for the map with the
+    question unanswered and reads the answer, which names Notes, while that request is pending."""
+    d = evidence/'clipboard-answer-during-remap'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'answer-during-remap') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            app.tap('End','Control_L')
+            v = peer.keycode('v')
+            peer.grab()
+            try:
+                peer.send_key(app.window, v, state=4)
+                peer.send_key(app.window, v, state=4, down=False)
+                peer.send_presses(app.window, 256)
+                peer.rewrite_keyboard_mapping()
+                peer.send_presses(app.window, 256, [('1', 1), ('s', 4)])
+            finally:
+                peer.ungrab()
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes().endswith(b'!'), 'answer-during-remap saved', timeout=10)
+            try:
+                offered = peer.request()
+            except AssertionError as error:
+                offered = repr(error)
+            assert app.p.poll() is None, ('the owner question\'s answer during a keyboard map request stopped Notes',
+                                          app.p.returncode, (d/'answer-during-remap.stderr').read_bytes())
+            # The paste gave up with the queue full (message 37); fc09dc3, which asks no question, pastes 'copy'.
+            assert doc.read_bytes() == b'copy me\n!', ('the paste gives up with the key queue full', doc.read_bytes())
+            assert peer.owner()==app.window and offered==(peer.utf8, 8, b'copy'), \
+                ('Notes still answers for the clipboard it holds', peer.owner()==app.window, offered)
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-owner-question-answer-during-a-keyboard-map-request-is-not-taken-for-the-map-reply')
+
+
+def notes_clipboard_keymap_notify_checks(args, x, display, evidence, passed):
+    """A KeymapNotify carries no sequence number, so its bytes 2-3 widen nothing. Any client may
+    send one to Notes' window (SendEvent with no event mask). The peer sends two, whose bytes 2-3
+    are 0x1234 and then 0x9234, read as sequences they would put Notes' count of the server's
+    progress at least half a 16-bit lap ahead; then a request from a window that is already gone,
+    whose answer's errors must still fall inside the ignored range."""
+    d = evidence/'clipboard-keymap-notify'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'copy me\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'keymap-notify') as app:
+            app.key('Shift_L', True)
+            for _ in range(4): app.tap('Right')
+            app.key('Shift_L', False)
+            app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'Notes owns the clipboard')
+            app.tap('End','Control_L')
+            for sixteen in [0x1234, 0x9234]:
+                peer.send_keymap_notify(app.window, sixteen)
+            peer.request_from_gone_window(app.window)
+            time.sleep(.3)
+            app.type('!'); app.tap('s','Control_L')
+            wait_for(lambda: app.p.poll() is not None or doc.read_bytes()==b'copy me\n!', 'keymap-notify saved')
+            assert app.p.poll() is None, ('a vanished requestor after two KeymapNotify events stopped Notes',
+                                          app.p.returncode, (d/'keymap-notify.stderr').read_bytes())
+            assert peer.owner()==app.window and peer.request()==(peer.utf8, 8, b'copy'), \
+                'Notes still answers for the clipboard it holds'
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-keymapnotify-widens-no-sequence-vanished-requestor-still-ignored')
+
+
+def notes_clipboard_lost_owner_checks(args, x, display, evidence, passed):
+    """Ownership is asked at paste time. A copy the server ignored, because another application's
+    claim is newer, leaves Ctrl+V asking the real owner, and Notes stops answering for the
+    clipboard; a copy the server granted is pasted from Notes' own text."""
+    d = evidence/'clipboard-lost-owner'; d.mkdir()
+    peer = ClipboardPeer(display)
+    try:
+        doc = d/'notes.txt'; doc.write_bytes(b'INTERNAL_OLD\n')
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'lost-owner') as app:
+            def select(n):
+                app.tap('Home','Control_L'); app.key('Shift_L', True)
+                for _ in range(n): app.tap('Right')
+                app.key('Shift_L', False)
+            def saved(wanted, what):
+                app.tap('s','Control_L')
+                try:
+                    wait_for(lambda: doc.read_bytes()==wanted, what)
+                except AssertionError:
+                    raise AssertionError(what, doc.read_bytes())
+            select(12)
+            peer.own(b'EXTERNAL_NEW')
+            # Ctrl+C stamped at server time 1, long before the peer's claim: the server keeps the
+            # peer as owner and says nothing, as when another application wins the race (ICCCM
+            # 2.1). Keys typed later reach Notes after these.
+            code = peer.keycode('c')
+            peer.send_key(app.window, code, state=4, stamp=1)
+            peer.send_key(app.window, code, state=4, stamp=1, down=False)
+            peer.x.XSync(peer.d, 0)
+            app.tap('End','Control_L'); app.tap('v','Control_L')
+            assert peer.serve() is True, 'Ctrl+V asks the application that owns the clipboard'
+            saved(b'INTERNAL_OLD\nEXTERNAL_NEW', 'the owner\'s text pasted')
+            assert peer.owner()==peer.w
+            # Asked directly now, Notes refuses: it has learned the clipboard is not its own.
+            peer.send_request(app.window, peer.w)
+            peer.x.XFlush(peer.d)
+            answer = peer.next_event(lambda e: e.type == 31 and e.selection.requestor == peer.w)
+            assert answer is not None and answer.selection.property == 0, 'a request sent to Notes directly is refused'
+            # A copy the server grants is pasted from Notes' own text, asking no one else.
+            select(8); app.tap('c','Control_L')
+            wait_for(lambda: peer.owner()==app.window, 'a copy stamped now takes the clipboard')
+            app.tap('End','Control_L'); app.tap('v','Control_L')
+            saved(b'INTERNAL_OLD\nEXTERNAL_NEWINTERNAL', 'Notes\' own copy pasted')
+            assert peer.request()==(peer.utf8, 8, b'INTERNAL'), 'and offered to others'
+            app.tap('Escape'); app.finish()
+    finally:
+        peer.close()
+    passed('notes-clipboard-ownership-asked-at-paste-lost-copy-asks-the-owner-granted-copy-pastes-its-own')
+
+
+# Library-level shapes need requests Notes never makes, so a probe compiled by the
+# committed seed from the same library units makes them, in an order it controls.
+CLIPBOARD_PROBE = r"""
+func probe_say(text):
+    let b = linux_cstring(text)
+    let n = linux_syscall6(1, 1, buffer_address(b), length(text), 0, 0, 0)
+    return x11_need(n == length(text), "probe: output failed\n")
+end
+func probe_serve(c):
+    let st = c.state
+    while st.clip.pending_count == 0:
+        do x11_events(c)
+        if st.clip.pending_count == 0: do linux_poll(st.fd, c.poll, 1, 100) end
+    end
+    do x11_serve(c)
+    return probe_say("SERVED\n")
+end
+func probe_lap(c, target):
+    while (c.state.sequence + 1) % 65536 != target:
+        do x11_rect(c, 0, 0, 1, 1)
+    end
+    return 0
+end
+func probe_requests(c, n):
+    while n != 0:
+        do x11_rect(c, 0, 0, 1, 1)
+        n = n - 1
+    end
+    return 0
+end
+func probe_read(c):
+    let i = 0
+    while i != 10:
+        do x11_events(c)
+        do linux_poll(c.state.fd, c.poll, 1, 100)
+        i = i + 1
+    end
+    return 0
+end
+func probe_expose(c):
+    let st = c.state
+    do x11_ack_expose(c)
+    let p = x11_request(c, 25, 0, 44)
+    do linux_put32(c.requests, p + 4, st.window)
+    do linux_put32(c.requests, p + 8, 32768)
+    do buffer_set(c.requests, p + 12, 12)
+    do linux_put32(c.requests, p + 16, st.window)
+    do x11_flush(c)
+    while not x11_exposed(c):
+        do x11_events(c)
+        if not x11_exposed(c): do linux_poll(st.fd, c.poll, 1, 100) end
+    end
+    return 0
+end
+func probe_window_gone(c, cb):
+    return x11_change_property(c, 0, cb.property, cb.utf8, 8, 0, 0)
+end
+func main():
+    let mode = linux_argument(linux_arguments(), 1)
+    let c = x11_open(200, 200, "Herbert - Clipboard probe")
+    do x11_enable_clipboard(c, 256)
+    do x11_clip_own(c, linux_cstring("hello"), 0, 5, 0)
+    if equal(mode, "first-lap-gone"):
+        -- Before any range has ever opened: 65,536 requests, and a reply read only after all of them.
+        do probe_requests(c, 65536)
+        do x11_intern(c, "HERBERT_PROBE_SYNC")
+    end
+    do probe_say("OWNED\n")
+    do probe_serve(c)
+    let st = c.state
+    let cb = st.clip
+    if equal(mode, "lap-unrelated") or equal(mode, "lap-requestor-shaped") or equal(mode, "lap-read-first"):
+        do probe_lap(c, cb.tolerant_from % 65536)
+        if equal(mode, "lap-unrelated"):
+            do x11_request(c, 70, 0, 20)
+        else:
+            do probe_window_gone(c, cb)
+        end
+        do probe_say("BAD\n")
+        if equal(mode, "lap-read-first"):
+            do x11_flush(c)
+            do probe_read(c)
+        end
+    elif equal(mode, "wrap-passed") or equal(mode, "wrap-straddle") or equal(mode, "lap-gone"):
+        do x11_intern(c, "HERBERT_PROBE_SYNC")
+        if equal(mode, "wrap-passed"): do probe_lap(c, 65534) end
+        if equal(mode, "wrap-straddle"): do probe_lap(c, 65535) end
+        do x11_flush(c)
+        do probe_say("READY\n")
+        do probe_serve(c)
+        if equal(mode, "lap-gone"): do probe_requests(c, 65536) end
+        if equal(mode, "wrap-passed"):
+            do x11_intern(c, "HERBERT_PROBE_SYNC")
+            do probe_window_gone(c, cb)
+            do probe_say("BAD\n")
+            do probe_serve(c)
+        end
+    elif equal(mode, "closed-lap-gone"):
+        -- The first answer's range closes on a reply. Then 65,536 requests, and a reply read only
+        -- after all of them, before an answer to a vanished requestor: x11_sync runs whether a
+        -- range is open or not, so that reply and those errors are numbered exactly.
+        do x11_intern(c, "HERBERT_PROBE_SYNC")
+        do probe_requests(c, 65536)
+        do x11_intern(c, "HERBERT_PROBE_SYNC")
+        do probe_say("READY\n")
+        do probe_serve(c)
+    elif equal(mode, "first-lap-gone"):
+        do probe_say("READY\n")
+        do probe_serve(c)
+    else:
+        if equal(mode, "passed-requestor-shaped"):
+            do x11_intern(c, "HERBERT_PROBE_SYNC")
+            do probe_window_gone(c, cb)
+        elif equal(mode, "event-passed"):
+            do probe_expose(c)
+            do probe_window_gone(c, cb)
+        elif equal(mode, "inside-wrong-code"):
+            do x11_change_property(c, st.window, cb.property, cb.utf8, 8, 3, 0)
+        elif equal(mode, "inside-wrong-opcode"):
+            do x11_request(c, 8, 0, 8)
+        elif equal(mode, "inside-sendevent-badvalue"):
+            do x11_request(c, 25, 0, 44)
+        elif equal(mode, "inside-badatom"):
+            do x11_change_property(c, st.window, 16777215, cb.utf8, 8, 0, 0)
+        elif equal(mode, "inside-badmatch"):
+            do x11_change_property(c, st.window, cb.property, cb.utf8, 8, 0, 0)
+            do x11_change_property(c, st.window, cb.property, 31, 8, 2, 0)
+        elif equal(mode, "runtime-reply-passed"):
+            -- The peer's second request is read before the owner check's reply, and that
+            -- reply, read by the event loop (x11_loop_reply), is the only message past the first answer.
+            while cb.pending_count == 0:
+                do x11_events(c)
+                if cb.pending_count == 0: do linux_poll(st.fd, c.poll, 1, 100) end
+            end
+            do x11_clip_owned(c)
+            do probe_window_gone(c, cb)
+        elif equal(mode, "intern-reply-passed"):
+            -- The same, with an InternAtom reply read by x11_reply.
+            while cb.pending_count == 0:
+                do x11_events(c)
+                if cb.pending_count == 0: do linux_poll(st.fd, c.poll, 1, 100) end
+            end
+            do x11_intern(c, "HERBERT_PROBE_SYNC")
+            do probe_window_gone(c, cb)
+        elif equal(mode, "keymap-reply-passed"):
+            -- The peer's second request and a MappingNotify are read first; the keyboard map's
+            -- reply, read by the event loop, is then the only message past the first answer.
+            let mapped = false
+            while not mapped or st.reply_pending != 0:
+                do x11_events(c)
+                if st.reply_pending != 0: mapped = true end
+                if not mapped or st.reply_pending != 0: do linux_poll(st.fd, c.poll, 1, 100) end
+            end
+            if cb.pending_count == 0: do probe_say("NO-REQUEST\n") end
+            do probe_window_gone(c, cb)
+        else:
+            do x11_request(c, 70, 0, 20)
+        end
+        do probe_say("BAD\n")
+        do probe_serve(c)
+    end
+    do x11_intern(c, "HERBERT_PROBE_SYNC")
+    do probe_say("SURVIVED\n")
+    do x11_close(c)
+    do process_exit(0)
+    return 0
+end
+"""
+
+# x11_sync's spacing at its limit: a sync inside the range is read, then exactly 65,536
+# requests follow before a requestor-shaped error. Every number from the sync on stays
+# exact only if the next sync comes 65,535 requests after it, not 65,536.
+CLIPBOARD_SYNC_PROBE = r"""
+func probe_say(text):
+    let b = linux_cstring(text)
+    let n = linux_syscall6(1, 1, buffer_address(b), length(text), 0, 0, 0)
+    return x11_need(n == length(text), "probe: output failed\n")
+end
+func main():
+    let c = x11_open(200, 200, "Herbert - Clipboard probe")
+    do x11_enable_clipboard(c, 256)
+    do x11_clip_own(c, linux_cstring("hello"), 0, 5, 0)
+    let st = c.state
+    let cb = st.clip
+    -- The answer's first request is the one that finds a sync due.
+    let left = 70000
+    while cb.sent != cb.synced + 65534 and left != 0:
+        do x11_rect(c, 0, 0, 1, 1)
+        left = left - 1
+    end
+    do x11_flush(c)
+    do probe_say("OWNED\n")
+    while cb.pending_count == 0:
+        do x11_events(c)
+        if cb.pending_count == 0: do linux_poll(st.fd, c.poll, 1, 100) end
+    end
+    do x11_serve(c)
+    do probe_say("SERVED\n")
+    let i = 0
+    while cb.read < cb.tolerant_from and i != 10:
+        do x11_events(c)
+        if cb.read < cb.tolerant_from: do linux_poll(st.fd, c.poll, 1, 100) end
+        i = i + 1
+    end
+    while cb.sent < cb.tolerant_from + 65536:
+        do x11_rect(c, 0, 0, 1, 1)
+    end
+    do x11_change_property(c, 0, cb.property, cb.utf8, 8, 0, 0)
+    do probe_say("BAD\n")
+    do x11_intern(c, "HERBERT_PROBE_SYNC")
+    do probe_say("SURVIVED\n")
+    do x11_close(c)
+    do process_exit(0)
+    return 0
+end
+"""
+
+
+def compile_probe(directory, libraries, program):
+    seed = ROOT/'bootstrap/seed/gen1.seed'
+    assert hashlib.sha256(seed.read_bytes()).hexdigest() == (ROOT/'bootstrap/seed/gen1.seed.sha256').read_text().split()[0], \
+        'committed seed hash mismatch'
+    directory.mkdir()
+    source = b'\n'.join((ROOT/name).read_bytes() for name in libraries) + b'\n' + program.encode()
+    (directory/'source.herb').write_bytes(source)
+    compiler = directory/'compiler'
+    shutil.copyfile(seed, compiler); compiler.chmod(0o755)
+    built = subprocess.run([str(compiler)], input=source, cwd=directory, capture_output=True, timeout=60)
+    assert built.returncode == 0 and built.stdout == b'0\n' and not built.stderr, (built.returncode, built.stdout, built.stderr)
+    image = directory/'a.out'; image.chmod(0o755)
+    return image
+
+
+# mode: (probe, what the peer does after the first answer, the probe's stdout, its exit status).
+# 'second' asks again; 'gone' sends a request from a window that no longer exists; 'after:X'
+# waits until the probe has said X. Every fatal mode ends with exactly the usual sentence.
+CLIPBOARD_WINDOW_MODES = {
+    # The review's shape, and a requestor's shape, on a request numbered 65,536 after the range:
+    # fatal, whether the probe reads in between or not.
+    'lap-unrelated': ('main', [], 'BAD\n', 1),
+    'lap-requestor-shaped': ('main', [], 'BAD\n', 1),
+    'lap-read-first': ('main', [], 'BAD\n', 1),
+    # A second answer extends the range; what came between it and the first must not ride along.
+    'passed-requestor-shaped': ('main', ['after:BAD', 'second'], 'BAD\nSERVED\n', 1),
+    'event-passed': ('main', ['after:BAD', 'second'], 'BAD\nSERVED\n', 1),
+    'inside-unrelated': ('main', ['after:BAD', 'second'], 'BAD\nSERVED\n', 1),
+    'inside-wrong-code': ('main', ['after:BAD', 'second'], 'BAD\nSERVED\n', 1),
+    'inside-wrong-opcode': ('main', ['after:BAD', 'second'], 'BAD\nSERVED\n', 1),
+    'inside-sendevent-badvalue': ('main', ['after:BAD', 'second'], 'BAD\nSERVED\n', 1),
+    # What a requestor can cause on ChangeProperty besides BadWindow: a property that is no atom
+    # (BadAtom), and a property changed to another type between two pieces (BadMatch).
+    'inside-badatom': ('main', ['after:BAD', 'second'], 'BAD\nSERVED\nSURVIVED\n', 0),
+    'inside-badmatch': ('main', ['after:BAD', 'second'], 'BAD\nSERVED\nSURVIVED\n', 0),
+    # Each kind of reply closes the range when it is the first message past it: the clipboard
+    # owner's answer (x11_clip_owned, read by the event loop), an InternAtom reply (x11_reply),
+    # and the keyboard map's after a MappingNotify.
+    'runtime-reply-passed': ('main', ['second'], 'BAD\nSERVED\n', 1),
+    'intern-reply-passed': ('main', ['second'], 'BAD\nSERVED\n', 1),
+    'keymap-reply-passed': ('main', ['second', 'remap'], 'BAD\nSERVED\n', 1),
+    # Across the 16-bit wrap: a range ending at 65535 closes on a reply numbered 0; a range
+    # from 65535 to 0 keeps both of a vanished requestor's errors ignored.
+    'wrap-passed': ('main', ['after:READY', 'gone', 'after:BAD', 'gone'], 'READY\nSERVED\nBAD\nSERVED\n', 1),
+    'wrap-straddle': ('main', ['after:READY', 'gone'], 'READY\nSERVED\nSURVIVED\n', 0),
+    # A vanished requestor's errors read only after 65,536 more requests are still ignored.
+    'lap-gone': ('main', ['after:READY', 'gone'], 'READY\nSERVED\nSURVIVED\n', 0),
+    # The same with no range open: 65,536 requests after a closed range, a reply after them, then
+    # a vanished requestor's errors, still ignored.
+    'closed-lap-gone': ('main', ['after:READY', 'gone'], 'READY\nSERVED\nSURVIVED\n', 0),
+    # And before any range has ever opened: 65,536 requests and a reply after them, then the first
+    # answer, then a vanished requestor's errors, still ignored.
+    'first-lap-gone': ('main', ['after:READY', 'gone'], 'READY\nSERVED\nSURVIVED\n', 0),
+    'sync-in-range': ('sync', [], 'BAD\n', 1),
+}
+
+
+def x11_clipboard_window_checks(args, x, display, evidence, passed):
+    """The ignored-error range holds only the errors a requestor can cause on the answers it
+    covers (BadWindow on ChangeProperty or SendEvent, BadAtom or BadMatch on ChangeProperty),
+    closes once the server has passed it (a reply, a reply read by the event loop, an event),
+    and counts requests exactly past 65,536."""
+    d = evidence/'clipboard-window'; d.mkdir()
+    libraries = ['lib/linux.herb', 'lib/x11.herb', 'lib/x11_clipboard.herb']
+    images, built = {}, {}
+    for name, program in [('main', CLIPBOARD_PROBE), ('sync', CLIPBOARD_SYNC_PROBE)]:
+        try:
+            images[name] = compile_probe(d/(name+'-probe'), libraries, program)
+        except AssertionError as error:
+            built[name] = repr(error)
+    env = dict(os.environ, DISPLAY=display); env.pop('XAUTHORITY', None)
+    peer = ClipboardPeer(display)
+    outcomes, expected = {}, {}
+    try:
+        for mode, (probe_name, steps, said, status) in CLIPBOARD_WINDOW_MODES.items():
+            expected[mode] = dict(rc=status, stdout='OWNED\nSERVED\n' + said,
+                                  stderr='desktop: X11 rejected a request\n' if status else '')
+            if probe_name not in images:
+                outcomes[mode] = dict(build=built[probe_name])
+                continue
+            out, err = d/(mode+'.stdout'), d/(mode+'.stderr')
+            # A previous probe's answer to an unawaited request must not pass for this one's.
+            peer.drain()
+            with out.open('wb') as o, err.open('wb') as e:
+                probe = subprocess.Popen([str(images[probe_name]), mode], env=env, stdin=subprocess.DEVNULL,
+                                         stdout=o, stderr=e)
+            try:
+                wait_for(lambda: out.read_bytes()==b'OWNED\n' and peer.owner() not in (0, peer.w), mode + ' probe owns the clipboard')
+                owner = peer.owner()
+                assert peer.request()==(peer.utf8, 8, b'hello'), mode
+                for step in steps:
+                    if probe.poll() is not None:
+                        break
+                    if step.startswith('after:'):
+                        word = (step[6:] + '\n').encode()
+                        wait_for(lambda: out.read_bytes().endswith(word) or probe.poll() is not None,
+                                 mode + ' probe says ' + step[6:], timeout=30)
+                    elif step == 'second':
+                        peer.x.XConvertSelection(peer.d, peer.clipboard, peer.utf8, peer.prop, peer.w, 0)
+                        peer.x.XFlush(peer.d)
+                    elif step == 'remap':
+                        peer.rewrite_keyboard_mapping()
+                    else:
+                        peer.request_from_gone_window(owner)
+                code = probe.wait(timeout=60)
+            finally:
+                if probe.poll() is None:
+                    probe.kill(); probe.wait()
+            outcomes[mode] = dict(rc=code, stdout=out.read_text(), stderr=err.read_text())
+    finally:
+        peer.close()
+    assert outcomes == expected, {mode: got for mode, got in outcomes.items() if got != expected[mode]}
+    passed('x11-clipboard-ignored-errors-close-when-passed-exact-across-wrap-unrelated-errors-fatal', outcomes=outcomes)
 
 
 def cpu_seconds(pid):
@@ -2678,6 +4224,31 @@ def main():
                     notes_open_checks(args,x,display,evidence,passed)
                     notes_selection_checks(args,x,display,evidence,passed)
                     notes_clipboard_checks(args,x,display,evidence,passed)
+                    notes_clipboard_vanished_pair_checks(args,x,display,evidence,passed)
+                    notes_clipboard_two_vanished_checks(args,x,display,evidence,passed)
+                    notes_clipboard_lap_flood_checks(args,x,display,evidence,passed)
+                    notes_clipboard_refusal_checks(args,x,display,evidence,passed)
+                    notes_clipboard_late_answer_checks(args,x,display,evidence,passed)
+                    notes_clipboard_late_refusal_checks(args,x,display,evidence,passed)
+                    notes_clipboard_stale_after_fresh_checks(args,x,display,evidence,passed)
+                    notes_clipboard_leftover_property_checks(args,x,display,evidence,passed)
+                    notes_clipboard_bad_atom_checks(args,x,display,evidence,passed)
+                    notes_clipboard_copy_flood_checks(args,x,display,evidence,passed)
+                    notes_clipboard_paste_flood_checks(args,x,display,evidence,passed)
+                    notes_clipboard_two_pastes_flood_checks(args,x,display,evidence,passed)
+                    notes_clipboard_late_owner_answer_checks(args,x,display,evidence,passed)
+                    notes_clipboard_copy_between_pastes_flood_checks(args,x,display,evidence,passed)
+                    notes_clipboard_late_owner_answer_time_checks(args,x,display,evidence,passed)
+                    notes_clipboard_given_up_still_owner_checks(args,x,display,evidence,passed)
+                    notes_clipboard_idle_then_vanished_checks(args,x,display,evidence,passed)
+                    notes_clipboard_owned_paste_grab_checks(args,x,display,evidence,passed)
+                    notes_clipboard_second_paste_waits_checks(args,x,display,evidence,passed)
+                    notes_clipboard_copy_during_question_checks(args,x,display,evidence,passed)
+                    notes_clipboard_remap_during_question_checks(args,x,display,evidence,passed)
+                    notes_clipboard_answer_during_remap_checks(args,x,display,evidence,passed)
+                    notes_clipboard_keymap_notify_checks(args,x,display,evidence,passed)
+                    notes_clipboard_lost_owner_checks(args,x,display,evidence,passed)
+                    x11_clipboard_window_checks(args,x,display,evidence,passed)
                     notes_mouse_checks(args,x,display,evidence,passed)
                     notes_navigation_checks(args,x,display,evidence,passed)
                     notes_big_checks(args,x,display,evidence,passed)

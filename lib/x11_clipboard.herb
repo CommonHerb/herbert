@@ -11,7 +11,22 @@
 -- capacity bounds the text this window can offer on the clipboard.
 func x11_enable_clipboard(c, capacity):
     let st = c.state
-    st.clip = X11Clip(true, false, 0, x11_intern(c, "CLIPBOARD"), x11_intern(c, "TARGETS"), x11_intern(c, "UTF8_STRING"), x11_intern(c, "text/plain;charset=utf-8"), x11_intern(c, "TIMESTAMP"), x11_intern(c, "HERBERT_CLIPBOARD"), x11_intern(c, "INCR"), linux_buffer(capacity), 0, linux_buffer(256), 0, false, 0, false, 0, 0)
+    -- Pastes take turns over eight properties (x11_clip_request).
+    let properties = linux_buffer(32)
+    do linux_put32(properties, 0, x11_intern(c, "HERBERT_CLIPBOARD_0"))
+    do linux_put32(properties, 4, x11_intern(c, "HERBERT_CLIPBOARD_1"))
+    do linux_put32(properties, 8, x11_intern(c, "HERBERT_CLIPBOARD_2"))
+    do linux_put32(properties, 12, x11_intern(c, "HERBERT_CLIPBOARD_3"))
+    do linux_put32(properties, 16, x11_intern(c, "HERBERT_CLIPBOARD_4"))
+    do linux_put32(properties, 20, x11_intern(c, "HERBERT_CLIPBOARD_5"))
+    do linux_put32(properties, 24, x11_intern(c, "HERBERT_CLIPBOARD_6"))
+    do linux_put32(properties, 28, x11_intern(c, "HERBERT_CLIPBOARD_7"))
+    st.clip = X11Clip(true, false, 0, x11_intern(c, "CLIPBOARD"), x11_intern(c, "TARGETS"), x11_intern(c, "UTF8_STRING"), x11_intern(c, "text/plain;charset=utf-8"), x11_intern(c, "TIMESTAMP"), linux_u32(properties, 0), x11_intern(c, "INCR"), linux_buffer(capacity), 0, linux_buffer(256), 0, false, 0, false, 0, 0, 0, 0, 0, 0, properties, 0, 0, false)
+    -- Counting starts at the last InternAtom, whose reply was the last message read.
+    let cb = st.clip
+    cb.sent = st.sequence
+    cb.read = st.sequence
+    cb.synced = st.sequence
     return 0
 end
 
@@ -85,21 +100,24 @@ func x11_serve(c):
     let st = c.state
     let cb = st.clip
     if not cb.on or cb.pending_count == 0: return 0 end
-    let from = (st.sequence + 1) % 65536
+    let from = cb.sent + 1
     let i = 0
     while i != cb.pending_count:
         do x11_serve_one(c, cb, i * 32)
         i = i + 1
     end
     cb.pending_count = 0
-    cb.tolerant_from = from
-    cb.tolerant_to = st.sequence
+    -- One range, extended forward while the server has not passed it, so the
+    -- errors of an earlier answer stay ignored when a later one follows first.
+    if not cb.tolerant: cb.tolerant_from = from end
+    cb.tolerant_to = cb.sent
     cb.tolerant = true
     return x11_flush(c)
 end
 
 -- Take the clipboard with count bytes of src from offset from. time is the
--- server time of the user's copy command (ICCCM rules out CurrentTime).
+-- server time of the user's copy command (ICCCM rules out CurrentTime). Nothing
+-- waits for the server here; x11_clip_owned asks whether the claim held.
 func x11_clip_own(c, src, from, count, time):
     let st = c.state
     let cb = st.clip
@@ -107,6 +125,8 @@ func x11_clip_own(c, src, from, count, time):
     cb.count = count
     cb.time = time
     cb.owned = true
+    -- An owner question still unanswered was asked before this claim.
+    cb.heed = false
     let p = x11_request(c, 22, 0, 16)
     do linux_put32(c.requests, p + 4, st.window)
     do linux_put32(c.requests, p + 8, cb.clipboard)
@@ -114,7 +134,46 @@ func x11_clip_own(c, src, from, count, time):
     return x11_flush(c)
 end
 
-func x11_clip_owned(c): return c.state.clip.owned end
+-- Whether this window owns CLIPBOARD, for a paste. The server silently ignores a
+-- claim older than the clipboard's last change, as when another application took
+-- it a moment later, so while this window believes it holds the clipboard this
+-- asks the server (GetSelectionOwner, ICCCM 2.1); the answer, read by the event
+-- loop (x11_loop_reply), keeps the belief only if the server names this window,
+-- and otherwise this window stops answering for it. True only once the server has
+-- named this window. The answer comes after any input already waiting; if the key
+-- queue fills first (256), or two seconds pass, this gives up and returns false.
+-- Whether this window owns the clipboard is then unknown, so owned is left as it
+-- was (requests are still answered from it) until the answer, read later, settles
+-- it, unless a claim was made since. The paste then asks the owner like any paste;
+-- if that is this window, it answers its own request once the paste stops waiting.
+func x11_clip_owned(c):
+    let st = c.state
+    let cb = st.clip
+    let asked = false
+    let start = linux_clock_ms(c.clock)
+    do x11_need(not linux_error(start), "desktop: monotonic clock failed\n")
+    while true:
+        if cb.asking == 0:
+            if asked or not cb.owned: return cb.owned end
+            let p = x11_request(c, 23, 0, 8)
+            do linux_put32(c.requests, p + 4, cb.clipboard)
+            cb.asking = st.sequence + 1
+            cb.heed = true
+            asked = true
+            do x11_flush(c)
+        end
+        do x11_events_loop(c, 512)
+        if cb.asking != 0:
+            if st.queue_count >= 256: return false end
+            let now = linux_clock_ms(c.clock)
+            do x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
+            if now - start >= 2000: return false end
+            do linux_poll(st.fd, c.poll, 1, 2000 - (now - start))
+        end
+    end
+    return false
+end
+
 func x11_clip_data(c): return c.state.clip.data end
 func x11_clip_count(c): return c.state.clip.count end
 
@@ -144,6 +203,7 @@ func x11_reply_runtime(c, sequence):
             do x11_keyboard_reply(c)
         else:
             do x11_need(linux_u16(c.replies, 2) == sequence, "desktop: X11 reply sequence mismatch\n")
+            do x11_seen(c, sequence)
             let extra = linux_u32(c.replies, 4) * 4
             do x11_need(extra <= buffer_length(c.replies) - 32, "desktop: X11 reply exceeds fixed buffer\n")
             let rest = linux_read_exact(st.fd, c.replies, 32, extra, c.poll, c.clock)
@@ -159,6 +219,9 @@ func x11_clip_wait(c, cb, start, wait_ms):
     while true:
         do x11_events_loop(c, 512)
         if cb.notified: return 0 end
+        -- With 256 keys queued nothing more is read until they are handled, so no
+        -- answer can arrive: waiting longer would only hold the keys up.
+        if st.queue_count >= 256: return 0 end
         let now = linux_clock_ms(c.clock)
         do x11_need(not linux_error(now), "desktop: monotonic clock failed\n")
         if now - start >= wait_ms: return 0 end
@@ -184,13 +247,24 @@ end
 
 -- Ask the clipboard's owner for UTF-8 text, waiting up to wait_ms. The result is
 -- a byte count, the text at c.replies offset 32 until the next X11 call, or
--- 0 - 1 no owner or a refusal, 0 - 2 no answer in time, 0 - 3 more than 65,504
--- bytes or an incremental transfer, 0 - 4 not 8-bit text. time is the server
--- time of the user's paste command. Events keep queueing while it waits.
+-- 0 - 1 no owner or a refusal, 0 - 2 no answer in time (or none readable before
+-- 256 queued keys are handled), 0 - 3 more than 65,504 bytes or an incremental
+-- transfer, 0 - 4 not 8-bit text. time is the server time of the user's paste
+-- command. Each request asks for the text in the next of eight properties,
+-- emptied first, and only an answer carrying this request's time and property
+-- (or None, a refusal) counts: an owner's late answer to an earlier request that
+-- timed out writes that request's property and is never read. Events keep
+-- queueing while it waits.
 func x11_clip_request(c, time, wait_ms):
     let st = c.state
     let cb = st.clip
     cb.notified = false
+    cb.asked = time
+    cb.property = linux_u32(cb.properties, cb.turn * 4)
+    cb.turn = (cb.turn + 1) % 8
+    let d = x11_request(c, 19, 0, 12)
+    do linux_put32(c.requests, d + 4, st.window)
+    do linux_put32(c.requests, d + 8, cb.property)
     let p = x11_request(c, 24, 0, 24)
     do linux_put32(c.requests, p + 4, st.window)
     do linux_put32(c.requests, p + 8, cb.clipboard)
