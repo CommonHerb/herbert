@@ -8,7 +8,7 @@ set -u
 T="$(cd "$(dirname "$0")" && pwd)"
 R="$T/larder_latebound.py"
 feeder="$T/kernel_input_feed.py"
-work="$(mktemp -d)"; trap 'rm -rf "$work"; pkill -9 -f "${work:?}" 2>/dev/null || true' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp -- the bochs runs under $work/b.d with the absolute bochsrc path in its cmdline; a system-wide `pkill bochs` would false-RED a CONCURRENT gate's boot, the F4 class). (Packet A item 3, 2026-07-05.)
+work="$(mktemp -d)" || { echo "FAIL: mktemp -d failed"; exit 1; }; trap 'rm -rf "${work:?}"; pkill -9 -f "${work:?}" 2>/dev/null || true' EXIT   # kill only THIS gate's bochs (scoped to its unique mktemp -- the bochs runs under $work/b.d with the absolute bochsrc path in its cmdline; a system-wide `pkill bochs` would false-RED a CONCURRENT gate's boot, the F4 class). (Packet A item 3, 2026-07-05.)
 pass=0; fail=0
 ok(){ echo "  PASS: $1"; pass=$((pass+1)); }
 bad(){ echo "  FAIL: $1"; fail=$((fail+1)); }
@@ -37,7 +37,7 @@ boot_feed(){ # kernel out kvm stream...
         -drive file="$DISK",format=raw,if=ide,index=0,media=disk,cache=writethrough \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 -no-reboot -display none \
         -chardev socket,id=s0,host=127.0.0.1,port="$port",server=off -serial chardev:s0 -monitor none -m 64M >/dev/null 2>&1
-    wait "$fp" 2>/dev/null; rm -rf "$d"
+    wait "$fp" 2>/dev/null; rm -rf "${d:?}"
 }
 
 build_kernel(){ python3 "$R" kernel "$1" "$2" >/dev/null; }   # out mut
@@ -140,22 +140,26 @@ if have_bochs; then
   SEED="$(python3 -c 'import os;print(os.urandom(8).hex())')"
   STREAM="$(python3 "$R" stream "$SEED")"
   kelf="$(readlink -f "$KELF")"; drv="$(readlink -f "$DRIVER")"
-  d="$work/b.d"; rm -rf "$d"; mkdir -p "$d"
+  d="${work:?}/b.d"; rm -rf "$d"; mkdir -p "$d"
   BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
   VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
   pkill -9 -f "${work:?}" 2>/dev/null || true   # scoped to THIS gate's own bochs ($work/b.d in the cmdline), not a system-wide `pkill bochs` (would false-RED a concurrent gate -- F4). (Packet A item 3, 2026-07-05.)
-  ( cd "$d"
+  ( set -e; cd "$d"
+    LOOP=""; MOUNTED=""
+    trap 'if [[ -n "$MOUNTED" ]]; then sudo umount mnt 2>/dev/null || true; fi; if [[ -n "$LOOP" ]]; then sudo losetup -d "$LOOP" 2>/dev/null || true; fi' EXIT   # a failure after losetup/mount must not leave the loop device or the mount behind
     dd if=/dev/zero of=disk.img bs=1M count=64 status=none
     parted -s disk.img mklabel msdos >/dev/null
     parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
     parted -s disk.img set 1 boot on >/dev/null
     LOOP="$(sudo losetup -fP --show disk.img)"
+    [[ -b "$LOOP" && -e "${LOOP}p1" ]] || { echo "HARNESS: losetup gave no usable loop device ('$LOOP')"; exit 1; }
     sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-    mkdir -p mnt; sudo mount "${LOOP}p1" mnt
+    mkdir -p mnt; sudo mount "${LOOP}p1" mnt; MOUNTED=1
     sudo mkdir -p mnt/boot/grub; sudo cp "$kelf" mnt/boot/kernel.elf; sudo cp "$drv" mnt/boot/driver.bin
     printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n module /boot/driver.bin\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
     sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-    sudo umount mnt; sudo losetup -d "$LOOP" )
+    sudo umount mnt; MOUNTED=""; sudo losetup -d "$LOOP"; LOOP="" ); disk_rc=$?
+  [[ "$disk_rc" -eq 0 ]] || bad "(Bochs) disk build failed (rc=$disk_rc) -- HARNESS, not a kernel verdict"
   cat > "$d/bochsrc.txt" <<BX
 romimage: file=$BXSHARE/BIOS-bochs-legacy
 vgaromimage: file=$VGABIOS

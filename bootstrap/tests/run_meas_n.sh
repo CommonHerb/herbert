@@ -285,7 +285,7 @@ print("=" * 78)
 PY
     exit $?
 fi
-[[ -n "$OUT" ]] || OUT="$(mktemp -d)"
+[[ -n "$OUT" ]] || OUT="$(mktemp -d)" || { echo "HARNESS: mktemp -d failed (--out)"; exit 1; }
 mkdir -p "$OUT"
 REC="$OUT/records.tsv"
 [[ -f "$REC" ]] || printf 'substrate\tphase\tN\tQ\tburst\tburstreps\tseed\tquickack\trep\tok\tmismatch\tt_launch\tt_accept\tt_hs\tt_fill_end\tt_query_end\tt_exit\trc\tframe\tgraded_want\tgraded_got\tshutdown\n' > "$REC"
@@ -295,8 +295,8 @@ have_kvm()  { [[ -r /dev/kvm && -w /dev/kvm ]] && have_qemu; }
 have_bochs() { command -v bochs >/dev/null 2>&1 && command -v parted >/dev/null 2>&1 \
     && command -v grub-install >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && sudo -n true 2>/dev/null; }
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+tmp="$(mktemp -d)" || { echo "HARNESS: mktemp -d failed (TMPDIR=${TMPDIR:-unset})"; exit 1; }
+trap 'rm -rf "${tmp:?}"' EXIT
 native_codegen_ensure_compiler "$tmp/gen1" || exit 1
 
 # ---------------- the probe: admitted ops only, late-bound N and Q ----------------
@@ -339,7 +339,7 @@ HERB
 
 ELF="$OUT/meas_n_probe.elf"
 compile_probe() {
-    local cdir="$tmp/probe.d"; rm -rf "$cdir"; mkdir -p "$cdir"
+    local cdir="${tmp:?}/probe.d"; rm -rf "$cdir"; mkdir -p "$cdir"
     probe_src > "$cdir/probe.herb"
     ( cd "$cdir" && "$NATIVE_CODEGEN_COMPILER" < probe.herb >/dev/null 2>"$cdir/err" )
     if [[ ! -f "$cdir/a.out" ]]; then
@@ -395,7 +395,7 @@ emit_record() { # substrate phase N Q burst rep W rc frame want_frame shutdown
 qemu_run() { # phase N Q burst rep kvm
     local ph="$1" N="$2" Q="$3" bu="$4" rep="$5" kvm="${6:-}"
     local sub="tcg"; [[ -n "$kvm" ]] && sub="kvm"
-    local W="$tmp/run"; rm -rf "$W"; mkdir -p "$W"
+    local W="${tmp:?}/run"; rm -rf "$W"; mkdir -p "$W"
     local acc=(-cpu qemu64); [[ -n "$kvm" ]] && acc=(-enable-kvm -cpu host)
     local port; port=$(free_port)
     local bflag=(); [[ "$bu" == "1" ]] && bflag=(--burst)
@@ -420,20 +420,24 @@ qemu_run() { # phase N Q burst rep kvm
 
 BOCHS_DISK=""
 bochs_build_disk() {
-    local W="$tmp/bdisk"; rm -rf "$W"; mkdir -p "$W"
+    local W="${tmp:?}/bdisk"; rm -rf "$W"; mkdir -p "$W"
     local t0 t1; t0=$(date +%s.%N)
     ( set -e; cd "$W"
+      LOOP=""; MOUNTED=""
+      trap 'if [[ -n "$MOUNTED" ]]; then sudo umount mnt 2>/dev/null || true; fi; if [[ -n "$LOOP" ]]; then sudo losetup -d "$LOOP" 2>/dev/null || true; fi' EXIT   # a failure after losetup/mount must not leave the loop device or the mount behind
       dd if=/dev/zero of=disk.img bs=1M count=64 status=none
       parted -s disk.img mklabel msdos >/dev/null
       parted -s disk.img mkpart primary fat32 1MiB 100% >/dev/null
       parted -s disk.img set 1 boot on >/dev/null
       LOOP="$(sudo losetup -fP --show disk.img)"
+      [[ -b "$LOOP" && -e "${LOOP}p1" ]] || { echo "HARNESS: losetup gave no usable loop device ('$LOOP')"; exit 1; }
       sudo mkfs.vfat -F 32 "${LOOP}p1" >/dev/null 2>&1
-      mkdir -p mnt; sudo mount "${LOOP}p1" mnt
+      mkdir -p mnt; sudo mount "${LOOP}p1" mnt; MOUNTED=1
       sudo mkdir -p mnt/boot/grub; sudo cp "$ELF" mnt/boot/kernel.elf
       printf 'set timeout=0\nset default=0\nmenuentry "c" {\n multiboot /boot/kernel.elf\n boot\n}\n' | sudo tee mnt/boot/grub/grub.cfg >/dev/null
       sudo grub-install --target=i386-pc --boot-directory=mnt/boot --modules="multiboot normal part_msdos fat biosdisk configfile" "$LOOP" >/dev/null 2>&1
-      sudo umount mnt; sudo losetup -d "$LOOP" ) || { echo "HARNESS: bochs disk build failed"; return 1; }
+      sudo umount mnt; MOUNTED=""; sudo losetup -d "$LOOP"; LOOP="" ); local rc=$?
+    [[ "$rc" -eq 0 ]] || { echo "HARNESS: bochs disk build failed (rc=$rc)"; return 1; }
     t1=$(date +%s.%N)
     BOCHS_DISK="$W/disk.img"
     python3 -c "print('MEAS bochs_disk_build_s=%.3f' % ($t1 - $t0))" | tee -a "$META"
@@ -442,7 +446,7 @@ bochs_build_disk() {
 
 bochs_run() { # phase N Q burst rep kill_s
     local ph="$1" N="$2" Q="$3" bu="$4" rep="$5" kill_s="${6:-300}"
-    local W="$tmp/run"; rm -rf "$W"; mkdir -p "$W"
+    local W="${tmp:?}/run"; rm -rf "$W"; mkdir -p "$W"
     local BXSHARE VGABIOS
     BXSHARE="$(dirname "$(find /usr/share -name 'BIOS-bochs-legacy' 2>/dev/null | head -1)")"
     VGABIOS="$(find /usr/share -name 'VGABIOS-lgpl-latest' 2>/dev/null | head -1)"
