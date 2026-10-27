@@ -1678,23 +1678,18 @@ func nc_is_hosted_memory_builtin(name):
     return equal(name, "linux_syscall6") or equal(name, "buffer_address") or equal(name, "buffer_get") or equal(name, "buffer_set") or equal(name, "buffer_length") or equal(name, "buffer_copy") or equal(name, "buffer_fill")
 end
 
-func emit_instr(ir, op, a, b):
-    do add(ir, (0, op, a, b, 0, "", 0))
-    return ir
-end
-
 func emit_instr_line(ir, op, a, b, line):
     do add(ir, (0, op, a, b, 0, "", line))
     return ir
 end
 
-func emit_instr_meta(ir, op, a, b, meta):
-    do add(ir, (0, op, a, b, meta, "", 0))
+func emit_instr_meta(ir, op, a, b, meta, line):
+    do add(ir, (0, op, a, b, meta, "", line))
     return ir
 end
 
-func emit_target_instr(ir, op, label):
-    do add(ir, (0, op, 0, 0, 0, label, 0))
+func emit_target_instr(ir, op, label, line):
+    do add(ir, (0, op, 0, 0, 0, label, line))
     return ir
 end
 
@@ -1925,14 +1920,14 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         if elem.0 != 0:
             return fault("bad new_array meta")
         end
-        return emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_intern_array(type_pool, nc_type_erase(type_pool, elem.1)))
+        return emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_intern_array(type_pool, nc_type_erase(type_pool, elem.1)), call_line)
     end
     ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     if equal(name, "linux_syscall6"):
-        return emit_instr(ir, op_linux_syscall6(), 0, 0)
+        return emit_instr_line(ir, op_linux_syscall6(), 0, 0, call_line)
     end
     if equal(name, "buffer_address"):
-        return emit_instr(ir, op_buffer_address(), 0, 0)
+        return emit_instr_line(ir, op_buffer_address(), 0, 0, call_line)
     end
     if equal(name, "buffer_get"):
         return emit_instr_line(ir, op_buffer_get(), 0, 0, call_line)
@@ -1941,7 +1936,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         return emit_instr_line(ir, op_buffer_set(), 0, 0, call_line)
     end
     if equal(name, "buffer_length"):
-        return emit_instr(ir, op_buffer_length(), 0, 0)
+        return emit_instr_line(ir, op_buffer_length(), 0, 0, call_line)
     end
     if equal(name, "buffer_copy"):
         return emit_instr_line(ir, op_buffer_copy(), 0, 0, call_line)
@@ -1950,72 +1945,72 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
         return emit_instr_line(ir, op_buffer_fill(), 0, 0, call_line)
     end
     if equal(name, "clogger"):
-        return emit_instr(ir, op_clogger(), 0, 0)
+        return emit_instr_line(ir, op_clogger(), 0, 0, call_line)
     end
     if equal(name, "stdin_read"):
-        return emit_instr(ir, op_stdin_read(), 0, 0)
+        return emit_instr_line(ir, op_stdin_read(), 0, 0, call_line)
     end
     if equal(name, "stderr_write"):
-        return emit_instr(ir, op_stderr_write(), 0, 0)
+        return emit_instr_line(ir, op_stderr_write(), 0, 0, call_line)
     end
     if equal(name, "length"):
-        return emit_instr(ir, op_length(), 0, 0)
+        return emit_instr_line(ir, op_length(), 0, 0, call_line)
     end
     if equal(name, "index"):
         return emit_instr_line(ir, op_index(), 0, 0, call_line)
     end
     if equal(name, "slice"):
-        return emit_instr(ir, op_slice(), 0, 0)
+        return emit_instr_line(ir, op_slice(), 0, 0, call_line)
     end
     if equal(name, "equal"):
-        return emit_instr(ir, op_equal(), 0, 0)
+        return emit_instr_line(ir, op_equal(), 0, 0, call_line)
     end
     if equal(name, "new_buffer"):
-        return emit_instr(ir, op_new_buffer(), 0, 0)
+        return emit_instr_line(ir, op_new_buffer(), 0, 0, call_line)
     end
     if equal(name, "freeze"):
-        return emit_instr(ir, op_freeze(), 0, 0)
+        return emit_instr_line(ir, op_freeze(), 0, 0, call_line)
     end
     if equal(name, "get"):
         return emit_instr_line(ir, op_get(), 0, 0, call_line)
     end
     if equal(name, "count"):
-        return emit_instr(ir, op_count(), 0, 0)
+        return emit_instr_line(ir, op_count(), 0, 0, call_line)
     end
     if equal(name, "input_byte"):
-        return emit_instr(ir, op_input_byte(), 0, 0)
+        return emit_instr_line(ir, op_input_byte(), 0, 0, call_line)
     end
     if equal(name, "boot_read"):
-        return emit_instr(ir, op_boot_read(), 0, 0)
+        return emit_instr_line(ir, op_boot_read(), 0, 0, call_line)
     end
     if equal(name, "output_byte"):
-        return emit_instr(ir, op_output_byte(), 0, 0)
+        return emit_instr_line(ir, op_output_byte(), 0, 0, call_line)
     end
     if equal(name, "module_byte"):
-        return emit_instr(ir, op_module_byte(), 0, 0)
+        return emit_instr_line(ir, op_module_byte(), 0, 0, call_line)
     end
     if equal(name, "sys_read"):
-        return emit_instr(ir, op_sys_read(), 0, 0)
+        return emit_instr_line(ir, op_sys_read(), 0, 0, call_line)
     end
     if equal(name, "sys_write"):
-        return emit_instr(ir, op_sys_write(), 0, 0)
+        return emit_instr_line(ir, op_sys_write(), 0, 0, call_line)
     end
     if equal(name, "yield"):
-        return emit_instr(ir, op_yield(), 0, 0)
+        return emit_instr_line(ir, op_yield(), 0, 0, call_line)
     end
     if equal(name, "bufbase"):
-        return emit_instr(ir, op_bufbase(), 0, 0)
+        return emit_instr_line(ir, op_bufbase(), 0, 0, call_line)
     end
     if equal(name, "bufget"):
-        return emit_instr(ir, op_bufget(), 0, 0)
+        return emit_instr_line(ir, op_bufget(), 0, 0, call_line)
     end
     if equal(name, "bufset"):
-        return emit_instr(ir, op_bufset(), 0, 0)
+        return emit_instr_line(ir, op_bufset(), 0, 0, call_line)
     end
     if equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "process_exit"):
         return fault("void builtin in expression")
     end
-    return emit_instr(ir, op_call(), nc_poly_lowered_call_target(type_pool, poly, caller_inst_idx, call_node_idx, call_line), count(kids))
+    return emit_instr_line(ir, op_call(), nc_poly_lowered_call_target(type_pool, poly, caller_inst_idx, call_node_idx, call_line), count(kids), call_line)
 end
 
 func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
@@ -2023,68 +2018,69 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     let tag = node.0
     let atoms = node.1
     let kids = node.2
+    let line = node.3
     if equal(tag, "int"):
-        return emit_instr(ir, op_push_int(), parse_decimal(get(atoms, 0)), 0)
+        return emit_instr_line(ir, op_push_int(), parse_decimal(get(atoms, 0)), 0, line)
     end
     if equal(tag, "char"):
-        return emit_instr(ir, op_push_int(), parse_decimal(get(atoms, 0)), 0)
+        return emit_instr_line(ir, op_push_int(), parse_decimal(get(atoms, 0)), 0, line)
     end
     if equal(tag, "str"):
         let s = string_from_atoms(atoms)
-        return emit_instr(ir, op_push_str(), intern_string(strings, s), 0)
+        return emit_instr_line(ir, op_push_str(), intern_string(strings, s), 0, line)
     end
     if equal(tag, "bool"):
         if equal(get(atoms, 0), "true"):
-            return emit_instr(ir, op_push_bool(), 1, 0)
+            return emit_instr_line(ir, op_push_bool(), 1, 0, line)
         end
-        return emit_instr(ir, op_push_bool(), 0, 0)
+        return emit_instr_line(ir, op_push_bool(), 0, 0, line)
     end
     if equal(tag, "name"):
-        return emit_instr(ir, op_load_local(), env_lookup(env, get(atoms, 0)), 0)
+        return emit_instr_line(ir, op_load_local(), env_lookup(env, get(atoms, 0)), 0, line)
     end
     if equal(tag, "and"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         let done = make_label("and", count(ir))
-        ir = emit_target_instr(ir, op_br_and(), done)
+        ir = emit_target_instr(ir, op_br_and(), done, line)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_label(ir, done)
     end
     if equal(tag, "or"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         let done = make_label("or", count(ir))
-        ir = emit_target_instr(ir, op_br_or(), done)
+        ir = emit_target_instr(ir, op_br_or(), done, line)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_label(ir, done)
     end
     if equal(tag, "not"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_not(), 0, 0)
+        return emit_instr_line(ir, op_not(), 0, 0, line)
     end
     if equal(tag, "bnot"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_bnot(), 0, 0)
+        return emit_instr_line(ir, op_bnot(), 0, 0, line)
     end
     if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod") or equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge") or equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, opcode_for_binop(tag), 0, 0)
+        return emit_instr_line(ir, opcode_for_binop(tag), 0, 0, line)
     end
     if equal(tag, "tuple"):
         ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_make_tuple(), count(kids), 0)
+        return emit_instr_line(ir, op_make_tuple(), count(kids), 0, line)
     end
     if equal(tag, "record-new"):
         let decl_idx = nc_record_decl_find(nodes, prog_idx, get(atoms, 0))
         if equal(get(nodes, decl_idx).0, "ref-record"):
             -- A ref record is a one-element array of the tuple of its fields.
             let rt = nc_record_type(type_pool, nodes, decl_idx, new_array(int))
-            ir = emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_erase(type_pool, rt.1))
+            ir = emit_instr_meta(ir, op_new_array(), 0, 0, nc_type_erase(type_pool, rt.1), line)
             ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-            ir = emit_instr(ir, op_make_tuple(), count(kids), 0)
-            return emit_instr(ir, op_arr_add_keep(), 0, 0)
+            ir = emit_instr_line(ir, op_make_tuple(), count(kids), 0, line)
+            return emit_instr_line(ir, op_arr_add_keep(), 0, 0, line)
         end
         ir = emit_exprs(kids, 0, count(kids), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_make_tuple(), count(kids), 0)
+        return emit_instr_line(ir, op_make_tuple(), count(kids), 0, line)
     end
     if equal(tag, "dot"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
@@ -2092,11 +2088,11 @@ func emit_expr(node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
             let shape = lowered_field(poly, nodes, caller_inst_idx, node_idx, node)
             if equal(get(nodes, shape.4).0, "ref-record"):
                 -- In place: the field's words straight from the record's element.
-                return emit_instr(ir, op_get_field(), shape.2, 0)
+                return emit_instr_line(ir, op_get_field(), shape.2, 0, line)
             end
-            return emit_instr(ir, op_tuple_get(), shape.2, 0)
+            return emit_instr_line(ir, op_tuple_get(), shape.2, 0, line)
         end
-        return emit_instr(ir, op_tuple_get(), parse_decimal(get(atoms, 0)), 0)
+        return emit_instr_line(ir, op_tuple_get(), parse_decimal(get(atoms, 0)), 0, line)
     end
     if equal(tag, "call"):
         return emit_call_expr(get(atoms, 0), kids, node_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
@@ -2174,19 +2170,19 @@ func emit_do_call(call_idx, stmt_line, env, ir, strings, nodes, prog_idx, type_p
     if equal(name, "add"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_arr_add(), 0, 0)
+        return emit_instr_line(ir, op_arr_add(), 0, 0, stmt_line)
     end
     if equal(name, "flogger"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_flogger(), 0, 0)
+        return emit_instr_line(ir, op_flogger(), 0, 0, stmt_line)
     end
     if equal(name, "fwriter"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_fwriter(), 0, 0)
+        return emit_instr_line(ir, op_fwriter(), 0, 0, stmt_line)
     end
     if equal(name, "process_exit"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        return emit_instr(ir, op_process_exit(), 0, 0)
+        return emit_instr_line(ir, op_process_exit(), 0, 0, stmt_line)
     end
     return fault("bad do call")
 end
@@ -2205,14 +2201,16 @@ func emit_if_arms(kids, i, n, env, ir, strings, nodes, prog_idx, type_pool, join
         return env_rebuild(body_env, scope_mark)
     end
     let next_label = make_label("if", count(ir))
+    -- The branch carries the condition's own line: a clause node's line is its body's.
+    let cond_line = get(nodes, get(arm.2, 0)).3
     ir = emit_expr(get(arm.2, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-    ir = emit_target_instr(ir, op_br_if_false(), next_label)
+    ir = emit_target_instr(ir, op_br_if_false(), next_label, cond_line)
     let body_idx = get(arm.2, 1)
     let body = get(nodes, body_idx)
     let body_env = emit_body(body.2, 0, count(body.2), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     env = env_rebuild(body_env, scope_mark)
     if (not body_ends_return(body_idx, nodes)) and i + 1 < n:
-        ir = emit_target_instr(ir, op_br(), join_label)
+        ir = emit_target_instr(ir, op_br(), join_label, cond_line)
     end
     ir = emit_label(ir, next_label)
     return emit_if_arms(kids, i + 1, n, env, ir, strings, nodes, prog_idx, type_pool, join_label, caller_inst_idx, poly)
@@ -2229,18 +2227,18 @@ end
 -- the only backward branch the IR has; a body that ends in a return has no
 -- fall-through, so it gets none (as an if arm gets no branch to its join).
 -- The body's names close at end, as an arm's do; their slots stay allocated.
-func emit_while_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+func emit_while_stmt(kids, line, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
     let top_label = make_label("loop", count(ir))
     ir = emit_label(ir, top_label)
     let exit_label = make_label("exit", count(ir))
     let scope_mark = env.3
     ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-    ir = emit_target_instr(ir, op_br_if_false(), exit_label)
+    ir = emit_target_instr(ir, op_br_if_false(), exit_label, line)
     let body_idx = get(kids, 1)
     let body = get(nodes, body_idx)
     let body_env = emit_body(body.2, 0, count(body.2), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     if not body_ends_return(body_idx, nodes):
-        ir = emit_target_instr(ir, op_br(), top_label)
+        ir = emit_target_instr(ir, op_br(), top_label, line)
     end
     ir = emit_label(ir, exit_label)
     return env_rebuild(body_env, scope_mark)
@@ -2283,13 +2281,13 @@ func lowered_field(poly, nodes, inst_idx, node_idx, node):
     return get(poly.3, i)
 end
 
-func emit_field_update(k, n, i, slot, value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
+func emit_field_update(k, n, i, slot, value_idx, line, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly):
     while i < n:
         if i == k:
             ir = emit_expr(value_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         else:
-            ir = emit_instr(ir, op_load_local(), slot, 0)
-            ir = emit_instr(ir, op_tuple_get(), i, 0)
+            ir = emit_instr_line(ir, op_load_local(), slot, 0, line)
+            ir = emit_instr_line(ir, op_tuple_get(), i, 0, line)
         end
         i = i + 1
     end
@@ -2301,14 +2299,15 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
     let tag = stmt.0
     let atoms = stmt.1
     let kids = stmt.2
+    let line = stmt.3
     if equal(tag, "let"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        ir = emit_instr(ir, op_store_local(), env.2, 0)
+        ir = emit_instr_line(ir, op_store_local(), env.2, 0, line)
         return env_let(env, get(atoms, 0))
     end
     if equal(tag, "assign"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        ir = emit_instr(ir, op_store_local(), env_lookup(env, get(atoms, 0)), 0)
+        ir = emit_instr_line(ir, op_store_local(), env_lookup(env, get(atoms, 0)), 0, line)
         return env
     end
     if equal(tag, "field-assign"):
@@ -2318,19 +2317,19 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         if equal(get(nodes, shape.4).0, "ref-record"):
             -- In place: the field's words go into the record's one element.
             let fields = nc_type_children(type_pool, nc_record_type(type_pool, nodes, shape.4, new_array(int)).1)
-            ir = emit_instr(ir, op_load_local(), slot, 0)
+            ir = emit_instr_line(ir, op_load_local(), slot, 0, line)
             ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-            ir = emit_instr(ir, op_set_field(), nc_type_width_tuple(type_pool, fields, 0, shape.2, 0), nc_type_width(type_pool, get(fields, shape.2)))
+            ir = emit_instr_line(ir, op_set_field(), nc_type_width_tuple(type_pool, fields, 0, shape.2, 0), nc_type_width(type_pool, get(fields, shape.2)), line)
             return env
         end
-        ir = emit_field_update(shape.2, shape.3, 0, slot, get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        ir = emit_instr(ir, op_make_tuple(), shape.3, 0)
-        ir = emit_instr(ir, op_store_local(), slot, 0)
+        ir = emit_field_update(shape.2, shape.3, 0, slot, get(kids, 0), line, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        ir = emit_instr_line(ir, op_make_tuple(), shape.3, 0, line)
+        ir = emit_instr_line(ir, op_store_local(), slot, 0, line)
         return env
     end
     if equal(tag, "return"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
-        ir = emit_instr(ir, op_ret(), 0, 0)
+        ir = emit_instr_line(ir, op_ret(), 0, 0, line)
         return env
     end
     if equal(tag, "do"):
@@ -2341,7 +2340,7 @@ func emit_stmt(stmt_idx, env, ir, strings, nodes, prog_idx, type_pool, caller_in
         return emit_if_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     end
     if equal(tag, "while"):
-        return emit_while_stmt(kids, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_while_stmt(kids, line, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
     end
     return fault("bad statement")
 end
@@ -3644,6 +3643,12 @@ func nc_diag_msg(code, payload):
     if code == 448:
         return "native-subset: a record construction is not a statement"
     end
+    if code == 405:
+        return diagnostic_with_payload("native-subset: nesting deeper than the compiler's limit of ", payload, " levels")
+    end
+    if code == 406:
+        return diagnostic_with_payload("native-subset: function '", payload, "' may not return a value")
+    end
     -- Kernel-route codes carry their own text, which names the route and the rule.
     if code > 442 and length(payload) > 0:
         return diagnostic_with_payload("native-subset: ", payload, "")
@@ -4894,7 +4899,7 @@ func nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx):
     return nc_poly_call_target_find_loop(targets, caller_inst_idx, call_node_idx, 0, count(targets))
 end
 
-func nc_poly_record_call_target(pool, poly, caller_inst_idx, call_node_idx, callee_inst_idx):
+func nc_poly_record_call_target(pool, poly, caller_inst_idx, call_node_idx, callee_inst_idx, call_line):
     let targets = poly.1
     let existing = nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx)
     if existing == 0 - 1:
@@ -4903,7 +4908,7 @@ func nc_poly_record_call_target(pool, poly, caller_inst_idx, call_node_idx, call
     end
     let old = get(targets, existing)
     if old.2 != callee_inst_idx:
-        return nc_infer_fail(pool, 430, 0, "")
+        return nc_infer_fail(pool, 430, call_line, "")
     end
     return 0
 end
@@ -4918,7 +4923,7 @@ func nc_poly_lowered_call_target(pool, poly, caller_inst_idx, call_node_idx, cal
         -- attempt's retained diagnostic instead, whatever local the call
         -- concerns; that diagnostic need not describe this call.
         if nc_retry_used(pool):
-            return nc_retry_diag_fail(pool, 430, 0, "")
+            return nc_retry_diag_fail(pool, 430, call_line, "")
         end
         return nc_fail(424, call_line, "")
     end
@@ -5626,7 +5631,7 @@ func nc_poly_constrain_user_call(pool, nodes, prog_idx, call_idx, env, want, sig
     if gi.0 != 0:
         return (gi.0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
     end
-    let rec = nc_poly_record_call_target(pool, funcs, fn_idx, call_idx, gi.1)
+    let rec = nc_poly_record_call_target(pool, funcs, fn_idx, call_idx, gi.1, node.3)
     if rec != 0:
         return (rec, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
     end
@@ -5666,7 +5671,7 @@ func nc_poly_infer_user_call(pool, nodes, prog_idx, call_idx, env, sig, fn_idx, 
     if gi.0 != 0:
         return (gi.0, 0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
     end
-    let rec = nc_poly_record_call_target(pool, funcs, fn_idx, call_idx, gi.1)
+    let rec = nc_poly_record_call_target(pool, funcs, fn_idx, call_idx, gi.1, node.3)
     if rec != 0:
         return (rec, 0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
     end
@@ -6564,6 +6569,15 @@ func nc_poly_infer_instance(pool, nodes, prog_idx, funcs, inst_idx, sig):
     do get(fn_node.1, 0)
     let params_node = get(nodes, get(fn_node.2, 0))
     let body_node = get(nodes, get(fn_node.2, 1))
+    -- A body that no return or exhaustive returning if terminates falls off
+    -- its end. Lowering uses the same predicate (body_ends_return), which is
+    -- what the metadata scan later reports as ERR 415/416 with no line, or
+    -- inference as an unconstrained signature (ERR 424) at the wrong function.
+    -- This is structural, not a speculative type conflict, so it reports
+    -- directly: a retained diagnostic from a retry must not replace it.
+    if not body_ends_return(get(fn_node.2, 1), nodes):
+        return (nc_fail(406, fn_node.3, get(fn_node.1, 0)), sig, 0)
+    end
     let input_scope = nc_check_input_scope(pool, nodes, fn_node)
     if input_scope != 0:
         return (input_scope, sig, 0)
@@ -6803,6 +6817,73 @@ func nc_poly_note_field(poly, inst, node, field_index, field_count, decl_idx):
     return 0
 end
 
+-- Nesting limit (ERR 405). Inference recurses through nc_infer_expr and
+-- nc_constrain_expr, about 2.8 KB of stack per expression level, and through
+-- nc_infer_stmt and nc_infer_body, about 3.2 KB per if or while level, so the
+-- default 8 MiB stack dies near 2,980 nested terms (2,650 nested ifs) with a
+-- bare SIGSEGV. Refuse deeper programs here, before inference, with a located
+-- diagnostic. A bare name or literal is level 1, and each node that opens a
+-- recursion level above it (an operator, call, projection, tuple, record
+-- construction, if or while) adds one; arms, bodies and the statements that
+-- wrap one expression add nothing. A flat sum of 2,000 terms is level 2,000
+-- and compiles; 2,001 terms, or 2,000 ifs around a bare condition, is level
+-- 2,001 and is refused. Every node's kids precede it in the pool, so one
+-- forward pass computes every level; the first node past the limit names the
+-- line. The limit assumes the 8 MiB default stack.
+func nc_depth_limit():
+    return 2000
+end
+
+func nc_depth_node_cost(tag):
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod"):
+        return 1
+    end
+    if equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr") or equal(tag, "bnot"):
+        return 1
+    end
+    if equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+        return 1
+    end
+    if equal(tag, "and") or equal(tag, "or") or equal(tag, "not") or equal(tag, "dot") or equal(tag, "tuple") or equal(tag, "record-new") or equal(tag, "call"):
+        return 1
+    end
+    if equal(tag, "if") or equal(tag, "while"):
+        return 1
+    end
+    if equal(tag, "name") or equal(tag, "int") or equal(tag, "str") or equal(tag, "char") or equal(tag, "bool"):
+        return 1
+    end
+    return 0
+end
+
+func nc_node_depth_kids(depth, kids, i, n, acc):
+    while i < n:
+        let d = get(depth, get(kids, i))
+        if d > acc:
+            acc = d
+        end
+        i = i + 1
+    end
+    return acc
+end
+
+func nc_depth_check_loop(nodes, i, n, depth, limit):
+    while i < n:
+        let node = get(nodes, i)
+        let d = nc_node_depth_kids(depth, node.2, 0, count(node.2), 0) + nc_depth_node_cost(node.0)
+        if d > limit:
+            return nc_fail(405, node.3, int_to_str(limit))
+        end
+        do add(depth, d)
+        i = i + 1
+    end
+    return 0
+end
+
+func nc_depth_check(nodes):
+    return nc_depth_check_loop(nodes, 0, count(nodes), new_array(int), nc_depth_limit())
+end
+
 func nc_verify_ast(nodes, prog_idx, pool):
     -- Reachability-independent class-mix rejection (matches C: a syntactic error in
     -- ANY function, reachable or not). This runs FIRST -- before the function-table
@@ -6818,6 +6899,12 @@ func nc_verify_ast(nodes, prog_idx, pool):
         let mix_instances = new_array((int, array(int), int, int, int, int))
         let mix_targets = new_array((int, int, int))
         return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int)), new_array((int, int, int, int, int))))
+    end
+    let deep = nc_depth_check(nodes)
+    if deep != 0:
+        let deep_instances = new_array((int, array(int), int, int, int, int))
+        let deep_targets = new_array((int, int, int))
+        return (deep, nc_sig_init(nodes, prog_idx), (deep_instances, deep_targets, new_array((int, int)), new_array((int, int, int, int, int))))
     end
     let tbl = nc_table_check(nodes, prog_idx)
     if tbl != 0:
@@ -7211,7 +7298,7 @@ func nc_meta_call_arg_words(pool, funcs, sig, callee_idx):
     return nc_meta_call_arg_words_loop(pool, sig, callee_idx, 0, fn.2, 0)
 end
 
-func nc_meta_pop_hosted_memory(pool, stack, remaining, is_buffer, two_buffers):
+func nc_meta_pop_hosted_memory(pool, stack, remaining, is_buffer, two_buffers, line):
     while remaining != 0:
         let want = nc_type_int()
         if is_buffer and remaining == 1:
@@ -7220,7 +7307,7 @@ func nc_meta_pop_hosted_memory(pool, stack, remaining, is_buffer, two_buffers):
         if two_buffers and remaining == 3:
             want = nc_type_buffer()
         end
-        let p = nc_meta_pop_expect(pool, stack, want, 0)
+        let p = nc_meta_pop_expect(pool, stack, want, line)
         if p.0 != 0:
             return (p.0, p.1)
         end
@@ -7261,7 +7348,7 @@ func nc_meta_layout_collect(layout_types, i, n, out):
     return out
 end
 
-func nc_meta_merge_types(pool, a, b, i, n, locals, out):
+func nc_meta_merge_types(pool, a, b, i, n, locals, out, line):
     while i < n:
         let at = get(a, i)
         let bt = get(b, i)
@@ -7270,7 +7357,7 @@ func nc_meta_merge_types(pool, a, b, i, n, locals, out):
             -- initialized it. Layout knowledge must not make it readable here.
             do add(out, nc_type_unknown())
         else:
-            let m = nc_type_merge(pool, at, bt, 0)
+            let m = nc_type_merge(pool, at, bt, line)
             if m.0 != 0:
                 return (m.0, out)
             end
@@ -7284,13 +7371,13 @@ end
 -- At a join a local keeps its class only where every predecessor initialized
 -- it (see nc_meta_merge_types); only slots whose merged class differs from the
 -- current state's are copied. The merge calls are the same, slot by slot.
-func nc_meta_merge_locals(pool, a, b, i, n, out):
+func nc_meta_merge_locals(pool, a, b, i, n, out, line):
     while i < n:
         let at = nc_pget(a, i)
         let bt = nc_pget(b, i)
         let mt = nc_type_unknown()
         if at != nc_type_unknown() and bt != nc_type_unknown():
-            let m = nc_type_merge(pool, at, bt, 0)
+            let m = nc_type_merge(pool, at, bt, line)
             if m.0 != 0:
                 return (m.0, out)
             end
@@ -7337,24 +7424,24 @@ func nc_meta_top_find(tops, i, n, pc):
     return 0 - 1
 end
 
-func nc_meta_stack_same_loop(pool, a, b, i, n):
+func nc_meta_stack_same_loop(pool, a, b, i, n, line):
     while i < n:
-        let m = nc_type_merge(pool, get(a, i), get(b, i), 0)
+        let m = nc_type_merge(pool, get(a, i), get(b, i), line)
         if m.0 != 0:
             return m.0
         end
         if m.1 != get(a, i):
-            return nc_fail(416, 0, "")
+            return nc_fail(416, line, "")
         end
         i = i + 1
     end
     return 0
 end
 
-func nc_meta_locals_same_loop(a, b, i, n):
+func nc_meta_locals_same_loop(a, b, i, n, line):
     while i < n:
         if nc_pget(a, i) != nc_pget(b, i):
-            return nc_fail(414, 0, "")
+            return nc_fail(414, line, "")
         end
         i = i + 1
     end
@@ -7366,27 +7453,27 @@ end
 -- so the one forward pass checked the body under the state of every iteration.
 -- Slots are never reused, so a body-local let is unknown at the top and stays
 -- unknown under the join; only a loop-carried slot whose class moved fails.
-func nc_meta_back_edge_ok(pool, tops, target, stack, local_types):
+func nc_meta_back_edge_ok(pool, tops, target, stack, local_types, line):
     let k = nc_meta_top_find(tops, 0, count(tops), target)
     if k == 0 - 1:
-        return nc_fail(415, 0, int_to_str(target))
+        return nc_fail(415, line, int_to_str(target))
     end
     let top = get(tops, k)
     if count(stack) != count(top.1) or nc_pcount(local_types) != nc_pcount(top.2):
-        return nc_fail(416, 0, "")
+        return nc_fail(416, line, "")
     end
-    let s = nc_meta_stack_same_loop(pool, top.1, stack, 0, count(stack))
+    let s = nc_meta_stack_same_loop(pool, top.1, stack, 0, count(stack), line)
     if s != 0:
         return s
     end
-    let lm = nc_meta_merge_locals(pool, top.2, local_types, 0, nc_pcount(top.2), top.2)
+    let lm = nc_meta_merge_locals(pool, top.2, local_types, 0, nc_pcount(top.2), top.2, line)
     if lm.0 != 0:
         return lm.0
     end
-    return nc_meta_locals_same_loop(lm.1, top.2, 0, nc_pcount(top.2))
+    return nc_meta_locals_same_loop(lm.1, top.2, 0, nc_pcount(top.2), line)
 end
 
-func nc_meta_enter_flow(pool, incoming, i, n, stack, local_types, live):
+func nc_meta_enter_flow(pool, incoming, i, n, stack, local_types, live, line):
     while i < n:
         let edge = get(incoming, i)
         if not live:
@@ -7395,13 +7482,13 @@ func nc_meta_enter_flow(pool, incoming, i, n, stack, local_types, live):
             live = true
         else:
             if count(stack) != count(edge.0) or nc_pcount(local_types) != nc_pcount(edge.1):
-                return (nc_fail(416, 0, ""), stack, local_types, live)
+                return (nc_fail(416, line, ""), stack, local_types, live)
             end
-            let sm = nc_meta_merge_types(pool, stack, edge.0, 0, count(stack), false, new_array(int))
+            let sm = nc_meta_merge_types(pool, stack, edge.0, 0, count(stack), false, new_array(int), line)
             if sm.0 != 0:
                 return (sm.0, stack, local_types, live)
             end
-            let lm = nc_meta_merge_locals(pool, local_types, edge.1, 0, nc_pcount(local_types), local_types)
+            let lm = nc_meta_merge_locals(pool, local_types, edge.1, 0, nc_pcount(local_types), local_types, line)
             if lm.0 != 0:
                 return (lm.0, stack, local_types, live)
             end
@@ -7429,15 +7516,16 @@ record MetaScan:
     has_heap: int
 end
 
-func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, code, new_array_meta, i, n, stack, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap, flow):
+func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, code, new_array_meta, lines, i, n, stack, local_types, stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap, flow):
     while i < n:
+        let line = get(lines, i)
         let incoming = get(flow.0, i)
-        let enter = nc_meta_enter_flow(pool, incoming, 0, count(incoming), stack, local_types, flow.1)
+        let enter = nc_meta_enter_flow(pool, incoming, 0, count(incoming), stack, local_types, flow.1, line)
         if enter.0 != 0:
             return MetaScan(enter.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         if not enter.3:
-            return MetaScan(nc_fail(416, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            return MetaScan(nc_fail(416, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         stack = enter.1
         local_types = enter.2
@@ -7456,21 +7544,21 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         let op = instr.0
         if op == 17 or op == 18 or op == 19:
             if instr.1 <= i or instr.1 >= n:
-                return MetaScan(nc_fail(415, 0, int_to_str(instr.1)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(415, line, int_to_str(instr.1)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
         end
         if op == 16:
             if instr.1 == i or instr.1 >= n:
-                return MetaScan(nc_fail(415, 0, int_to_str(instr.1)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(415, line, int_to_str(instr.1)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
         end
         let na_type = get(new_array_meta, i)
         if op == 28:
             if na_type == 0:
-                return MetaScan(nc_fail(439, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(439, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
         elif na_type != 0:
-            return MetaScan(nc_fail(439, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            return MetaScan(nc_fail(439, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         if (op >= 26 and op <= 32) or op == 67:
             has_heap = 1
@@ -7480,29 +7568,29 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             stack = nc_stack_push(stack, nc_type_int())
         elif op == 1:
             if instr.1 != 0 and instr.1 != 1:
-                return MetaScan(nc_fail(417, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(417, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(stack, nc_type_bool())
         elif op == 2:
             if instr.1 >= strings_count:
-                return MetaScan(nc_fail(428, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(428, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(stack, nc_type_string())
         elif op == 3:
             if instr.1 >= nc_pcount(local_types):
-                return MetaScan(nc_fail(416, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(416, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let lt = nc_pget(local_types, instr.1)
             if nc_type_has_unknown(pool, lt):
-                return MetaScan(nc_fail(424, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(424, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(stack, lt)
         elif op == 4:
-            let p = nc_stack_pop(stack, 0)
+            let p = nc_stack_pop(stack, line)
             if p.0 != 0:
                 return MetaScan(p.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let st = nc_meta_store_local_type(pool, local_types, instr.1, p.2, 0)
+            let st = nc_meta_store_local_type(pool, local_types, instr.1, p.2, line)
             if st.0 != 0:
                 return MetaScan(st.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
@@ -7515,57 +7603,57 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             -- add/sub, the bitwise/shift binops (band/bor/bxor/shl/shr), and the
             -- multiplicative binops (mul/div/mod) all pop two ints and push one int;
             -- identical stack discipline.
-            let r = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
+            let r = nc_meta_pop_expect(pool, stack, nc_type_int(), line)
             if r.0 != 0:
                 return MetaScan(r.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let l = nc_meta_pop_expect(pool, r.1, nc_type_int(), 0)
+            let l = nc_meta_pop_expect(pool, r.1, nc_type_int(), line)
             if l.0 != 0:
                 return MetaScan(l.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(l.1, nc_type_int())
         elif op == 41:
             -- bnot: pop one int, push one int (the int-typed counterpart of op 13).
-            let p = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
+            let p = nc_meta_pop_expect(pool, stack, nc_type_int(), line)
             if p.0 != 0:
                 return MetaScan(p.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(p.1, nc_type_int())
         elif op == 7 or op == 8 or op == 9 or op == 10 or op == 11 or op == 12:
-            let r = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
+            let r = nc_meta_pop_expect(pool, stack, nc_type_int(), line)
             if r.0 != 0:
                 return MetaScan(r.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let l = nc_meta_pop_expect(pool, r.1, nc_type_int(), 0)
+            let l = nc_meta_pop_expect(pool, r.1, nc_type_int(), line)
             if l.0 != 0:
                 return MetaScan(l.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(l.1, nc_type_bool())
         elif op == 13:
-            let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), 0)
+            let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), line)
             if p.0 != 0:
                 return MetaScan(p.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(p.1, nc_type_bool())
         elif op == 14:
             if count(stack) < instr.1:
-                return MetaScan(nc_fail(416, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(416, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let from = count(stack) - instr.1
             let kids = nc_meta_tuple_children_from_stack(stack, from, 0, instr.1, new_array(int))
             stack = nc_stack_prefix(stack, from)
             stack = nc_stack_push(stack, nc_type_intern_tuple(pool, kids))
         elif op == 15:
-            let p = nc_stack_pop(stack, 0)
+            let p = nc_stack_pop(stack, line)
             if p.0 != 0:
                 return MetaScan(p.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if not nc_type_is_tuple(pool, p.2):
-                return MetaScan(nc_fail(431, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(431, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let kids = nc_type_tuple_children(pool, p.2)
             if instr.1 >= count(kids):
-                return MetaScan(nc_fail(431, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(431, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let elem_t = get(kids, instr.1)
             let tw = nc_type_width(pool, p.2)
@@ -7575,7 +7663,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             stack = nc_stack_push(p.1, elem_t)
         elif op == 16:
             if instr.1 < i:
-                let back = nc_meta_back_edge_ok(pool, flow.4, instr.1, stack, local_types)
+                let back = nc_meta_back_edge_ok(pool, flow.4, instr.1, stack, local_types, line)
                 if back != 0:
                     return MetaScan(back, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
                 end
@@ -7584,14 +7672,14 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             end
             flow = (flow.0, false, flow.2, flow.3, flow.4)
         elif op == 17:
-            let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), 0)
+            let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), line)
             if p.0 != 0:
                 return MetaScan(p.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = p.1
             do add(get(flow.0, instr.1), (stack, local_types))
         elif op == 18 or op == 19:
-            let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), 0)
+            let p = nc_meta_pop_expect(pool, stack, nc_type_bool(), line)
             if p.0 != 0:
                 return MetaScan(p.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
@@ -7600,16 +7688,16 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             stack = p.1
         elif op == 20:
             if instr.1 >= count(funcs):
-                return MetaScan(nc_fail(426, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(426, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if instr.1 == main_idx:
-                return MetaScan(nc_fail(421, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(421, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let callee = get(funcs, instr.1)
             if instr.2 != callee.2:
-                return MetaScan(nc_fail(426, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(426, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let popped = nc_meta_pop_call_args(pool, funcs, sig, instr.1, stack, instr.2 - 1, 0)
+            let popped = nc_meta_pop_call_args(pool, funcs, sig, instr.1, stack, instr.2 - 1, line)
             if popped.0 != 0:
                 return MetaScan(popped.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
@@ -7644,114 +7732,114 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             stack = nc_stack_push(popped.1, ret)
         elif op == 21:
             if count(stack) != 1:
-                return MetaScan(nc_fail(416, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(416, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let ret = nc_sig_get_ret(sig, fn_idx)
             if ret != nc_type_unknown():
                 if not nc_type_equal(pool, get(stack, 0), ret):
-                    return MetaScan(nc_fail(430, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                    return MetaScan(nc_fail(430, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
                 end
             end
             stack = new_array(int)
             flow = (flow.0, false, flow.2, flow.3, flow.4)
         elif op == 22:
-            let p = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
+            let p = nc_meta_pop_expect(pool, stack, nc_type_string(), line)
             if p.0 != 0:
                 return MetaScan(p.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(p.1, nc_type_int())
         elif op == 23:
-            let idx = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
+            let idx = nc_meta_pop_expect(pool, stack, nc_type_int(), line)
             if idx.0 != 0:
                 return MetaScan(idx.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let strv = nc_meta_pop_expect(pool, idx.1, nc_type_string(), 0)
+            let strv = nc_meta_pop_expect(pool, idx.1, nc_type_string(), line)
             if strv.0 != 0:
                 return MetaScan(strv.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(strv.1, nc_type_int())
         elif op == 25:
-            let r = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
+            let r = nc_meta_pop_expect(pool, stack, nc_type_string(), line)
             if r.0 != 0:
                 return MetaScan(r.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let l = nc_meta_pop_expect(pool, r.1, nc_type_string(), 0)
+            let l = nc_meta_pop_expect(pool, r.1, nc_type_string(), line)
             if l.0 != 0:
                 return MetaScan(l.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(l.1, nc_type_bool())
         elif op == 24:
-            return MetaScan(nc_fail(438, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            return MetaScan(nc_fail(438, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         elif op == 26:
             heap_entry = (4, 0, 0)
             stack = nc_stack_push(stack, nc_type_buffer())
         elif op == 27:
-            let p = nc_meta_pop_expect(pool, stack, nc_type_buffer(), 0)
+            let p = nc_meta_pop_expect(pool, stack, nc_type_buffer(), line)
             if p.0 != 0:
-                return MetaScan(nc_fail(437, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(437, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(p.1, nc_type_string())
         elif op == 28:
             if not nc_type_is_array(pool, na_type):
-                return MetaScan(nc_fail(439, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(439, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let elem_t = nc_type_array_elem(pool, na_type)
             let elem_w = nc_type_width(pool, elem_t)
             if elem_w <= 0:
-                return MetaScan(nc_fail(438, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(438, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             heap_entry = (1, elem_w, elem_t)
             stack = nc_stack_push(stack, na_type)
         elif op == 29:
-            let idx = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
+            let idx = nc_meta_pop_expect(pool, stack, nc_type_int(), line)
             if idx.0 != 0:
                 return MetaScan(idx.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let arr = nc_stack_pop(idx.1, 0)
+            let arr = nc_stack_pop(idx.1, line)
             if arr.0 != 0:
                 return MetaScan(arr.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if not nc_type_is_array(pool, arr.2):
-                return MetaScan(nc_fail(435, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(435, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let elem_t = nc_type_array_elem(pool, arr.2)
             let elem_w = nc_type_width(pool, elem_t)
             heap_entry = (2, elem_w, elem_t)
             stack = nc_stack_push(arr.1, elem_t)
         elif op == 30:
-            let arr = nc_stack_pop(stack, 0)
+            let arr = nc_stack_pop(stack, line)
             if arr.0 != 0:
                 return MetaScan(arr.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if not nc_type_is_array(pool, arr.2):
-                return MetaScan(nc_fail(435, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(435, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(arr.1, nc_type_int())
         elif op == 31:
-            let val = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
+            let val = nc_meta_pop_expect(pool, stack, nc_type_int(), line)
             if val.0 != 0:
                 return MetaScan(val.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let bufv = nc_meta_pop_expect(pool, val.1, nc_type_buffer(), 0)
+            let bufv = nc_meta_pop_expect(pool, val.1, nc_type_buffer(), line)
             if bufv.0 != 0:
-                return MetaScan(nc_fail(437, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(437, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = bufv.1
         elif op == 32:
-            let val = nc_stack_pop(stack, 0)
+            let val = nc_stack_pop(stack, line)
             if val.0 != 0:
                 return MetaScan(val.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let arr = nc_stack_pop(val.1, 0)
+            let arr = nc_stack_pop(val.1, line)
             if arr.0 != 0:
                 return MetaScan(arr.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if not nc_type_is_array(pool, arr.2):
-                return MetaScan(nc_fail(435, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(435, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let elem_t = nc_type_array_elem(pool, arr.2)
             let elem_w = nc_type_width(pool, elem_t)
-            let ok = nc_expect_array_elem(pool, val.2, elem_t, 0)
+            let ok = nc_expect_array_elem(pool, val.2, elem_t, line)
             if ok != 0:
                 return MetaScan(ok, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
@@ -7759,20 +7847,20 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             stack = arr.1
         elif op == 63:
             -- ARR_ADD_KEEP: add, leaving the array (a ref record) on the stack.
-            let val = nc_stack_pop(stack, 0)
+            let val = nc_stack_pop(stack, line)
             if val.0 != 0:
                 return MetaScan(val.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let arr = nc_stack_pop(val.1, 0)
+            let arr = nc_stack_pop(val.1, line)
             if arr.0 != 0:
                 return MetaScan(arr.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if not nc_type_is_array(pool, arr.2):
-                return MetaScan(nc_fail(435, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(435, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let elem_t = nc_type_array_elem(pool, arr.2)
             let elem_w = nc_type_width(pool, elem_t)
-            let ok = nc_expect_array_elem(pool, val.2, elem_t, 0)
+            let ok = nc_expect_array_elem(pool, val.2, elem_t, line)
             if ok != 0:
                 return MetaScan(ok, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
@@ -7782,78 +7870,78 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             -- GET_FIELD (field index): a ref record's field read in place. Records
             -- the element's (width, field start, field width) for the emitter, as
             -- TUPLE_GET does. Not faultable: the one element exists by construction.
-            let arr = nc_stack_pop(stack, 0)
+            let arr = nc_stack_pop(stack, line)
             if arr.0 != 0:
                 return MetaScan(arr.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if not nc_type_is_array(pool, arr.2):
-                return MetaScan(nc_fail(435, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(435, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let rec_t = nc_type_array_elem(pool, arr.2)
             if not nc_type_is_tuple(pool, rec_t):
-                return MetaScan(nc_fail(431, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(431, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let kids = nc_type_tuple_children(pool, rec_t)
             if instr.1 >= count(kids):
-                return MetaScan(nc_fail(431, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(431, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             let field_t = get(kids, instr.1)
             tuple_entry = (nc_type_width(pool, rec_t), nc_tuple_child_start_loop(pool, kids, 0, instr.1, 0), nc_type_width(pool, field_t))
             stack = nc_stack_push(arr.1, field_t)
         elif op == 64:
             -- SET_FIELD (offset, width): a ref record's field written in place.
-            let val = nc_stack_pop(stack, 0)
+            let val = nc_stack_pop(stack, line)
             if val.0 != 0:
                 return MetaScan(val.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
-            let arr = nc_stack_pop(val.1, 0)
+            let arr = nc_stack_pop(val.1, line)
             if arr.0 != 0:
                 return MetaScan(arr.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if not nc_type_is_array(pool, arr.2):
-                return MetaScan(nc_fail(435, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(435, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             -- A value whose width is not the field's (a never-returning helper's
             -- result, whose type inference left open) is the width change that the
             -- same update of a value record reports.
             if nc_type_width(pool, val.2) != instr.2:
-                return MetaScan(nc_fail(433, 0, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(433, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = arr.1
         elif op == 33:
             if fn_idx != main_idx:
-                return MetaScan(nc_fail(408, 0, "CLOGGER"), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(408, line, "CLOGGER"), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if has_clogger != 0:
                 let payload = ""
                 if has_clogger == 2:
                     payload = "stdin_read"
                 end
-                return MetaScan(nc_fail(411, 0, payload), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(411, line, payload), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             has_clogger = 1
             has_heap = 1
             stack = nc_stack_push(stack, nc_type_string())
         elif op == 34:
-            let p = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
+            let p = nc_meta_pop_expect(pool, stack, nc_type_string(), line)
             if p.0 != 0:
                 return MetaScan(p.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = p.1
         elif op == 35:
-            let pf = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
+            let pf = nc_meta_pop_expect(pool, stack, nc_type_string(), line)
             if pf.0 != 0:
                 return MetaScan(pf.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = pf.1
         elif op == 54:
-            let pe = nc_meta_pop_expect(pool, stack, nc_type_int(), 0)
+            let pe = nc_meta_pop_expect(pool, stack, nc_type_int(), line)
             if pe.0 != 0:
                 return MetaScan(pe.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = pe.1
         elif op == 55:
-            let sw = nc_meta_pop_expect(pool, stack, nc_type_string(), 0)
+            let sw = nc_meta_pop_expect(pool, stack, nc_type_string(), line)
             if sw.0 != 0:
                 return MetaScan(sw.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
@@ -7874,17 +7962,17 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             elif op == 67:
                 arity = 3
             end
-            let hm = nc_meta_pop_hosted_memory(pool, stack, arity, op != 58, op == 66)
+            let hm = nc_meta_pop_hosted_memory(pool, stack, arity, op != 58, op == 66, line)
             if hm.0 != 0:
                 return MetaScan(hm.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             stack = nc_stack_push(hm.1, nc_type_int())
         elif op == 56:
             if fn_idx != main_idx:
-                return MetaScan(nc_fail(408, 0, "STDIN_READ"), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(408, line, "STDIN_READ"), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             if has_clogger != 0:
-                return MetaScan(nc_fail(411, 0, "stdin_read"), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+                return MetaScan(nc_fail(411, line, "stdin_read"), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             -- Historical flag name; 1=legacy input, 2=checked input. Consumers
             -- outside this function only test nonzero, not the input's type.
@@ -7892,7 +7980,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             has_heap = 1
             stack = nc_stack_push(stack, nc_type_stdin_result(pool))
         else:
-            return MetaScan(nc_fail(408, 0, nc_opcode_name_for_diag(op)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            return MetaScan(nc_fail(408, line, nc_opcode_name_for_diag(op)), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
         max_stack = nc_max_i(max_stack, nc_stack_word_depth(pool, stack))
         do add(tuple_meta, tuple_entry)
@@ -7948,8 +8036,12 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     let code = fn.4
     let n = count(code)
     let heap_meta0 = new_array((int, int, int))
+    let end_line = 0
+    if n > 0 and count(fn.6) == n:
+        end_line = get(fn.6, n - 1)
+    end
     if n == 0 or get(code, n - 1).0 != 21:
-        return (nc_fail(416, 0, ""), FunctionMeta(0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, new_array(array(int)), new_array((int, int, int)), new_array((int, int, int)), 0, 0, heap_meta0, 0))
+        return (nc_fail(416, end_line, ""), FunctionMeta(0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, new_array(array(int)), new_array((int, int, int)), new_array((int, int, int)), 0, 0, heap_meta0, 0))
     end
     if count(fn.5) != n:
         return (nc_fail(439, 0, ""), FunctionMeta(0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, new_array(array(int)), new_array((int, int, int)), new_array((int, int, int)), 0, 0, heap_meta0, 0))
@@ -7966,7 +8058,7 @@ func nc_build_one_meta(pool, prog, sig, fn_idx):
     let back_targets = nc_meta_back_targets(code, 0, n, new_array(int))
     let tops = new_array((int, array(int), array(array(int))))
     let flow = (incoming, true, layout_types, back_targets, tops)
-    let p = nc_meta_process_loop(pool, funcs, sig, fn_idx, prog.2, count(prog.1), code, fn.5, 0, n, new_array(int), local_types, stacks, tuple_meta, call_meta, 0, 0, 0, heap_meta0, 0, flow)
+    let p = nc_meta_process_loop(pool, funcs, sig, fn_idx, prog.2, count(prog.1), code, fn.5, fn.6, 0, n, new_array(int), local_types, stacks, tuple_meta, call_meta, 0, 0, 0, heap_meta0, 0, flow)
     if p.status != 0:
         return (p.status, FunctionMeta(0, 0, 0, new_array(int), new_array(int), 0, 0, 0, 0, stacks, tuple_meta, call_meta, 0, 0, p.heap_meta, p.has_heap))
     end

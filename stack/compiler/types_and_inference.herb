@@ -133,6 +133,12 @@ func nc_diag_msg(code, payload):
     if code == 448:
         return "native-subset: a record construction is not a statement"
     end
+    if code == 405:
+        return diagnostic_with_payload("native-subset: nesting deeper than the compiler's limit of ", payload, " levels")
+    end
+    if code == 406:
+        return diagnostic_with_payload("native-subset: function '", payload, "' may not return a value")
+    end
     -- Kernel-route codes carry their own text, which names the route and the rule.
     if code > 442 and length(payload) > 0:
         return diagnostic_with_payload("native-subset: ", payload, "")
@@ -1383,7 +1389,7 @@ func nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx):
     return nc_poly_call_target_find_loop(targets, caller_inst_idx, call_node_idx, 0, count(targets))
 end
 
-func nc_poly_record_call_target(pool, poly, caller_inst_idx, call_node_idx, callee_inst_idx):
+func nc_poly_record_call_target(pool, poly, caller_inst_idx, call_node_idx, callee_inst_idx, call_line):
     let targets = poly.1
     let existing = nc_poly_call_target_find(targets, caller_inst_idx, call_node_idx)
     if existing == 0 - 1:
@@ -1392,7 +1398,7 @@ func nc_poly_record_call_target(pool, poly, caller_inst_idx, call_node_idx, call
     end
     let old = get(targets, existing)
     if old.2 != callee_inst_idx:
-        return nc_infer_fail(pool, 430, 0, "")
+        return nc_infer_fail(pool, 430, call_line, "")
     end
     return 0
 end
@@ -1407,7 +1413,7 @@ func nc_poly_lowered_call_target(pool, poly, caller_inst_idx, call_node_idx, cal
         -- attempt's retained diagnostic instead, whatever local the call
         -- concerns; that diagnostic need not describe this call.
         if nc_retry_used(pool):
-            return nc_retry_diag_fail(pool, 430, 0, "")
+            return nc_retry_diag_fail(pool, 430, call_line, "")
         end
         return nc_fail(424, call_line, "")
     end
@@ -2115,7 +2121,7 @@ func nc_poly_constrain_user_call(pool, nodes, prog_idx, call_idx, env, want, sig
     if gi.0 != 0:
         return (gi.0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
     end
-    let rec = nc_poly_record_call_target(pool, funcs, fn_idx, call_idx, gi.1)
+    let rec = nc_poly_record_call_target(pool, funcs, fn_idx, call_idx, gi.1, node.3)
     if rec != 0:
         return (rec, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
     end
@@ -2155,7 +2161,7 @@ func nc_poly_infer_user_call(pool, nodes, prog_idx, call_idx, env, sig, fn_idx, 
     if gi.0 != 0:
         return (gi.0, 0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
     end
-    let rec = nc_poly_record_call_target(pool, funcs, fn_idx, call_idx, gi.1)
+    let rec = nc_poly_record_call_target(pool, funcs, fn_idx, call_idx, gi.1, node.3)
     if rec != 0:
         return (rec, 0, ar.2, gi.2, nc_or_changed(ar.4, gi.3))
     end
@@ -3053,6 +3059,15 @@ func nc_poly_infer_instance(pool, nodes, prog_idx, funcs, inst_idx, sig):
     do get(fn_node.1, 0)
     let params_node = get(nodes, get(fn_node.2, 0))
     let body_node = get(nodes, get(fn_node.2, 1))
+    -- A body that no return or exhaustive returning if terminates falls off
+    -- its end. Lowering uses the same predicate (body_ends_return), which is
+    -- what the metadata scan later reports as ERR 415/416 with no line, or
+    -- inference as an unconstrained signature (ERR 424) at the wrong function.
+    -- This is structural, not a speculative type conflict, so it reports
+    -- directly: a retained diagnostic from a retry must not replace it.
+    if not body_ends_return(get(fn_node.2, 1), nodes):
+        return (nc_fail(406, fn_node.3, get(fn_node.1, 0)), sig, 0)
+    end
     let input_scope = nc_check_input_scope(pool, nodes, fn_node)
     if input_scope != 0:
         return (input_scope, sig, 0)
@@ -3292,6 +3307,73 @@ func nc_poly_note_field(poly, inst, node, field_index, field_count, decl_idx):
     return 0
 end
 
+-- Nesting limit (ERR 405). Inference recurses through nc_infer_expr and
+-- nc_constrain_expr, about 2.8 KB of stack per expression level, and through
+-- nc_infer_stmt and nc_infer_body, about 3.2 KB per if or while level, so the
+-- default 8 MiB stack dies near 2,980 nested terms (2,650 nested ifs) with a
+-- bare SIGSEGV. Refuse deeper programs here, before inference, with a located
+-- diagnostic. A bare name or literal is level 1, and each node that opens a
+-- recursion level above it (an operator, call, projection, tuple, record
+-- construction, if or while) adds one; arms, bodies and the statements that
+-- wrap one expression add nothing. A flat sum of 2,000 terms is level 2,000
+-- and compiles; 2,001 terms, or 2,000 ifs around a bare condition, is level
+-- 2,001 and is refused. Every node's kids precede it in the pool, so one
+-- forward pass computes every level; the first node past the limit names the
+-- line. The limit assumes the 8 MiB default stack.
+func nc_depth_limit():
+    return 2000
+end
+
+func nc_depth_node_cost(tag):
+    if equal(tag, "add") or equal(tag, "sub") or equal(tag, "mul") or equal(tag, "div") or equal(tag, "mod"):
+        return 1
+    end
+    if equal(tag, "band") or equal(tag, "bor") or equal(tag, "bxor") or equal(tag, "shl") or equal(tag, "shr") or equal(tag, "bnot"):
+        return 1
+    end
+    if equal(tag, "eq") or equal(tag, "ne") or equal(tag, "lt") or equal(tag, "le") or equal(tag, "gt") or equal(tag, "ge"):
+        return 1
+    end
+    if equal(tag, "and") or equal(tag, "or") or equal(tag, "not") or equal(tag, "dot") or equal(tag, "tuple") or equal(tag, "record-new") or equal(tag, "call"):
+        return 1
+    end
+    if equal(tag, "if") or equal(tag, "while"):
+        return 1
+    end
+    if equal(tag, "name") or equal(tag, "int") or equal(tag, "str") or equal(tag, "char") or equal(tag, "bool"):
+        return 1
+    end
+    return 0
+end
+
+func nc_node_depth_kids(depth, kids, i, n, acc):
+    while i < n:
+        let d = get(depth, get(kids, i))
+        if d > acc:
+            acc = d
+        end
+        i = i + 1
+    end
+    return acc
+end
+
+func nc_depth_check_loop(nodes, i, n, depth, limit):
+    while i < n:
+        let node = get(nodes, i)
+        let d = nc_node_depth_kids(depth, node.2, 0, count(node.2), 0) + nc_depth_node_cost(node.0)
+        if d > limit:
+            return nc_fail(405, node.3, int_to_str(limit))
+        end
+        do add(depth, d)
+        i = i + 1
+    end
+    return 0
+end
+
+func nc_depth_check(nodes):
+    return nc_depth_check_loop(nodes, 0, count(nodes), new_array(int), nc_depth_limit())
+end
+
 func nc_verify_ast(nodes, prog_idx, pool):
     -- Reachability-independent class-mix rejection (matches C: a syntactic error in
     -- ANY function, reachable or not). This runs FIRST -- before the function-table
@@ -3307,6 +3389,12 @@ func nc_verify_ast(nodes, prog_idx, pool):
         let mix_instances = new_array((int, array(int), int, int, int, int))
         let mix_targets = new_array((int, int, int))
         return (nc_fail(442, mix_line, ""), nc_sig_init(nodes, prog_idx), (mix_instances, mix_targets, new_array((int, int)), new_array((int, int, int, int, int))))
+    end
+    let deep = nc_depth_check(nodes)
+    if deep != 0:
+        let deep_instances = new_array((int, array(int), int, int, int, int))
+        let deep_targets = new_array((int, int, int))
+        return (deep, nc_sig_init(nodes, prog_idx), (deep_instances, deep_targets, new_array((int, int)), new_array((int, int, int, int, int))))
     end
     let tbl = nc_table_check(nodes, prog_idx)
     if tbl != 0:

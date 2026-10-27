@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Stack-headroom guard for the committed seed.
 
-The compiler recurses once per expression node; at the default 8 MiB stack the
-largest flat sum it survives is about 2,981 terms (cold audit 2026-10-26,
-size-headroom). Nothing in the suite pins that. This check compiles generated
-programs with an explicit 8 MiB stack and runs each image against an oracle
-computed here, so about a 35 percent loss of headroom (limit below 1,950 terms)
-goes red while ordinary noise at the edge (plus or minus one term) does not.
+The compiler's type inference recurses once per nesting level; at the default
+8 MiB stack the deepest flat sum the compiler survived was about 2,981 terms
+(cold audit 2026-10-26, size-headroom). Since 2026-10-27 the compiler
+refuses nesting past 2,000 levels with ERR 405, and the conformance case
+nesting-flat-sum-2001-refused pins that ceiling from above. This check pins the
+headroom from below: it compiles generated programs with an explicit 8 MiB stack
+and runs each image against an oracle computed here, so about a 35 percent loss
+of headroom (limit below 1,950 terms) goes red while ordinary noise at the edge
+(plus or minus one term) does not. Nested ifs at the 2,000-level limit need more
+stack than a flat sum (6 to 7 MiB against 5 to 6); nesting-if-1999-compiles is
+the case that watches that edge.
 
 --stack-kb N   diagnostic: run with another soft stack limit (regression model).
 --compiler P   explicit candidate seed (default: checksum-verified workspace seed).
