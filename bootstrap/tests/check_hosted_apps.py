@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import shlex
@@ -362,6 +363,109 @@ def rgb_at(frame, x, y):
 def region(frame, x, y, w, h):
     return b''.join(frame['rgb'][((y+i)*frame['width']+x)*3:((y+i)*frame['width']+x+w)*3]
                     for i in range(h))
+
+
+# The status rows read back as text. Notes draws them with pixel_text, one 5x7 bitmap per byte in a 6-pixel
+# cell (lib/pixel_text.herb). glyphs() reads that table from the font source itself: every printable ASCII
+# character has its own bitmap, and anything else draws one fallback box, read here as U+FFFD. No two share a
+# bitmap, so a cell reads back to exactly one character.
+NOTES_BACKGROUND = 1054759          # behind the status rows (notes_draw)
+AMBER, GREY = 16173151, 11255503    # a warning's ink, and every other status ink (notes_status)
+_glyphs = {}
+
+
+def glyphs():
+    if not _glyphs:
+        font = (ROOT/'lib/pixel_text.herb').read_text()
+        pairs = re.findall(r'if ch == (\d+): return "([01]{35})" end', font)
+        fallback = re.findall(r'\n    return "([01]{35})"\nend', font)
+        assert sorted(int(ch) for ch, _ in pairs) == list(range(32, 127)) and len(fallback) == 1, 'font table shape'
+        table = {bits: chr(int(ch)) for ch, bits in pairs}
+        table.setdefault(fallback[0], '�')
+        assert len(table) == 96, 'two glyphs share one bitmap'
+        _glyphs.update(table)
+    return _glyphs
+
+
+def decoded(frame, x, y, cells):
+    """pixel_text read back: the characters in `cells` cells from (x, y), trailing blanks dropped, and the set
+    of ink colours. A cell that matches no glyph, or has ink in its gap column, reads as NUL: misplaced or
+    overlapping text never reads as text."""
+    table, width, rgb = glyphs(), frame['width'], frame['rgb']
+    text, inks = [], set()
+    for cell in range(cells):
+        bits, stray = [], False
+        for row in range(7):
+            at = ((y + row) * width + x + cell * 6) * 3
+            for col in range(6):
+                colour = int.from_bytes(rgb[at + col * 3:at + col * 3 + 3], 'big')
+                if colour != NOTES_BACKGROUND:
+                    inks.add(colour)
+                    stray = stray or col == 5
+                if col < 5:
+                    bits.append('0' if colour == NOTES_BACKGROUND else '1')
+        text.append('\0' if stray else table.get(''.join(bits), '\0'))
+    return ''.join(text).rstrip(' '), inks
+
+
+def status_text(frame, y=560):
+    """A status row's text from x=28, as far as the 130 characters that fit before x=808, and its inks."""
+    return decoded(frame, 28, y, 130)
+
+
+# The sentences N1 reads back by their exact text (examples/notes.herb notes_status).
+READY = 'Ready. UTF-8 text; original bytes and newline style are preserved.'
+SAVED = 'Saved. File and containing directory synced.'
+EDITED = 'Edited. Ctrl+S saves this document.'
+# On a read-only document the sentence after an edit, the close prompt, the help row under it and Ctrl+O's refusal
+# say that Ctrl+Shift+S saves a copy where they would say that Ctrl+S saves (the key list, LEGEND, is unchanged).
+EDITED_READ_ONLY = 'Edited. This file is read-only; Ctrl+Shift+S saves a copy.'
+OPEN_REFUSED = 'Unsaved edits. Ctrl+S saves (or Ctrl+Shift+S rescues) before Ctrl+O opens another file.'
+OPEN_REFUSED_READ_ONLY = ('Unsaved edits to a read-only file. Ctrl+Shift+S saves a copy; '
+                          'Ctrl+O opens another file after Ctrl+S saves.')
+WRITTEN_UNCONFIRMED = 'Written; sync/verification failed. Ctrl+S retries; Ctrl+Shift+S rescues.'
+MATCHED = 'Match. F3 next | Shift+F3 previous | Ctrl+F new search'
+SEARCHING = 'Type a case-sensitive search. Enter next | Shift+Enter previous | Esc done'
+SAVE_FAILED = 'Save failed; no replacement this attempt. Ctrl+Shift+S saves a rescue copy.'
+RESCUE_FAILED = 'Rescue failed; no copy published this attempt. Your edits remain here.'
+READ_ONLY = ('Not saved: this file is read-only. Make it writable and press Ctrl+S again, '
+             'or Ctrl+Shift+S to save a copy beside it.')
+CHANGED = ('Not saved: another program changed this file or its permissions since it was opened. '
+           'Ctrl+Shift+S saves a copy beside it.')
+NO_PERMISSION = ('Not saved: no permission to write in this folder, or the file belongs to another account. '
+                 'Fix it, then Ctrl+S.')
+GONE = 'Not saved: the file was deleted or moved since it was opened. Ctrl+Shift+S saves a copy beside it.'
+RESCUE_NO_PERMISSION = 'Rescue failed: no permission to write in this folder. Fix the folder, then Ctrl+Shift+S again.'
+# While the close prompt is pending, each refusal is said shorter (the general rescue failure is short already) and
+# followed by the instruction of the prompt's form that is up, in its own words: KEPT when the recovery copy is current, UNCONFIRMED when a save of an
+# unedited document was unconfirmed and no recovery copy exists, DISCARDS otherwise.
+PENDING = {SAVE_FAILED: 'Save failed; nothing replaced. Ctrl+Shift+S saves a rescue copy.',
+           RESCUE_FAILED: RESCUE_FAILED,
+           READ_ONLY: 'Not saved: read-only. Make it writable, or Ctrl+Shift+S saves a copy.',
+           CHANGED: 'Not saved: the file or its permissions changed. Ctrl+Shift+S saves a copy.',
+           NO_PERMISSION: 'Not saved: no permission in this folder, or the file is not yours.',
+           GONE: 'Not saved: the file was deleted or moved. Ctrl+Shift+S saves a copy.',
+           RESCUE_NO_PERMISSION: 'Rescue failed: no permission to write in this folder.'}
+KEPT = ' Close pending: Y closes (recovery kept); Esc returns.'
+DISCARDS = ' Close pending: Y discards edits; Esc returns.'
+UNCONFIRMED = ' Close pending: Y closes; NO recovery copy; Esc returns.'
+PROMPT_KEPT = 'Unsaved: Y closes (recovery kept). Esc returns. Ctrl+S saves. Ctrl+Shift+S rescues.'
+PROMPT_INCOMPLETE = 'Unsaved: Y discards edits; latest recovery INCOMPLETE. Esc returns | Ctrl+S saves.'
+PROMPT_UNCONFIRMED = 'Save unconfirmed: Y closes; NO recovery copy. Esc returns | Ctrl+S retries.'
+PROMPT_KEPT_READ_ONLY = 'Unsaved: Y closes (recovery kept). Esc returns. Ctrl+Shift+S saves a copy.'
+PROMPT_INCOMPLETE_READ_ONLY = 'Unsaved: Y discards edits; latest recovery INCOMPLETE. Esc returns | Ctrl+Shift+S saves a copy.'
+PROMPT_UNCONFIRMED_READ_ONLY = 'Save unconfirmed: Y closes; NO recovery copy. Esc returns | Ctrl+Shift+S saves a copy.'
+# The key list on the help row (y=580) when no prompt is up, and under the close prompt of a writable document.
+LEGEND = ('Ctrl+S save | Ctrl+O open | Ctrl+G line | Ctrl+X/C/V cut, copy, paste | Ctrl+Z/Y undo, redo | Ctrl+F find | '
+          'Ctrl+Shift+U Unicode | Ctrl+Q close')
+# The help row under a pending close after any other message replaced the prompt: the prompt's form, then what
+# Ctrl+S does. On a read-only document (read_only_help) it ends with Ctrl+Shift+S's copy, and it is shown under
+# the prompt itself as well, from the moment the prompt opens, where LEGEND would say that Ctrl+S saves.
+HELP_KEPT = 'Close pending: Y closes (recovery kept) | Esc returns | Ctrl+S saves'
+HELP_DISCARDS = 'Close pending: Y discards edits | Esc returns | Ctrl+S saves'
+HELP_UNCONFIRMED = 'Close pending: Y closes; NO recovery copy | Esc returns | Ctrl+S retries'
+def read_only_help(help_row):
+    return help_row.rsplit(' | ', 1)[0] + ' | Ctrl+Shift+S saves a copy'
 
 
 def stable_memory(samples, label):
@@ -1242,6 +1346,9 @@ def notes_selection_checks(args, x, display, evidence, passed):
     with application(args.notes, big, b'Herbert - Notes', (900,600), x, display, d, 'selection-big') as app:
         # Replacing 60,002 bytes with 60,001 needs both in history: one undo step.
         app.tap('a','Control_L'); app.tap('c','Control_L'); app.tap('End','Control_L'); app.type('!')
+        # Saved first, so the file no longer holds content: the paste's saved() below cannot pass on the
+        # setup's bytes before the paste's own save lands.
+        saved(big, content + b'!', 'the mark typed before the paste saved')
         app.tap('a','Control_L'); app.tap('v','Control_L')
         saved(big, content, 'whole-document paste over a whole-document selection')
         app.tap('z','Control_L'); saved(big, content + b'!', 'one undo restores the replaced document')
@@ -1656,6 +1763,549 @@ def notes_navigation_checks(args, x, display, evidence, passed):
            samples=samples)
 
 
+def notes_read_only_checks(args, x, display, evidence, passed):
+    d = evidence/'read-only'; d.mkdir()
+    def message():
+        return status_text(app.frame())
+    def marked():
+        # The status line says read-only beside Saved/UNSAVED.
+        return decoded(app.frame(), 734, 542, 11)[0]
+    def rescue():
+        app.key('Control_L', True); app.tap('s','Shift_L'); app.key('Control_L', False)
+    # The owner write bit decides: 0464 is read-only though its group may write.
+    for mode in (0o444, 0o400, 0o464):
+        doc = d/('protected-%o.txt' % mode); doc.write_bytes(b'protected\n'); doc.chmod(mode)
+        before = doc.stat()
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'read-only-%o' % mode) as app:
+            wait_for(lambda: marked()=='read-only |', 'a read-only file is marked read-only when it opens')
+            app.type('zz')
+            wait_for(lambda: message()==(EDITED_READ_ONLY, {GREY}), 'an edit to a read-only file points at Ctrl+Shift+S')
+            app.tap('s','Control_L')
+            wait_for(lambda: message()==(READ_ONLY, {AMBER}), 'Ctrl+S on a read-only file refuses with its sentence')
+            after = doc.stat()
+            assert doc.read_bytes()==b'protected\n', 'the refused file changed'
+            assert (after.st_ino, after.st_mode, after.st_mtime_ns)==(before.st_ino, before.st_mode, before.st_mtime_ns)
+            app.tap('o','Control_L')
+            wait_for(lambda: message()==(OPEN_REFUSED_READ_ONLY, {AMBER}), 'Ctrl+O with edits to a read-only file')
+            copies = set(d.glob('herbert-rescue-*.txt'))
+            rescue()
+            wait_for(lambda: len(set(d.glob('herbert-rescue-*.txt'))-copies)==1, 'Ctrl+Shift+S saves a copy beside a read-only file')
+            copy = (set(d.glob('herbert-rescue-*.txt'))-copies).pop()
+            assert copy.read_bytes()==b'zzprotected\n' and copy.stat().st_mode & 0o777 == 0o600, 'the copy holds the edits, private'
+            assert marked()=='read-only |', 'read-only stays shown while the file is open'
+            app.tap('q','Control_L'); app.tap('y'); app.finish()
+        assert doc.read_bytes()==b'protected\n' and doc.stat().st_ino==before.st_ino, 'closing changed the read-only file'
+    plain = d/'plain.txt'; plain.write_bytes(b'plain\n'); plain.chmod(0o644)
+    inode = plain.stat().st_ino
+    fresh = d/'fresh.txt'
+    with application(args.notes, plain, b'Herbert - Notes', (900,600), x, display, d, 'read-write') as app:
+        wait_for(lambda: message()==(READY, {GREY}), 'a writable file opens with the ready sentence')
+        assert marked()=='', 'a writable file is marked read-only'
+        app.type('zz')
+        wait_for(lambda: message()==(EDITED, {GREY}), 'an edit to a writable file points at Ctrl+S')
+        app.tap('o','Control_L')
+        wait_for(lambda: message()==(OPEN_REFUSED, {AMBER}), 'Ctrl+O with edits to a writable file, as before')
+        app.tap('s','Control_L')
+        wait_for(lambda: plain.read_bytes()==b'zzplain\n' and message()==(SAVED, {GREY}), 'a 0644 file saves')
+        assert plain.stat().st_ino!=inode and plain.stat().st_mode & 0o777 == 0o644 and marked()==''
+        # Opened later, a read-only file is marked while it is open, and only then.
+        app.tap('o','Control_L'); app.type('protected-444.txt'); app.tap('Return')
+        wait_for(lambda: marked()=='read-only |', 'Ctrl+O of a read-only file marks it')
+        app.tap('o','Control_L'); app.type('fresh.txt'); app.tap('Return')
+        wait_for(lambda: message()==('New file. It is created when you save with Ctrl+S.', {GREY}), 'a new name opens')
+        assert marked()=='', 'a new document is marked read-only'
+        app.type('n'); app.tap('s','Control_L')
+        wait_for(lambda: fresh.exists() and fresh.read_bytes()==b'n' and message()==(SAVED, {GREY}), 'the new document saves')
+        assert fresh.stat().st_mode & 0o777 == 0o600 and marked()==''
+        app.tap('Escape'); app.finish()
+    passed('notes-read-only-0444-0400-0464-refused-untouched-marked-edit-and-open-point-at-the-copy-rescue-private-'
+           '0644-and-new-file-unmarked-save')
+
+
+def notes_permission_change_checks(args, x, display, evidence, passed):
+    # Gulpin's ruling: the way to overwrite a read-only file is to change the permission and save again. Each
+    # Ctrl+S reads the file's state again, except after a save whose check after the rename failed (lead ruling 21:
+    # there it reads nothing, and file_save's recovery refuses a permission changed since). A change of permission
+    # alone is taken as it is, and with it any change a stat cannot show (lead ruling 19's limit: the same size
+    # rewritten with the modification time put back); any other change is refused. A file recorded read-only is
+    # refused as read-only only when Ctrl+S found nothing else wrong (0 or 116); a file gone, a second hard link, a
+    # folder or FIFO put at its name, a folder that cannot be searched get that result's own sentence, read-only or
+    # not (lead ruling 28). Nothing is written.
+    d = evidence/'permission-change'; d.mkdir()
+    def message():
+        return status_text(app.frame())
+    def number():
+        return decoded(app.frame(), 830, 560, 3)
+    def marked():
+        return decoded(app.frame(), 734, 542, 11)[0]
+    def untouched(doc, before, content):
+        after = doc.stat()
+        assert doc.read_bytes()==content and (after.st_ino, after.st_mtime_ns)==(before.st_ino, before.st_mtime_ns), 'a refused save changed the file'
+    doc = d/'made-writable.txt'; doc.write_bytes(b'locked\n'); doc.chmod(0o444); before = doc.stat()
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'made-writable') as app:
+        app.type('zz'); app.tap('s','Control_L')
+        wait_for(lambda: message()==(READ_ONLY, {AMBER}), 'a read-only file refuses Ctrl+S')
+        doc.chmod(0o644)
+        assert marked()=='read-only |', 'the mark shows the state at open until the next Ctrl+S'
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes()==b'zzlocked\n' and message()==(SAVED, {GREY}), 'made writable, Ctrl+S again saves')
+        assert doc.stat().st_ino!=before.st_ino and doc.stat().st_mode & 0o777 == 0o644 and marked()=='', 'saved with the new permission, unmarked'
+        app.tap('Escape'); app.finish()
+    doc = d/'made-read-only.txt'; doc.write_bytes(b'open\n'); doc.chmod(0o644)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'made-read-only') as app:
+        app.type('zz'); doc.chmod(0o444); before = doc.stat()
+        assert marked()=='', 'the mark shows the state at open until the next Ctrl+S'
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(READ_ONLY, {AMBER}), 'made read-only while open, Ctrl+S refuses as read-only')
+        assert marked()=='read-only |', 'the refusal marks the file read-only'
+        untouched(doc, before, b'open\n')
+        doc.chmod(0o600)
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes()==b'zzopen\n' and message()==(SAVED, {GREY}), 'made writable again, Ctrl+S saves')
+        assert doc.stat().st_mode & 0o777 == 0o600 and marked()=='', 'the replacement keeps the permission it was given'
+        app.tap('Escape'); app.finish()
+    doc = d/'edited-and-locked.txt'; doc.write_bytes(b'mine\n'); doc.chmod(0o644)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'edited-and-locked') as app:
+        app.type('zz'); doc.write_bytes(b'other program\n'); doc.chmod(0o444); before = doc.stat()
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(READ_ONLY, {AMBER}), 'an outside edit that also removed the write bit: read-only first')
+        doc.chmod(0o644)
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(CHANGED, {AMBER}) and marked()=='', 'made writable, the outside edit is still refused')
+        untouched(doc, before, b'other program\n')
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    doc = d/'deleted.txt'; doc.write_bytes(b'gone\n'); doc.chmod(0o444)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'read-only-deleted') as app:
+        # Recorded read-only, a file gone still gets its own sentence: "make it writable" cannot be done (lead ruling 28).
+        app.type('zz'); doc.unlink(); app.tap('s','Control_L')
+        wait_for(lambda: message()==(GONE, {AMBER}), 'a read-only file deleted while open gives the deleted-or-moved sentence')
+        assert not doc.exists(), 'a refused save recreated the deleted file'
+        assert marked()=='read-only |', 'a file gone keeps the mark it had'
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    doc = d/'swapped.txt'; doc.write_bytes(b'swap\n'); doc.chmod(0o444); other = d/'other.txt'; other.write_bytes(b'other\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'read-only-symlink-swap') as app:
+        app.type('zz'); doc.unlink(); doc.symlink_to('other.txt'); app.tap('s','Control_L')
+        wait_for(lambda: message()==(SAVE_FAILED, {AMBER}) and number()==('40', {AMBER}),
+                 'a read-only file swapped for a symlink keeps the generic sentence and its number')
+        assert other.read_bytes()==b'other\n' and doc.is_symlink()
+        assert marked()=='', 'the mark follows the status the refusal read: a symbolic link, writable'
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    # The mark follows the last status Ctrl+S could read, also when it then refuses the file for something else:
+    # a second hard link (31) that came with a permission change, in both directions, each refused with the link's
+    # own sentence and its number, read-only or not (lead ruling 28). Nothing is written.
+    doc = d/'linked-made-writable.txt'; doc.write_bytes(b'linked\n'); doc.chmod(0o444); second = d/'second-name.txt'
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'linked-made-writable') as app:
+        wait_for(lambda: marked()=='read-only |', 'a read-only file is marked when it opens')
+        app.type('zz'); os.link(doc, second); doc.chmod(0o644); before = doc.stat()
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(SAVE_FAILED, {AMBER}) and number()==('31', {AMBER}),
+                 'a second hard link keeps the generic sentence and its number')
+        assert marked()=='', 'made writable with a second link: the mark follows the status the refusal read'
+        untouched(doc, before, b'linked\n')
+        second.unlink()
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes()==b'zzlinked\n' and message()==(SAVED, {GREY}), 'the second link gone, Ctrl+S saves')
+        assert doc.stat().st_mode & 0o777 == 0o644 and marked()==''
+        app.tap('Escape'); app.finish()
+    doc = d/'linked-made-read-only.txt'; doc.write_bytes(b'linked\n'); doc.chmod(0o644); second = d/'second-name-2.txt'
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'linked-made-read-only') as app:
+        app.type('zz'); os.link(doc, second); doc.chmod(0o444); before = doc.stat()
+        assert marked()=='', 'the mark shows the state at open until the next Ctrl+S'
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(SAVE_FAILED, {AMBER}) and number()==('31', {AMBER}),
+                 'made read-only with a second link: the link\'s generic sentence and its number')
+        assert marked()=='read-only |', 'made read-only with a second link: the mark follows the status the refusal read'
+        untouched(doc, before, b'linked\n')
+        app.tap('q','Control_L')
+        wait_for(lambda: message()==(PROMPT_KEPT_READ_ONLY, {AMBER})
+                 and decoded(app.frame(), 28, 580, 145)[0]==read_only_help(HELP_KEPT),
+                 'the close prompt of a file now read-only offers the copy, not Ctrl+S')
+        app.tap('y'); app.finish()
+    untouched(doc, before, b'linked\n')
+    # Opened read-only, a Ctrl+S that finds something else wrong says what it found, not "make it writable" (lead
+    # ruling 28), and the mark follows the last status it could read (lead ruling 22): a second hard link (31), a
+    # 0555 folder or a 0444 FIFO put at the name (22, marked from what the stat found), the folder made unsearchable
+    # (47, the mark kept). Nothing is written, and the folder or FIFO is left as it was.
+    doc = d/'read-only-linked.txt'; doc.write_bytes(b'linked\n'); doc.chmod(0o444); second = d/'second-name-3.txt'
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'read-only-linked') as app:
+        wait_for(lambda: marked()=='read-only |', 'a read-only file is marked when it opens')
+        app.type('zz'); os.link(doc, second); before = doc.stat()
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(SAVE_FAILED, {AMBER}) and number()==('31', {AMBER}),
+                 'a read-only file given a second hard link: the link\'s generic sentence and its number')
+        assert marked()=='read-only |', 'a second hard link: the mark follows the status the refusal read'
+        untouched(doc, before, b'linked\n')
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    untouched(doc, before, b'linked\n')
+    for kind in ('folder', 'fifo'):
+        doc = d/('read-only-%s-at-name.txt' % kind); doc.write_bytes(b'plain\n'); doc.chmod(0o444)
+        try:
+            with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'read-only-%s-at-name' % kind) as app:
+                wait_for(lambda: marked()=='read-only |', 'a read-only file is marked when it opens')
+                app.type('zz'); doc.unlink()
+                if kind == 'folder':
+                    doc.mkdir(); doc.chmod(0o555)
+                else:
+                    os.mkfifo(doc); doc.chmod(0o444)
+                app.tap('s','Control_L')
+                wait_for(lambda: message()==(SAVE_FAILED, {AMBER}) and number()==('22', {AMBER}),
+                         'a %s put at a read-only file\'s name: the generic sentence and its number' % kind)
+                assert marked()=='read-only |', 'a 0555 folder or a 0444 FIFO: the mark follows the status the refusal read'
+                app.tap('q','Control_L'); app.tap('y'); app.finish()
+            if kind == 'folder':
+                assert doc.is_dir() and not any(doc.iterdir()), 'a refused save wrote into the folder at the name'
+            else:
+                assert doc.is_fifo(), 'a refused save replaced the FIFO at the name'
+            assert not list(d.glob('.herbert-save-*.tmp')), 'a refused save left a temporary file'
+        finally:
+            if doc.is_dir(): doc.chmod(0o755)
+    shut = d/'unsearchable'; shut.mkdir(); doc = shut/'f.txt'; doc.write_bytes(b'locked\n'); doc.chmod(0o444); before = doc.stat()
+    try:
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'read-only-unsearchable') as app:
+            wait_for(lambda: marked()=='read-only |', 'a read-only file is marked when it opens')
+            app.type('zz'); wait_for(lambda: any(shut.glob('.herbert-notes-*/recovery.txt')), 'the first edit made its recovery copy')
+            shut.chmod(0o600); app.tap('s','Control_L')
+            wait_for(lambda: message()==(NO_PERMISSION, {AMBER}),
+                     'a read-only file whose folder cannot be searched: the no-permission sentence')
+            assert marked()=='read-only |', 'a status that could not be read keeps the mark it had'
+            shut.chmod(0o755); app.tap('s','Control_L')
+            wait_for(lambda: message()==(READ_ONLY, {AMBER}), 'the folder searchable again, Ctrl+S refuses as read-only')
+            app.tap('q','Control_L'); app.tap('y'); app.finish()
+    finally:
+        shut.chmod(0o755)
+    untouched(doc, before, b'locked\n')
+    passed('notes-permission-changed-while-open-made-writable-saves-made-read-only-refused-outside-edit-still-refused-'
+           'deleted-and-symlinked-read-only-gone-linked-replaced-or-unsearchable-keep-their-own-sentence')
+
+
+def notes_save_reason_checks(args, x, display, evidence, passed):
+    d = evidence/'save-reasons'; d.mkdir()
+    def message():
+        return status_text(app.frame())
+    def number():
+        # Every other code keeps its sentence and its number, drawn at x=830.
+        return decoded(app.frame(), 830, 560, 3)
+    def rescue():
+        app.key('Control_L', True); app.tap('s','Shift_L'); app.key('Control_L', False)
+    doc = d/'outside.txt'; doc.write_bytes(b'mine\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'outside-edit') as app:
+        app.type('zz'); doc.write_bytes(b'other program\n'); app.tap('s','Control_L')
+        wait_for(lambda: message()==(CHANGED, {AMBER}), 'an outside edit gives the changed-since-opened sentence')
+        assert doc.read_bytes()==b'other program\n'
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    doc = d/'chmod.txt'; doc.write_bytes(b'mode\n'); doc.chmod(0o644)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'chmod-undone') as app:
+        # A permission changed and changed back leaves only the change time moved: not a permission change to
+        # take, so it is refused as a change by another program, a sentence that names permissions.
+        app.type('zz'); doc.chmod(0o600); doc.chmod(0o644); inode = doc.stat().st_ino; app.tap('s','Control_L')
+        wait_for(lambda: message()==(CHANGED, {AMBER}), 'a chmod undone after opening gives the changed sentence')
+        assert doc.read_bytes()==b'mode\n' and doc.stat().st_ino==inode
+        assert decoded(app.frame(), 734, 542, 11)[0]=='', 'a writable file is not marked read-only'
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    locked = d/'locked'; locked.mkdir(); doc = locked/'f.txt'; doc.write_bytes(b'locked\n'); locked.chmod(0o555)
+    try:
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'locked-folder') as app:
+            app.type('zz'); app.tap('s','Control_L')
+            wait_for(lambda: message()==(NO_PERMISSION, {AMBER}), 'a save in a 0555 folder gives the no-permission sentence')
+            rescue()
+            wait_for(lambda: message()==(RESCUE_NO_PERMISSION, {AMBER}), 'a rescue there says so in its own words')
+            assert doc.read_bytes()==b'locked\n' and [p.name for p in locked.iterdir()]==['f.txt']
+            app.tap('q','Control_L'); app.tap('y'); app.finish()
+    finally:
+        locked.chmod(0o755)
+    doc = d/'gone.txt'; doc.write_bytes(b'gone\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'deleted') as app:
+        app.type('zz'); doc.unlink(); app.tap('s','Control_L')
+        wait_for(lambda: message()==(GONE, {AMBER}), 'a deleted file gives the deleted-or-moved sentence')
+        assert not doc.exists(), 'a refused save recreated the deleted file'
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    doc = d/'empty.txt'; doc.write_bytes(b'')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'deleted-empty') as app:
+        # An empty file was on disk too: "deleted or moved" is said by whether it existed, not by its size.
+        app.type('n'); doc.unlink(); app.tap('s','Control_L')
+        wait_for(lambda: message()==(GONE, {AMBER}), 'a deleted empty file gives the deleted-or-moved sentence')
+        assert not doc.exists(), 'a refused save recreated the deleted file'
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    folder = d/'new-folder'; folder.mkdir(); doc = folder/'new.txt'
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'new-document-folder-removed') as app:
+        # A new document was never on disk, so "deleted or moved" would be false: its 2 keeps the generic sentence.
+        app.type('n'); wait_for(lambda: any(folder.glob('.herbert-notes-*')), 'the first edit made its recovery folder')
+        shutil.rmtree(folder); app.tap('s','Control_L')
+        wait_for(lambda: message()==(SAVE_FAILED, {AMBER}) and number()==('2', {AMBER}),
+                 'a new document whose folder was removed keeps the generic sentence and its number')
+        assert not folder.exists()
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    doc = d/'swap.txt'; doc.write_bytes(b'swap\n'); other = d/'other.txt'; other.write_bytes(b'other\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'symlink-swap') as app:
+        app.type('zz'); doc.unlink(); doc.symlink_to('other.txt'); app.tap('s','Control_L')
+        wait_for(lambda: message()==(SAVE_FAILED, {AMBER}) and number()==('40', {AMBER}),
+                 'a symlink swap keeps the generic sentence and its number')
+        assert other.read_bytes()==b'other\n' and doc.is_symlink()
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    doc = d/'taken.txt'; doc.write_bytes(b'taken\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'rescue-names-taken') as app:
+        for n in range(80): (d/('herbert-rescue-%d-%d.txt' % (app.p.pid, n))).write_bytes(b'')
+        app.type('zz'); rescue()
+        wait_for(lambda: message()==(RESCUE_FAILED, {AMBER}) and number()==('17', {AMBER}),
+                 'a rescue with its names taken keeps the generic sentence and its number')
+        assert doc.read_bytes()==b'taken\n'
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    passed('notes-save-refusals-say-why-outside-edit-chmod-undone-0555-folder-deleted-rescue-and-keep-the-number-for-'
+           'the-rest-a-new-document-included')
+
+
+def notes_close_prompt_refusal_checks(args, x, display, evidence, passed):
+    d = evidence/'refused-while-closing'; d.mkdir()
+    def message():
+        return status_text(app.frame())
+    def number():
+        return decoded(app.frame(), 830, 560, 3)
+    def helped():
+        return decoded(app.frame(), 28, 580, 145)[0]
+    def rescue():
+        app.key('Control_L', True); app.tap('s','Shift_L'); app.key('Control_L', False)
+    def closing(prompt, help_row=LEGEND):
+        # Row 580 under the prompt itself: the key list on a writable document, the read-only help row otherwise.
+        app.tap('q','Control_L')
+        wait_for(lambda: message()==(prompt, {AMBER}) and helped()==help_row, 'the close prompt is up')
+    def refused(sentence, suffix, help_row, what):
+        # Row 560 keeps the instruction of the prompt's form that is up; row 580 says the same, then what Ctrl+S does
+        # (on a read-only file, that Ctrl+Shift+S saves a copy).
+        wait_for(lambda: message()==(PENDING[sentence] + suffix, {AMBER}) and helped()==help_row,
+                 what + ': the prompt\'s instruction stays')
+    doc = d/'protected.txt'; doc.write_bytes(b'protected\n'); doc.chmod(0o444); inode = doc.stat().st_ino
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'read-only-closing') as app:
+        app.type('zz'); closing(PROMPT_KEPT_READ_ONLY, read_only_help(HELP_KEPT))
+        app.tap('s','Control_L'); refused(READ_ONLY, KEPT, read_only_help(HELP_KEPT), 'read-only')
+        app.tap('Escape')
+        wait_for(lambda: message()==(EDITED_READ_ONLY, {GREY}), 'Esc still returns to editing')
+        closing(PROMPT_KEPT_READ_ONLY, read_only_help(HELP_KEPT))
+        app.tap('s','Control_L'); refused(READ_ONLY, KEPT, read_only_help(HELP_KEPT), 'read-only again')
+        app.tap('y'); app.finish()
+    assert doc.read_bytes()==b'protected\n' and doc.stat().st_ino==inode, 'Y after a refusal changed the file'
+    doc = d/'outside.txt'; doc.write_bytes(b'mine\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'outside-closing') as app:
+        app.type('zz'); doc.write_bytes(b'other program\n'); closing(PROMPT_KEPT)
+        app.tap('s','Control_L'); refused(CHANGED, KEPT, HELP_KEPT, 'an outside edit')
+        app.tap('y'); app.finish()
+    assert doc.read_bytes()==b'other program\n'
+    locked = d/'locked'; locked.mkdir(); doc = locked/'f.txt'; doc.write_bytes(b'locked\n')
+    shut = locked/'shut.txt'; shut.write_bytes(b'shut\n'); shut.chmod(0o444); locked.chmod(0o555)
+    try:
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'locked-closing') as app:
+            # No recovery copy can be made in the folder, so the prompt warns that Y discards the edits.
+            app.type('zz'); closing(PROMPT_INCOMPLETE)
+            app.tap('s','Control_L'); refused(NO_PERMISSION, DISCARDS, HELP_DISCARDS, 'a 0555 folder')
+            rescue(); refused(RESCUE_NO_PERMISSION, DISCARDS, HELP_DISCARDS, 'a rescue in a 0555 folder')
+            app.tap('y'); app.finish()
+        assert doc.read_bytes()==b'locked\n'
+        with application(args.notes, shut, b'Herbert - Notes', (900,600), x, display, d, 'read-only-locked-closing') as app:
+            app.type('zz'); closing(PROMPT_INCOMPLETE_READ_ONLY, read_only_help(HELP_DISCARDS))
+            app.tap('s','Control_L'); refused(READ_ONLY, DISCARDS, read_only_help(HELP_DISCARDS), 'a read-only file in a 0555 folder')
+            app.tap('y'); app.finish()
+        assert shut.read_bytes()==b'shut\n'
+    finally:
+        locked.chmod(0o755)
+    doc = d/'gone.txt'; doc.write_bytes(b'gone\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'deleted-closing') as app:
+        app.type('zz'); doc.unlink(); closing(PROMPT_KEPT)
+        app.tap('s','Control_L'); refused(GONE, KEPT, HELP_KEPT, 'a deleted file')
+        app.tap('y'); app.finish()
+    assert not doc.exists()
+    doc = d/'swap.txt'; doc.write_bytes(b'swap\n'); other = d/'other.txt'; other.write_bytes(b'other\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'symlink-closing') as app:
+        app.type('zz'); doc.unlink(); doc.symlink_to('other.txt'); closing(PROMPT_KEPT)
+        app.tap('s','Control_L'); refused(SAVE_FAILED, KEPT, HELP_KEPT, 'a symlink swap')
+        assert number()==('40', {AMBER}), 'the generic sentence keeps its number while closing'
+        app.tap('y'); app.finish()
+    assert other.read_bytes()==b'other\n' and doc.is_symlink()
+    doc = d/'taken.txt'; doc.write_bytes(b'taken\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'names-taken-closing') as app:
+        for n in range(80): (d/('herbert-rescue-%d-%d.txt' % (app.p.pid, n))).write_bytes(b'')
+        app.type('zz'); closing(PROMPT_KEPT)
+        rescue(); refused(RESCUE_FAILED, KEPT, HELP_KEPT, 'a rescue with its names taken')
+        assert number()==('17', {AMBER}), 'the generic rescue sentence keeps its number while closing'
+        app.tap('y'); app.finish()
+    assert doc.read_bytes()==b'taken\n'
+    # The third form: an unedited document whose save published but whose folder sync failed has no recovery
+    # copy, and Y discards no edits. Same launcher as notes_fault_checks: recovery off, the second fsync fails.
+    u = d/'unconfirmed'; u.mkdir(); doc = u/'notes.txt'; doc.write_bytes(b'base\n')
+    launcher = u/'notes-under-fsync-fault'
+    launcher.write_text('#!/bin/sh\nexec strace --kill-on-exit -y -o '+shlex.quote(str(u/'strace.log'))+' -e inject=mkdirat:error=EACCES:when=1+ -e inject=fsync:error=EIO:when=2 '+shlex.quote(str(args.notes.resolve()))+' "$@"\n'); launcher.chmod(0o700)
+    with application(launcher, doc, b'Herbert - Notes', (900,600), x, display, u, 'unconfirmed-closing') as app:
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(WRITTEN_UNCONFIRMED, {AMBER}), 'the save published, its folder sync failed')
+        closing(PROMPT_UNCONFIRMED)
+        doc.chmod(0o444)
+        app.tap('s','Control_L'); refused(READ_ONLY, UNCONFIRMED, read_only_help(HELP_UNCONFIRMED), 'made read-only, unconfirmed')
+        app.tap('Escape'); closing(PROMPT_UNCONFIRMED_READ_ONLY, read_only_help(HELP_UNCONFIRMED))
+        doc.chmod(0o644)
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(SAVED, {GREY}), 'made writable again, the retry saves and ends the prompt')
+        assert doc.read_bytes()==b'base\n' and doc.stat().st_mode & 0o777 == 0o644
+        app.tap('Escape'); app.finish()
+    with application(launcher, doc, b'Herbert - Notes', (900,600), x, display, u, 'unconfirmed-closing-deleted') as app:
+        app.tap('s','Control_L')
+        wait_for(lambda: message()==(WRITTEN_UNCONFIRMED, {AMBER}), 'the save published, its folder sync failed again')
+        closing(PROMPT_UNCONFIRMED)
+        doc.unlink()
+        app.tap('s','Control_L'); refused(GONE, UNCONFIRMED, HELP_UNCONFIRMED, 'deleted, unconfirmed')
+        app.tap('y'); app.finish()
+    assert not doc.exists()
+    passed('notes-refusals-while-closing-keep-the-prompt-instruction-all-three-forms-read-only-prompts-offer-the-copy-'
+           'outside-folder-deleted-generic-y-and-esc-as-before')
+
+
+def notes_anchor_checks(args, x, display, evidence, passed):
+    d = evidence/'anchor'; d.mkdir()
+    mark, match = (3033707).to_bytes(3,'big'), (6969880).to_bytes(3,'big')
+    def at(row, col):
+        return 28 + col * 12 + 3, 100 + row * 20 + 10
+    def shift(key, n=1):
+        app.key('Shift_L', True)
+        for _ in range(n): app.tap(key)
+        app.key('Shift_L', False)
+    def shows(colour):
+        return colour in region(app.frame(),26,98,848,424)
+    def message():
+        return status_text(app.frame())
+    def saved(wanted, what):
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes()==wanted, what)
+    def found(what):
+        wait_for(lambda: message()==(MATCHED, {GREY}), what + ': the match is found')
+        assert not shows(mark), what + ': nothing is selected'
+    text = b'alpha beta\ngamma delta\nend\n'
+    doc = d/'notes.txt'; doc.write_bytes(text)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'anchor') as app:
+        app.tap('f','Control_L'); app.type('delta'); app.tap('Escape')
+        # A plain click, then F3, then a keystroke: only the keystroke changes the text.
+        app.click(*at(0, 0)); app.tap('F3'); found('a click then F3')
+        app.type('!'); text = text.replace(b'delta', b'!delta')
+        saved(text, 'a click, F3 and a keystroke insert at the match')
+        # A Shift+arrow selection, then F3 (or Shift+F3), then a keystroke: the same.
+        app.tap('Home','Control_L'); shift('Right', 5)
+        wait_for(lambda: shows(mark), 'a keyboard selection')
+        app.tap('F3'); found('Shift+Right then F3')
+        app.type('?'); text = text.replace(b'delta', b'?delta')
+        saved(text, 'Shift+Right, F3 and a keystroke insert at the match')
+        app.tap('End','Control_L'); shift('Left', 3)
+        wait_for(lambda: shows(mark), 'a backward keyboard selection')
+        app.tap('F3','Shift_L'); found('Shift+Left then Shift+F3')
+        app.type('#'); text = text.replace(b'delta', b'#delta')
+        saved(text, 'Shift+Left, Shift+F3 and a keystroke insert at the match')
+        app.tap('Escape'); app.finish()
+    # F3 with no query after a click opens Find; the match is highlighted, nothing is selected.
+    text = b'alpha beta\ngamma delta\nend\n'; doc.write_bytes(text)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'anchor-no-query') as app:
+        app.click(*at(0, 0)); app.tap('F3')
+        wait_for(lambda: message()==(SEARCHING, {GREY}), 'F3 with no query opens Find')
+        app.type('delta')
+        wait_for(lambda: message()==(MATCHED, {GREY}) and shows(match), 'Find highlights its match')
+        assert not shows(mark), 'F3 with no query after a click: nothing is selected'
+        app.tap('Escape'); app.type('!')
+        saved(b'alpha beta\ngamma !delta\nend\n', 'the keystroke after leaving Find inserts at the match')
+        app.tap('Escape'); app.finish()
+    # F3 with no query after a Shift+arrow selection: the same, so the anchor goes whether or not a query exists.
+    text = b'alpha beta\ngamma delta\nend\n'; doc.write_bytes(text)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'anchor-no-query-shift') as app:
+        shift('Right', 5)
+        wait_for(lambda: shows(mark), 'a keyboard selection before F3')
+        app.tap('F3')
+        wait_for(lambda: message()==(SEARCHING, {GREY}), 'F3 with no query opens Find')
+        app.type('delta')
+        wait_for(lambda: message()==(MATCHED, {GREY}) and shows(match), 'Find highlights its match')
+        assert not shows(mark), 'F3 with no query after Shift+Right: nothing is selected'
+        app.tap('Escape'); app.type('!')
+        saved(b'alpha beta\ngamma !delta\nend\n', 'after Shift+Right, F3 and Find, the keystroke inserts at the match')
+        app.tap('Escape'); app.finish()
+    # A Shift+movement that cannot move (Shift+Left at the start of the document, Shift+Home at a line start) selects
+    # nothing but leaves the anchor on the cursor; F3 drops that anchor too, so the keystroke only inserts.
+    text = b'alpha beta\ngamma delta\nend\n'; doc.write_bytes(text)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'anchor-shift-no-move') as app:
+        app.tap('f','Control_L'); app.type('delta'); app.tap('Escape')
+        app.tap('Home','Control_L'); shift('Left')
+        assert not shows(mark), 'Shift+Left at the start of the document selects nothing'
+        app.tap('F3'); found('Shift+Left at the start, then F3')
+        app.type('!')
+        saved(b'alpha beta\ngamma !delta\nend\n', 'Shift+Left at the start, F3 and a keystroke insert at the match')
+        app.tap('Home','Control_L'); app.tap('Down'); shift('Home')
+        assert not shows(mark), 'Shift+Home at a line start selects nothing'
+        app.tap('F3'); found('Shift+Home at a line start, then F3')
+        app.type('?')
+        saved(b'alpha beta\ngamma !?delta\nend\n', 'Shift+Home at a line start, F3 and a keystroke insert at the match')
+        app.tap('Escape'); app.finish()
+    # The same with no query ever typed: F3 opens Find, and the anchor the Shift key left on the cursor goes too,
+    # though neither a query nor a selection exists when F3 is pressed.
+    for name, what, keys in (('anchor-shift-no-move-no-query', 'Shift+Left at the start', lambda: shift('Left')),
+                             ('anchor-shift-home-no-query', 'Shift+Home at a line start',
+                              lambda: (app.tap('Down'), shift('Home')))):
+        text = b'alpha beta\ngamma delta\nend\n'; doc.write_bytes(text)
+        with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, name) as app:
+            keys()
+            assert not shows(mark), what + ' selects nothing'
+            app.tap('F3')
+            wait_for(lambda: message()==(SEARCHING, {GREY}), what + ', then F3 with no query opens Find')
+            app.type('delta')
+            wait_for(lambda: message()==(MATCHED, {GREY}) and shows(match), what + ': Find highlights its match')
+            assert not shows(mark), what + ', then F3 with no query: nothing is selected'
+            app.tap('Escape'); app.type('!')
+            saved(b'alpha beta\ngamma !delta\nend\n', what + ', F3 with no query, Find and a keystroke insert at the match')
+            app.tap('Escape'); app.finish()
+    passed('notes-click-and-f3-leave-no-anchor-click-shift-arrows-shift-f3-and-f3-without-a-query-after-a-click-or-'
+           'shift-arrows')
+
+
+def notes_prompt_drag_checks(args, x, display, evidence, passed):
+    d = evidence/'prompt-drag'; d.mkdir()
+    text = b''.join(b'line %03d\n' % i for i in range(200))
+    doc = d/'long.txt'; doc.write_bytes(text)
+    def held():
+        # The cursor's line and column, and the view's first twenty rows (the caret blinks on the
+        # twenty-first, where the drag below the text leaves the cursor).
+        frame = app.frame()
+        return decoded(frame, 62, 542, 8)[0], decoded(frame, 170, 542, 8)[0], region(frame, 28, 100, 840, 400)
+    def field(label):
+        return lambda: decoded(app.frame(), 28, 580, len(label))[0]==label
+    def unicode():
+        app.key('Control_L', True); app.tap('u','Shift_L', pause=0); app.key('Control_L', False)
+    closing = lambda: status_text(app.frame())[0].startswith('Unsaved:')
+    prompts = [('F3 with no query (Find)', lambda: app.tap('F3', pause=0), field('Find:')),
+               ('Find', lambda: app.tap('f','Control_L', pause=0), field('Find:')),
+               ('Go to line', lambda: app.tap('g','Control_L', pause=0), field('Go to line:')),
+               ('Unicode entry', unicode, field('Unicode U+')),
+               ('Open', lambda: app.tap('o','Control_L', pause=0), field('Open:')),
+               ('the close prompt', lambda: app.tap('q','Control_L', pause=0), closing),
+               ('a close from the window manager', lambda: x.delete(app.window), closing)]
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'prompt-drag') as app:
+        for name, open_prompt, up in prompts:
+            if name == 'the close prompt':
+                app.tap('Home','Control_L'); app.type('x'); text = b'x' + text
+            app.tap('Home','Control_L')
+            wait_for(lambda: held()[:2]==('1', '1'), name + ': the cursor at the top')
+            # Press at the top, hold the button below the text, and open the prompt, all in one drain.
+            app.stop()
+            app.move(28 + 3, 100 + 10); app.button(True)
+            try:
+                app.move(450, 560); open_prompt()
+                app.p.send_signal(signal.SIGCONT)
+                wait_for(up, name + ' is up')
+                before = held(); time.sleep(.3)
+                assert held()==before, (name, 'the cursor or view moved under the prompt', before[:2], held()[:2])
+                app.tap('Escape')
+                wait_for(lambda: not up(), name + ' is down')
+                time.sleep(.3)
+                assert held()==before, (name, 'the drag came back after the prompt', before[:2], held()[:2])
+            finally:
+                # Never leave the shared display's button held for the cases after a failure.
+                app.button(False)
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes()==text, 'the document saved')
+        # The last drag's selection is still there: the first Escape drops it, the second closes.
+        app.tap('Escape'); app.tap('Escape'); app.finish()
+    passed('notes-a-prompt-ends-a-held-drag-f3-find-go-to-line-unicode-open-close-prompt-window-close')
+
+
 def static_elf(path):
     data = path.read_bytes()
     assert data[:7] == b'\x7fELF\x02\x01\x01', 'expected little-endian ELF64'
@@ -1715,6 +2365,12 @@ def main():
                     notes_mouse_checks(args,x,display,evidence,passed)
                     notes_navigation_checks(args,x,display,evidence,passed)
                     notes_big_checks(args,x,display,evidence,passed)
+                    notes_read_only_checks(args,x,display,evidence,passed)
+                    notes_permission_change_checks(args,x,display,evidence,passed)
+                    notes_save_reason_checks(args,x,display,evidence,passed)
+                    notes_close_prompt_refusal_checks(args,x,display,evidence,passed)
+                    notes_anchor_checks(args,x,display,evidence,passed)
+                    notes_prompt_drag_checks(args,x,display,evidence,passed)
             finally:
                 x.close()
     except BaseException as error:

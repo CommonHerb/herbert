@@ -60,7 +60,25 @@ source; the retained source map identifies its original units.
   names, without allocating. See the Notes guide.
 - `file_io.herb`: open a bounded regular file and save through an exclusive
   temporary file and atomic rename in its opened directory. Detected external
-  changes are refused; post-publication sync or verification failure is reported distinctly.
+  changes are refused, with one exception a caller asks for: `file_recheck(f)`,
+  run before a save, reads the document's status again through the opened
+  directory, puts its current permission bits in `f.state.mode` (whenever that
+  stat works, also before a refusal), and adopts a change of the permission bits
+  alone, with the change time that goes with it, so the save keeps the new bits.
+  A change time that moved with the bits as recorded (a permission changed and
+  changed back) is still refused. It reads nothing for a document not yet on
+  disk, or after a save whose check after the rename failed (the baseline
+  unconfirmed): there `file_save`'s own recovery checks the file against what it
+  published, and a permission changed since is refused. A caller goes on to
+  `file_save` only after 0 or 116 (which `file_save` refuses itself); any other
+  result, a refusal `file_save` would give or an error of the stat itself, ends
+  that attempt with that result, whatever permission bits were recorded. Notes
+  refuses a file whose owner write bit is off only after 0 or 116; any other
+  result keeps its own refusal there too.
+  The limit: an outside edit that keeps the size
+  and the modification time and comes with a permission change is not seen, nor
+  are extended attributes set with one, and the save replaces them.
+  Post-publication sync or verification failure is reported distinctly.
   An exclusive sibling rescue copy can preserve edits without replacing the original.
   The [Notes guide](../examples/notes.md) gives file and metadata limitations.
   A handle is a `File` record: `f.state` is a reference record (directory

@@ -428,6 +428,129 @@ for label, exists in [('changed', True), ('appeared', False), ('symlink-replacem
     out, err = finish(proc, b'\n')
     expected = {'changed': -116, 'appeared': -17, 'symlink-replacement': -40}[label]
     result('conflict-' + label, proc.returncode == 0 and not err and out == u(expected) + b'\n' and target.read_bytes() == b'outside' and (not list(d.glob('.herbert-save-*.tmp'))), output=out.decode())
+# file_recheck: the document's state read again before a save. A change of permission bits alone is adopted
+# (recorded, so the save keeps the new bits); a size, inode, owner, group, either half of the modification time, or
+# a moved change time with the mode unchanged stays 116. The bytes themselves are not compared: an edit that keeps
+# the size and the modification time is adopted with a permission change (lead ruling 19's limit), so
+# 'content-with-chmod-refused' is refused for the modification time its edit moves, and
+# 'content-restored-mtime-refused' for the change time that moved with the mode as recorded. Links, symlinks and a
+# vanished file keep file_save's own refusals. The recorded mode follows every stat that worked, a link's or
+# symlink's refusal included (the caller shows it); a vanished file leaves it as it was. "owner" and "group" make
+# the recorded owner or group differ from the file's (a file now owned by another account is file_regular's 13
+# before any comparison; that needs root, so it is not set up here).
+recheck = compile('recheck', r"""func main():
+ let args = linux_arguments()
+ let f = file_open(linux_argument(args, 1), 65536)
+ let field = linux_argument(args, 2)
+ let ready = stderr_write("READY\n")
+ let wait = stdin_read()
+ if equal(field, "owner"): do linux_put32(f.baseline, 28, linux_u32(f.baseline, 28) + 1) end
+ if equal(field, "group"): do linux_put32(f.baseline, 32, linux_u32(f.baseline, 32) + 1) end
+ let checked = file_recheck(f)
+ let mode = f.state.mode
+ let again = file_recheck(f)
+ let bytes = linux_cstring("new\nnotes\t!\n")
+ let saved = file_save(f, bytes, 12)
+ let closed = file_close(f)
+ return (checked, mode, again, saved)
+end
+""")
+
+def recheck_case(label, change, *, start=0o640, field='', checked=0, mode=None, saved=0, exists=True):
+    d = work / ('case-recheck-' + label)
+    d.mkdir()
+    target = d / 'document.txt'
+    if exists:
+        target.write_bytes(old)
+        target.chmod(start)
+    proc = subprocess.Popen([str(recheck), str(target), field], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    ready(proc)
+    change(target)
+    before = target.stat() if target.exists() and not target.is_symlink() else None
+    before_bytes = target.read_bytes() if before else None
+    out, err = finish(proc, b'\n')
+    after_mode = mode if mode is not None else start
+    expected = b'(' + u(checked) + b', ' + str(after_mode).encode() + b', ' + u(checked) + b', ' + u(saved) + b')\n'
+    assert proc.returncode == 0 and not err and out == expected, (label, out, err, expected)
+    if saved == 0:
+        assert target.read_bytes() == new and stat.S_IMODE(target.stat().st_mode) == after_mode, (label, oct(target.stat().st_mode))
+    elif before:
+        assert target.read_bytes() == before_bytes and target.stat().st_ino == before.st_ino, label
+    assert not list(d.glob('.herbert-save-*.tmp'))
+    result('recheck-' + label, True, output=out.decode().strip())
+    return d
+
+def outside_edit(target, keep_mtime=False, size=0, mode=None):
+    before = target.stat()
+    target.write_bytes(b'OLD UNTOUCHED\n' + b'+' * size)
+    if keep_mtime:
+        os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+    if mode is not None:
+        target.chmod(mode)
+
+def replaced(target, mode):
+    # Same bytes, size and modification time under the same name: only the inode (and mode) tell.
+    before = target.stat()
+    fresh = target.with_name('replacement')
+    fresh.write_bytes(target.read_bytes())
+    os.utime(fresh, ns=(before.st_atime_ns, before.st_mtime_ns))
+    fresh.chmod(mode)
+    os.replace(fresh, target)
+
+def swapped(target):
+    target.unlink()
+    other = target.with_name('other')
+    other.write_bytes(b'outside')
+    target.symlink_to(other.name)
+
+recheck_case('unchanged', lambda t: None, mode=0o640)
+recheck_case('mode-only-adopted', lambda t: t.chmod(0o600), mode=0o600)
+recheck_case('made-writable-adopted', lambda t: t.chmod(0o644), start=0o444, mode=0o644)
+recheck_case('made-read-only-reported', lambda t: t.chmod(0o444), start=0o644, mode=0o444)
+recheck_case('mode-undone-refused', lambda t: (t.chmod(0o600), t.chmod(0o640)), checked=-116, saved=-116)
+recheck_case('content-with-chmod-refused', lambda t: outside_edit(t, mode=0o600), checked=-116, mode=0o600, saved=-116)
+recheck_case('content-restored-mtime-refused', lambda t: outside_edit(t, keep_mtime=True), checked=-116, saved=-116)
+def moved_mtime(target, ns, mode):
+    # Only the modification time moves, by whole seconds or by nanoseconds alone, together with a permission change.
+    before = target.stat()
+    if ns == 1 and before.st_mtime_ns % 1000000000 == 999999999: ns = -1
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + ns))
+    target.chmod(mode)
+    after = target.stat()
+    assert (after.st_mtime_ns - before.st_mtime_ns == ns and after.st_size == before.st_size and after.st_ino == before.st_ino), 'mtime move'
+recheck_case('mtime-seconds-with-chmod-refused', lambda t: moved_mtime(t, 1000000000, 0o600), checked=-116, mode=0o600, saved=-116)
+recheck_case('mtime-nanoseconds-with-chmod-refused', lambda t: moved_mtime(t, 1, 0o600), checked=-116, mode=0o600, saved=-116)
+recheck_case('size-restored-mtime-with-chmod-refused', lambda t: outside_edit(t, keep_mtime=True, size=1, mode=0o600), checked=-116, mode=0o600, saved=-116)
+recheck_case('inode-restored-mtime-with-chmod-refused', lambda t: replaced(t, 0o600), checked=-116, mode=0o600, saved=-116)
+recheck_case('owner-with-chmod-refused', lambda t: t.chmod(0o600), field='owner', checked=-116, mode=0o600, saved=-116)
+recheck_case('group-with-chmod-refused', lambda t: t.chmod(0o600), field='group', checked=-116, mode=0o600, saved=-116)
+d = recheck_case('hard-link-with-chmod-refused', lambda t: (os.link(t, t.with_name('second')), t.chmod(0o600)), checked=-31, mode=0o600, saved=-31)
+assert (d / 'document.txt').stat().st_nlink == 2 and (d / 'document.txt').read_bytes() == old
+d = recheck_case('hard-link-made-read-only-recorded', lambda t: (os.link(t, t.with_name('second')), t.chmod(0o444)), start=0o644, checked=-31, mode=0o444, saved=-31)
+assert (d / 'document.txt').stat().st_nlink == 2 and (d / 'document.txt').read_bytes() == old
+d = recheck_case('symlink-swapped-refused', swapped, checked=-40, mode=0o777, saved=-40)
+assert (d / 'document.txt').is_symlink() and (d / 'other').read_bytes() == b'outside'
+d = recheck_case('deleted-refused', lambda t: t.unlink(), checked=-2, saved=-2)
+assert not (d / 'document.txt').exists()
+recheck_case('new-document-reads-nothing', lambda t: None, mode=0o600, exists=False)
+# A baseline not yet confirmed after a publish is file_save's to recover: file_recheck reads nothing then.
+recheck_uncertain = compile('recheck-uncertain', r"""func main():
+ let args = linux_arguments()
+ let f = file_open(linux_argument(args, 1), 65536)
+ let bytes = linux_cstring("new\nnotes\t!\n")
+ let first = file_save(f, bytes, 12)
+ let checked = file_recheck(f)
+ let second = file_save(f, bytes, 12)
+ let closed = file_close(f)
+ return (first, checked, second)
+end
+""")
+d = work / 'case-recheck-unconfirmed-baseline'
+d.mkdir()
+target = d / 'document'
+target.write_bytes(old)
+r = subprocess.run(['strace', '-o', str(d / 'strace.log'), '-e', 'inject=newfstatat:error=EIO:when=5', str(recheck_uncertain), str(target)], capture_output=True, timeout=10)
+result('recheck-unconfirmed-baseline-left-to-save', r.returncode == 0 and not r.stderr and r.stdout == b'(1, 0, 0)\n' and target.read_bytes() == new, output=r.stdout.decode())
 # Rescue copies bypass the conflicted original, without changing its baseline.
 rescue = compile('rescue-copy', r"""func main():
  let args = linux_arguments()

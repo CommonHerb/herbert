@@ -64,9 +64,13 @@ pastes**; a cut, a paste or a typed replacement is one undo step.
 
 **The mouse.** A left click in the text places the cursor at the nearest
 character boundary, dragging selects, and Shift+click extends the selection to
-the click. Dragging above, below or beside the text scrolls the view one row or
-column every 50 ms while the button is held, so a selection can run past one
-screen. Clicks outside the text, and while the Open, Find or Go to line field,
+the click; a click that does not drag, or a drag that ends where it began,
+selects nothing. Dragging above, below or
+beside the text scrolls the view one row or column every 50 ms while the button
+is held, so a selection can run past one screen. Opening the Open, Find or Go to
+line field, Unicode entry or the close prompt (from Ctrl+Q, Escape or the
+window's close button) ends a drag still held, so the cursor and view stay put
+under it and after it. Clicks outside the text, and while the Open, Find or Go to line field,
 Unicode entry or the close prompt is active, do nothing; so does the wheel
 while one of those is up or a drag is held. Keys, clicks and wheel notches are
 handled in the order they happened.
@@ -91,7 +95,9 @@ automatically equated.
 Typing finds the first matching position at/after the cursor. Enter/F3 finds the
 next match; Shift+Enter/Shift+F3 finds the previous match. Search wraps at both
 ends and includes overlapping matches. Escape leaves search; F3/Shift+F3 then
-repeat the last query. F3 without a previous query opens search. The cursor and scrolling show the match location, and
+repeat the last query. F3 without a previous query opens search. Pressed in the
+document, F3 and Shift+F3 first drop any selection, as Ctrl+F does, whether or
+not there is a query, so they never select. The cursor and scrolling show the match location, and
 while Find is open the match is highlighted. It is not a selection: leaving Find leaves none. Search never changes the
 document or undo history.
 
@@ -101,7 +107,81 @@ the original. A confirmed recovery copy is kept; if recovery is incomplete,
 the prompt explicitly warns that edits are being discarded. If a save of an
 unedited document was unconfirmed, the prompt instead says that saving is
 unconfirmed and no recovery copy exists. Escape returns to editing and
-Ctrl+S saves. Holding a close key cannot confirm discard.
+Ctrl+S saves (on a read-only file the prompt names Ctrl+Shift+S, which saves a
+copy, instead). Holding a close key cannot confirm discard.
+
+**A read-only file is not saved over.** A file whose owner write permission is
+off (0444, 0400 or 0464, say) shows `read-only` beside Saved/UNSAVED in the
+status line. Ctrl+S on it writes nothing and says so in the footer. While
+`read-only` shows, the sentence shown after an edit, the close prompt and the
+line below it (from the moment the prompt opens) name Ctrl+Shift+S, which still
+saves a copy beside it, where they would say that Ctrl+S saves or retries;
+Ctrl+O's refusal names the copy too, and says that Ctrl+O opens another file
+only after Ctrl+S saves. The list of keys on the bottom line, shown when no
+prompt is up, still lists Ctrl+S; on a read-only file Ctrl+S refuses as above.
+There is no key to override this: to overwrite the file, make it writable and
+press Ctrl+S again. A new file, not yet on disk, is never read-only.
+
+Each Ctrl+S reads the file's status again (with one exception, below):
+`read-only` follows the permission the file had when it opened until the next
+Ctrl+S, and after that the one the last Ctrl+S found, also when that Ctrl+S
+found something else wrong with the file (a second hard link, another owner, a
+symbolic link, a folder or another kind of file put at its name); a Ctrl+S that
+finds the file gone, or cannot read its status at all (its folder cannot be
+searched, an input/output error), leaves the mark as it was. A Ctrl+S that finds
+something wrong other than a change by another program (the file gone, a second
+hard link, another owner, something other than an ordinary file at its name, a
+status it could not read) writes nothing and gives that refusal's own sentence
+(below), whether or not `read-only` shows. Otherwise, when the mark, as that
+Ctrl+S leaves it, shows `read-only`, Ctrl+S refuses as read-only. A file made
+read-only while it is open is refused at the next Ctrl+S like one that opened
+read-only, and a save after a change of permission keeps the new permission. A
+permission changed and changed back counts as a change by another program
+(below), at every Ctrl+S until the file is given a different permission (which
+is then taken, as above): Notes cannot tell it from another program's edit that
+kept the file's size and put its modification time back, so it refuses both,
+with the sentence that names permissions (or, while `read-only` shows, as
+read-only). So does a permission changed together with the file's size,
+modification time, group or identity on disk (another file put at its name),
+again as read-only when the permission it found is read-only; a file given a
+second hard link or another owner is refused as such files always are (below),
+read-only or not.
+
+The limit: another program's edit that keeps the file's size and modification
+time and comes with a permission change is not seen. If another program rewrites
+the file in place at the same size and puts its modification time back, or
+changes only its extended attributes, and the permission changes too (before or
+after that edit), the next Ctrl+S takes the new permission: if the owner may
+write, that Ctrl+S saves over the other program's work; if not, it refuses as
+read-only, and the first Ctrl+S after the file is made writable saves over it.
+
+The exception: when a save was written but the check of the file just written
+failed (the footer says "Written; sync/verification failed"; a failed sync alone
+is not this case), the next Ctrl+S first checks the file against what that save
+wrote and does not read the permission again. A permission changed meanwhile is
+then refused as a change by another program, without `read-only`, at every
+Ctrl+S until the file has the permission that save gave it again; then Ctrl+S
+confirms that save and saves.
+
+**A refused save says why** when the reason is one you can act on: another
+program changed the file (or its permissions, as above) since it was opened,
+there is no permission to write in its folder (or the file belongs to another
+account), or the file was deleted or moved. While `read-only` shows (as that
+Ctrl+S leaves the mark), a file deleted or moved, one that belongs to another
+account and one whose folder cannot be searched are still said so; a change by
+another program, and a folder that can be searched but not written in, are
+refused as read-only instead (above). A new file whose folder was removed before
+its first save keeps the general sentence and its error number, since it was
+never on disk. A rescue refused for want of permission in the folder says so
+too. Any other failure keeps the general sentence and its error number, a Ctrl+S
+that could not read the file's status for a reason other than permission
+included (an input/output error gives 5); none of these refusals replaces the
+file. While the close prompt is pending, a refused save or rescue gives its
+reason (in short; the general rescue failure's sentence is short already) and
+keeps the instruction of the prompt that is up in that prompt's own words
+(recovery kept, recovery incomplete so Y discards edits, or a save unconfirmed
+with no recovery copy); the line below says the same, then what Ctrl+S does, or
+on a read-only file that Ctrl+Shift+S saves a copy. Y and Escape work as before.
 
 **Ctrl+O opens another file** in the same window. The Open field at the bottom
 starts with the open document's folder as an absolute path; type a name or edit
@@ -112,8 +192,9 @@ field starts empty. A name that does not exist yet opens an empty document,
 created when you save, exactly as at launch, and every launch refusal applies.
 A refused path leaves the open document, its cursor, history and recovery session
 unchanged, and the field stays open so the path can be corrected. With unsaved
-changes Ctrl+O refuses and points to Ctrl+S and Ctrl+Shift+S: opening never
-discards edits. The opened document starts with empty undo history, and its first
+changes Ctrl+O refuses and points to Ctrl+S and Ctrl+Shift+S (on a read-only
+file, to Ctrl+Shift+S's copy and to the Ctrl+S that must save first): opening
+never discards edits. The opened document starts with empty undo history, and its first
 edit creates a new recovery session beside it; earlier session copies stay where
 they are. Opening allocates nothing: Notes keeps one spare file context from
 startup and swaps it with the open one.
@@ -133,7 +214,7 @@ Failure before publication leaves no rescue file and retains your edits; a
 directory-sync failure is reported as a published but unconfirmed copy.
 
 The footer shows cursor position, on-disk byte count, LF/CRLF style, unsaved
-state and save errors. CRLF counts as two on-disk bytes, so inserting a newline
+state, read-only and save errors. CRLF counts as two on-disk bytes, so inserting a newline
 requires two free bytes in a CRLF document.
 Text, serialization, grapheme boundaries and history use bounded buffers,
 allocated on startup and reused through edits and saves. At capacity, insertion stops with a
@@ -146,10 +227,14 @@ leaves the previous file intact and retains your edits. A failure after rename
 is reported separately as written but not durably confirmed. A missing target
 is published with Linux's no-replace rename, so a file created by someone else
 while you edit is not overwritten. Ordinary detected external edits are refused.
+A change of the file's permission alone, made while it is open, is not an edit:
+the next Ctrl+S takes it as it is, together with any change the file's status
+does not show; a permission changed and changed back, and one changed after a
+save whose check failed, are refused instead (see read-only files above).
 
 Final symlinks, directories, devices, FIFOs, multiply hardlinked files and files
-owned by another account are refused. Existing ordinary permission bits are
-preserved; a new file is private (0600). ACLs, extended attributes, ownership,
+owned by another account are refused. Existing ordinary permission bits, as
+they are at the save, are preserved; a new file is private (0600). ACLs, extended attributes, ownership,
 special permission bits and hardlink identity are not preserved by replacement.
 Use this editor for ordinary notes that do not depend on that metadata.
 Parent-directory symlinks are resolved once when opened; subsequent operations

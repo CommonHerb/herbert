@@ -2,8 +2,15 @@
 -- Open the parent directory once; all later operations are relative to that
 -- descriptor. Final symlinks, nonregular and multiply linked files are refused.
 -- Existing-target replacement preserves rwx mode, not ACLs/xattrs/ownership.
--- Concurrent changes observed before publication are refused. There is no
--- interprocess lock: another writer can still race the final check and rename.
+-- Concurrent changes observed before publication are refused, except a status
+-- that differs only in its permission bits and change time, which file_recheck
+-- adopts when its caller asks, together with any change a stat cannot show: an
+-- outside edit that keeps the size and the modification time and comes with a
+-- permission change is not seen (nor are extended attributes). file_recheck
+-- reads nothing for a new document, or after a publish whose check failed and
+-- left the baseline unconfirmed: file_save's recovery checks that one first, and
+-- there a permission changed since is refused. There is no interprocess lock:
+-- another writer can still race the final check and rename.
 -- Result: 0 success; raw -errno failure; 1 means published but durability or
 -- baseline refresh failed (do not claim the old file survived that result).
 -- A File (below): its state, the read bytes (capacity + 1), basename, temp name,
@@ -275,6 +282,51 @@ func file_conflict(f):
     if regular != 0: return regular end
     if not file_same(f.stat, f.baseline): return 0 - 116 end
     return 0
+end
+
+-- The document's state as it is now, read before a save through the folder held
+-- since it opened (a final symlink is not followed). Whenever that stat works,
+-- state.mode becomes the permission bits it found, before any refusal below
+-- (31, 13 another owner, 40, 22), so a caller that shows the mode shows the
+-- last status it could read; a stat that fails (a file gone, a folder that
+-- cannot be searched, an I/O error) leaves state.mode as it was. A permission
+-- change made while the document is open is adopted: when the file's mode
+-- differs from its baseline and nothing else does but the change time (same
+-- device, inode, link count, owner, group, size and modification time), the
+-- baseline takes the current stat, so file_save keeps the new bits and does not
+-- refuse the change. Any other difference stays a conflict (116), and so does a
+-- change time that moved with the mode as recorded: a chmod undone and an
+-- outside edit whose modification time was put back look the same, so both are
+-- refused. The limit that comes with adopting: an outside change that keeps the
+-- size and the modification time and comes with a permission change (the bytes
+-- rewritten in place with the time put back, or extended attributes set) is not
+-- seen; it is adopted with the mode, and file_save then replaces it. Result: 0;
+-- 116; the refusal file_save would give first (2 gone, 40 a symlink, 22 not a
+-- regular file, 31 hard links, 13 another owner or a folder that cannot be
+-- searched); or any other error of the stat itself (5, 12 and the like), which
+-- file_save's own stat a moment later might not meet, so a caller goes on to
+-- file_save after 0 or 116 only (file_save refuses 116 itself). A new document
+-- reads nothing and gives 0, and so does a baseline not yet confirmed after a
+-- publish: file_save's own recovery checks that one first, against what it
+-- published (identity, mode, size, modification time and bytes), so there a
+-- permission changed since is refused (116) until it is back to the published
+-- one. Refusing a file whose owner write bit is off is the caller's.
+func file_recheck(f):
+    let st = f.state
+    if not st.exists or st.uncertain: return file_result(f, 0) end
+    let status = file_stat(f)
+    if status == 0: st.mode = linux_u32(f.stat, 24) & 511 end
+    if status == 0: status = file_regular(f.stat) end
+    if status != 0: return file_result(f, status) end
+    if file_same(f.stat, f.baseline): return file_result(f, 0) end
+    let mode = linux_u32(f.stat, 24)
+    let was = linux_u32(f.baseline, 24)
+    let kept = linux_u64(f.stat, 0) == linux_u64(f.baseline, 0) and linux_u64(f.stat, 8) == linux_u64(f.baseline, 8) and linux_u64(f.stat, 16) == linux_u64(f.baseline, 16) and linux_u32(f.stat, 28) == linux_u32(f.baseline, 28) and linux_u32(f.stat, 32) == linux_u32(f.baseline, 32) and linux_u64(f.stat, 48) == linux_u64(f.baseline, 48) and linux_u64(f.stat, 88) == linux_u64(f.baseline, 88) and linux_u64(f.stat, 96) == linux_u64(f.baseline, 96)
+    if kept and mode != was and (mode & 61440) == (was & 61440):
+        do linux_copy(f.baseline, 0, f.stat, 0, 144)
+        return file_result(f, 0)
+    end
+    return file_result(f, 0 - 116)
 end
 
 func file_save(f, bytes, count):

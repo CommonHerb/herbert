@@ -8,8 +8,9 @@
 -- X11 clipboard's own buffer; clip is scratch for text pasted from elsewhere,
 -- after its CRLF newlines become LF. time is the server time of the key being
 -- handled, which the clipboard protocol asks for. dragging is true from a left
--- press in the text to its release; drag_x/drag_y hold the pointer's last place
--- and scrolled_at the last time a drag held past an edge scrolled the view.
+-- press in the text to its release, or until a prompt opens; drag_x/drag_y hold
+-- the pointer's last place and scrolled_at the last time a drag held past an
+-- edge scrolled the view.
 -- detached is true while the wheel has moved the view away from the cursor;
 -- the next key (other than a bare modifier), click or drag re-attaches it, and
 -- the view follows the cursor every frame as before. going is the Go to line
@@ -125,6 +126,7 @@ func notes_request_close(c, f, t, s, recovery):
     s.unicode_input = false
     s.opening = false
     s.going = false
+    s.dragging = false
     do notes_checkpoint(recovery, f, t, s)
     do x11_ack_close(c)
     if not s.dirty: return notes_quit(c, f, t, s, recovery) end
@@ -132,10 +134,54 @@ func notes_request_close(c, f, t, s, recovery):
     return notes_message(s, 5)
 end
 
+-- An existing document whose owner write bit is off: as the file was when it
+-- opened, then as the last Ctrl+S found it (file_recheck reads it again whenever
+-- its stat works, also before a refusal for a second link, another owner, a
+-- symlink or a folder at its name; a file gone, or a stat that fails, keeps the
+-- mark it had). The exception: after a save that published but whose check
+-- after the rename failed, file_recheck reads nothing until file_save's own
+-- recovery confirms that save, so the mark stays as it was. file_save renames a
+-- new file over the old one, which only the folder's permission governs, so
+-- Notes itself refuses to save over it (45) when file_recheck gave 0 or 116;
+-- any other result has already ended that Ctrl+S with its own sentence. A new
+-- document, not yet on disk, is never read-only.
+func notes_read_only(f): return f.state.exists and (f.state.mode & 128) == 0 end
+
+-- The Ctrl+S failures a person can act on get their own sentence; every other
+-- code keeps message 4 and its number. A new document that was never on disk
+-- cannot have been deleted or moved, so its 2 stays generic.
+func notes_save_error(f, status):
+    if status == 0 - 116: return 46 end
+    if status == 0 - 13: return 47 end
+    if status == 0 - 2 and f.state.exists: return 48 end
+    return 4
+end
+
 func notes_save(f, t, s):
     if s.recovery_attempted and s.recovery_result != 0:
         s.checkpoint_pending = true
     end
+    -- The file as it is now, not as it opened: a permission changed since then is
+    -- taken as it is, so a read-only file made writable saves on this Ctrl+S and
+    -- a file made read-only is refused like one that opened read-only. Any result
+    -- of file_recheck but 0 and 116 ends this Ctrl+S with that result's own
+    -- sentence before file_save is called, read-only or not: a file gone 48; a
+    -- second link, a symlink or another kind of file at its name the general
+    -- sentence and 31, 40 or 22; a folder that cannot be searched, or another
+    -- owner, 47; a stat that failed (EIO, ENOMEM) the general sentence and its
+    -- number. So nothing is written when the recheck's own stat fails though
+    -- file_save's stat a moment later might work. Only after 0 or 116 is a
+    -- document recorded read-only refused as read-only (45).
+    -- After a save whose check after the rename failed (message 6 with the
+    -- baseline unconfirmed; a failed sync alone is not this) nothing is read here:
+    -- file_save's recovery checks the file against what it published, and a
+    -- permission changed since is a change by another program (46) there.
+    let current = file_recheck(f)
+    if current != 0 and current != 0 - 116:
+        s.save_result = current
+        return notes_message(s, notes_save_error(f, current))
+    end
+    if notes_read_only(f): return notes_message(s, 45) end
     let result = file_save(f, text_file_bytes(t), text_file_length(t))
     s.save_result = result
     if result == 0:
@@ -148,7 +194,7 @@ func notes_save(f, t, s):
         s.dirty = true
         return notes_message(s, 6)
     end
-    return notes_message(s, 4)
+    return notes_message(s, notes_save_error(f, result))
 end
 
 func notes_save_copy(f, t, s):
@@ -165,6 +211,7 @@ func notes_save_copy(f, t, s):
     end
     if result == 0: return notes_message(s, 7) end
     if result == 1: return notes_message(s, 8) end
+    if result == 0 - 13: return notes_message(s, 49) end
     return notes_message(s, 9)
 end
 
@@ -570,7 +617,11 @@ func notes_key(c, t, s, recovery, query, key, mods):
     end
     if s.finding: return notes_search_key(t, s, query, key, mods) end
     if control and (key == 103 or key == 71): return notes_line_start(s) end
-    if key == 65472: return notes_find(t, s, query, (mods & 1) != 0, true) end
+    if key == 65472:
+        -- F3 and Shift+F3 move to a match; like Ctrl+F they never select.
+        s.anchor = 0 - 1
+        return notes_find(t, s, query, (mods & 1) != 0, true)
+    end
     if key == 65307:
         -- The first Escape drops a selection; the next one closes.
         if notes_selected(t, s):
@@ -684,6 +735,9 @@ end
 -- ignore the pointer.
 func notes_pointer(t, s, symbol, state, code):
     if symbol == 4294967043:
+        -- A click (the cursor still where the press put the anchor) leaves no
+        -- anchor behind; a drag or Shift+click that covered text keeps its selection.
+        if s.anchor == text_cursor(t): s.anchor = 0 - 1 end
         s.dragging = false
         return 0
     end
@@ -753,6 +807,9 @@ end
 
 func notes_modifier(key): return (key >= 65505 and key <= 65518) or key == 65027 end
 
+-- Open, Find, Go to line, Unicode entry or the close prompt has the keyboard.
+func notes_prompted(s): return s.opening or s.finding or s.going or s.unicode_input or s.confirming end
+
 func notes_keys(c, t, s, recovery, query, event):
     while x11_next_key(c, event):
         s.time = linux_u32(event, 12)
@@ -762,6 +819,9 @@ func notes_keys(c, t, s, recovery, query, event):
         else:
             if not notes_modifier(symbol): do notes_attach(s) end
             do notes_key(c, t, s, recovery, query, symbol, linux_u32(event, 4))
+            -- A prompt this key opened ends a held drag, so its edge scroll never
+            -- moves the cursor or the view under the prompt.
+            if notes_prompted(s): s.dragging = false end
         end
     end
     return 0
@@ -877,8 +937,13 @@ end
 
 func notes_warning(message):
     if (message >= 3 and message <= 11) or message == 13 or message == 14 or message == 17 or message == 18: return true end
-    return (message >= 22 and message <= 30) or (message >= 32 and message <= 41) or message == 43 or message == 44
+    return (message >= 22 and message <= 30) or (message >= 32 and message <= 41) or message == 43 or message == 44 or (message >= 45 and message <= 49)
 end
+
+-- The refused saves and rescues: while the close prompt is pending, each says
+-- its reason, shorter except the general rescue failure (9), whose sentence is
+-- short already, and keeps the prompt's own instruction beside it.
+func notes_refusal(message): return message == 4 or message == 9 or (message >= 45 and message <= 49) end
 
 -- Highlight [a, b) behind the visible rows: the selection, or Find's match. A
 -- selected newline shows as a half-cell stub at the end of its line.
@@ -925,16 +990,32 @@ func notes_status(c, f, t, s, query):
     let dirty = "Saved"
     if s.dirty: dirty = "UNSAVED" end
     do pixel_text(c, dirty, 806, 542, 1)
+    -- On a read-only document the sentence after an edit, the close prompt and the help row under it say
+    -- that Ctrl+Shift+S saves a copy where they would say that Ctrl+S saves; Ctrl+O's refusal names the
+    -- copy too, and still says that Ctrl+O opens another file only after Ctrl+S saves. The key list on
+    -- row 580, drawn when no prompt is up, still lists Ctrl+S, which message 45 then refuses.
+    let readonly = notes_read_only(f)
+    if readonly: do pixel_text(c, "read-only |", 734, 542, 1) end
     let message = s.message_id
     let status = "Ready. UTF-8 text; original bytes and newline style are preserved."
-    if message == 1 and s.dirty: status = "Edited. Ctrl+S saves this document." end
+    if message == 1 and s.dirty:
+        status = "Edited. Ctrl+S saves this document."
+        if readonly: status = "Edited. This file is read-only; Ctrl+Shift+S saves a copy." end
+    end
     if message == 2: status = "Saved. File and containing directory synced." end
     if message == 3: status = "Not enough space (" end
     if message == 4: status = "Save failed; no replacement this attempt. Ctrl+Shift+S saves a rescue copy." end
     if message == 5:
         status = "Unsaved: Y discards edits; latest recovery INCOMPLETE. Esc returns | Ctrl+S saves."
-        if not s.recovery_attempted: status = "Save unconfirmed: Y closes; NO recovery copy. Esc returns | Ctrl+S retries." end
-        if notes_recovery_current(s): status = "Unsaved: Y closes (recovery kept). Esc returns. Ctrl+S saves. Ctrl+Shift+S rescues." end
+        if readonly: status = "Unsaved: Y discards edits; latest recovery INCOMPLETE. Esc returns | Ctrl+Shift+S saves a copy." end
+        if not s.recovery_attempted:
+            status = "Save unconfirmed: Y closes; NO recovery copy. Esc returns | Ctrl+S retries."
+            if readonly: status = "Save unconfirmed: Y closes; NO recovery copy. Esc returns | Ctrl+Shift+S saves a copy." end
+        end
+        if notes_recovery_current(s):
+            status = "Unsaved: Y closes (recovery kept). Esc returns. Ctrl+S saves. Ctrl+Shift+S rescues."
+            if readonly: status = "Unsaved: Y closes (recovery kept). Esc returns. Ctrl+Shift+S saves a copy." end
+        end
     end
     if message == 6: status = "Written; sync/verification failed. Ctrl+S retries; Ctrl+Shift+S rescues." end
     if message == 7: status = "Rescue copy saved. Original stays open; its unsaved state is unchanged." end
@@ -952,7 +1033,10 @@ func notes_status(c, f, t, s, query):
     if message == 19: status = "Open: type a path. Enter opens | Esc cancels. A name that does not exist yet starts an empty file." end
     if message == 20: status = "Opened. Original bytes and newline style are preserved." end
     if message == 21: status = "New file. It is created when you save with Ctrl+S." end
-    if message == 22: status = "Unsaved edits. Ctrl+S saves (or Ctrl+Shift+S rescues) before Ctrl+O opens another file." end
+    if message == 22:
+        status = "Unsaved edits. Ctrl+S saves (or Ctrl+Shift+S rescues) before Ctrl+O opens another file."
+        if readonly: status = "Unsaved edits to a read-only file. Ctrl+Shift+S saves a copy; Ctrl+O opens another file after Ctrl+S saves." end
+    end
     if message == 23: status = "Not opened: the file exceeds the " end
     if message == 24: status = "Not opened: symbolic links are refused. Open the intended file directly." end
     if message == 25: status = "Not opened: multiply hardlinked files are refused to preserve their links." end
@@ -975,14 +1059,35 @@ func notes_status(c, f, t, s, query):
     if message == 42: status = "Go to line: type a number, then Enter. Esc cancels. Ctrl+Home and Ctrl+End jump to the top and bottom." end
     if message == 43: status = "Go to line: at most 7 digits. Backspace removes one." end
     if message == 44: status = "Type a line number first, then Enter. Esc cancels." end
+    if message == 45: status = "Not saved: this file is read-only. Make it writable and press Ctrl+S again, or Ctrl+Shift+S to save a copy beside it." end
+    if message == 46: status = "Not saved: another program changed this file or its permissions since it was opened. Ctrl+Shift+S saves a copy beside it." end
+    if message == 47: status = "Not saved: no permission to write in this folder, or the file belongs to another account. Fix it, then Ctrl+S." end
+    if message == 48: status = "Not saved: the file was deleted or moved since it was opened. Ctrl+Shift+S saves a copy beside it." end
+    if message == 49: status = "Rescue failed: no permission to write in this folder. Fix the folder, then Ctrl+Shift+S again." end
     if s.confirming and message == 7:
         status = "Rescue saved. Close pending: Y closes; Esc returns."
     end
     if s.confirming and message == 8:
         status = "Copy written; sync uncertain. Close pending: Y closes; Esc returns."
     end
+    let pending = s.confirming and notes_refusal(message)
+    if pending:
+        if message == 4: status = "Save failed; nothing replaced. Ctrl+Shift+S saves a rescue copy." end
+        if message == 45: status = "Not saved: read-only. Make it writable, or Ctrl+Shift+S saves a copy." end
+        if message == 46: status = "Not saved: the file or its permissions changed. Ctrl+Shift+S saves a copy." end
+        if message == 47: status = "Not saved: no permission in this folder, or the file is not yours." end
+        if message == 48: status = "Not saved: the file was deleted or moved. Ctrl+Shift+S saves a copy." end
+        if message == 49: status = "Rescue failed: no permission to write in this folder." end
+    end
     if notes_warning(message): let warning = x11_color(c, 16173151) end
     do pixel_text(c, status, 28, 560, 1)
+    if pending:
+        -- The instruction of the close prompt that is up (message 5), in its own words.
+        let closing = " Close pending: Y discards edits; Esc returns."
+        if not s.recovery_attempted: closing = " Close pending: Y closes; NO recovery copy; Esc returns." end
+        if notes_recovery_current(s): closing = " Close pending: Y closes (recovery kept); Esc returns." end
+        do pixel_text(c, closing, 28 + 6 * length(status), 560, 1)
+    end
     if message == 3 or message == 23 or message == 10:
         -- the limit's number (or the history budget, twice it) and the rest of the sentence follow the prefix, drawn in place
         let number = notes_capacity()
@@ -1015,10 +1120,19 @@ func notes_status(c, f, t, s, query):
         do pixel_text(c, "Sibling file:", 28, 580, 1)
         let name = file_copy_name(f)
         do pixel_text_buffer(c, name, 0, linux_nul_end(name, 0, buffer_length(name)), 112, 580, 1)
-    elif s.confirming and message != 5:
-        let closehelp = "Close pending: Y discards edits | Esc returns | Ctrl+S saves"
-        if notes_recovery_current(s): closehelp = "Close pending: Y closes (recovery kept) | Esc returns | Ctrl+S saves" end
+    elif s.confirming and (message != 5 or readonly):
+        -- The close prompt's three forms, as message 5 words them: after any other message replaces message 5,
+        -- and under message 5 itself on a read-only document, where the key list would say that Ctrl+S saves.
+        let closehelp = "Close pending: Y discards edits"
+        let tail = " | Esc returns | Ctrl+S saves"
+        if not s.recovery_attempted:
+            closehelp = "Close pending: Y closes; NO recovery copy"
+            tail = " | Esc returns | Ctrl+S retries"
+        end
+        if notes_recovery_current(s): closehelp = "Close pending: Y closes (recovery kept)" end
+        if readonly: tail = " | Esc returns | Ctrl+Shift+S saves a copy" end
         do pixel_text(c, closehelp, 28, 580, 1)
+        do pixel_text(c, tail, 28 + 6 * length(closehelp), 580, 1)
     else:
         do pixel_text(c, "Ctrl+S save | Ctrl+O open | Ctrl+G line | Ctrl+X/C/V cut, copy, paste | Ctrl+Z/Y undo, redo | Ctrl+F find | Ctrl+Shift+U Unicode | Ctrl+Q close", 28, 580, 1)
     end
