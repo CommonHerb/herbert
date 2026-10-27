@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -3059,6 +3059,129 @@
       "id": "buffer-fill-reserved-name", "profile": "reject",
       "source": "func buffer_fill(a, b, c):\n    return c\nend\nfunc main():\n    return 0\nend\n",
       "diagnostic": "line 1: native-subset: invalid function table (ERR 429)"
+    },
+    {
+      "id": "bitwise-complement-values", "profile": "run",
+      "source": "func main():\n    let x = 42\n    return (~5, ~18446744073709551615, ~(~7), ~x, ~9223372036854775807)\nend\n",
+      "stdin": "", "stdout": "(18446744073709551610, 0, 7, 18446744073709551573, 9223372036854775808)\n", "status": 0
+    },
+    {
+      "id": "bitwise-complement-in-helper", "profile": "run",
+      "source": "func flip(v):\n    return ~v\nend\nfunc main():\n    return (flip(0), flip(1), flip(flip(12345)))\nend\n",
+      "stdin": "", "stdout": "(18446744073709551615, 18446744073709551614, 12345)\n", "status": 0
+    },
+    {
+      "id": "shift-left-values", "profile": "run",
+      "source": "func main():\n    let x = 3\n    return ((x << 2), (1 << 0), (5 << 60), (x << 63), (18446744073709551615 << 4))\nend\n",
+      "stdin": "", "stdout": "(12, 1, 5764607523034234880, 9223372036854775808, 18446744073709551600)\n", "status": 0
+    },
+    {
+      "id": "shift-right-logical-top-bit", "profile": "run",
+      "source": "func main():\n    let x = 18446744073709551615\n    return ((x >> 1), (x >> 63), (9223372036854775808 >> 3), (x >> 0), (12345678901234567890 >> 32))\nend\n",
+      "stdin": "", "stdout": "(9223372036854775807, 1, 1152921504606846976, 18446744073709551615, 2874452364)\n", "status": 0
+    },
+    {
+      "id": "shift-right-bit-count", "profile": "run",
+      "source": "func main():\n    let v = 18446744073709551615\n    let n = 0\n    while v != 0 and n < 100:\n        v = v >> 1\n        n = n + 1\n    end\n    return n\nend\n",
+      "stdin": "", "stdout": "64\n", "status": 0
+    },
+    {
+      "id": "bitwise-and-values", "profile": "run",
+      "source": "func main():\n    let x = 255\n    return ((x & 15), (x & 0), (6 & 3), (18446744073709551615 & 1), (x & x), (4096 & 255))\nend\n",
+      "stdin": "", "stdout": "(15, 0, 2, 1, 255, 0)\n", "status": 0
+    },
+    {
+      "id": "bitwise-and-in-helper", "profile": "run",
+      "source": "func low(v, mask):\n    return v & mask\nend\nfunc main():\n    return (low(1000, 255), low(1000, 0), low(0, 1000))\nend\n",
+      "stdin": "", "stdout": "(232, 0, 0)\n", "status": 0
+    },
+    {
+      "id": "buffer-get-at-length-fault", "profile": "run-stdio",
+      "source": "func main():\n    let b = new_buffer()\n    do append(b, 65)\n    do append(b, 66)\n    return buffer_get(b, buffer_length(b))\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 5: get: position 2 out of range (count 2)\n",
+      "status": 1
+    },
+    {
+      "id": "buffer-get-empty-fault", "profile": "run-stdio",
+      "source": "func main():\n    let b = new_buffer()\n    return buffer_get(b, 0)\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 3: get: position 0 out of range (count 0)\n",
+      "status": 1
+    },
+    {
+      "id": "buffer-set-byte-255", "profile": "run",
+      "source": "func main():\n    let b = new_buffer()\n    do append(b, 0)\n    do append(b, 1)\n    let x = buffer_set(b, 1, 255)\n    let y = buffer_set(b, 0, 254)\n    return (x, y, buffer_get(b, 0), buffer_get(b, 1), buffer_length(b))\nend\n",
+      "stdin": "", "stdout": "(255, 254, 254, 255, 2)\n", "status": 0
+    },
+    {
+      "id": "buffer-set-byte-256-fault", "profile": "run-stdio",
+      "source": "func main():\n    let b = new_buffer()\n    do append(b, 7)\n    let x = buffer_set(b, 0, 256)\n    return x\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 4: append: byte value 256 out of range 0..255\n",
+      "status": 1
+    },
+    {
+      "id": "buffer-set-at-length-fault", "profile": "run-stdio",
+      "source": "func main():\n    let b = new_buffer()\n    do append(b, 7)\n    let x = buffer_set(b, 1, 9)\n    return x\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 4: get: position 1 out of range (count 1)\n",
+      "status": 1
+    },
+    {
+      "id": "linux-syscall6-write-stdout", "profile": "run",
+      "source": "func main():\n    let b = new_buffer()\n    do append(b, 104)\n    do append(b, 105)\n    do append(b, 10)\n    let n = linux_syscall6(1, 1, buffer_address(b), buffer_length(b), 0, 0, 0)\n    return n\nend\n",
+      "stdin": "", "stdout": "hi\n3\n", "status": 0
+    },
+    {
+      "id": "linux-syscall6-read-stdin", "profile": "run",
+      "source": "func main():\n    let b = new_buffer()\n    do buffer_fill(b, 4, 0)\n    let n = linux_syscall6(0, 0, buffer_address(b), 4, 0, 0, 0)\n    return (n, buffer_get(b, 0), buffer_get(b, 3), buffer_length(b))\nend\n",
+      "stdin": "wxyz", "stdout": "(4, 119, 122, 4)\n", "status": 0
+    },
+    {
+      "id": "buffer-copy-source-span-fault", "profile": "run-stdio",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let a = text(\"abcdefgh\")\n    let c = text(\"xyz\")\n    let n = buffer_copy(a, 0, c, 2, 2)\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 13: get: position 3 out of range (count 3)\n",
+      "status": 1
+    },
+    {
+      "id": "buffer-copy-source-start-fault", "profile": "run-stdio",
+      "source": "func text(s):\n    let b = new_buffer()\n    let i = 0\n    while i < length(s):\n        do append(b, index(s, i))\n        i = i + 1\n    end\n    return b\nend\nfunc main():\n    let a = text(\"abcdefgh\")\n    let c = text(\"xyz\")\n    let n = buffer_copy(a, 0, c, 5, 0)\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 13: get: position 5 out of range (count 3)\n",
+      "status": 1
+    },
+    {
+      "id": "arity-buffer-get-under-2", "profile": "reject",
+      "source": "func main():\n    return buffer_get(new_buffer())\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'buffer_get' (ERR 420)"
+    },
+    {
+      "id": "buffer-set-value-not-int", "profile": "reject",
+      "source": "func main():\n    return buffer_set(new_buffer(), 0, true)\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "buffer-length-reserved-name", "profile": "reject",
+      "source": "func buffer_length(a):\n    return a\nend\nfunc main():\n    return 0\nend\n",
+      "diagnostic": "line 1: native-subset: invalid function table (ERR 429)"
+    },
+    {
+      "id": "buffer-address-not-buffer", "profile": "reject",
+      "source": "func main():\n    return buffer_address(7)\nend\n",
+      "diagnostic": "line 2: native-subset: structural type conflict (ERR 430)"
+    },
+    {
+      "id": "arity-linux-syscall6-under-7", "profile": "reject",
+      "source": "func main():\n    return linux_syscall6(1, 1, 0, 0, 0, 0)\nend\n",
+      "diagnostic": "line 2: native-subset: arity mismatch at call to 'linux_syscall6' (ERR 420)"
     }
   ]
 }
