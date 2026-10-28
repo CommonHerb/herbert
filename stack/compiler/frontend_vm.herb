@@ -305,14 +305,23 @@ func decode_char(s):
         if c2 == '\\':
             return 92
         end
+        if c2 == 't':
+            return 9
+        end
+        if c2 == 'r':
+            return 13
+        end
+        if c2 == '0':
+            return 0
+        end
         return 39
     end
     return c1
 end
 
 -- s is the raw lexed STRING text including the surrounding double quotes.
--- Walk s[1 .. length(s)-1) decoding \n \\ \" into a buffer; returns the
--- frozen byte string.
+-- Walk s[1 .. length(s)-1) decoding \n \\ \" \t \r \0 into a buffer; returns
+-- the frozen byte string.
 func decode_string_loop(s, i, end_i, buf):
     while i < end_i:
         let c = index(s, i)
@@ -322,6 +331,12 @@ func decode_string_loop(s, i, end_i, buf):
                 do append(buf, 10)
             elif c2 == '\\':
                 do append(buf, 92)
+            elif c2 == 't':
+                do append(buf, 9)
+            elif c2 == 'r':
+                do append(buf, 13)
+            elif c2 == '0':
+                do append(buf, 0)
             else:
                 do append(buf, 34)
             end
@@ -2425,6 +2440,10 @@ func diagnostic_message(code, payload):
         return "integer literal does not fit in 64 bits"
     end
     if code == 104:
+        -- The payload is the byte after the backslash; it is named when printable.
+        if length(payload) == 1 and index(payload, 0) > 32 and index(payload, 0) < 127:
+            return diagnostic_with_payload("unknown escape sequence '\\", payload, "'")
+        end
         return "unknown escape sequence"
     end
     if code == 105:
@@ -2641,11 +2660,11 @@ func err_end_of_int(src, i, n, line, acc):
 end
 
 func err_string_escape_ok(c):
-    return c == 'n' or c == '\\' or c == '"'
+    return c == 'n' or c == '\\' or c == '"' or c == 't' or c == 'r' or c == '0'
 end
 
 func err_char_escape_ok(c):
-    return c == 'n' or c == '\\' or c == '\''
+    return c == 'n' or c == '\\' or c == '\'' or c == 't' or c == 'r' or c == '0'
 end
 
 func err_end_of_string(src, i, n, line):
@@ -2664,7 +2683,7 @@ func err_end_of_string(src, i, n, line):
             return err_pos_fail(err_diag(105, line, ""))
         end
         if not err_string_escape_ok(index(src, i + 1)):
-            return err_pos_fail(err_diag(104, line, ""))
+            return err_pos_fail(err_diag(104, line, slice_text(src, i + 1, i + 2)))
         end
         return err_end_of_string(src, i + 2, n, line)
     end
@@ -2700,7 +2719,7 @@ func err_end_of_char(src, i, n, line):
             return err_pos_fail(err_diag(105, line, ""))
         end
         if not err_char_escape_ok(index(src, i + 1)):
-            return err_pos_fail(err_diag(104, line, ""))
+            return err_pos_fail(err_diag(104, line, slice_text(src, i + 1, i + 2)))
         end
         return err_check_char_close(src, i + 2, n, line)
     end

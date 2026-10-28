@@ -305,14 +305,23 @@ func decode_char(s):
         if c2 == '\\':
             return 92
         end
+        if c2 == 't':
+            return 9
+        end
+        if c2 == 'r':
+            return 13
+        end
+        if c2 == '0':
+            return 0
+        end
         return 39
     end
     return c1
 end
 
 -- s is the raw lexed STRING text including the surrounding double quotes.
--- Walk s[1 .. length(s)-1) decoding \n \\ \" into a buffer; returns the
--- frozen byte string.
+-- Walk s[1 .. length(s)-1) decoding \n \\ \" \t \r \0 into a buffer; returns
+-- the frozen byte string.
 func decode_string_loop(s, i, end_i, buf):
     while i < end_i:
         let c = index(s, i)
@@ -322,6 +331,12 @@ func decode_string_loop(s, i, end_i, buf):
                 do append(buf, 10)
             elif c2 == '\\':
                 do append(buf, 92)
+            elif c2 == 't':
+                do append(buf, 9)
+            elif c2 == 'r':
+                do append(buf, 13)
+            elif c2 == '0':
+                do append(buf, 0)
             else:
                 do append(buf, 34)
             end
@@ -2425,6 +2440,10 @@ func diagnostic_message(code, payload):
         return "integer literal does not fit in 64 bits"
     end
     if code == 104:
+        -- The payload is the byte after the backslash; it is named when printable.
+        if length(payload) == 1 and index(payload, 0) > 32 and index(payload, 0) < 127:
+            return diagnostic_with_payload("unknown escape sequence '\\", payload, "'")
+        end
         return "unknown escape sequence"
     end
     if code == 105:
@@ -2641,11 +2660,11 @@ func err_end_of_int(src, i, n, line, acc):
 end
 
 func err_string_escape_ok(c):
-    return c == 'n' or c == '\\' or c == '"'
+    return c == 'n' or c == '\\' or c == '"' or c == 't' or c == 'r' or c == '0'
 end
 
 func err_char_escape_ok(c):
-    return c == 'n' or c == '\\' or c == '\''
+    return c == 'n' or c == '\\' or c == '\'' or c == 't' or c == 'r' or c == '0'
 end
 
 func err_end_of_string(src, i, n, line):
@@ -2664,7 +2683,7 @@ func err_end_of_string(src, i, n, line):
             return err_pos_fail(err_diag(105, line, ""))
         end
         if not err_string_escape_ok(index(src, i + 1)):
-            return err_pos_fail(err_diag(104, line, ""))
+            return err_pos_fail(err_diag(104, line, slice_text(src, i + 1, i + 2)))
         end
         return err_end_of_string(src, i + 2, n, line)
     end
@@ -2700,7 +2719,7 @@ func err_end_of_char(src, i, n, line):
             return err_pos_fail(err_diag(105, line, ""))
         end
         if not err_char_escape_ok(index(src, i + 1)):
-            return err_pos_fail(err_diag(104, line, ""))
+            return err_pos_fail(err_diag(104, line, slice_text(src, i + 1, i + 2)))
         end
         return err_check_char_close(src, i + 2, n, line)
     end
@@ -3590,7 +3609,8 @@ func nc_diag_msg(code, payload):
         return "native-subset: frame, signed displacement, or layout overflow"
     end
     if code == 429:
-        return "native-subset: invalid function table"
+        -- The function-table checks (nc_table_check_loop) say which rule broke.
+        return diagnostic_with_payload("native-subset: ", payload, "")
     end
     if code == 430:
         return "native-subset: structural type conflict"
@@ -4977,10 +4997,10 @@ func nc_table_check_loop(func_kids, i, n, seen, nodes, main_count, main_params, 
         let fn = get(nodes, get(func_kids, i))
         let name = get(fn.1, 0)
         if err_is_builtin_name(name):
-            return nc_fail(429, fn.3, name)
+            return nc_fail(429, fn.3, diagnostic_with_payload("function name '", name, "' is a reserved builtin"))
         end
         if err_name_seen(seen, name):
-            return nc_fail(429, fn.3, name)
+            return nc_fail(429, fn.3, diagnostic_with_payload("function '", name, "' is defined twice"))
         end
         do add(seen, name)
         let pn = get(nodes, get(fn.2, 0))
@@ -4992,10 +5012,10 @@ func nc_table_check_loop(func_kids, i, n, seen, nodes, main_count, main_params, 
         i = i + 1
     end
     if main_count != 1:
-        return nc_fail(429, 0, "main")
+        return nc_fail(429, 0, "no main function")
     end
     if main_params != 0:
-        return nc_fail(429, main_line, "main")
+        return nc_fail(429, main_line, "main takes no parameters")
     end
     return 0
 end
@@ -15779,6 +15799,37 @@ func nc_route_name(source):
     return freeze(buf)
 end
 
+-- The success marker. fwriter has published a.out; now say so. Before this,
+-- the marker was main's rendered result, written by the entry stub after the
+-- rename, so a closed or full stdout ended in status 1 with nothing on stderr
+-- and a broken pipe in SIGPIPE, though a.out had been replaced. SIGPIPE is
+-- blocked first (rt_sigprocmask, SIG_BLOCK, a one-bit set for signal 13), so a
+-- gone reader is an EPIPE result rather than a kill; then "0\n" goes to fd 1 in
+-- one write. Anything but two bytes written is said on stderr, and the status
+-- is 1. The new a.out stays: it is complete and correct.
+func nc_publish_marker():
+    let mask = new_buffer()
+    do append(mask, 0)
+    do append(mask, 16)
+    do append(mask, 0)
+    do append(mask, 0)
+    do append(mask, 0)
+    do append(mask, 0)
+    do append(mask, 0)
+    do append(mask, 0)
+    let blocked = linux_syscall6(14, 0, buffer_address(mask), 0, 8, 0, 0)
+    let marker = new_buffer()
+    do append(marker, 48)
+    do append(marker, 10)
+    let wrote = linux_syscall6(1, 1, buffer_address(marker), 2, 0, 0, 0)
+    if wrote == 2:
+        do process_exit(0)
+    end
+    let said = stderr_write("compiler: output published, but the success marker could not be written\n")
+    do process_exit(1)
+    return 0
+end
+
 func nc_drive(source):
     if nc_is_ast_dump(source):
         do nc_emit_ast_dump_program(source)
@@ -15879,7 +15930,7 @@ func nc_drive(source):
     buf = nc_emit_rodata(buf, prog.1)
     buf = nc_emit_zeroes_loop(buf, pad)
     do fwriter(freeze(buf))
-    return 0
+    return nc_publish_marker()
 end
 
 func main():

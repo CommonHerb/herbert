@@ -157,6 +157,37 @@ func nc_route_name(source):
     return freeze(buf)
 end
 
+-- The success marker. fwriter has published a.out; now say so. Before this,
+-- the marker was main's rendered result, written by the entry stub after the
+-- rename, so a closed or full stdout ended in status 1 with nothing on stderr
+-- and a broken pipe in SIGPIPE, though a.out had been replaced. SIGPIPE is
+-- blocked first (rt_sigprocmask, SIG_BLOCK, a one-bit set for signal 13), so a
+-- gone reader is an EPIPE result rather than a kill; then "0\n" goes to fd 1 in
+-- one write. Anything but two bytes written is said on stderr, and the status
+-- is 1. The new a.out stays: it is complete and correct.
+func nc_publish_marker():
+    let mask = new_buffer()
+    do append(mask, 0)
+    do append(mask, 16)
+    do append(mask, 0)
+    do append(mask, 0)
+    do append(mask, 0)
+    do append(mask, 0)
+    do append(mask, 0)
+    do append(mask, 0)
+    let blocked = linux_syscall6(14, 0, buffer_address(mask), 0, 8, 0, 0)
+    let marker = new_buffer()
+    do append(marker, 48)
+    do append(marker, 10)
+    let wrote = linux_syscall6(1, 1, buffer_address(marker), 2, 0, 0, 0)
+    if wrote == 2:
+        do process_exit(0)
+    end
+    let said = stderr_write("compiler: output published, but the success marker could not be written\n")
+    do process_exit(1)
+    return 0
+end
+
 func nc_drive(source):
     if nc_is_ast_dump(source):
         do nc_emit_ast_dump_program(source)
@@ -257,5 +288,5 @@ func nc_drive(source):
     buf = nc_emit_rodata(buf, prog.1)
     buf = nc_emit_zeroes_loop(buf, pad)
     do fwriter(freeze(buf))
-    return 0
+    return nc_publish_marker()
 end

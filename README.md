@@ -131,12 +131,25 @@ Normal program `main` return rendering, `clogger` and `flogger` are unchanged.
 
 The compiler reads source from stdin before parsing or dispatching an emit mode.
 Successful compilation publishes `a.out`, prints `0` plus newline to stdout,
-and exits 0. A checked input error writes `compiler: stdin read failed (errno N)` plus newline
-to stderr and exits 1. Lexical, structural and native diagnostics retain their
+and exits 0. A hosted compile writes the marker after publication, with SIGPIPE
+blocked; if it cannot be written (for example stdout closed or full, or its reader
+gone), it
+writes `compiler: output published, but the success marker could not be written`
+plus newline to stderr, best effort (with stderr closed or gone too, the status 1
+is silent), and exits 1, leaving the new `a.out`, which is complete.
+The kernel emit routes still print the marker as `main`'s rendered result, after
+the new image is in place: when it cannot be written they exit 1 with nothing on
+stderr, or, if its reader has gone and SIGPIPE is not ignored, are killed by
+SIGPIPE (status 141 in a shell). A checked input error writes
+`compiler: stdin read failed (errno N)` plus newline to stderr and exits 1.
+Lexical, structural and native diagnostics retain their
 text but now go to stderr with status 1 and empty stdout. This deliberately
 changes the old status-zero/stdout rejection convention, including shared native
 diagnostics in historical emit modes. Callers must check the compiler status
-before using `a.out`; a failed invocation preserves the previous artifact.
+before using `a.out`. A rejection, an input error or a publication failure
+preserves the previous artifact; a status 1 after publication does not, and
+leaves the new one in place: a hosted compile or a kernel emit route whose marker
+could not be written.
 The internal `-- emit: ast-dump` inspection route writes the parsed tree to
 stdout without publishing `a.out`. It and every emit route that reads its
 input now run the checked lexer and parser first, so lexically or

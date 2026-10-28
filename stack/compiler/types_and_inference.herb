@@ -80,7 +80,8 @@ func nc_diag_msg(code, payload):
         return "native-subset: frame, signed displacement, or layout overflow"
     end
     if code == 429:
-        return "native-subset: invalid function table"
+        -- The function-table checks (nc_table_check_loop) say which rule broke.
+        return diagnostic_with_payload("native-subset: ", payload, "")
     end
     if code == 430:
         return "native-subset: structural type conflict"
@@ -1467,10 +1468,10 @@ func nc_table_check_loop(func_kids, i, n, seen, nodes, main_count, main_params, 
         let fn = get(nodes, get(func_kids, i))
         let name = get(fn.1, 0)
         if err_is_builtin_name(name):
-            return nc_fail(429, fn.3, name)
+            return nc_fail(429, fn.3, diagnostic_with_payload("function name '", name, "' is a reserved builtin"))
         end
         if err_name_seen(seen, name):
-            return nc_fail(429, fn.3, name)
+            return nc_fail(429, fn.3, diagnostic_with_payload("function '", name, "' is defined twice"))
         end
         do add(seen, name)
         let pn = get(nodes, get(fn.2, 0))
@@ -1482,10 +1483,10 @@ func nc_table_check_loop(func_kids, i, n, seen, nodes, main_count, main_params, 
         i = i + 1
     end
     if main_count != 1:
-        return nc_fail(429, 0, "main")
+        return nc_fail(429, 0, "no main function")
     end
     if main_params != 0:
-        return nc_fail(429, main_line, "main")
+        return nc_fail(429, main_line, "main takes no parameters")
     end
     return 0
 end

@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GOOD = b'func main():\n    return 42\nend\n'
 OLD = b'previous complete artifact\x00\xff\n'
 FAIL = b'compiler: output publication failed\n'
+MARKER_LOST = b'compiler: output published, but the success marker could not be written\n'
 
 
 def need(ok, message):
@@ -122,6 +123,39 @@ def run_cases(compiler, work, faults):
         need((d / 'a.out' / 'keep').read_bytes() == OLD, 'destination directory changed')
         no_temporary(d)
     case('directory-destination', directory_output)
+
+    # The success marker is written after publication. When it cannot be
+    # written, the new artifact stays (it is complete) and the compiler says so.
+    def marker_lost(d, stdout, preexec=None):
+        (d / 'a.out').write_bytes(OLD)
+        (d / 'source.herb').write_bytes(GOOD)
+        result = subprocess.run([str(compiler)], input=GOOD, cwd=d, stdout=stdout,
+                                stderr=subprocess.PIPE, timeout=30, preexec_fn=preexec)
+        (d / 'stderr').write_bytes(result.stderr)
+        (d / 'status').write_text(str(result.returncode)+'\n')
+        need((result.returncode, result.stderr) == (1, MARKER_LOST),
+             f'expected {(1, MARKER_LOST)!r}, got {(result.returncode, result.stderr)!r}')
+        need(hashlib.sha256((d / 'a.out').read_bytes()).hexdigest() == hashlib.sha256(image).hexdigest(),
+             'published artifact differs from a normal compile')
+        no_temporary(d)
+
+    def stdout_closed(d):
+        marker_lost(d, None, lambda: os.close(1))
+    case('marker-stdout-closed', stdout_closed)
+
+    def stdout_full(d):
+        with open('/dev/full', 'wb') as full:
+            marker_lost(d, full)
+    case('marker-stdout-full', stdout_full)
+
+    def stdout_reader_gone(d):
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        try:
+            marker_lost(d, write_end)
+        finally:
+            os.close(write_end)
+    case('marker-stdout-reader-gone', stdout_reader_gone)
 
     def mask(d):
         exact(invoke(compiler, d, umask=0o077), 0, b'0\n', b'')
