@@ -454,7 +454,8 @@ used under `do` to discard its result:
   count. `n = 0` is allowed and moves nothing (`at` or `from` may then equal the
   length, never exceed it). Overlapping spans within one buffer, or through
   aliases, are moved correctly in either direction. It does not grow or allocate.
-  Added 2026-10-23 (LEDGER D29); the only bulk byte move in the language.
+  Added 2026-10-23 (debt D29 of the maintainers' private canon, not published); the
+  only bulk byte move in the language.
 - `buffer_fill(b, n, v)` appends `n` copies of the byte `v` to `b` and returns
   `n`: what `n` calls of `append(b, v)` would leave, byte for byte, in one step.
   `v` must be 0..255 and is checked first, whether or not `n` is zero; a bad

@@ -88,8 +88,8 @@ SHA256 `f604235d8f8577cfddff269bef565a4059f36df4cf3e9e2bbb05eac6c119ef59`.
 The existing kernel and mutation gates must still run against the repaired parser.
 
 `fixtures/cairn-bochs-ci-seed.e9` is the actual September 11 audit capture for seed
-`691708f82b0bf856`, copied unchanged from
-`BLUESTONE/audits/independent-assessment-2026-09-11/logs/cairn-bochs-get.e9`.
+`691708f82b0bf856`, copied unchanged from that audit's log `cairn-bochs-get.e9`, which
+is kept in the maintainers' private canon and is not published.
 Its expected payload is independently fixed in `check_debugcon_frames.py`.
 The early D4 is a wake-record value; the later closed write is the answer.
 `CAIRN_BOCHS_SEED=691708f82b0bf856` reproduces the same live link55 Bochs

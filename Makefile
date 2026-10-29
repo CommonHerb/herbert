@@ -317,7 +317,7 @@ switchover-dry-run:
 # make test already reaches this through the frozen C-free surface in both its
 # absent and tombstone phases. This standalone target diagnoses that same gate;
 # adding it again to verify-local would duplicate enforcement. Prior enforcement
-# evidence: MEWTWO/audits/step0-diet-gate-2026-09-02/REPORT.md.
+# evidence: a 2026-09-02 report in the maintainers' private canon (not published).
 closed-loop-memory-diet:
 	@bash bootstrap/tests/run_closed_loop_memory_diet.sh
 

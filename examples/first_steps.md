@@ -12,9 +12,10 @@ at the edge of the play area. Escape or the window's close button exits normally
 Changing focus clears held keys; press again after returning to the window.
 The character blinks and the small green indicator changes while idle.
 
-This is the first interactive checkpoint for making Herbert useful for ordinary
-programs. There is no maze, collision with obstacles, score, audio or full game
-yet. Development stops here for Ben to try it before the game expands.
+This was the first interactive checkpoint for making Herbert useful for ordinary
+programs, and it stays small: one character to move, with no obstacles, score
+or audio. Development stopped here for Gulpin to try it before the game
+expanded; [the maze](maze.md) and [the notes editor](notes.md) followed.
 
 ## What runs
 
@@ -79,7 +80,7 @@ libX11, libXtst and Xvfb belong to the independent tests, not to the executable.
 smoke check: window, idle animation, held Right/release, and window-manager close.
 It addresses synthetic events only to its test window. The full control and
 sustained-memory checks run on the private display.
-Ben reported a successful manual trial on September 13 and authorized the maze
+Gulpin reported a successful manual trial on September 13 and authorized the maze
 and notes-editor expansion. His report is separate from automated observations
 and does not identify the cause of the original Down-test failure.
 

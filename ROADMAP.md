@@ -93,5 +93,6 @@ sovereignty. The C bootstrap interpreter remains retired. Frozen C-derived
 artifacts and the seed's original minting provenance remain explicit trust
 anchors; reproducing a seed establishes consistency, not independent provenance.
 
-Current decisions and open debts live in the MEWTWO canon one repository up.
+Current decisions and open debts are kept in the maintainers' private canon,
+which is not published.
 Historical responsibility details remain in `BOOTSTRAP-RESPONSIBILITIES.md`.
