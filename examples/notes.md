@@ -6,9 +6,11 @@ The resulting program links no foreign language runtime or graphics library.
 
 ```sh
 make notes
-./build/notes my-notes.txt
+./build/notes ~/my-notes.txt
 ```
 
+Keep notes outside a code checkout: Notes writes its recovery folder and rescue
+copies beside the file you open (see Session recovery below).
 Without a path it opens `notes.txt` in the current directory. A missing file
 starts empty and is created only when you save. An existing file must contain
 at most 4,194,304 bytes (4 MiB) of valid UTF-8, TAB, and either LF or CRLF newlines.
@@ -268,7 +270,11 @@ path is used for file operations. Each edit still moves
 the text after the cursor, in one block since the block copy, and writes the
 whole recovery copy; on the development machine an insertion in the middle of
 a 4 MiB document costs under a millisecond and its checkpoint a few. A line
-many thousands of characters long is slower to draw.
+many thousands of characters long is slower to draw. Lines are not wrapped: a
+line wider than the window runs past its right edge, and the view scrolls
+sideways to follow the cursor. The bitmap letters have no descenders, so g, p, q
+and y sit on the baseline. There is no desktop launcher or install step; start
+Notes from a terminal.
 
 **Session recovery is automatic after editing.** At the first edit, Notes creates
 a private sibling directory named `.herbert-notes-<process>-<number>` (0700).
