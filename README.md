@@ -102,7 +102,9 @@ Use the value builtin in `main`, with at most one syntactic input operation
 across `stdin_read` and legacy `clogger`. Mutually exclusive branches still
 count separately. Existing reachable-function checking is unchanged; this is
 not a new validation pass over unused helper bodies. The builtin takes no
-arguments; `do stdin_read()` is rejected. Its function name is reserved, while
+arguments. As a statement, `do stdin_read()` reads standard input to EOF and
+discards the bytes and the status; it is still the one input operation (see
+"Statement calls" in the language guide). Its function name is reserved, while
 local and parameter names may use that spelling. It is native hosted-only,
 not an addition to VM or kernel target interfaces.
 
@@ -115,8 +117,9 @@ transfer: the result is not a byte count or an all-or-nothing guarantee. The
 inherited SIGPIPE disposition is unchanged, so a broken pipe may terminate the
 process rather than return an error.
 
-Use `stderr_write` in an expression (for example, bind its result with `let`);
-`do stderr_write(...)` is rejected because it produces a value.
+Use `stderr_write` in an expression (for example, bind its result with `let`)
+to see the status, or as a statement: `do stderr_write(...)` writes the bytes
+and discards the status.
 
 `do process_exit(status)` accepts one integer and terminates the process with
 its low eight bits as the exit status, without rendering `main`'s return value.
