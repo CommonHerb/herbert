@@ -156,7 +156,7 @@ mi="$work/interlock.elf"; nop_off "$base" "$mi" "$(fpos $o_interlock)" 4 >/dev/n
 iX=$(trace_for "$mi" 10); iY=$(trace_for "$mi" 5)
 if [[ "$iX" == "$TX" && "$iY" == "$TY" ]]; then
     if has_hex "$mi" "85c07449"; then fail_test "M-interlock: 85c07449 still present after patch"; \
-    else echo "M-interlock CAUGHT (white-box): done-check->nops is SILENT on silicon (X=$iX Y=$iY unchanged, slow-PIT margin) but the P-sched pin (85c07449) is GONE -> gate RED. (Proves the interlock is white-box-pinned, not silicon-witnessed -- honest split.)"; fi
+    else echo "M-interlock CAUGHT (white-box): done-check->nops is SILENT on QEMU-TCG (X=$iX Y=$iY unchanged, slow-PIT margin) but the P-sched pin (85c07449) is GONE -> gate RED. (Proves the interlock is white-box-pinned, not silicon-witnessed -- honest split.)"; fi
 else fail_test "M-interlock: expected SILENT $TX/$TY (white-box only), got X=$iX Y=$iY"; fi
 
 # M-provzero: set seedA GP dword [0] (the edi slot in popa order) nonzero. Silicon still emits the
@@ -165,7 +165,7 @@ mp="$work/provzero.elf"; patch_off "$base" "$mp" "$(fpos $off_seedA)" "11111111"
 pX=$(trace_for "$mp" 10); pY=$(trace_for "$mp" 5)
 gpA=$(dd if="$mp" bs=1 skip="$(fpos $off_seedA)" count=4 status=none | xxd -p)
 if [[ "$pX" == "$TX" && "$pY" == "$TY" && "$gpA" == "11111111" ]]; then
-    echo "M-provzero CAUGHT (white-box): a nonzero seeded GP dword is SILENT on silicon (X=$pX Y=$pY unchanged) but the P-seeds 8-zero-GP provenance pin is now $gpA -> gate RED. (Proves the provenance pin -- not the trace -- defends against a forge that seeds a fake accumulator; the cold-re-dispatch-fakes-warmth meta-class.)"
+    echo "M-provzero CAUGHT (white-box): a nonzero seeded GP dword is SILENT on QEMU-TCG (X=$pX Y=$pY unchanged) but the P-seeds 8-zero-GP provenance pin is now $gpA -> gate RED. (Proves the provenance pin -- not the trace -- defends against a forge that seeds a fake accumulator; the cold-re-dispatch-fakes-warmth meta-class.)"
 else fail_test "M-provzero: expected SILENT $TX/$TY (white-box only), got X=$pX Y=$pY gp=$gpA"; fi
 
 echo ""

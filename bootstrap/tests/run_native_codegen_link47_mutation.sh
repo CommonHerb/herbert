@@ -64,4 +64,4 @@ done
 echo "native-codegen link47 mutation (tenement): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
 if [[ -e "$HVMARK" ]]; then echo "FAIL: link47 HARNESS FAILURE -- a QEMU run was dead/timed-out (empty output); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link47 tenement MUTATION proof -- noreclaim/noremap/noskip each RED on silicon + assert_tenement False)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link47 tenement MUTATION proof -- noreclaim/noremap/noskip each RED on QEMU-TCG + assert_tenement False)"

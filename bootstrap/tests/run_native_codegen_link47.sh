@@ -158,4 +158,4 @@ fi
 f2_harness_summary || exit 1
 echo "native-codegen link47 (tenement / MEMORY RECLAMATION): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link47 tenement / MEMORY RECLAMATION -- $N programs reuse $M physical pages; byte-pinned to tenement_ref.build_elf, white-box reclamation machinery, QEMU+KVM+Bochs GREEN, frozen-rollcall differential RED, additive on rollcall/tickover)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link47 tenement / MEMORY RECLAMATION -- $N programs reuse $M physical pages; byte-pinned to tenement_ref.build_elf, white-box reclamation machinery, substrate scope: QEMU=$(have_qemu && echo GREEN || echo SKIPPED), Bochs=$(have_bochs && echo GREEN || echo SKIPPED), KVM=$(have_kvm && echo GREEN || echo 'SKIPPED (/dev/kvm unavailable)'), frozen-rollcall differential RED, additive on rollcall/tickover)"

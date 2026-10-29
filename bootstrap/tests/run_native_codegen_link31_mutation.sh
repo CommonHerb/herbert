@@ -139,7 +139,7 @@ me="$work/noeoi.elf"; patch_hex "$base" "$me" "b020e620a1${inq_le}" "90909090a1$
 eX=$(emit_for "$me" 65); eY=$(emit_for "$me" 200)
 if [[ "$eX" == "de58ad" && "$eY" == "de2ead" ]]; then
     if has_hex "$me" "b020e620a1${inq_le}"; then fail_test "M-noeoi: EOI still present after patch"; \
-    else echo "M-noeoi CAUGHT (white-box): EOI->nops is SILENT on silicon (X=$eX Y=$eY unchanged) but the P-sched scheduler pin (b020e620...) is GONE -> gate RED. (Proves the EOI is white-box-pinned, not silicon-witnessed.)"; fi
+    else echo "M-noeoi CAUGHT (white-box): EOI->nops is SILENT on QEMU-TCG (X=$eX Y=$eY unchanged) but the P-sched scheduler pin (b020e620...) is GONE -> gate RED. (Proves the EOI is white-box-pinned, not silicon-witnessed.)"; fi
 else fail_test "M-noeoi: expected SILENT de58ad/de2ead (white-box only), got X=$eX Y=$eY"; fi
 
 # M-eflags: seedB eflags 0x002 -> 0x202 (IF=1). Silicon still single-shot (slow PIT). P-seeds RED.
@@ -147,7 +147,7 @@ mf="$work/eflags.elf"; patch_off "$base" "$mf" "$(fpos $((off_seedB+40)))" "0202
 fX=$(emit_for "$mf" 65); fY=$(emit_for "$mf" 200)
 ef_now=$(dd if="$mf" bs=1 skip="$(fpos $((off_seedB+40)))" count=4 status=none | xxd -p)
 if [[ "$fX" == "de58ad" && "$fY" == "de2ead" && "$ef_now" == "02020000" ]]; then
-    echo "M-eflags CAUGHT (white-box): seedB eflags 0x002->0x202 (IF=1) is SILENT on silicon (X=$fX Y=$fY unchanged) but the P-seeds eflags==0x002 value-bind is now 0x202 -> gate RED. (Proves IF=0 is white-box-pinned against re-preemption/double-emit.)"
+    echo "M-eflags CAUGHT (white-box): seedB eflags 0x002->0x202 (IF=1) is SILENT on QEMU-TCG (X=$fX Y=$fY unchanged) but the P-seeds eflags==0x002 value-bind is now 0x202 -> gate RED. (Proves IF=0 is white-box-pinned against re-preemption/double-emit.)"
 else fail_test "M-eflags: expected SILENT de58ad/de2ead (white-box only), got X=$fX Y=$fY ef=$ef_now"; fi
 
 # M-thresh: cmp 128 -> cmp 100. Silicon still splits 65|200. P-sched THRESH==128 value-bind RED.
@@ -155,7 +155,7 @@ mt="$work/thresh.elf"; patch_hex "$base" "$mt" "3d80000000" "3d64000000" >/dev/n
 tX=$(emit_for "$mt" 65); tY=$(emit_for "$mt" 200)
 if [[ "$tX" == "de58ad" && "$tY" == "de2ead" ]]; then
     if has_hex "$mt" "3d800000007307"; then fail_test "M-thresh: cmp 128 still present after patch"; \
-    else echo "M-thresh CAUGHT (white-box): THRESH 128->100 is SILENT on silicon for X=65/Y=200 (X=$tX Y=$tY unchanged) but the P-sched cmp-imm value-bind (3d80000000) is GONE -> gate RED. (Proves THRESH is white-box-pinned.)"; fi
+    else echo "M-thresh CAUGHT (white-box): THRESH 128->100 is SILENT on QEMU-TCG for X=65/Y=200 (X=$tX Y=$tY unchanged) but the P-sched cmp-imm value-bind (3d80000000) is GONE -> gate RED. (Proves THRESH is white-box-pinned.)"; fi
 else fail_test "M-thresh: expected SILENT de58ad/de2ead (white-box only), got X=$tX Y=$tY"; fi
 
 echo ""

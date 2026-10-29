@@ -70,4 +70,4 @@ done
 echo "native-codegen link48 mutation (homestead): pass=$pass fail=$fail"
 [[ "$fail" -eq 0 ]] || exit 1
 if [[ -e "$HVMARK" ]]; then echo "FAIL: link48 HARNESS FAILURE -- a feeder never reached LISTENING (dead socket/QEMU); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link48 homestead MUTATION proof -- nogrow/noclear/eager each RED on silicon + assert_homestead False; M-eager = full output, zero demand commits)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link48 homestead MUTATION proof -- nogrow/noclear/eager each RED on QEMU-TCG + assert_homestead False; M-eager = full output, zero demand commits)"

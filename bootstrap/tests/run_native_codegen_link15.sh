@@ -120,8 +120,8 @@ check_trap() {
     # fixture is a runtime fault BY CONSTRUCTION (e.g. divide-by-zero) and the
     # exact trap-emitting bytes are pinned white-box by the disasm gate, so the
     # clean-trap property is intrinsic and graded WITHOUT C. The native trap exits
-    # 1 (herbert's runtime-fault convention). C is preserved as an OPT-IN
-    # exit-status-parity cross-check under NATIVE_CODEGEN_ORACLE=c.
+    # 1 (herbert's runtime-fault convention). The C cross-check below (NATIVE_CODEGEN_ORACLE=c)
+    # is retired: native_codegen_oracle.sh refuses that mode before any probe runs.
     "$elf" <"$input" >"$tmp/$label.n.out" 2>"$tmp/$label.n.err"
     local nrc=$?
     if [[ $nrc -eq 0 ]]; then
@@ -261,5 +261,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link15: $pass sub-tests: * / % differentials (Adler-32 with + * %65521, mul/div/mod, 64-bit wrap mul/div), a+b*c vs (a+b)*c precedence proof, clean div/mod-by-zero traps with renamed twins (exit-status parity, no SIGFPE), imul/div emit-byte disasm gate)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link15: $pass sub-tests: * / % differentials (Adler-32 with + * %65521, mul/div/mod, 64-bit wrap mul/div), a+b*c vs (a+b)*c precedence proof, clean div/mod-by-zero traps with renamed twins (exit status 1 and empty stdout, no SIGFPE or SIGSEGV; stderr is not graded here), imul/div emit-byte disasm gate)"
 exit 0
