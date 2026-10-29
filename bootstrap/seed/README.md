@@ -38,7 +38,10 @@ bytes) is the deferred Oberon-ideal hardening.
 ## Re-seeding (when the backend legitimately changes)
 
 Edit the [compiler source stages](../../docs/COMPILER.md) and run
-`make compiler-source` to refresh the checked assembled artifact first.
+`make compiler-source` and `make oracle-source` to refresh both checked assembled
+artifacts first: the i386 oracle fragment is every stage but the driver plus the
+oracle units, so an edit to any other stage moves it too, and `make check` stays
+red until both are current.
 Any change to `stack/native_compile_fragment.herb` that shifts gen-1's bytes —
 including a **comment edit that changes the net line count**, because the
 compiler embeds source line numbers — makes this seed stale and the michoi seed
@@ -47,10 +50,14 @@ gate goes **RED**. That RED means *re-seed*, not *regression*:
 ```
 make reseed          # re-mints gen-1 C-FREE: the committed seed recompiles the
                      # backend to its own fixpoint, checks it self-reproduces,
-                     # rewrites gen1.seed + .sha256 (no C interpreter involved)
+                     # runs hosted conformance, memory/I/O, wordcount and stack
+                     # headroom on the candidate, then rewrites gen1.seed + .sha256
+                     # (no C interpreter involved)
 git add stack/compiler/*.herb stack/native_compile_fragment.herb \
+        stack/i386_oracle_fragment.herb \
         bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 make check && make test
+make verify-local    # what make reseed's last line asks, plus any target gates
 ```
 
 (Post-switchover — sovereignty link `castoff` — the C bootstrap is gone, so the

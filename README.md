@@ -14,8 +14,12 @@ Gulpin completed its manual trial and authorized this expansion on September 13.
 ```sh
 make maze notes
 ./build/maze
-./build/notes my-notes.txt
+./build/notes ~/my-notes.txt
 ```
+
+Notes keeps its recovery and rescue copies beside the file it opens
+(`.herbert-notes-*/`, `herbert-rescue-*.txt`), so keep notes outside this
+checkout, as above; the repository ignores those names in case you do not.
 
 The maze reads an editable text map, checks walls, counts collected dots and
 supports completion and restart. Notes opens, edits and saves a bounded UTF-8

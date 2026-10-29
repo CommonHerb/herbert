@@ -1,7 +1,7 @@
 # Native Ecosystem Covenant
 
-This branch grows Herbert's ecosystem without relaxing Herbert's
-native-sovereignty goal.
+This covenant governs how Herbert's ecosystem grows without relaxing
+Herbert's native-sovereignty goal.
 
 ## Hard Rule
 
@@ -26,9 +26,9 @@ not count as Herbert-native progress.
 
 ## First Mergeable Slice
 
-This branch starts with documentation plus `.herb` programs only: examples that
-show what Herbert can make today, and a native ledger candidate that records the
-current replacement map from inside Herbert.
+The first slice (June 2026) was documentation plus `.herb` programs only:
+examples that show what Herbert can make today, and a native ledger candidate
+that records the current replacement map from inside Herbert.
 
 ## Native Ledger Candidate
 
