@@ -98,5 +98,5 @@ mutate_red provlit      "$work/mod_x.bin"   "forged stack, clean dump -> witness
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail native-codegen-link33 mutation sub-test(s) failed."; exit 1; fi
 if [[ -e "$HVMARK" ]]; then echo "FAIL: link33 HARNESS FAILURE -- a QEMU run was dead/timed-out (empty output); fail-closed, NOT a genuine pass"; rm -f "$HVMARK"; exit 1; fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen link33 mutation / lodger: control clean build GREEN + 7 mutations each RED on the dual-substrate host grader -- M-skipcall/M-modaddr SILICON-RED (the 0xE9 stream itself changes -- witness frame absent), M-aliasframe/M-provlit/M-noexclude/M-noexclbuf/M-hardcodeaddr HOST-RED (the run completes; the host witness [esp==alloc_hi] + allocator-policy recompute catch it); honest split, $pass checks)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen link33 mutation / lodger: control clean build GREEN + 7 mutations each RED on the dual-substrate host grader -- M-skipcall/M-modaddr RED on QEMU-TCG (the 0xE9 stream itself changes -- witness frame absent), M-aliasframe/M-provlit/M-noexclude/M-noexclbuf/M-hardcodeaddr HOST-RED (the run completes; the host witness [esp==alloc_hi] + allocator-policy recompute catch it); honest split, $pass checks)"
 exit 0

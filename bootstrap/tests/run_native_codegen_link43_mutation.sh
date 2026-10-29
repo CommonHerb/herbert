@@ -65,7 +65,7 @@ expect_red(){ # label kernel module
     local label="$1" kelf="$2" mod="$3"
     run "$kelf" "$mod" gx "$work/$label.out"
     if python3 "$REF" grade "$work/$label.out" "$KEND" gx >/dev/null 2>&1; then bad "$label graded GREEN (mutation vacuous -- the design choice is NOT load-bearing)"
-    else ok "$label is RED on silicon ($(python3 "$REF" grade "$work/$label.out" "$KEND" gx 2>&1 | sed -n 2p | sed 's/^ *- //'))"; fi
+    else ok "$label is RED on QEMU-TCG ($(python3 "$REF" grade "$work/$label.out" "$KEND" gx 2>&1 | sed -n 2p | sed 's/^ *- //'))"; fi
 }
 # sanity: the GENUINE module on the GENUINE 4-page kernel is GREEN (the mutations are the only RED)
 run "$work/k4.elf" "$work/mod.bin" gx "$work/genuine.out"

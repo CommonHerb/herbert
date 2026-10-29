@@ -25,7 +25,7 @@ N="${TENEMENT_MUT_N:-6}"   # canonical N=6 workers
 M="${TENEMENT_MUT_M:-2}"   # MSLOTS=2
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [[ "${KERNEL_CODEGEN_REQUIRE_EMU:-0}" == "1" ]]; then echo "FAIL: stack/native_compile_fragment.herb (mutation proof requires QEMU)"; exit 1; fi
-    echo "  SKIP: qemu-system-x86_64 not found -- mutation proof needs the silicon gate"; exit 0
+    echo "  SKIP: qemu-system-x86_64 not found -- mutation proof needs QEMU"; exit 0
 fi
 work="$(mktemp -d)"; export KERNEL_PARSE_ERROR_FILE="$work/parser-errors.txt"; trap 'kernel_test_cleanup "$work"' EXIT
 HVMARK="/tmp/.hv_harness_fail.$$"; rm -f "$HVMARK"   # fail-closed marker: a dead/timed-out QEMU run trips this -> hard fail at end
@@ -58,7 +58,7 @@ for mut in noreclaim noremap noskip; do
     # (b) silicon: boot + grade must be RED
     boot "$work/k_$mut.elf" "$work/o_$mut"
     if python3 "$REF" gradeten "$work/o_$mut" "$KEND" "$N" "$M" >/dev/null 2>&1; then fail_test "M-$mut graded GREEN -- the mutation is VACUOUS (the reclamation choice is not load-bearing)"
-    else ok "M-$mut RED -- the mutation is caught on silicon (the reclamation choice is load-bearing)"; fi
+    else ok "M-$mut RED -- the mutation is caught on QEMU-TCG (the reclamation choice is load-bearing)"; fi
 done
 
 echo "native-codegen link47 mutation (tenement): pass=$pass fail=$fail"

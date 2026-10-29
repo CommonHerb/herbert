@@ -281,11 +281,11 @@ mutate idtr_not_failclosed \
 # caught statically (CAUGHT:head/hole/idtr) BEFORE boot -- there is provably no mutation that
 # passes the static gates yet triple-faults. The triple-fault path itself is proven on silicon by
 # the EMPIRICAL pre-build (nostore/notpresent/wrongslot -> triple-fault on both QEMU and Bochs,
-# recorded in run_native_codegen_link21.sh), and the boot gate's exact-byte check is exercised by
+# recorded in the message of commit 875df08), and the boot gate's exact-byte check is exercised by
 # the 5 positive probes in the forcing harness. Full static pinning is the strength here, not a gap.
 
 echo ""
 if [[ "$fail" -ne 0 ]]; then echo "$fail link21-mutation check(s) failed."; exit 1; fi
 xc=""; [[ "$XCHECK" == "1" ]] && xc=" + each native two-stage image byte-identical to C (retireable)"
-echo "PASS: link21 mutation proof ($pass checks: control emits golden=$GOLDEN via the runtime-store-mapped access C-FREE; 7 mutations each CAUGHT via a real two-stage seed compile of the mutated backend -- a not-present PTE, a corrupted slot computation (shr), and a wrong store-target vaddr leave 0x300000 unmapped (caught by the exact-head store pin); a wrong store FRAME and a wrong ACCESS page are behaviorally invisible (caught by the exact-head gate); filling the build-time hole is caught by the hole grep; breaking the fail-closed IDTR is caught by the fail-closed-IDTR grep -- the runtime computed-address store, the MMU-judged access, and the fail-closed mechanism are all proven load-bearing; the triple-fault path itself was shown on QEMU and Bochs by the empirical pre-build (recorded in run_native_codegen_link21.sh), not by this run$xc)"
+echo "PASS: link21 mutation proof ($pass checks: control emits golden=$GOLDEN via the runtime-store-mapped access C-FREE; 7 mutations each CAUGHT via a real two-stage seed compile of the mutated backend -- a not-present PTE, a corrupted slot computation (shr), and a wrong store-target vaddr leave 0x300000 unmapped (caught by the exact-head store pin); a wrong store FRAME and a wrong ACCESS page are behaviorally invisible (caught by the exact-head gate); filling the build-time hole is caught by the hole grep; breaking the fail-closed IDTR is caught by the fail-closed-IDTR grep -- the runtime computed-address store, the MMU-judged access, and the fail-closed mechanism are all proven load-bearing; the triple-fault path itself was shown on QEMU and Bochs by the empirical pre-build (recorded in the message of commit 875df08, which landed link21), not by this run$xc)"
 exit 0
