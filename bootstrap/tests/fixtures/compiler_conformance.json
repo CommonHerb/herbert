@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have. Two more cases the same day pin what that batch's review found still unpinned: an upward overlapping buffer_copy of twelve bytes, which runs the eight-byte backward step once and the byte tail four times, and a buffer_copy destination start past the destination's length. The 2026-10-27 diagnostics cases pin the nesting limit from both sides (a flat sum of 2,000 terms and 1,999 nested ifs compile; 2,001 terms and 2,000 ifs are refused with ERR 405 at the first node past the limit), the array-of-unknown ERR 438 program the K1 review wrote, and a located ERR 430 and ERR 433 on a never-returning helper's result; the same day the missing-return cases moved from ERR 424/415/416 to ERR 406 at the function's own line and the ERR 436 case gained its line. The K3 cases (2026-10-27) pin the \\t, \\r and \\0 escapes in strings and chars and how main renders them, a backslash-space still unnamed, and the four ERR 429 function-table texts; the same day the nine reserved-name cases took the ERR 429 text that names the builtin and the two unknown-escape cases the ERR 104 text that names the escape.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have. Two more cases the same day pin what that batch's review found still unpinned: an upward overlapping buffer_copy of twelve bytes, which runs the eight-byte backward step once and the byte tail four times, and a buffer_copy destination start past the destination's length. The 2026-10-27 diagnostics cases pin the nesting limit from both sides (a flat sum of 2,000 terms and 1,999 nested ifs compile; 2,001 terms and 2,000 ifs are refused with ERR 405 at the first node past the limit), the array-of-unknown ERR 438 program the K1 review wrote, and a located ERR 430 and ERR 433 on a never-returning helper's result; the same day the missing-return cases moved from ERR 424/415/416 to ERR 406 at the function's own line and the ERR 436 case gained its line. The K3 cases (2026-10-27) pin the \\t, \\r and \\0 escapes in strings and chars and how main renders them, a backslash-space still unnamed, and the four ERR 429 function-table texts; the same day the nine reserved-name cases took the ERR 429 text that names the builtin and the two unknown-escape cases the ERR 104 text that names the escape. The K4 cases (2026-10-28) pin the located division-by-zero message for / and % on different lines (a modulo inside a helper, and a modulo by zero in a tuple after good divisions), output written before the fault kept, and the out-of-memory message when one buffer_fill asks for more than the 3.5 GiB heap, which fails before any memory is touched.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -3312,6 +3312,38 @@
       "id": "string-escape-backslash-space", "profile": "reject",
       "source": "func main():\n    return \"\\ \"\nend\n",
       "diagnostic": "line 2: unknown escape sequence (ERR 104)"
+    },
+    {
+      "id": "division-by-zero-message", "profile": "run-stdio",
+      "source": "func main():\n    let zero = length(\"\")\n    do flogger(\"before\\n\")\n    return 10 / zero\nend\n",
+      "stdin": "",
+      "stdout": "before\n",
+      "stderr": "herbert: line 4: division by zero\n",
+      "status": 1
+    },
+    {
+      "id": "modulo-by-zero-message", "profile": "run-stdio",
+      "source": "func rest(a, b):\n    return a % b\nend\nfunc main():\n    do flogger(\"kept\")\n    let r = rest(7, 3)\n    return rest(r, 0)\nend\n",
+      "stdin": "",
+      "stdout": "kept",
+      "stderr": "herbert: line 2: division by zero\n",
+      "status": 1
+    },
+    {
+      "id": "division-modulo-mixed-located", "profile": "run-stdio",
+      "source": "func main():\n    let a = 100\n    let b = 7\n    let q = a / b\n    let r = a % b\n    let z = length(\"\")\n    do flogger(\"q=\")\n    do flogger(\"\\n\")\n    return (q, r, 5 % 0, z)\nend\n",
+      "stdin": "",
+      "stdout": "q=\n",
+      "stderr": "herbert: line 9: division by zero\n",
+      "status": 1
+    },
+    {
+      "id": "heap-exhausted-message", "profile": "run-stdio",
+      "source": "func main():\n    let b = new_buffer()\n    do append(b, 65)\n    do flogger(\"start\\n\")\n    let n = buffer_fill(b, 4000000000, 0)\n    do flogger(\"filled\\n\")\n    return n\nend\n",
+      "stdin": "",
+      "stdout": "start\n",
+      "stderr": "herbert: out of memory (the 3.5 GiB heap is used up)\n",
+      "status": 1
     }
   ]
 }

@@ -9,12 +9,13 @@
 # probe is the differential centerpiece -- it exercises `+`, `*`, and `% 65521`
 # (a non-power-of-two modulus that needs REAL unsigned division, not a mask).
 #
-# Div/mod by zero must TRAP CLEANLY: the compiled program faults with a nonzero
-# exit and empty stdout (NO SIGFPE/#DE), matching the C bootstrap's exit status as captured in the committed golden.
-# The native back end guards with `test rcx,rcx; jz <exit1>` before `div`.
-# (Exact-stderr text is deferred per the D13 fault-parity convention: C prints
-# `herbert: line N: division by zero`; native matches exit status + empty
-# stdout.) Each trap probe carries a renamed twin -- if the twin behaves
+# Div/mod by zero must TRAP CLEANLY: the compiled program exits 1 with empty
+# stdout (NO SIGFPE/#DE); this gate checks the status and the empty stdout (the
+# C-bootstrap comparison mode, NATIVE_CODEGEN_ORACLE=c, is retired). The native
+# back end loads the operator's line (`mov r10d, line`), then guards with
+# `test rcx,rcx; jz <diag_div>` before `div`, and since K4 the program prints
+# `herbert: line N: division by zero` on stderr. This gate does not grade stderr;
+# the conformance run-stdio cases pin that text. Each trap probe carries a renamed twin -- if the twin behaves
 # differently the trap was probe-fitted.
 #
 # A white-box disasm gate pins the exact emit bytes for imul and the div
@@ -104,10 +105,10 @@ check_diff() {
     fi
 }
 
-# Trap probe: the compiled program must fault CLEANLY on a zero divisor -- a
-# nonzero exit with EMPTY stdout and NO SIGFPE (#DE, exit 136) / SIGSEGV. The C
-# bootstrap does the same (nonzero exit, empty stdout, located stderr). We grade
-# exit-status parity (NOT the full stderr envelope -- exact-stderr is deferred).
+# Trap probe: the compiled program must fault CLEANLY on a zero divisor -- exit
+# 1 with EMPTY stdout and NO SIGFPE (#DE, exit 136) / SIGSEGV. Since K4 it also
+# prints the located `herbert: line N: division by zero`, as the C bootstrap does;
+# this gate grades the status and stdout only (the conformance cases pin the text).
 # The compiler itself must exit 0 and emit a valid ELF (this is an ACCEPTED
 # program with a runtime fault, not a rejected one).
 check_trap() {
@@ -204,7 +205,7 @@ check_disasm_gate() {
 
     # Emit byte sequences (pop rcx=59 pop rax=58 ... push result):
     #   mul: 59 58 48 0f af c1 50          (imul rax,rcx; push rax)
-    #   div: 59 58 48 85 c9 0f 84 <rel32>  (test rcx,rcx; jz exit1)
+    #   div: 59 58 48 85 c9 0f 84 <rel32>  (test rcx,rcx; jz diag_div; after 41 ba imm32, mov r10d,line)
     #        48 31 d2 48 f7 f1 50          (xor rdx,rdx; div rcx; push rax)
     #   mod: ... 48 31 d2 48 f7 f1 52      (push rdx instead of rax)
     local gate_ok=1

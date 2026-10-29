@@ -11,6 +11,8 @@ linux_syscall6 and buffer_address deliberately give trusted code raw OS access.
 from pathlib import Path
 import argparse
 import hashlib
+import os
+import resource
 import select
 import shutil
 import subprocess
@@ -263,6 +265,59 @@ func main():
     return (n1, n2, buffer_length(a), buffer_length(w))
 end
 """, b"ab.....!++++++#WITNESS(5, 6, 15, 7)\n")
+
+        # A failed write of main's result says so on stderr and exits 1 (K4). The program contract builds programs but
+        # runs none, so the redirected-descriptor checks live here. stdout on /dev/full gives ENOSPC (28), a closed
+        # stdout EBADF (9); an int and a string result use the two copies of the write helper (the scalar render and
+        # the aggregate render). A gone reader still ends the program by SIGPIPE, as it ends standard tools.
+        def run_redirected(label, source, expected, *, stdout=None, preexec=None):
+            nonlocal passed
+            executable = compile_probe(label, source)
+            result = subprocess.run([str(executable)], cwd=executable.parent, stdin=subprocess.DEVNULL, stdout=stdout,
+                                    stderr=subprocess.PIPE, timeout=15, preexec_fn=preexec)
+            (executable.parent / "runtime.stderr").write_bytes(result.stderr)
+            require((result.returncode, result.stderr), expected, label)
+            passed += 1
+            print(f"PASS {label}", flush=True)
+
+        for kind, source in [("int", "func main():\n    return 42\nend\n"),
+                             ("string", "func main():\n    return \"hello\"\nend\n")]:
+            with open("/dev/full", "wb") as full:
+                run_redirected(f"write-fail-full-{kind}", source, (1, b"herbert: cannot write output (error 28)\n"),
+                               stdout=full)
+            run_redirected(f"write-fail-closed-{kind}", source, (1, b"herbert: cannot write output (error 9)\n"),
+                           preexec=lambda: os.close(1))
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        try:
+            run_redirected("write-reader-gone-sigpipe", "func main():\n    return 42\nend\n", (-13, b""), stdout=write_end)
+        finally:
+            os.close(write_end)
+
+        # The heap (K4): the startup reservation of the 3.5 GiB heap fails under a 1 GiB address-space limit, and a
+        # buffer_fill whose count wraps takes the heap trap; each says so and exits 1. Neither touches the heap.
+        run_redirected("heap-reserve-fails", "func main():\n    let b = new_buffer()\n    do append(b, 65)\n"
+                       "    return buffer_length(b)\nend\n", (1, b"herbert: cannot reserve the 3.5 GiB heap\n"),
+                       preexec=lambda: resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30)))
+        run_probe("heap-fill-count-wraps", "func main():\n    let b = new_buffer()\n    do append(b, 1)\n    do append(b, 2)\n"
+                  "    return buffer_fill(b, 0 - 1, 0)\nend\n", b"",
+                  stderr=b"herbert: out of memory (the 3.5 GiB heap is used up)\n", status=1)
+
+        # clogger() with stdin larger than the heap left says so too (K4, ruling 17). R1..R5 are value records of 16
+        # fields of the one before, so R5 is 16**5 = 1,048,576 words. new_array(T) writes a 24-byte header and takes an
+        # untouched backing of two elements (16 * width bytes), so the loops leave 59,464 of the heap's 3,758,096,384
+        # bytes while touching only the headers (about 1 MiB resident). 1,000 bytes of stdin fit; 1 MiB does not, and
+        # clogger's one-byte probe past the heap left ends the program with the out-of-memory sentence. "reserved"
+        # shows that the loops ended and clogger was reached.
+        records = "record R1:\n" + "".join(f"    a{i}: int\n" for i in range(16)) + "end\n" + "".join(
+            f"record R{k}:\n" + "".join(f"    f{i}: R{k - 1}\n" for i in range(16)) + "end\n" for k in range(2, 6))
+        loops = "".join(f"    {'let ' if name == 'R5' else ''}i = 0\n    while i < {n}:\n        do new_array({name})\n"
+                        "        i = i + 1\n    end\n" for name, n in (("R5", 223), ("R4", 15), ("R3", 15)))
+        clogger_source = (records + "func main():\n" + loops +
+                          "    do flogger(\"reserved\\n\")\n    let s = clogger()\n    return length(s)\nend\n")
+        run_probe("heap-clogger-fits", clogger_source, b"reserved\n1000\n", stdin=b"x" * 1000)
+        run_probe("heap-clogger-past-heap", clogger_source, b"reserved\n", stdin=bytes(range(256)) * 4096,
+                  stderr=b"herbert: out of memory (the 3.5 GiB heap is used up)\n", status=1)
 
         builtins = {
             "linux_syscall6": ["1", "1", "0", "0", "0", "0", "0"],

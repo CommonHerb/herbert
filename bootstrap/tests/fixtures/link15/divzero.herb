@@ -1,9 +1,9 @@
 -- Divide-by-zero TRAP probe. The divisor is a clogger byte; fed a zero byte it
--- is a runtime division by zero. Both the C bootstrap and the native ELF must
--- fault CLEANLY: nonzero exit, empty stdout, NO SIGFPE/#DE crash. (The native
--- back end guards with `test rcx,rcx; jz <exit1>` before `div`.) Graded for
--- exit-status parity vs C; C also prints `herbert: line N: division by zero`,
--- the native side matches exit + empty stdout (exact-stderr text deferred, D13).
+-- is a runtime division by zero. The native ELF must fault CLEANLY: exit 1,
+-- empty stdout, NO SIGFPE/#DE crash (its back end guards with `test rcx,rcx;
+-- jz <diag_div>` before `div`). link15 grades the status and the empty stdout.
+-- Since K4 the program also prints `herbert: line 11: division by zero` on
+-- stderr; link15 does not grade stderr (the conformance cases pin that text).
 func main():
     let inp = clogger()
     let a = index(inp, 0)

@@ -125,7 +125,11 @@ structure and checks statements following this call; it does not treat
 this call as never returning. Both names are reserved builtin function names. These
 operations are not additions to the VM or kernel target interfaces.
 
-Normal program `main` return rendering, `clogger` and `flogger` are unchanged.
+These two builtins do not change how `main`'s result is rendered or how `clogger`
+and `flogger` behave. `docs/LANGUAGE.md` gives the message, best effort, that a
+program prints when it divides by zero, uses up its heap (`clogger` input larger
+than the heap left included) or cannot write `main`'s result (sections 3 and 4);
+a failed `flogger` write ends it with status 1 and no message.
 
 ## Compiler invocation
 
@@ -138,8 +142,11 @@ writes `compiler: output published, but the success marker could not be written`
 plus newline to stderr, best effort (with stderr closed or gone too, the status 1
 is silent), and exits 1, leaving the new `a.out`, which is complete.
 The kernel emit routes still print the marker as `main`'s rendered result, after
-the new image is in place: when it cannot be written they exit 1 with nothing on
-stderr, or, if its reader has gone and SIGPIPE is not ignored, are killed by
+the new image is in place: when it cannot be written they exit 1 with
+`herbert: cannot write output (error N)` plus newline on stderr, best effort
+(with stderr closed too, the status 1 is silent; with stderr's reader gone too,
+they are killed by SIGPIPE unless it is ignored or blocked), or, if stdout's
+reader has gone and SIGPIPE is neither ignored nor blocked, are killed by
 SIGPIPE (status 141 in a shell). A checked input error writes
 `compiler: stdin read failed (errno N)` plus newline to stderr and exits 1.
 Lexical, structural and native diagnostics retain their

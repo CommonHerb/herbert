@@ -1543,8 +1543,8 @@ end
 -- Multiplicative opcodes. Appended at 42-44 after the current max (op_bnot=41);
 -- NEVER renumber an existing opcode (the VM range-checks binops and pass-1 sizes
 -- by op number). mul/div/mod are int x int -> int binops. div/mod also fault on a
--- zero divisor (a located runtime fault, exit-status parity with the C oracle),
--- so they are "faultable" (see nc_code_has_faultable_loop); mul never faults.
+-- zero divisor: a located runtime fault ("herbert: line N: division by zero",
+-- exit 1) through the fault block every hosted program carries; mul never faults.
 func op_mul():
     return 42
 end
@@ -8124,32 +8124,16 @@ func nc_analyze_program(pool, prog, sig):
     return nc_analyze_program_loop(pool, prog, sig, 0, count(prog.0), new_array(FunctionMeta), 0, 0)
 end
 
-func nc_code_has_faultable_loop(code, i, n):
-    while i < n:
-        let op = get(code, i).0
-        -- 23/29/31 = index/get/append OOB faults; 43/44 = div/mod by-zero fault.
-        -- A faultable op forces the fault-helper block (incl. the exit1 routine the
-        -- div/mod zero-check jumps to) to be emitted. op_mul (42) never faults.
-        if op == 23 or op == 29 or op == 31 or op == 43 or op == 44 or op == 60 or op == 61 or op == 66 or op == 67:
-            return 1
-        end
-        i = i + 1
-    end
-    return 0
-end
-
-func nc_funcs_have_faultable_loop(funcs, i, n):
-    while i < n:
-        if nc_code_has_faultable_loop(get(funcs, i).4, 0, count(get(funcs, i).4)) != 0:
-            return 1
-        end
-        i = i + 1
-    end
-    return 0
-end
-
+-- Every hosted program carries the fault-helper block (K4). Each one writes
+-- main's result through the fd1 write helper, whose failed write is reported
+-- through the block ("herbert: cannot write output (error N)"); every heap
+-- allocation reports a used-up heap through it; div/mod and the index, get,
+-- append and buffer_* ops report their located faults through it. Before K4 the
+-- block was emitted only for a program with one of the located-fault ops
+-- (23/29/31/43/44/60/61/66/67), and any other program ended silently on a full
+-- heap or a failed write. nc_drive appends the fault rodata when this is 1.
 func nc_prog_has_faultable(prog):
-    return nc_funcs_have_faultable_loop(prog.0, 0, count(prog.0))
+    return 1
 end
 
 -- Little-endian byte-serialization helpers. Now that tonka added * / %, these
@@ -8409,12 +8393,21 @@ func nc_fault_route_len():
     return 12
 end
 
+-- The fault rodata (nc_append_fault_rodata), appended after the program's own
+-- strings: nine fragments (135 bytes), then ": division by zero\n" (19), the
+-- out-of-memory sentence (53), the cannot-reserve sentence (41) and the
+-- "cannot write output (error " prefix (36), each appended LAST so no earlier
+-- offset moved. 284 bytes.
 func nc_fault_rodata_len():
-    return 135
+    return 284
 end
 
+-- The fault-helper block, placed after the entry head. Offsets from its start:
+-- diag_index 0 (106), diag_get 106 (106), diag_append 212 (95), diag_div 307
+-- (50), diag_oom 357 (22), diag_reserve 379 (22), diag_write 401 (60), write_fd2
+-- 461 (46), dec_fd2 507 (53), exit1 560 (12). 572 bytes (418 before K4).
 func nc_fault_helper_len():
-    return 418
+    return 572
 end
 
 func nc_write_helper_len():
@@ -8486,16 +8479,32 @@ func nc_fault_diag_append_rel():
     return 212
 end
 
-func nc_fault_write_fd2_rel():
+func nc_fault_diag_div_rel():
     return 307
 end
 
+func nc_fault_diag_oom_rel():
+    return 357
+end
+
+func nc_fault_diag_reserve_rel():
+    return 379
+end
+
+func nc_fault_diag_write_rel():
+    return 401
+end
+
+func nc_fault_write_fd2_rel():
+    return 461
+end
+
 func nc_fault_dec_fd2_rel():
-    return 353
+    return 507
 end
 
 func nc_fault_exit1_rel():
-    return 406
+    return 560
 end
 
 func nc_fault_prefix_off():
@@ -8532,6 +8541,22 @@ end
 
 func nc_fault_just_nl_off():
     return 134
+end
+
+func nc_fault_sep_div_off():
+    return 135
+end
+
+func nc_fault_oom_off():
+    return 154
+end
+
+func nc_fault_reserve_off():
+    return 207
+end
+
+func nc_fault_write_off():
+    return 248
 end
 
 func nc_arg_copy_len_loop(k, nwords, acc):
@@ -8691,14 +8716,15 @@ func nc_group_single_len(op):
     -- Multiplicative (42-44). LOAD-BEARING for branch-displacement layout: a
     -- wrong length here silently rots every branch offset in any function that
     -- uses these ops. mul is 7 bytes (pop rcx; pop rax; imul rax,rcx [4 bytes];
-    -- push rax). div and mod are 18 bytes each: pop rcx; pop rax; test rcx,rcx
-    -- [3]; jz exit1 [6]; xor rdx,rdx [3]; div rcx [3]; push rax|rdx [1]. These
-    -- MUST match the byte counts emitted by nc_emit_mul / nc_emit_div_or_mod.
+    -- push rax). div and mod are 24 bytes each: mov r10d,line [6]; pop rcx;
+    -- pop rax; test rcx,rcx [3]; jz diag_div [6]; xor rdx,rdx [3]; div rcx [3];
+    -- push rax|rdx [1]. These MUST match the byte counts emitted by nc_emit_mul /
+    -- nc_emit_div_or_mod.
     if op == 42:
         return 7
     end
     if op == 43 or op == 44:
-        return 18
+        return 24
     end
     return 0
 end
@@ -9445,23 +9471,31 @@ func nc_emit_rsi_store_rax(buf, mag):
     return nc_append_le32(buf, mag)
 end
 
-func nc_emit_heap_trap(buf):
-    do append(buf, 184)
-    do append(buf, 231)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 191)
-    do append(buf, 1)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 15)
-    do append(buf, 5)
+-- The heap trap, 12 bytes (every site's skip-over branch assumes 12): jmp rel32
+-- to the fault block's out-of-memory helper, then 7 int3 bytes nothing reaches.
+-- Every allocation past the 3.5 GiB heap takes it, and so does every size that
+-- would wrap on the way to one (a doubled capacity, a byte size, an element
+-- offset, buffer_fill's need). Before K4 it was an inline exit_group(1) with no
+-- message.
+func nc_emit_heap_trap(buf, oom_off):
+    return nc_emit_fault_jmp12(buf, oom_off)
+end
+
+-- jmp rel32 to target + 7 int3 (0xCC): a 12-byte exit into the fault block,
+-- the length of the inline exit_group(1) it replaces.
+func nc_emit_fault_jmp12(buf, target):
+    buf = nc_emit_jmp_abs(buf, target)
+    do append(buf, 204)
+    do append(buf, 204)
+    do append(buf, 204)
+    do append(buf, 204)
+    do append(buf, 204)
+    do append(buf, 204)
+    do append(buf, 204)
     return buf
 end
 
-func nc_emit_heap_alloc(buf):
+func nc_emit_heap_alloc(buf, oom_off):
     do append(buf, 76)
     do append(buf, 137)
     do append(buf, 240)
@@ -9475,7 +9509,7 @@ func nc_emit_heap_alloc(buf):
     do append(buf, 254)
     do append(buf, 118)
     do append(buf, 12)
-    return nc_emit_heap_trap(buf)
+    return nc_emit_heap_trap(buf, oom_off)
 end
 
 func nc_emit_call_abs(buf, target):
@@ -9487,6 +9521,14 @@ end
 func nc_emit_jmp_abs(buf, target):
     let base = buffer_length(buf) + 5
     do append(buf, 233)
+    return nc_append_rel32(buf, target, base)
+end
+
+-- jg rel32 (0F 8F): taken when the flags of the last test say greater than zero.
+func nc_emit_jg_abs(buf, target):
+    let base = buffer_length(buf) + 6
+    do append(buf, 15)
+    do append(buf, 143)
     return nc_append_rel32(buf, target, base)
 end
 
@@ -9587,7 +9629,63 @@ func nc_emit_diag_append(buf, ro_base, write_off, dec_off, exit_off):
     return nc_emit_jmp_abs(buf, exit_off)
 end
 
-func nc_emit_write_fd(buf, fd):
+-- Division or modulo by zero: the site loaded r10 with the operator's line.
+-- mov r14,r10 (3) + "herbert: line " (17) + decimal r14 (8) + ": division by
+-- zero\n" (17) + jmp exit1 (5) = 50 bytes.
+func nc_emit_diag_div(buf, ro_base, write_off, dec_off, exit_off):
+    do append(buf, 77)
+    do append(buf, 137)
+    do append(buf, 214)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
+    buf = nc_emit_diag_dec_r14(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_div_off(), 19, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+-- The heap is used up (any heap trap): one sentence, no line. 22 bytes.
+func nc_emit_diag_oom(buf, ro_base, write_off, exit_off):
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_oom_off(), 53, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+-- The startup mmap of the 3.5 GiB heap failed (the heap stub). 22 bytes.
+func nc_emit_diag_reserve(buf, ro_base, write_off, exit_off):
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_reserve_off(), 41, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+-- main's result could not be written. The fd1 write helper jumps here with rax =
+-- write's return: a negative errno, or 0 for a write that made no progress,
+-- which is reported as EIO (5). neg rax; jnz +5; mov eax,5; mov r14,rax (13) +
+-- "herbert: cannot write output (error " (17) + decimal r14 (8) + ")\n" (17) +
+-- jmp exit1 (5) = 60 bytes. A broken pipe does not get here while SIGPIPE has
+-- its default action: the signal ends the process first, as it does for
+-- standard tools.
+func nc_emit_diag_write(buf, ro_base, write_off, dec_off, exit_off):
+    do append(buf, 72)
+    do append(buf, 247)
+    do append(buf, 216)
+    do append(buf, 117)
+    do append(buf, 5)
+    do append(buf, 184)
+    do append(buf, 5)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 73)
+    do append(buf, 137)
+    do append(buf, 198)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_write_off(), 36, write_off)
+    buf = nc_emit_diag_dec_r14(buf, dec_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_close_paren_nl_off(), 2, write_off)
+    return nc_emit_jmp_abs(buf, exit_off)
+end
+
+-- The write loop: rsi=ptr, rdx=len -> write(2) to fd until every byte is out,
+-- advancing past short writes; returns at once for len 0. 34 bytes. When a
+-- write returns 0 or less it falls into the 12-byte failure path that follows
+-- (nc_emit_write_fd for fd 2, nc_emit_write_fd1 for main's result).
+func nc_emit_write_loop(buf, fd):
     do append(buf, 72)
     do append(buf, 133)
     do append(buf, 210)
@@ -9622,6 +9720,13 @@ func nc_emit_write_fd(buf, fd):
     do append(buf, 117)
     do append(buf, 228)
     do append(buf, 195)
+    return buf
+end
+
+-- fd 2, the fault block's write: a failed write ends the process with exit 1 and
+-- no message, since stderr is where the message would go. 46 bytes.
+func nc_emit_write_fd(buf, fd):
+    buf = nc_emit_write_loop(buf, fd)
     do append(buf, 184)
     do append(buf, 231)
     do append(buf, 0)
@@ -9635,6 +9740,13 @@ func nc_emit_write_fd(buf, fd):
     do append(buf, 15)
     do append(buf, 5)
     return buf
+end
+
+-- fd 1, main's rendered result: a failed write jumps to the fault block's
+-- "cannot write output" helper (fail_off) with rax = write's return. 46 bytes.
+func nc_emit_write_fd1(buf, fail_off):
+    buf = nc_emit_write_loop(buf, 1)
+    return nc_emit_fault_jmp12(buf, fail_off)
 end
 
 func nc_emit_write_fd2(buf):
@@ -9817,14 +9929,14 @@ func nc_emit_render_bool_fd1(buf, write_off):
     return buf
 end
 
-func nc_emit_render_main(buf, main_ret, render_start):
+func nc_emit_render_main(buf, main_ret, render_start, write_fail_off):
     let write_off = render_start + nc_render_body_len(main_ret)
     if main_ret == nc_type_bool():
         buf = nc_emit_render_bool_fd1(buf, write_off)
     else:
         buf = nc_emit_render_int_fd1(buf, write_off)
     end
-    return nc_emit_write_fd(buf, 1)
+    return nc_emit_write_fd1(buf, write_fail_off)
 end
 
 -- ====================================================================
@@ -9837,7 +9949,7 @@ end
 -- to [rdi+8k] = [rsp+8k]. The render runs with rsp at that scratch base; the
 -- structural literals are staged at [rsp+8N] (above the N results). Each
 -- element renderer (int/bool, no newline) and the shared write helper are
--- placed once after the (optional) fault helpers; the inline render body
+-- placed once after the fault helpers; the inline render body
 -- calls them. Lengths are exact (the ERR-418 sub-boundary check verifies).
 -- Validated on silicon before wiring.
 
@@ -9902,10 +10014,10 @@ func nc_render_str_elem_len():
     return 15
 end
 
--- link12: the string escaping helper (nc_emit_render_str_noln), 161 bytes
--- (hand-assembled + validated byte-exact vs C's print_string_lit before wiring).
+-- link12: the string escaping helper (nc_emit_render_str_noln), 148 bytes since
+-- K4 wrote it in runs (161 bytes before, one write per byte); same output bytes.
 func nc_render_str_noln_len():
-    return 161
+    return 148
 end
 
 -- link12: per-token byte length of a render plan (see nc_build_render_plan).
@@ -10191,19 +10303,30 @@ end
 -- link12: the string escaping helper. rsi=ptr, rdx=len -> write  "  + escaped bytes
 -- +  "  to fd1 (no newline), escaping byte 10->\n, 92->\\, 34->\" else raw, byte-
 -- identical to C's print_string_lit (bootstrap/value.c). Self-contained subroutine
--- (saves r12/r13, calls the shared write helper per byte). 161 bytes; hand-assembled
--- and validated byte-exact vs C over a 12-case torture battery before wiring.
+-- (saves r12/r13/rbx; r12 = start of the pending run, r13 = scan pointer, rbx =
+-- end). K4: written in runs, one write per run of plain bytes and one per escape
+-- through the shared write helper (an empty run makes no syscall), so 100,000
+-- plain bytes take 3 writes with the quotes where they took 100,002. 148 bytes:
+-- 0 push r12/r13/rbx, set r12/r13/rbx; 15 write the opening quote; 37 loop: done
+-- at end; next byte, advance; 64 escape: stage it, flush the run, write the two
+-- bytes, the next run starts after it; 106 close: flush the run, closing quote.
 func nc_emit_render_str_noln(buf, write_off):
     do append(buf, 65)
     do append(buf, 84)
     do append(buf, 65)
     do append(buf, 85)
+    do append(buf, 83)
     do append(buf, 73)
     do append(buf, 137)
     do append(buf, 244)
     do append(buf, 73)
     do append(buf, 137)
-    do append(buf, 213)
+    do append(buf, 245)
+    do append(buf, 72)
+    do append(buf, 141)
+    do append(buf, 28)
+    do append(buf, 22)
+    -- 15: sub rsp,16; mov byte [rsp],34; lea rsi,[rsp]; mov edx,1; call write
     do append(buf, 72)
     do append(buf, 131)
     do append(buf, 236)
@@ -10222,104 +10345,84 @@ func nc_emit_render_str_noln(buf, write_off):
     do append(buf, 0)
     do append(buf, 0)
     buf = nc_emit_call_abs(buf, write_off)
-    do append(buf, 72)
-    do append(buf, 131)
-    do append(buf, 196)
-    do append(buf, 16)
-    do append(buf, 77)
-    do append(buf, 133)
-    do append(buf, 237)
-    do append(buf, 116)
-    do append(buf, 89)
+    -- 37 loop: cmp r13,rbx; jae close (106); movzx eax,byte [r13]; inc r13
+    do append(buf, 73)
+    do append(buf, 57)
+    do append(buf, 221)
+    do append(buf, 115)
+    do append(buf, 64)
     do append(buf, 65)
     do append(buf, 15)
     do append(buf, 182)
-    do append(buf, 4)
-    do append(buf, 36)
-    do append(buf, 72)
-    do append(buf, 131)
-    do append(buf, 236)
-    do append(buf, 16)
+    do append(buf, 69)
+    do append(buf, 0)
+    do append(buf, 73)
+    do append(buf, 255)
+    do append(buf, 197)
+    -- 50: cmp al,92; je 64; cmp al,34; je 64; cmp al,10; jne loop (37); mov al,110
+    do append(buf, 60)
+    do append(buf, 92)
+    do append(buf, 116)
+    do append(buf, 10)
+    do append(buf, 60)
+    do append(buf, 34)
+    do append(buf, 116)
+    do append(buf, 6)
     do append(buf, 60)
     do append(buf, 10)
-    do append(buf, 116)
-    do append(buf, 18)
-    do append(buf, 60)
-    do append(buf, 92)
-    do append(buf, 116)
-    do append(buf, 27)
-    do append(buf, 60)
-    do append(buf, 34)
-    do append(buf, 116)
-    do append(buf, 36)
-    do append(buf, 136)
-    do append(buf, 4)
-    do append(buf, 36)
-    do append(buf, 186)
-    do append(buf, 1)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 235)
-    do append(buf, 37)
-    do append(buf, 102)
-    do append(buf, 199)
-    do append(buf, 4)
-    do append(buf, 36)
-    do append(buf, 92)
+    do append(buf, 117)
+    do append(buf, 231)
+    do append(buf, 176)
     do append(buf, 110)
-    do append(buf, 186)
-    do append(buf, 2)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 235)
-    do append(buf, 24)
-    do append(buf, 102)
-    do append(buf, 199)
+    -- 64 escape: mov byte [rsp],92; mov [rsp+1],al; flush the run: rsi=r12, rdx=r13-1-r12
+    do append(buf, 198)
     do append(buf, 4)
     do append(buf, 36)
     do append(buf, 92)
-    do append(buf, 92)
-    do append(buf, 186)
-    do append(buf, 2)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 235)
-    do append(buf, 11)
-    do append(buf, 102)
-    do append(buf, 199)
-    do append(buf, 4)
+    do append(buf, 136)
+    do append(buf, 68)
     do append(buf, 36)
-    do append(buf, 92)
-    do append(buf, 34)
-    do append(buf, 186)
-    do append(buf, 2)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
+    do append(buf, 1)
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 73)
+    do append(buf, 141)
+    do append(buf, 85)
+    do append(buf, 255)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 226)
+    buf = nc_emit_call_abs(buf, write_off)
+    -- 87: lea rsi,[rsp]; mov edx,2; call write
     do append(buf, 72)
     do append(buf, 141)
     do append(buf, 52)
     do append(buf, 36)
+    do append(buf, 186)
+    do append(buf, 2)
+    do append(buf, 0)
+    do append(buf, 0)
+    do append(buf, 0)
     buf = nc_emit_call_abs(buf, write_off)
-    do append(buf, 72)
-    do append(buf, 131)
-    do append(buf, 196)
-    do append(buf, 16)
-    do append(buf, 73)
-    do append(buf, 255)
-    do append(buf, 196)
-    do append(buf, 73)
-    do append(buf, 255)
-    do append(buf, 205)
-    do append(buf, 235)
-    do append(buf, 162)
-    do append(buf, 72)
-    do append(buf, 131)
+    -- 101: mov r12,r13; jmp loop (37)
+    do append(buf, 77)
+    do append(buf, 137)
     do append(buf, 236)
-    do append(buf, 16)
+    do append(buf, 235)
+    do append(buf, 187)
+    -- 106 close: rsi=r12, rdx=rbx-r12; call write
+    do append(buf, 76)
+    do append(buf, 137)
+    do append(buf, 230)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 218)
+    do append(buf, 76)
+    do append(buf, 41)
+    do append(buf, 226)
+    buf = nc_emit_call_abs(buf, write_off)
+    -- 120: mov byte [rsp],34; lea rsi,[rsp]; mov edx,1; call write
     do append(buf, 198)
     do append(buf, 4)
     do append(buf, 36)
@@ -10334,10 +10437,12 @@ func nc_emit_render_str_noln(buf, write_off):
     do append(buf, 0)
     do append(buf, 0)
     buf = nc_emit_call_abs(buf, write_off)
+    -- 138: add rsp,16; pop rbx; pop r13; pop r12; ret
     do append(buf, 72)
     do append(buf, 131)
     do append(buf, 196)
     do append(buf, 16)
+    do append(buf, 91)
     do append(buf, 65)
     do append(buf, 93)
     do append(buf, 65)
@@ -10394,6 +10499,10 @@ func nc_emit_fault_helpers(buf, ro_base, helper_start):
     buf = nc_emit_diag_index(buf, ro_base, write_off, dec_off, exit_off)
     buf = nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off)
     buf = nc_emit_diag_append(buf, ro_base, write_off, dec_off, exit_off)
+    buf = nc_emit_diag_div(buf, ro_base, write_off, dec_off, exit_off)
+    buf = nc_emit_diag_oom(buf, ro_base, write_off, exit_off)
+    buf = nc_emit_diag_reserve(buf, ro_base, write_off, exit_off)
+    buf = nc_emit_diag_write(buf, ro_base, write_off, dec_off, exit_off)
     buf = nc_emit_write_fd2(buf)
     buf = nc_emit_dec_fd2(buf, write_off)
     return nc_emit_fault_exit1(buf)
@@ -10650,20 +10759,21 @@ func nc_emit_mul(buf):
     return buf
 end
 
--- Divide / modulo. pop rhs(divisor)->rcx (0x59), pop lhs(dividend)->rax (0x58).
--- Guard divide-by-zero BEFORE `div`: test rcx,rcx (48 85 C9); jz exit1
--- (0F 84 rel32) routes to the shared clean fault-exit (exit 1, empty stdout) --
--- exit-status parity with the C oracle's `herbert: line N: division by zero`.
--- (Exact-stderr text is deferred per the D13 fault-parity convention; the C
--- side keeps the located message, the native side matches exit status + empty
--- stdout. Reusing the located-diagnostic helper would be a much larger addition
--- -- a new ro-data fragment + diag handler -- so exit-status parity is used.)
--- Then xor rdx,rdx (48 31 D2) zero-extends the dividend, div rcx (48 F7 F1)
--- gives the unsigned 64-bit quotient in rax / remainder in rdx; push rax (0x50)
--- for `/`, push rdx (0x52) for `%`. 18 bytes; must equal
--- nc_group_single_len(43/44). The jz rel32 base is instr_off + 11 (the byte
--- after the rel32 field: 1+1+3 prefix + 2 jz opcode + 4 rel32).
-func nc_emit_div_or_mod(buf, is_mod, exit_off, instr_off):
+-- Divide / modulo. mov r10d,line (41 BA imm32) first, so the pinned bytes
+-- below stay contiguous; then pop rhs(divisor)->rcx (0x59), pop lhs(dividend)
+-- ->rax (0x58). Guard divide-by-zero BEFORE `div`: test rcx,rcx (48 85 C9); jz
+-- diag_div (0F 84 rel32), the fault block's located helper, which prints
+-- `herbert: line N: division by zero` (the C oracle's text) and exits 1; stdout
+-- keeps what was written before. r10 is scratch at an op boundary. Then xor
+-- rdx,rdx (48 31 D2) zero-extends the dividend, div rcx (48 F7 F1) gives the
+-- unsigned 64-bit quotient in rax / remainder in rdx; push rax (0x50) for `/`,
+-- push rdx (0x52) for `%`. 24 bytes; must equal nc_group_single_len(43/44). The
+-- jz rel32 base is instr_off + 17 (the byte after the rel32 field: 6 mov + 1+1+3
+-- + 2 jz opcode + 4 rel32).
+func nc_emit_div_or_mod(buf, is_mod, line, diag_off, instr_off):
+    do append(buf, 65)
+    do append(buf, 186)
+    buf = nc_append_le32(buf, line)
     do append(buf, 89)
     do append(buf, 88)
     do append(buf, 72)
@@ -10671,7 +10781,7 @@ func nc_emit_div_or_mod(buf, is_mod, exit_off, instr_off):
     do append(buf, 201)
     do append(buf, 15)
     do append(buf, 132)
-    buf = nc_append_rel32(buf, exit_off, instr_off + 11)
+    buf = nc_append_rel32(buf, diag_off, instr_off + 17)
     do append(buf, 72)
     do append(buf, 49)
     do append(buf, 210)
@@ -10939,7 +11049,15 @@ func nc_emit_aggregate_ret_stores(buf, k):
     return buf
 end
 
-func nc_emit_clogger(buf):
+-- clogger, 91 bytes: read stdin into the heap left (r15 - r14). Its exits:
+-- a read that returns 0 or an error in the loop (+35) ends the input there and
+-- returns what was read; when the heap left is exactly used, a one-byte probe
+-- read (+58) that returns 0 (+67) returns the input too. A probe that returns
+-- a byte (stdin larger than the heap left) jumps to the fault block's
+-- out-of-memory helper (K4, ruling 17); a probe read error goes to the fault
+-- block's exit1, the silent status 1 it ended with before. Those last 12 bytes
+-- (+69: jg rel32, jmp rel32, int3) replace the inline exit_group(1) both shared.
+func nc_emit_clogger(buf, oom_off, exit_off):
     do append(buf, 77)
     do append(buf, 137)
     do append(buf, 244)
@@ -11009,18 +11127,9 @@ func nc_emit_clogger(buf):
     do append(buf, 192)
     do append(buf, 116)
     do append(buf, 12)
-    do append(buf, 184)
-    do append(buf, 231)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 191)
-    do append(buf, 1)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 0)
-    do append(buf, 15)
-    do append(buf, 5)
+    buf = nc_emit_jg_abs(buf, oom_off)
+    buf = nc_emit_jmp_abs(buf, exit_off)
+    do append(buf, 204)
     do append(buf, 77)
     do append(buf, 137)
     do append(buf, 230)
@@ -11469,7 +11578,7 @@ end
 -- append does. The new bytes are stored by rep stosb, never assumed zero.
 -- Scratch registers only (rax rcx rdx rsi rdi r8 r9 r10 r11); the direction
 -- flag is clear by the process ABI. 142 bytes (nc_group_single_len).
-func nc_emit_buffer_fill(buf, line, diag_append_off, instr_off):
+func nc_emit_buffer_fill(buf, line, diag_append_off, instr_off, oom_off):
     -- pop rcx (v); v <= 255 or fault through the located append route (base instr_off + 22).
     do append(buf, 89)
     do append(buf, 72)
@@ -11501,7 +11610,7 @@ func nc_emit_buffer_fill(buf, line, diag_append_off, instr_off):
     do append(buf, 208)
     do append(buf, 115)
     do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    buf = nc_emit_heap_trap(buf, oom_off)
     -- r11 = capacity; room when capacity >= need: jump to offset 123 (offset 51).
     do append(buf, 77)
     do append(buf, 139)
@@ -11530,7 +11639,7 @@ func nc_emit_buffer_fill(buf, line, diag_append_off, instr_off):
     do append(buf, 76)
     do append(buf, 137)
     do append(buf, 223)
-    buf = nc_emit_heap_alloc(buf)
+    buf = nc_emit_heap_alloc(buf, oom_off)
     -- the old bytes move to the new storage: rsi = old data, rdi = new, rcx = length; rep movsb leaves rdi at new data + length (offset 101).
     do append(buf, 73)
     do append(buf, 139)
@@ -12273,13 +12382,13 @@ func nc_emit_fwriter(buf):
     return buf
 end
 
-func nc_emit_new_heap_header(buf, backing_size):
+func nc_emit_new_heap_header(buf, backing_size, oom_off):
     do append(buf, 191)
     do append(buf, 24)
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    buf = nc_emit_heap_alloc(buf)
+    buf = nc_emit_heap_alloc(buf, oom_off)
     do append(buf, 73)
     do append(buf, 137)
     do append(buf, 192)
@@ -12300,7 +12409,7 @@ func nc_emit_new_heap_header(buf, backing_size):
     do append(buf, 0)
     do append(buf, 191)
     buf = nc_append_le32(buf, backing_size)
-    buf = nc_emit_heap_alloc(buf)
+    buf = nc_emit_heap_alloc(buf, oom_off)
     do append(buf, 73)
     do append(buf, 137)
     do append(buf, 64)
@@ -12310,12 +12419,12 @@ func nc_emit_new_heap_header(buf, backing_size):
     return buf
 end
 
-func nc_emit_new_buffer(buf):
-    return nc_emit_new_heap_header(buf, 2)
+func nc_emit_new_buffer(buf, oom_off):
+    return nc_emit_new_heap_header(buf, 2, oom_off)
 end
 
-func nc_emit_new_array(buf, width):
-    return nc_emit_new_heap_header(buf, nc_mul8(width + width))
+func nc_emit_new_array(buf, width, oom_off):
+    return nc_emit_new_heap_header(buf, nc_mul8(width + width), oom_off)
 end
 
 func nc_emit_count(buf):
@@ -12336,7 +12445,7 @@ func nc_emit_get_loads(buf, width, j):
     return buf
 end
 
-func nc_emit_get(buf, width, line, diag_get_off, instr_off):
+func nc_emit_get(buf, width, line, diag_get_off, instr_off, oom_off):
     do append(buf, 89)
     do append(buf, 65)
     do append(buf, 88)
@@ -12367,7 +12476,7 @@ func nc_emit_get(buf, width, line, diag_get_off, instr_off):
     buf = nc_append_le32(buf, nc_mul8(width))
     do append(buf, 113)
     do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    buf = nc_emit_heap_trap(buf, oom_off)
     do append(buf, 76)
     do append(buf, 1)
     do append(buf, 214)
@@ -12383,16 +12492,16 @@ func nc_emit_arr_add_stores(buf, k):
     return buf
 end
 
-func nc_emit_arr_add(buf, width):
-    return nc_emit_arr_add_any(buf, width, 0)
+func nc_emit_arr_add(buf, width, oom_off):
+    return nc_emit_arr_add_any(buf, width, 0, oom_off)
 end
 
 -- ADD_KEEP (op 63) builds a ref record: add, leaving the array on the stack.
-func nc_emit_arr_add_keep(buf, width):
-    return nc_emit_arr_add_any(buf, width, 1)
+func nc_emit_arr_add_keep(buf, width, oom_off):
+    return nc_emit_arr_add_any(buf, width, 1, oom_off)
 end
 
-func nc_emit_arr_add_any(buf, width, keep):
+func nc_emit_arr_add_any(buf, width, keep, oom_off):
     buf = nc_emit_rsp_load_r8(buf, nc_mul8(width))
     do append(buf, 77)
     do append(buf, 139)
@@ -12415,7 +12524,7 @@ func nc_emit_arr_add_any(buf, width, keep):
     do append(buf, 227)
     do append(buf, 115)
     do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    buf = nc_emit_heap_trap(buf, oom_off)
     do append(buf, 76)
     do append(buf, 137)
     do append(buf, 223)
@@ -12425,8 +12534,8 @@ func nc_emit_arr_add_any(buf, width, keep):
     buf = nc_append_le32(buf, nc_mul8(width))
     do append(buf, 113)
     do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
-    buf = nc_emit_heap_alloc(buf)
+    buf = nc_emit_heap_trap(buf, oom_off)
+    buf = nc_emit_heap_alloc(buf, oom_off)
     do append(buf, 73)
     do append(buf, 139)
     do append(buf, 80)
@@ -12440,7 +12549,7 @@ func nc_emit_arr_add_any(buf, width, keep):
     buf = nc_append_le32(buf, width)
     do append(buf, 113)
     do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    buf = nc_emit_heap_trap(buf, oom_off)
     do append(buf, 72)
     do append(buf, 49)
     do append(buf, 201)
@@ -12476,7 +12585,7 @@ func nc_emit_arr_add_any(buf, width, keep):
     buf = nc_append_le32(buf, nc_mul8(width))
     do append(buf, 113)
     do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    buf = nc_emit_heap_trap(buf, oom_off)
     do append(buf, 73)
     do append(buf, 3)
     do append(buf, 112)
@@ -12497,7 +12606,7 @@ func nc_emit_arr_add_any(buf, width, keep):
     return buf
 end
 
-func nc_emit_buf_append(buf, line, diag_append_off, instr_off):
+func nc_emit_buf_append(buf, line, diag_append_off, instr_off, oom_off):
     do append(buf, 89)
     do append(buf, 72)
     do append(buf, 129)
@@ -12532,11 +12641,11 @@ func nc_emit_buf_append(buf, line, diag_append_off, instr_off):
     do append(buf, 227)
     do append(buf, 115)
     do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    buf = nc_emit_heap_trap(buf, oom_off)
     do append(buf, 76)
     do append(buf, 137)
     do append(buf, 223)
-    buf = nc_emit_heap_alloc(buf)
+    buf = nc_emit_heap_alloc(buf, oom_off)
     do append(buf, 73)
     do append(buf, 139)
     do append(buf, 80)
@@ -12587,7 +12696,7 @@ func nc_emit_buf_append(buf, line, diag_append_off, instr_off):
     return buf
 end
 
-func nc_emit_freeze(buf):
+func nc_emit_freeze(buf, oom_off):
     do append(buf, 65)
     do append(buf, 88)
     do append(buf, 77)
@@ -12610,7 +12719,7 @@ func nc_emit_freeze(buf):
     do append(buf, 0)
     do append(buf, 0)
     do append(buf, 0)
-    buf = nc_emit_heap_alloc(buf)
+    buf = nc_emit_heap_alloc(buf, oom_off)
     do append(buf, 73)
     do append(buf, 137)
     do append(buf, 195)
@@ -12642,7 +12751,10 @@ func nc_emit_freeze(buf):
     return buf
 end
 
-func nc_emit_heap_stub(buf):
+-- mmap(NULL, 3.5 GiB, RW, PRIVATE|ANON); on failure (K4) jmp to the fault
+-- block's "cannot reserve" helper (reserve_off), else r14 = base, r15 = end.
+-- 70 bytes.
+func nc_emit_heap_stub(buf, reserve_off):
     do append(buf, 72)
     do append(buf, 199)
     do append(buf, 192)
@@ -12689,7 +12801,7 @@ func nc_emit_heap_stub(buf):
     do append(buf, 192)
     do append(buf, 121)
     do append(buf, 12)
-    buf = nc_emit_heap_trap(buf)
+    buf = nc_emit_fault_jmp12(buf, reserve_off)
     do append(buf, 73)
     do append(buf, 137)
     do append(buf, 198)
@@ -12716,8 +12828,14 @@ end
 func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, main_ret, code_len, strings, rplan):
     let layout = nc_entry_layout(has_heap, has_faultable, main_ret, rplan)
     let start_len = buffer_length(buf)
+    -- The heap stub, the heap traps and main's result write all jump into the
+    -- fault block (K4), so a hosted program is never emitted without it.
+    if has_faultable == 0:
+        return (nc_fail(418, 0, "entry-fault-block"), buf)
+    end
+    let write_fail_off = layout.4 + nc_fault_diag_write_rel()
     if has_heap != 0:
-        buf = nc_emit_heap_stub(buf)
+        buf = nc_emit_heap_stub(buf, layout.4 + nc_fault_diag_reserve_rel())
     end
     let ck = nc_emit_entry_check(start_len, buf, layout.0, "entry-heap")
     if ck != 0:
@@ -12768,7 +12886,7 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
         buf = nc_emit_render_int_noln(buf, write_off)
         buf = nc_emit_render_bool_noln(buf, write_off)
         buf = nc_emit_render_str_noln(buf, write_off)
-        buf = nc_emit_write_fd(buf, 1)
+        buf = nc_emit_write_fd1(buf, write_fail_off)
         ck = nc_emit_entry_check(start_len, buf, layout.6, "entry-render")
         if ck != 0:
             return (ck, buf)
@@ -12800,7 +12918,7 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
     if ck != 0:
         return (ck, buf)
     end
-    buf = nc_emit_render_main(buf, main_ret, layout.5)
+    buf = nc_emit_render_main(buf, main_ret, layout.5, write_fail_off)
     ck = nc_emit_entry_check(start_len, buf, layout.6, "entry-render")
     if ck != 0:
         return (ck, buf)
@@ -12809,6 +12927,7 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
 end
 
 func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, diag_base, i, n, buf):
+    let oom_off = diag_base + nc_fault_diag_oom_rel()
     while i < n:
         let code = fn.4
         let instr = get(code, i)
@@ -12859,9 +12978,9 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         elif op == 42:
             buf = nc_emit_mul(buf)
         elif op == 43:
-            buf = nc_emit_div_or_mod(buf, 0, diag_base + nc_fault_exit1_rel(), instr_off)
+            buf = nc_emit_div_or_mod(buf, 0, get(fn.6, i), diag_base + nc_fault_diag_div_rel(), instr_off)
         elif op == 44:
-            buf = nc_emit_div_or_mod(buf, 1, diag_base + nc_fault_exit1_rel(), instr_off)
+            buf = nc_emit_div_or_mod(buf, 1, get(fn.6, i), diag_base + nc_fault_diag_div_rel(), instr_off)
         elif op == 15:
             buf = nc_emit_tuple_get(buf, meta, i)
         elif op == 16:
@@ -12895,27 +13014,27 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         elif op == 25:
             buf = nc_emit_equal(buf)
         elif op == 26:
-            buf = nc_emit_new_buffer(buf)
+            buf = nc_emit_new_buffer(buf, oom_off)
         elif op == 27:
-            buf = nc_emit_freeze(buf)
+            buf = nc_emit_freeze(buf, oom_off)
         elif op == 28:
-            buf = nc_emit_new_array(buf, get(meta.heap_meta, i).1)
+            buf = nc_emit_new_array(buf, get(meta.heap_meta, i).1, oom_off)
         elif op == 29:
-            buf = nc_emit_get(buf, get(meta.heap_meta, i).1, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
+            buf = nc_emit_get(buf, get(meta.heap_meta, i).1, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off, oom_off)
         elif op == 30:
             buf = nc_emit_count(buf)
         elif op == 31:
-            buf = nc_emit_buf_append(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
+            buf = nc_emit_buf_append(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off, oom_off)
         elif op == 32:
-            buf = nc_emit_arr_add(buf, get(meta.heap_meta, i).1)
+            buf = nc_emit_arr_add(buf, get(meta.heap_meta, i).1, oom_off)
         elif op == 63:
-            buf = nc_emit_arr_add_keep(buf, get(meta.heap_meta, i).1)
+            buf = nc_emit_arr_add_keep(buf, get(meta.heap_meta, i).1, oom_off)
         elif op == 64:
             buf = nc_emit_set_field(buf, a, instr.2)
         elif op == 65:
             buf = nc_emit_get_field(buf, meta, i)
         elif op == 33:
-            buf = nc_emit_clogger(buf)
+            buf = nc_emit_clogger(buf, oom_off, diag_base + nc_fault_exit1_rel())
         elif op == 34:
             buf = nc_emit_flogger(buf)
         elif op == 35:
@@ -12939,7 +13058,7 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
         elif op == 66:
             buf = nc_emit_buffer_copy(buf, get(fn.6, i), diag_base + nc_fault_diag_get_rel(), instr_off)
         elif op == 67:
-            buf = nc_emit_buffer_fill(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off)
+            buf = nc_emit_buffer_fill(buf, get(fn.6, i), diag_base + nc_fault_diag_append_rel(), instr_off, oom_off)
         end
         i = g.1
     end
@@ -13002,6 +13121,10 @@ func nc_append_fault_rodata(strings):
     do add(strings, " out of range 0..255")
     do add(strings, ")\n")
     do add(strings, "\n")
+    do add(strings, ": division by zero\n")
+    do add(strings, "herbert: out of memory (the 3.5 GiB heap is used up)\n")
+    do add(strings, "herbert: cannot reserve the 3.5 GiB heap\n")
+    do add(strings, "herbert: cannot write output (error ")
     return strings
 end
 

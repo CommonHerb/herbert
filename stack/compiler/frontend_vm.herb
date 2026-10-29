@@ -1543,8 +1543,8 @@ end
 -- Multiplicative opcodes. Appended at 42-44 after the current max (op_bnot=41);
 -- NEVER renumber an existing opcode (the VM range-checks binops and pass-1 sizes
 -- by op number). mul/div/mod are int x int -> int binops. div/mod also fault on a
--- zero divisor (a located runtime fault, exit-status parity with the C oracle),
--- so they are "faultable" (see nc_code_has_faultable_loop); mul never faults.
+-- zero divisor: a located runtime fault ("herbert: line N: division by zero",
+-- exit 1) through the fault block every hosted program carries; mul never faults.
 func op_mul():
     return 42
 end
