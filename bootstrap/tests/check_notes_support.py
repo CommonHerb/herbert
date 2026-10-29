@@ -1249,7 +1249,8 @@ scan_case('newest-by-nanoseconds-and-signed-seconds', by_nanoseconds('.herbert-n
 scan_case('newest-by-nanoseconds-names-swapped', by_nanoseconds('.herbert-notes-1-1'), found=3, newest='.herbert-notes-1-1')
 scan_case('many-entries', crowded, found=3, newest='.herbert-notes-2-1')
 scan_case('newest-copy-unreadable', lambda d: (scan_folder(d, '.herbert-notes-1-1', scanned_text, 9), scan_folder(d, '.herbert-notes-1-2', scanned_text, 0, mode=0)),
-          found=2, newest='.herbert-notes-1-2', loaded=-13, present=1, size=0, same=0)
+          found=2, newest='.herbert-notes-1-2', loaded=-13, present=1, size=0, same=0,
+          after=lambda d: (d / '.herbert-notes-1-2' / 'recovery.txt').chmod(0o600))
 scan_case('newest-without-a-copy', lambda d: (scan_folder(d, '.herbert-notes-1-1', scanned_text, 9), scan_folder(d, '.herbert-notes-1-2', None, 0)),
           found=2, newest='.herbert-notes-1-2', present=0, size=0, same=0)
 scan_case('newest-copy-over-capacity', lambda d: scan_folder(d, '.herbert-notes-1-1', b'x' * 70000, 0),
