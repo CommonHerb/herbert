@@ -13,12 +13,14 @@
 -- another writer can still race the final check and rename.
 -- Result: 0 success; raw -errno failure; 1 means published but durability or
 -- baseline refresh failed (do not claim the old file survived that result).
--- A File (below): its state, the read bytes (capacity + 1), basename, temp name,
--- stat, baseline stat, original path bytes (NUL terminated, useful for display),
+-- A File (below): its state, the read bytes (capacity + 1), basename, temp name
+-- (scratch, 256 bytes from file_new: a save's temporary name, or a load's leaf
+-- name while it is checked), stat (scratch: every stat writes it before it is read),
+-- baseline stat, original path bytes (NUL terminated, useful for display),
 -- temp-file stat, last published bytes (recovery after an unsuccessful
 -- post-rename stat) and the latest rescue-copy basename (NUL terminated; valid
--- after copy result 0 or 1). Basename and path have 4096 bytes each, so one File
--- can load document after document. The stat buffers keep the kernel's layout. State:
+-- after copy result 0 or 1). file_new's basename and path have 4096 bytes, so one
+-- File can load document after document. The stat buffers keep the kernel's layout. State:
 -- status and published cover the last operation, rescue calls included;
 -- uncertain marks a baseline not yet confirmed after a publish.
 
@@ -137,15 +139,34 @@ end
 -- bytes, a caller-chosen limit from zero through 16 MiB, and paths of at most
 -- 4095 bytes. file_load fills it, as often as needed, without allocating.
 func file_new(capacity):
-    return File(FileState(0 - 1, 0, false, 0, 0, false, 384, false, 0), linux_buffer(capacity + 1), linux_buffer(4096), linux_buffer(128), linux_buffer(144), linux_buffer(144), linux_buffer(4096), linux_buffer(144), linux_buffer(capacity), linux_buffer(128))
+    return File(FileState(0 - 1, 0, false, 0, 0, false, 384, false, 0), linux_buffer(capacity + 1), linux_buffer(4096), linux_buffer(256), linux_buffer(144), linux_buffer(144), linux_buffer(4096), linux_buffer(144), linux_buffer(capacity), linux_buffer(128))
 end
 
--- Load the document named by path's first count bytes into f's own storage.
--- Any directory f held is closed first; its temp/rescue serial keeps counting.
--- Missing leaf is a new empty document; missing parent is error. The result
--- is also file_status(f). Call file_close even on errors; a dirfd of -1
--- represents a parent not successfully open.
-func file_load(f, path, count):
+-- The name in f.temp (NUL terminated), looked up through dirfd, a folder just
+-- opened, before f changes: its stat, not following a symlink, goes into f.stat
+-- (scratch: every stat of f writes it before anything reads it). 0: a regular
+-- file the library will read; 0 - 2: nothing there, a new document; anything
+-- else refuses: the stat's own error (13 in a folder that can be read but not
+-- searched), or file_regular's 40 a symlink, 22 not a regular file, 31 hard
+-- links, 13 another owner.
+func file_leaf(f, dirfd):
+    let stat = linux_syscall6(262, dirfd, buffer_address(f.temp), buffer_address(f.stat), 256, 0, 0)
+    if stat == 0: return file_regular(f.stat) end
+    return stat
+end
+
+-- f takes dirfd, a folder already open, with the name already in f.basename,
+-- once file_leaf has found there a regular file (found 0) or nothing (found
+-- 0 - 2): the directory f held is closed and its state starts over (its
+-- temp/rescue serial keeps counting), its old document gone. Nothing there is a
+-- new empty document (result 0, count 0, not existing). A regular file is read
+-- by file_read; a refusal there (it cannot be opened or read, too large, changed
+-- while read, or no longer one file_regular accepts: it is never compared with
+-- file_leaf's stat, so a regular file swapped for another is read) leaves f on
+-- the new folder, marked existing, count the bytes read (capacity + 1 when too
+-- large). Use f only after a result of 0: a save after a refusal is checked as
+-- any save is (116 after a file that did not open; a file too large is replaced).
+func file_adopt(f, dirfd, found):
     let st = f.state
     do file_close(f)
     st.status = 0
@@ -155,37 +176,196 @@ func file_load(f, path, count):
     st.mode = 384
     st.uncertain = false
     st.saved_count = 0
+    st.dirfd = dirfd
+    if found == 0 - 2: return 0 end
+    st.exists = true
+    return file_read(f)
+end
+
+-- Load the document named by path's first count bytes into f's own storage.
+-- f changes only once the file is one the library will read, or missing (a new
+-- empty document; a missing folder is an error). Before that, the path is
+-- checked (22; then 36 for a leaf over 255 bytes), its folder is opened, and the
+-- leaf's own stat runs through that folder (file_leaf). A refusal at any of
+-- these (a bad path, a leaf over 255 bytes, a folder missing, unopenable, or
+-- readable but not searchable, a symlink, not a regular file, a second link,
+-- another owner) leaves f exactly as it was, still on its document, only its
+-- status saying the refusal (a folder already opened is closed again); of f's
+-- storage only the scratch f.temp (the leaf's name, or ".") and f.stat (the
+-- leaf's stat) were written. The length check also keeps the leaf within
+-- f.temp (255 bytes and a NUL). Then f takes the new folder and path
+-- (file_adopt), and only file_read's refusals remain (unreadable, too large,
+-- changed while read): those leave f on the new folder without its old
+-- document, as file_adopt says. The result is also file_status(f). Call
+-- file_close even on errors; a dirfd of -1 represents a parent not
+-- successfully open.
+func file_load(f, path, count):
     if count == 0 or count >= buffer_length(f.path) or count > 4095 or not linux_range(path, 0, count): return file_result(f, 0 - 22) end
-    do linux_copy(f.path, 0, path, 0, count)
-    do buffer_set(f.path, count, 0)
-    let slash = file_path_scan(f.path, count, 0, 0 - 1)
+    let slash = file_path_scan(path, count, 0, 0 - 1)
     let leaf = 0
     if slash < count: leaf = slash + 1 end
-    if slash == 0 - 2 or leaf == count or file_dot_leaf(f.path, leaf, count): return file_result(f, 0 - 22) end
-    do linux_copy(f.basename, 0, f.path, leaf, count - leaf + 1)
+    if slash == 0 - 2 or leaf == count or file_dot_leaf(path, leaf, count): return file_result(f, 0 - 22) end
+    if count - leaf > 255: return file_result(f, 0 - 36) end
     -- The parent's name is the path cut at its last slash ("/" for a leaf at
-    -- the root), or "." written into the temp-name scratch. Nothing is allocated.
+    -- the root), ended in the caller's own buffer for the open and put back at
+    -- once, or "." written into the temp-name scratch. Nothing is allocated.
     let dirfd = 0
     if slash < count:
         let cut = slash
         if slash == 0: cut = 1 end
-        let kept = buffer_get(f.path, cut)
-        do buffer_set(f.path, cut, 0)
-        dirfd = linux_syscall6(2, buffer_address(f.path), 589824, 0, 0, 0, 0)
-        do buffer_set(f.path, cut, kept)
+        let kept = buffer_get(path, cut)
+        do buffer_set(path, cut, 0)
+        dirfd = linux_syscall6(2, buffer_address(path), 589824, 0, 0, 0, 0)
+        do buffer_set(path, cut, kept)
     else:
         do linux_text(f.temp, 0, ".")
         do buffer_set(f.temp, 1, 0)
         dirfd = linux_syscall6(2, buffer_address(f.temp), 589824, 0, 0, 0, 0)
     end
     if linux_error(dirfd): return file_result(f, dirfd) end
-    st.dirfd = dirfd
-    let stat = file_stat(f)
-    if stat == 0 - 2: return 0 end
-    if stat == 0: stat = file_regular(f.stat) end
-    if stat != 0: return file_result(f, stat) end
-    st.exists = true
-    return file_read(f)
+    do linux_copy(f.temp, 0, path, leaf, count - leaf)
+    do buffer_set(f.temp, count - leaf, 0)
+    let found = file_leaf(f, dirfd)
+    if found != 0 and found != 0 - 2:
+        do linux_syscall6(3, dirfd, 0, 0, 0, 0, 0)
+        return file_result(f, found)
+    end
+    do linux_copy(f.path, 0, path, 0, count)
+    do buffer_set(f.path, count, 0)
+    do linux_copy(f.basename, 0, f.path, leaf, count - leaf + 1)
+    return file_adopt(f, dirfd, found)
+end
+
+-- A folder scan's storage, allocated once by file_scan_new and reused by every
+-- file_scan: dents takes the getdents64 records, 32 KiB (what a C library's
+-- readdir reads at a time: about 500 short entries a call, and room for a record
+-- of the longest name, 280 bytes); stat one entry's status; name the newest
+-- match's name, NUL terminated (at most 255 bytes); time its modification time
+-- (seconds, nanoseconds).
+record FileScan:
+    dents: buffer
+    stat: buffer
+    name: buffer
+    time: buffer
+end
+
+func file_scan_new(): return FileScan(linux_buffer(32768), linux_buffer(144), linux_buffer(256), linux_buffer(16)) end
+func file_scan_name(scan): return scan.name end
+
+-- Whether b[p, stop) begins with prefix.
+func file_prefixed(b, p, stop, prefix):
+    if stop - p < length(prefix): return false end
+    let i = 0
+    while i < length(prefix):
+        if buffer_get(b, p + i) != index(prefix, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- Whether stat's modification time is later than the one in time. Seconds are
+-- signed (before 1970 they are negative), so both are compared with the sign
+-- bit flipped; equal seconds go to the nanoseconds.
+func file_later(stat, time):
+    let a = (linux_u64(stat, 88) ^ 9223372036854775808)
+    let b = (linux_u64(time, 0) ^ 9223372036854775808)
+    if a != b: return a > b end
+    return linux_u64(stat, 96) > linux_u64(time, 8)
+end
+
+-- Count the folders in f's opened folder whose names begin with prefix, and
+-- keep the newest of them by modification time in scan (file_scan_name). The
+-- folder is listed from its start with getdents64 into scan's own buffer, as
+-- many calls as it takes; nothing is allocated. An entry counts only when it
+-- is a folder itself: the listing's type says directory (or unknown, which some
+-- filesystems give), and a stat through f's folder that does not follow a
+-- symlink (fstatat, AT_SYMLINK_NOFOLLOW) says directory too, so a symlink, a
+-- plain file or anything else wearing the name is skipped. That stat's time
+-- picks the newest, never the name; on a tie the first listed stays. Nothing
+-- inside any folder is read. Result: the count (with 0 the name is empty), or a
+-- raw -errno when f's folder cannot be listed.
+func file_scan(f, scan, prefix):
+    let dirfd = f.state.dirfd
+    do buffer_set(scan.name, 0, 0)
+    if linux_error(dirfd): return 0 - 9 end
+    let rewound = linux_syscall6(8, dirfd, 0, 0, 0, 0, 0)
+    if linux_error(rewound): return rewound end
+    let found = 0
+    while true:
+        let got = linux_syscall6(217, dirfd, buffer_address(scan.dents), buffer_length(scan.dents), 0, 0, 0)
+        if linux_error(got): return got end
+        if got == 0: return found end
+        let p = 0
+        while p < got:
+            let reclen = linux_u16(scan.dents, p + 16)
+            if reclen == 0: return 0 - 5 end
+            let kind = buffer_get(scan.dents, p + 18)
+            let name = p + 19
+            let stop = linux_nul_end(scan.dents, name, p + reclen)
+            if (kind == 4 or kind == 0) and stop < p + reclen and stop - name < buffer_length(scan.name) and file_prefixed(scan.dents, name, stop, prefix):
+                let checked = linux_syscall6(262, dirfd, buffer_address(scan.dents) + name, buffer_address(scan.stat), 256, 0, 0)
+                if checked == 0 and (linux_u32(scan.stat, 24) & 61440) == 16384:
+                    found = found + 1
+                    if found == 1 or file_later(scan.stat, scan.time):
+                        do linux_put64(scan.time, 0, linux_u64(scan.stat, 88))
+                        do linux_put64(scan.time, 8, linux_u64(scan.stat, 96))
+                        do linux_copy(scan.name, 0, scan.dents, name, stop - name + 1)
+                    end
+                end
+            end
+            p = p + reclen
+        end
+    end
+    return found
+end
+
+-- Whether name is one plain name: not empty, ".", or "..", and without a slash
+-- or a NUL.
+func file_one_name(name):
+    if length(name) == 0 or equal(name, ".") or equal(name, ".."): return false end
+    let i = 0
+    while i < length(name):
+        if index(name, i) == 47 or index(name, i) == 0: return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- Load the file name inside the folder, within f's opened folder, that folder
+-- names (its bytes up to a NUL; one name, no slash, not . or ..) into g,
+-- through descriptors only, as file_load loads one: the names are checked (22;
+-- then 36 for a name over 255 bytes), that folder is opened relative to f's with
+-- O_DIRECTORY | O_NOFOLLOW (a symlink at its name is refused with 20), and the
+-- file's own stat runs through it (file_leaf) before g changes. A refusal at
+-- any of these (a bad name, a name over 255 bytes, a folder missing,
+-- unopenable or readable but not searchable, a final symlink, a nonregular or
+-- multiply linked file, one owned by another account) leaves g exactly as it
+-- was but its scratch (g.temp, g.stat), and closes that folder if it opened.
+-- Then g takes the folder (file_adopt) and the file is read, once; one larger
+-- than g's capacity is refused (27, after capacity + 1 bytes), and file_read's
+-- refusals leave g as file_adopt says (a copy refused while read stays marked
+-- existing), so only a result of 0 means g holds the copy. g.path holds
+-- "folder/name".
+func file_load_inside(g, f, folder, name):
+    let count = linux_nul_end(folder, 0, buffer_length(folder))
+    if count == 0 or count == buffer_length(folder) or count + length(name) + 1 >= buffer_length(g.path) or not file_one_name(name): return file_result(g, 0 - 22) end
+    if file_path_scan(folder, count, 0, 0 - 1) != 0 - 1 or file_dot_leaf(folder, 0, count): return file_result(g, 0 - 22) end
+    if length(name) > 255: return file_result(g, 0 - 36) end
+    let fd = linux_syscall6(257, f.state.dirfd, buffer_address(folder), 720896, 0, 0, 0)
+    if linux_error(fd): return file_result(g, fd) end
+    do linux_text(g.temp, 0, name)
+    do buffer_set(g.temp, length(name), 0)
+    let found = file_leaf(g, fd)
+    if found != 0 and found != 0 - 2:
+        do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+        return file_result(g, found)
+    end
+    do linux_copy(g.path, 0, folder, 0, count)
+    do buffer_set(g.path, count, 47)
+    do linux_text(g.path, count + 1, name)
+    do buffer_set(g.path, count + 1 + length(name), 0)
+    do linux_copy(g.basename, 0, g.path, count + 1, length(name) + 1)
+    return file_adopt(g, fd, found)
 end
 
 -- A new File loaded from a path string. Its storage serves later file_load calls.

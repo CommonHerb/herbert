@@ -466,6 +466,22 @@ HELP_DISCARDS = 'Close pending: Y discards edits | Esc returns | Ctrl+S saves'
 HELP_UNCONFIRMED = 'Close pending: Y closes; NO recovery copy | Esc returns | Ctrl+S retries'
 def read_only_help(help_row):
     return help_row.rsplit(' | ', 1)[0] + ' | Ctrl+Shift+S saves a copy'
+# The line at y=85 (notes_draw), read back from x=28 to the window's edge (145 cells), so a line drawn past its 130
+# characters shows. Before the first edit of a document opened beside .herbert-notes-* session folders it says how
+# many and names the newest by modification time, and in amber, when that folder's copy differs from the file, it
+# says so as well; with no folders, and from the first edit, it is the recovery line as before. LABEL is its ink
+# when it is not a warning.
+LABEL = 8820395
+NEVER_EDITED = 'Recovery: created on first edit; copies are kept until you remove them.'
+def recovery_line(frame):
+    return decoded(frame, 28, 85, 145)
+def copies_line(count, newest):
+    return f'Recovery copies from earlier sessions sit beside this file ({count}). Newest: {newest}/recovery.txt'
+def differs_line(count, newest):
+    return f'Recovery copies beside this file ({count}). The newest differs from this file. Open {newest}/recovery.txt'
+def kept_line(session):
+    # The recovery line after an edit: its label, then the session's path from x=352 (cell 54).
+    return 'Recovery copy kept beside this file:'.ljust(54) + session + '/recovery.txt'
 
 
 def stable_memory(samples, label):
@@ -2306,6 +2322,306 @@ def notes_prompt_drag_checks(args, x, display, evidence, passed):
     passed('notes-a-prompt-ends-a-held-drag-f3-find-go-to-line-unicode-open-close-prompt-window-close')
 
 
+# Session folders from earlier sessions beside a document, said at open (at launch and after Ctrl+O) on the line at
+# y=85, each asserted by its decoded text and ink (recovery_line).
+def session_folder(folder, name, text, age):
+    """A session folder as Notes makes one (0700, recovery.txt 0600), last written age seconds ago."""
+    path = folder/name; path.mkdir(mode=0o700)
+    (path/'recovery.txt').write_bytes(text); (path/'recovery.txt').chmod(0o600)
+    when = time.time_ns() - age * 1000000000
+    os.utime(path, ns=(when, when))
+    return path
+
+
+def holds(path, data):
+    return path.exists() and path.read_bytes() == data
+
+
+def notes_recovery_equal_checks(args, x, display, evidence, passed):
+    # Reopened beside the folder of a session that saved, whose copy equals the file: the line says how many folders
+    # and names the newest, plain, until the first edit, when the recovery line takes it as before; saving that edit
+    # does not bring the notice back.
+    d = evidence/'notice-equal'; d.mkdir(); doc = d/'doc.txt'; doc.write_bytes(b'alpha\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'notice-first') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (NEVER_EDITED, {LABEL}), 'no session folders: the line as before')
+        first = f'.herbert-notes-{app.p.pid}-1'
+        app.type('x'); app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes() == b'xalpha\n' and holds(d/first/'recovery.txt', b'xalpha\n'),
+                 'saved; the copy equals the file')
+        app.tap('q','Control_L'); app.finish()
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'notice-reopened') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (copies_line(1, first), {LABEL}),
+                 'reopened beside one folder whose copy equals the file: its count and name, plain')
+        app.frame('notice-plain')
+        session = f'.herbert-notes-{app.p.pid}-1'
+        app.type('y')
+        wait_for(lambda: recovery_line(app.frame()) == (kept_line(session), {LABEL}),
+                 'the first edit: the recovery line takes the notice\'s place')
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes() == b'yxalpha\n' and status_text(app.frame())[0] == SAVED, 'the edit saved')
+        assert recovery_line(app.frame()) == (kept_line(session), {LABEL}), 'after the save: still the recovery line'
+        app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-one-copy-equal-to-the-file-plain-count-until-the-first-edit-not-back-after-a-save')
+
+
+def notes_recovery_differs_checks(args, x, display, evidence, passed):
+    # A session whose edits were discarded leaves a copy that differs from the file. Reopened beside it, at launch and
+    # with Ctrl+O from another folder, the line is amber, says so, and names the copy to open.
+    d = evidence/'notice-differs'; d.mkdir(); doc = d/'doc.txt'; doc.write_bytes(b'alpha\n')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'differs-first') as app:
+        first = f'.herbert-notes-{app.p.pid}-1'
+        app.type('unsaved ')
+        wait_for(lambda: holds(d/first/'recovery.txt', b'unsaved alpha\n'), 'the edits are in the copy')
+        app.tap('q','Control_L'); app.tap('y'); app.finish()
+    assert doc.read_bytes() == b'alpha\n'
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'differs-reopened') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (differs_line(1, first), {AMBER}),
+                 'reopened at launch beside a copy that differs: amber')
+        app.frame('notice-amber')
+        app.tap('q','Control_L'); app.finish()
+    start = d/'start'; start.mkdir(); (start/'start.txt').write_bytes(b'start\n')
+    with application(args.notes, start/'start.txt', b'Herbert - Notes', (900,600), x, display, d, 'differs-opened') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (NEVER_EDITED, {LABEL}), 'a folder without session folders')
+        app.tap('o','Control_L'); app.type('../doc.txt'); app.tap('Return')
+        wait_for(lambda: recovery_line(app.frame()) == (differs_line(1, first), {AMBER}),
+                 'opened with Ctrl+O beside a copy that differs: amber')
+        assert status_text(app.frame())[0] == 'Opened. Original bytes and newline style are preserved.'
+        app.tap('q','Control_L'); app.finish()
+    assert doc.read_bytes() == b'alpha\n' and holds(d/first/'recovery.txt', b'unsaved alpha\n')
+    # A later session that saves leaves the newest folder, its copy equal to the file: two real sessions, ordered by
+    # their folders' own times, and the line is plain again with the older copy that differs only counted. In that
+    # later session, once its edit is saved, the line stays the recovery line: the amber notice does not come back.
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'differs-later-save') as app:
+        later = f'.herbert-notes-{app.p.pid}-1'
+        app.type('z'); app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes() == b'zalpha\n' and holds(d/later/'recovery.txt', b'zalpha\n')
+                 and status_text(app.frame())[0] == SAVED, 'a later session saved')
+        assert recovery_line(app.frame()) == (kept_line(later), {LABEL}), 'after the save: the recovery line, no notice'
+        app.tap('q','Control_L'); app.finish()
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'differs-after-save') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (copies_line(2, later), {LABEL}),
+                 'beside both: the newest equals the file, plain, two counted')
+        app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-newest-copy-differs-amber-at-launch-and-after-ctrl-o-plain-after-a-later-save')
+
+
+def notes_recovery_newest_checks(args, x, display, evidence, passed):
+    # Several folders: only the newest by modification time is read, and its copy equals the file, so the line is
+    # plain though both older copies differ; the process numbers and serials in the names point at those older ones.
+    # A symbolic link and a plain file wearing the name, newer still, are not counted.
+    d = evidence/'notice-newest'; d.mkdir(); doc = d/'doc.txt'; doc.write_bytes(b'beta\n')
+    session_folder(d, '.herbert-notes-900-1', b'older, different\n', 100)
+    session_folder(d, '.herbert-notes-50-7', b'older, different too\n', 50)
+    session_folder(d, '.herbert-notes-7-2', b'beta\n', 10)
+    session_folder(d, 'elsewhere', b'linked, different\n', 0)
+    (d/'.herbert-notes-99-9').symlink_to('elsewhere')
+    (d/'.herbert-notes-98-9').write_bytes(b'a plain file\n')
+    want = (copies_line(3, '.herbert-notes-7-2'), {LABEL})
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'newest-launched') as app:
+        wait_for(lambda: recovery_line(app.frame()) == want, 'at launch: three folders, the newest equal to the file: plain')
+        app.tap('q','Control_L'); app.finish()
+    start = d/'start'; start.mkdir(); (start/'start.txt').write_bytes(b'start\n')
+    with application(args.notes, start/'start.txt', b'Herbert - Notes', (900,600), x, display, d, 'newest-opened') as app:
+        app.tap('o','Control_L'); app.type('../doc.txt'); app.tap('Return')
+        wait_for(lambda: recovery_line(app.frame()) == want, 'after Ctrl+O: the same')
+        app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-several-copies-only-the-newest-by-time-read-links-and-files-not-counted')
+
+
+def notes_recovery_removed_checks(args, x, display, evidence, passed):
+    # The notice goes with the folders: shown beside one, then, that folder removed, nothing when the file is opened
+    # again with Ctrl+O, nor at the next launch.
+    d = evidence/'notice-removed'; d.mkdir(); doc = d/'doc.txt'; doc.write_bytes(b'gamma\n')
+    folder = session_folder(d, '.herbert-notes-31-1', b'gamma\n', 5)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'removed-before') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (copies_line(1, folder.name), {LABEL}), 'beside one folder: shown')
+        shutil.rmtree(folder)
+        app.tap('o','Control_L'); app.type('doc.txt'); app.tap('Return')
+        wait_for(lambda: recovery_line(app.frame()) == (NEVER_EDITED, {LABEL}), 'the folder removed, opened again: nothing')
+        app.tap('q','Control_L'); app.finish()
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'removed-after') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (NEVER_EDITED, {LABEL}), 'and at the next launch: nothing')
+        app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-gone-once-the-folders-are-removed')
+
+
+OPENED = 'Opened. Original bytes and newline style are preserved.'
+NEW_FILE = 'New file. It is created when you save with Ctrl+S.'
+
+
+def notes_recovery_compare_checks(args, x, display, evidence, passed):
+    # The newest copy is compared with the file byte for byte, not by size or by its first bytes: amber for a copy of
+    # the same size with one byte in the middle changed (a typo fixed just before a crash), for a copy that is the file
+    # and more, and for one that is less than the file; plain for an equal copy. The first at launch, the rest with
+    # Ctrl+O; each folder's session folder has its own name, so each line differs from the one before it.
+    d = evidence/'notice-compare'; d.mkdir()
+    cases = [('same-size', b'alpha\n', b'alXha\n'), ('longer', b'alpha\n', b'alpha\nmore\n'),
+             ('shorter', b'alpha\nmore\n', b'alpha\n'), ('equal', b'alpha\n', b'alpha\n')]
+    for serial, (name, text, copy) in enumerate(cases, 1):
+        (d/name).mkdir(); (d/name/'doc.txt').write_bytes(text)
+        session_folder(d/name, f'.herbert-notes-4242-{serial}', copy, 5)
+    want = {name: (differs_line(1, f'.herbert-notes-4242-{serial}'), {AMBER}) for serial, (name, _, _) in enumerate(cases, 1)}
+    want['equal'] = (copies_line(1, '.herbert-notes-4242-4'), {LABEL})
+    with application(args.notes, d/'same-size'/'doc.txt', b'Herbert - Notes', (900,600), x, display, d, 'compare') as app:
+        wait_for(lambda: recovery_line(app.frame()) == want['same-size'], 'at launch, a same-size copy, one byte changed: amber')
+        for name in ('longer', 'shorter', 'equal'):
+            app.tap('o','Control_L'); app.type(f'../{name}/doc.txt'); app.tap('Return')
+            wait_for(lambda: recovery_line(app.frame()) == want[name] and status_text(app.frame())[0] == OPENED,
+                     f'opened with Ctrl+O beside the {name} copy: ' + ('plain' if name == 'equal' else 'amber'))
+        app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-amber-for-a-same-size-change-a-longer-or-a-shorter-copy-plain-for-an-equal-one')
+
+
+def notes_recovery_new_file_checks(args, x, display, evidence, passed):
+    # A file not yet on disk, beside the folders of two sessions that never saved it (the later one crashed before
+    # its first save): the newest copy holds all the text, so the line is amber, says how many there are, and names
+    # the newest, at launch and after Ctrl+O; opening does not create the file.
+    d = evidence/'notice-new-file'; d.mkdir(); doc = d/'todo.txt'
+    session_folder(d, '.herbert-notes-4242-1', b'a first try\n', 50)
+    session_folder(d, '.herbert-notes-4242-2', b'an hour of typing\n', 5)
+    want = (differs_line(2, '.herbert-notes-4242-2'), {AMBER})
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'new-file-launched') as app:
+        wait_for(lambda: recovery_line(app.frame()) == want, 'at launch, a new file beside a copy: amber')
+        app.tap('q','Control_L'); app.finish()
+    start = d/'start'; start.mkdir(); (start/'start.txt').write_bytes(b'start\n')
+    with application(args.notes, start/'start.txt', b'Herbert - Notes', (900,600), x, display, d, 'new-file-opened') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (NEVER_EDITED, {LABEL}), 'a folder without session folders')
+        app.tap('o','Control_L'); app.type('../todo.txt'); app.tap('Return')
+        wait_for(lambda: recovery_line(app.frame()) == want and status_text(app.frame())[0] == NEW_FILE,
+                 'after Ctrl+O, a new file beside a copy: amber')
+        app.tap('q','Control_L'); app.finish()
+    assert not doc.exists()
+    passed('notes-recovery-notice-a-new-file-beside-two-copies-amber-with-the-count-at-launch-and-after-ctrl-o')
+
+
+def notes_recovery_long_name_checks(args, x, display, evidence, passed):
+    # Folder names made by hand, too long for the line (Notes's own are about 24 characters): the line keeps to its 130
+    # characters and nothing is drawn past them (recovery_line reads to the window's edge). Plain, a 215-character name
+    # cut inside the name; amber, a 47-character name with "/recovery.txt" cut after five characters.
+    d = evidence/'notice-long-name'; d.mkdir()
+    names = {'plain': '.herbert-notes-' + 'n' * 200, 'amber': '.herbert-notes-' + 'm' * 32}
+    for kind, copy in [('plain', b'delta\n'), ('amber', b'other\n')]:
+        (d/kind).mkdir(); (d/kind/'doc.txt').write_bytes(b'delta\n')
+        session_folder(d/kind, names[kind], copy, 5)
+    plain = (copies_line(1, names['plain'])[:130], {LABEL})
+    amber = (differs_line(1, names['amber'])[:130], {AMBER})
+    assert amber[0].endswith(names['amber'] + '/reco'), amber
+    with application(args.notes, d/'plain'/'doc.txt', b'Herbert - Notes', (900,600), x, display, d, 'long-name') as app:
+        wait_for(lambda: recovery_line(app.frame()) == plain, 'a 215-character name, plain: cut at 130 characters')
+        app.tap('o','Control_L'); app.type('../amber/doc.txt'); app.tap('Return')
+        wait_for(lambda: recovery_line(app.frame()) == amber, 'a 47-character name, amber: cut at 130 characters')
+        app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-a-name-too-long-for-the-line-is-cut-at-130-characters-plain-and-amber')
+
+
+def notes_recovery_long_compare_checks(args, x, display, evidence, passed):
+    # A document of 100,000 bytes beside a copy of the same size: the whole copy is compared, not its size or its first
+    # bytes. Amber when one byte in the middle differs (at launch) and when only the last byte does (Ctrl+O); plain when
+    # the copy is equal (Ctrl+O). Each folder's session folder has its own name.
+    d = evidence/'notice-long-compare'; d.mkdir()
+    text = (b'a line of the long document, the same in its copy\n' * 2000)[:99999] + b'.'
+    middle = bytearray(text); middle[50000] = ord('#')
+    last = bytearray(text); last[-1] = ord('!')
+    assert len(text) == len(middle) == len(last) == 100000 and b'#' not in text and b'!' not in text
+    cases = [('middle', bytes(middle)), ('last', bytes(last)), ('equal', text)]
+    for serial, (name, copy) in enumerate(cases, 1):
+        (d/name).mkdir(); (d/name/'doc.txt').write_bytes(text)
+        session_folder(d/name, f'.herbert-notes-4343-{serial}', copy, 5)
+    want = {'middle': (differs_line(1, '.herbert-notes-4343-1'), {AMBER}),
+            'last': (differs_line(1, '.herbert-notes-4343-2'), {AMBER}),
+            'equal': (copies_line(1, '.herbert-notes-4343-3'), {LABEL})}
+    with application(args.notes, d/'middle'/'doc.txt', b'Herbert - Notes', (900,600), x, display, d, 'long-compare') as app:
+        wait_for(lambda: recovery_line(app.frame()) == want['middle'], 'at launch, 100,000 bytes, the 50,001st differs: amber')
+        for name in ('last', 'equal'):
+            app.tap('o','Control_L'); app.type(f'../{name}/doc.txt'); app.tap('Return')
+            wait_for(lambda: recovery_line(app.frame()) == want[name] and status_text(app.frame())[0] == OPENED,
+                     f'opened with Ctrl+O beside the {name} copy of 100,000 bytes: ' + ('plain' if name == 'equal' else 'amber'))
+        app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-100000-bytes-amber-for-one-byte-in-the-middle-and-for-the-last-byte-plain-when-equal')
+
+
+def notes_recovery_unreadable_checks(args, x, display, evidence, passed):
+    # A newest copy that cannot be read is counted and never called different: one with no read permission (mode 000),
+    # an older copy that differs beside it, at launch; one of the capacity and a byte more (4,194,305 bytes), with
+    # Ctrl+O. Both plain, each with its count.
+    d = evidence/'notice-unreadable'; d.mkdir()
+    for kind in ('locked', 'large'):
+        (d/kind).mkdir(); (d/kind/'doc.txt').write_bytes(b'epsilon\n')
+    session_folder(d/'locked', '.herbert-notes-5151-1', b'older, different\n', 50)
+    locked = session_folder(d/'locked', '.herbert-notes-5151-2', b'epsilon\n', 5)
+    (locked/'recovery.txt').chmod(0)
+    session_folder(d/'large', '.herbert-notes-5151-3', b'e' * (4194304 + 1), 5)
+    with application(args.notes, d/'locked'/'doc.txt', b'Herbert - Notes', (900,600), x, display, d, 'unreadable') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (copies_line(2, '.herbert-notes-5151-2'), {LABEL}),
+                 'at launch, the newest copy at mode 000: counted, plain')
+        app.tap('o','Control_L'); app.type('../large/doc.txt'); app.tap('Return')
+        wait_for(lambda: recovery_line(app.frame()) == (copies_line(1, '.herbert-notes-5151-3'), {LABEL})
+                 and status_text(app.frame())[0] == OPENED, 'after Ctrl+O, a newest copy over the capacity: counted, plain')
+        app.tap('q','Control_L'); app.finish()
+    (locked/'recovery.txt').chmod(0o600)
+    passed('notes-recovery-notice-a-newest-copy-at-mode-000-or-over-the-capacity-counted-and-plain')
+
+
+def notes_recovery_twelve_checks(args, x, display, evidence, passed):
+    # Twelve session folders (the audit found 26 and 19 in one folder): the two-digit count is drawn whole and the text
+    # after it follows it, plain at launch and amber with Ctrl+O.
+    d = evidence/'notice-twelve'
+    for kind, pid, newest in (('plain', 6161, b'zeta\n'), ('amber', 6262, b'zeta, edited\n')):
+        (d/kind).mkdir(parents=True); (d/kind/'doc.txt').write_bytes(b'zeta\n')
+        for serial in range(1, 13):
+            session_folder(d/kind, f'.herbert-notes-{pid}-{serial}', newest if serial == 12 else b'older\n', 100 - serial)
+    with application(args.notes, d/'plain'/'doc.txt', b'Herbert - Notes', (900,600), x, display, d, 'twelve') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (copies_line(12, '.herbert-notes-6161-12'), {LABEL}),
+                 'at launch beside twelve folders: (12), plain')
+        app.tap('o','Control_L'); app.type('../amber/doc.txt'); app.tap('Return')
+        wait_for(lambda: recovery_line(app.frame()) == (differs_line(12, '.herbert-notes-6262-12'), {AMBER}),
+                 'after Ctrl+O beside twelve folders, the newest differing: (12), amber')
+        app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-twelve-folders-the-count-drawn-whole-plain-and-amber')
+
+
+def notes_recovery_refused_open_checks(args, x, display, evidence, passed):
+    # A Ctrl+O that is refused keeps the open document and its notice: the amber line stays through a missing
+    # folder's refusal, the Escape after it, and a symbolic link's refusal.
+    d = evidence/'notice-refused-open'; d.mkdir(); doc = d/'doc.txt'; doc.write_bytes(b'eta\n')
+    session_folder(d, '.herbert-notes-7171-1', b'eta, unsaved\n', 5)
+    (d/'link.txt').symlink_to('doc.txt')
+    want = (differs_line(1, '.herbert-notes-7171-1'), {AMBER})
+    def shows(status):
+        frame = app.frame()
+        return status_text(frame)[0].startswith(status) and recovery_line(frame) == want
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'refused-open') as app:
+        wait_for(lambda: recovery_line(app.frame()) == want, 'at launch beside a copy that differs: amber')
+        app.tap('o','Control_L'); app.type('no_such_folder/x.txt'); app.tap('Return')
+        wait_for(lambda: shows('Not opened: no such folder'), 'a missing folder refused: the notice kept')
+        app.tap('Escape')
+        wait_for(lambda: shows(READY), 'Escape: the notice kept')
+        app.tap('o','Control_L'); app.type('link.txt'); app.tap('Return')
+        wait_for(lambda: shows('Not opened: symbolic links are refused.'), 'a symbolic link refused: the notice kept')
+        app.tap('Escape'); app.tap('q','Control_L'); app.finish()
+    passed('notes-recovery-notice-kept-through-a-refused-ctrl-o-a-missing-folder-escape-and-a-symbolic-link')
+
+
+def notes_recovery_stale_amber_checks(args, x, display, evidence, passed):
+    # The amber mark is set again at every open: from a document whose newest copy differs (amber) to one whose newest
+    # copy cannot be read (mode 000), with Ctrl+O, the line is plain.
+    d = evidence/'notice-stale'
+    for kind in ('amber', 'locked'):
+        (d/kind).mkdir(parents=True); (d/kind/'doc.txt').write_bytes(b'theta\n')
+    session_folder(d/'amber', '.herbert-notes-8181-1', b'theta, unsaved\n', 5)
+    locked = session_folder(d/'locked', '.herbert-notes-8181-2', b'theta\n', 5)
+    (locked/'recovery.txt').chmod(0)
+    with application(args.notes, d/'amber'/'doc.txt', b'Herbert - Notes', (900,600), x, display, d, 'stale') as app:
+        wait_for(lambda: recovery_line(app.frame()) == (differs_line(1, '.herbert-notes-8181-1'), {AMBER}),
+                 'at launch beside a copy that differs: amber')
+        app.tap('o','Control_L'); app.type('../locked/doc.txt'); app.tap('Return')
+        wait_for(lambda: recovery_line(app.frame()) == (copies_line(1, '.herbert-notes-8181-2'), {LABEL})
+                 and status_text(app.frame())[0] == OPENED, 'after Ctrl+O, the newest copy at mode 000: plain')
+        app.tap('q','Control_L'); app.finish()
+    (locked/'recovery.txt').chmod(0o600)
+    passed('notes-recovery-notice-ctrl-o-from-amber-to-a-newest-copy-that-cannot-be-read-is-plain')
+
+
 def static_elf(path):
     data = path.read_bytes()
     assert data[:7] == b'\x7fELF\x02\x01\x01', 'expected little-endian ELF64'
@@ -2371,6 +2687,18 @@ def main():
                     notes_close_prompt_refusal_checks(args,x,display,evidence,passed)
                     notes_anchor_checks(args,x,display,evidence,passed)
                     notes_prompt_drag_checks(args,x,display,evidence,passed)
+                    notes_recovery_equal_checks(args,x,display,evidence,passed)
+                    notes_recovery_differs_checks(args,x,display,evidence,passed)
+                    notes_recovery_newest_checks(args,x,display,evidence,passed)
+                    notes_recovery_removed_checks(args,x,display,evidence,passed)
+                    notes_recovery_compare_checks(args,x,display,evidence,passed)
+                    notes_recovery_new_file_checks(args,x,display,evidence,passed)
+                    notes_recovery_long_name_checks(args,x,display,evidence,passed)
+                    notes_recovery_long_compare_checks(args,x,display,evidence,passed)
+                    notes_recovery_unreadable_checks(args,x,display,evidence,passed)
+                    notes_recovery_twelve_checks(args,x,display,evidence,passed)
+                    notes_recovery_refused_open_checks(args,x,display,evidence,passed)
+                    notes_recovery_stale_amber_checks(args,x,display,evidence,passed)
             finally:
                 x.close()
     except BaseException as error:

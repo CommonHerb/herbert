@@ -196,7 +196,8 @@ changes Ctrl+O refuses and points to Ctrl+S and Ctrl+Shift+S (on a read-only
 file, to Ctrl+Shift+S's copy and to the Ctrl+S that must save first): opening
 never discards edits. The opened document starts with empty undo history, and its first
 edit creates a new recovery session beside it; earlier session copies stay where
-they are. Opening allocates nothing: Notes keeps one spare file context from
+they are, and the line under the path says so (see session recovery below).
+Opening allocates nothing: Notes keeps one spare file context from
 startup and swaps it with the open one.
 
 **Ctrl+Shift+S saves a rescue copy** in the same directory, named
@@ -246,7 +247,11 @@ Current limits: fixed-size 900x600 window, limited font and keyboard coverage,
 no compose/IME, primary selection (middle-click paste), double- or triple-click
 selection, scroll bar, horizontal or Shift+wheel scrolling, drag-and-drop,
 general save-as dialog, file browser or multi-file tabs. Ctrl+O replaces the open document; to edit two files at
-once, launch another instance with the other path. The visible path is clipped
+once, launch another instance with the other path. Two windows on one file do not
+know of each other, and nothing locks the file. When one saves, the other's next
+Ctrl+S is refused, saying another program changed the file (or, for a file new in
+both, the general sentence and 17), and its Ctrl+Shift+S still saves a copy of its
+edits beside the file. The visible path is clipped
 after 130 bytes and the Open field shows a path's last 130 characters; the full
 path is used for file operations. Each edit still moves
 the text after the cursor, in one block since the block copy, and writes the
@@ -279,6 +284,24 @@ is no cleanup timer or automatic deletion. Each edited session retains one
 snapshot of at most 4 MiB; interrupted saves can also leave a temporary file.
 These private files contain your text and continue to use disk space until you
 remove them. Clean sessions create no copy.
+
+**Opening a file beside earlier copies says so.** When a file opens, at launch or
+with Ctrl+O, Notes looks in its folder for `.herbert-notes-*` session folders (a
+symbolic link or a plain file with such a name is not counted). If there are none,
+the line under the path is as before. If there are some, that line says how many
+and names the newest, by when it was last written, as the path to open
+(`.herbert-notes-12345-1/recovery.txt`); at the first edit the recovery line takes
+its place as before. Only that newest folder's `recovery.txt` is read, once and at
+most 4 MiB, and when its bytes differ from the file just opened (a file not yet
+on disk counts as empty) the line is amber, still says how many, and says that the
+newest differs from this file: `Recovery copies beside this file (2). The newest
+differs from this file. Open .herbert-notes-12345-1/recovery.txt`. A session
+folder does not record which file it was for, so the copy of another file in the
+same folder, this window's own included, counts too and, when it is the newest, is
+the one compared. An older copy is never read, so one that differs is only
+counted. A copy that cannot be read (no permission, over 4 MiB) is counted but not
+called different, and a folder name too long for the line is cut at the line's
+end.
 
 A failed checkpoint leaves an amber recovery warning in the window; editing,
 normal save and manual rescue remain available. A new edit or Ctrl+S retries. If directory creation succeeded but opening or

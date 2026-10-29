@@ -86,7 +86,33 @@ source; the retained source map identifies its original units.
   `f.path` the NUL-terminated path; the stat buffers keep the kernel's layout.
   `file_new(capacity)` allocates a handle's storage once and `file_load(f, path,
   count)` loads a document into it, again and again, without allocating;
-  `file_open(path, capacity)` does both from a path string.
+  `file_open(path, capacity)` does both from a path string. `file_load`
+  changes the handle only once the file is one it will read, or missing (a new
+  document): it checks the path (22, then 36 for a leaf over 255 bytes, so a
+  path of 4096 bytes or more is 22 whatever its leaf), opens the folder, and
+  stats the leaf through that folder first. A load
+  refused there (a bad path, a leaf over 255 bytes, a folder missing,
+  unopenable, or readable but not searchable, a symlink, not a regular file, a
+  second link, another owner) leaves the handle exactly as it was, still on its
+  document, and only `file_status(f)` says the refusal; only its scratch (the
+  temp-name and stat buffers) was written. After that the handle takes the new
+  folder and path, its old document gone, and only a refusal while the file is
+  read is left (it cannot be opened or read, too large, changed while read):
+  that leaves the handle marked existing, the bytes read so far counted
+  (capacity + 1 when too large). Use the handle only after a result of 0:
+  nothing marks such a refusal, and a save through it is checked as any save
+  is (refused with 116 after a file that could not be opened, whose baseline
+  is still the old document's; after a file refused as too large it replaces
+  that file). `file_scan(f, scan,
+  prefix)` counts the folders in the handle's folder whose names begin with
+  `prefix` and keeps the newest by modification time (`file_scan_name(scan)`),
+  listing it with getdents64 into storage that `file_scan_new()` allocates
+  once; a symlink or a plain file wearing the name is skipped, and nothing
+  inside a folder is read. `file_load_inside(g, f, folder, name)` loads one
+  file inside one such folder into another handle, through descriptors, never
+  following a symlink at either name, and keeps that handle as it was on the
+  same refusals as `file_load`. Notes uses the two at open to say that
+  session copies sit beside the document.
 - `../examples/first_steps.herb`: the application's position, controls and scene.
 
 The compiler has no game/window-specific operation. Seven hosted-only primitives

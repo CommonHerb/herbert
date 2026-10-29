@@ -924,6 +924,367 @@ snapshot.rename(snapshot.with_name('first-preserved.txt'));outside=d/'outside';o
 out,err=finish(proc,b'\n')
 result('session-symlink-replacement-refused',proc.returncode==0 and not err and out==b'(0, '+u(-40)+b')\n' and outside.read_bytes()==b'untouched' and snapshot.with_name('first-preserved.txt').read_bytes()==prior)
 
+# A load refused before its folder opens leaves the handle it reuses as it was (the retro review's F6, built from the
+# reviewer's check_file_load_recovery.py): after a CRLF document loads, each refusal below, on the SAME handle, keeps
+# its count, folder descriptor, existence, mode and unconfirmed mark, its path, name, bytes and baseline byte for byte,
+# and the caller's path buffer as it was given; only the status says the refusal. A save through the handle afterwards
+# still replaces that document. The refusals: an empty path, 4097 and 4096 bytes, a count past the caller's buffer, a
+# NUL inside the path, a missing folder (absolute and relative), a trailing slash, a leaf of "." or "..", "/", a
+# folder that cannot be searched (13) and a file used as a folder (20); then, on a second handle, a bare name (no
+# slash, so its folder is ".", the working folder) where the working folder cannot be listed (13).
+load_refusal = compile('load-refusal-keeps-handle', r"""func keep_copy(b):
+ let c = linux_buffer(buffer_length(b))
+ do linux_copy(c, 0, b, 0, buffer_length(b))
+ return c
+end
+func keep_same(a, b):
+ if buffer_length(a) != buffer_length(b): return 0 end
+ if file_bytes_same(a, b, buffer_length(a), 0): return 1 end
+ return 0
+end
+func keep_report(out, f, kept, path, count):
+ let given = keep_copy(path)
+ let r = file_load(f, path, count)
+ do linux_put64(out, 0, r)
+ do linux_put64(out, 8, file_status(f))
+ do linux_put64(out, 16, file_count(f))
+ do linux_put64(out, 24, f.state.dirfd)
+ let exists = 0
+ if f.state.exists: exists = 1 end
+ do linux_put64(out, 32, exists)
+ do linux_put64(out, 40, f.state.mode)
+ let uncertain = 0
+ if f.state.uncertain: uncertain = 1 end
+ do linux_put64(out, 48, uncertain)
+ do linux_put64(out, 56, keep_same(f.path, kept.0))
+ do linux_put64(out, 64, keep_same(f.basename, kept.1))
+ do linux_put64(out, 72, keep_same(f.bytes, kept.2))
+ do linux_put64(out, 80, keep_same(f.baseline, kept.3))
+ do linux_put64(out, 88, keep_same(path, given))
+ return file_write_bytes(1, out, 0, 96)
+end
+func main():
+ let args = linux_arguments()
+ let good = linux_argument(args, 1)
+ let f = file_new(65536)
+ let goodpath = linux_cstring(good)
+ let out = linux_buffer(96)
+ do linux_put64(out, 0, file_load(f, goodpath, length(good)))
+ do linux_put64(out, 8, file_count(f))
+ do linux_put64(out, 16, f.state.dirfd)
+ do file_write_bytes(1, out, 0, 24)
+ let kept = (keep_copy(f.path), keep_copy(f.basename), keep_copy(f.bytes), keep_copy(f.baseline))
+ let long = linux_buffer(4200)
+ let i = 0
+ while i < 4200:
+  do buffer_set(long, i, 97)
+  i = i + 1
+ end
+ do buffer_set(long, 0, 47)
+ do keep_report(out, f, kept, long, 0)
+ do keep_report(out, f, kept, long, 4097)
+ do keep_report(out, f, kept, long, 4096)
+ do keep_report(out, f, kept, goodpath, buffer_length(goodpath) + 1)
+ let inside = keep_copy(goodpath)
+ do buffer_set(inside, 1, 0)
+ do keep_report(out, f, kept, inside, length(good))
+ let n = 2
+ let more = true
+ while more:
+  let asked = linux_argument(args, n)
+  if equal(asked, ""):
+   more = false
+  else:
+   do keep_report(out, f, kept, linux_cstring(asked), length(asked))
+   n = n + 1
+  end
+ end
+ do linux_put64(out, 0, file_save(f, linux_cstring("saved through the same handle\n"), 30))
+ do file_write_bytes(1, out, 0, 8)
+ do file_close(f)
+ do process_exit(0)
+ return 0
+end
+""")
+d = work / 'case-load-refusal'
+d.mkdir()
+good = d / 'good.txt'
+good.write_bytes(b'line1\r\nline2\r\n')
+good.chmod(0o640)
+(d / 'locked' / 'inner').mkdir(parents=True)
+(d / 'locked').chmod(0)
+asked = [(str(d / 'no_such_dir' / 'file.txt'), -2), ('no_such_relative_dir/file.txt', -2), (str(d) + '/', -22),
+         (str(d) + '/.', -22), (str(d) + '/..', -22), ('/', -22), (str(d / 'locked' / 'inner' / 'file.txt'), -13),
+         (str(good) + '/file.txt', -20)]
+r = subprocess.run([str(load_refusal), str(good)] + [path for path, _ in asked], cwd=d, capture_output=True, timeout=30)
+(d / 'locked').chmod(0o700)
+(d / 'stdout').write_bytes(r.stdout)
+
+def refusals_kept(r, good, asked):
+    # The driver's five refusals and then the asked ones, each leaving the handle as it was; then the save through it.
+    refusals = [-22, -22, -22, -22, -22] + [code for _, code in asked]
+    assert r.returncode == 0 and not r.stderr and len(r.stdout) == 24 + 96 * len(refusals) + 8, (r.returncode, r.stderr, len(r.stdout))
+    head = struct.unpack_from('<3Q', r.stdout, 0)
+    assert head[0] == 0 and head[1] == 14 and head[2] < 1 << 31, head
+    for at, code in enumerate(refusals):
+        got = struct.unpack_from('<12Q', r.stdout, 24 + 96 * at)
+        wanted = (code % (1 << 64), code % (1 << 64), 14, head[2], 1, 0o640, 0, 1, 1, 1, 1, 1)
+        assert got == wanted, ('refusal', at, code, got, wanted)
+    assert struct.unpack_from('<Q', r.stdout, 24 + 96 * len(refusals))[0] == 0 and good.read_bytes() == b'saved through the same handle\n'
+    return len(refusals)
+
+kept = refusals_kept(r, good, asked)
+# The bare-name branch: the handle loaded by its absolute path, the driver runs in a working folder that it may write
+# and search but not list (0300), so opening "." for "bare.txt" is refused (13), and the handle is kept there too.
+bare = work / 'case-load-refusal-bare-name'
+(bare / 'unlisted').mkdir(parents=True)
+good = bare / 'good.txt'
+good.write_bytes(b'line1\r\nline2\r\n')
+good.chmod(0o640)
+(bare / 'unlisted').chmod(0o300)
+r = subprocess.run([str(load_refusal), str(good), 'bare.txt'], cwd=bare / 'unlisted', capture_output=True, timeout=30)
+(bare / 'unlisted').chmod(0o700)
+(bare / 'stdout').write_bytes(r.stdout)
+kept += refusals_kept(r, good, [('bare.txt', -13)])
+result('load-refused-before-its-folder-opens-keeps-the-handle', True, refusals=kept)
+
+# A leaf over 255 bytes is refused (36) after the length checks, before any folder opens, so beside a missing
+# folder too, and the handle is kept: in a folder, beside a missing folder, and the reviewer's 4095-byte bare name. A
+# leaf of exactly 255 bytes is a name like any other (the handle here was loaded from one).
+d = work / 'case-load-refusal-long-leaf'
+(d / 'dir').mkdir(parents=True)
+good = d / ('g' * 251 + '.txt')
+good.write_bytes(b'line1\r\nline2\r\n')
+good.chmod(0o640)
+asked = [(str(d / 'dir' / ('a' * 256)), -36), (str(d / 'no_such_dir' / ('a' * 256)), -36), ('a' * 4095, -36)]
+r = subprocess.run([str(load_refusal), str(good)] + [path for path, _ in asked], cwd=d, capture_output=True, timeout=30)
+(d / 'stdout').write_bytes(r.stdout)
+result('load-refused-leaf-over-255-bytes-keeps-the-handle', True, refusals=refusals_kept(r, good, asked))
+
+# A folder that can be read but not searched (0600, 0400) opens, but nothing in it can be looked up: the leaf's stat
+# through it is refused (13) before the handle changes, for a file there and for a new name alike.
+d = work / 'case-load-refusal-unsearchable-folder'
+d.mkdir()
+good = d / 'good.txt'
+good.write_bytes(b'line1\r\nline2\r\n')
+good.chmod(0o640)
+for name, mode in (('r0600', 0o600), ('r0400', 0o400)):
+    (d / name).mkdir()
+    (d / name / 'file.txt').write_bytes(b'inside\n')
+    (d / name).chmod(mode)
+asked = [(str(d / 'r0600' / 'file.txt'), -13), (str(d / 'r0600' / 'new.txt'), -13), (str(d / 'r0400' / 'file.txt'), -13)]
+r = subprocess.run([str(load_refusal), str(good)] + [path for path, _ in asked], cwd=d, capture_output=True, timeout=30)
+for name in ('r0600', 'r0400'):
+    (d / name).chmod(0o700)
+(d / 'stdout').write_bytes(r.stdout)
+result('load-refused-in-a-folder-readable-not-searchable-keeps-the-handle', True, refusals=refusals_kept(r, good, asked))
+
+# The leaf's own stat, through the new folder, decides before the handle changes: a symbolic link (40), a FIFO and a
+# folder (22) and a file with a second hard link (31) are refused and the handle is kept (another owner, 13, has no
+# case here: READ in file_regular). A file refused while it is read is past that point: here one with no read
+# permission (13) leaves the handle on the new path, marked existing with nothing read, and a save through it is then
+# refused (116) and writes nothing.
+d = work / 'case-load-refusal-leaf-stat'
+(d / 'folder').mkdir(parents=True)
+good = d / 'good.txt'
+good.write_bytes(b'line1\r\nline2\r\n')
+good.chmod(0o640)
+(d / 'link.txt').symlink_to('good.txt')
+os.mkfifo(d / 'fifo')
+(d / 'linked.txt').write_bytes(b'linked\n')
+os.link(d / 'linked.txt', d / 'linked-too.txt')
+locked = d / 'locked.txt'
+locked.write_bytes(b'locked\n')
+locked.chmod(0)
+locked_before = locked.stat()
+asked = [(str(d / 'link.txt'), -40), (str(d / 'fifo'), -22), (str(d / 'folder'), -22), (str(d / 'linked.txt'), -31)]
+r = subprocess.run([str(load_refusal), str(good)] + [path for path, _ in asked] + [str(locked)], cwd=d, capture_output=True, timeout=30)
+(d / 'stdout').write_bytes(r.stdout)
+rows = 5 + len(asked)
+assert r.returncode == 0 and not r.stderr and len(r.stdout) == 24 + 96 * (rows + 1) + 8, (r.returncode, r.stderr, len(r.stdout))
+head = struct.unpack_from('<3Q', r.stdout, 0)
+assert head[0] == 0 and head[1] == 14 and head[2] < 1 << 31, head
+for at, code in enumerate([-22, -22, -22, -22, -22] + [code for _, code in asked]):
+    got = struct.unpack_from('<12Q', r.stdout, 24 + 96 * at)
+    wanted = (code % (1 << 64), code % (1 << 64), 14, head[2], 1, 0o640, 0, 1, 1, 1, 1, 1)
+    assert got == wanted, ('refusal', at, code, got, wanted)
+got = struct.unpack_from('<12Q', r.stdout, 24 + 96 * rows)
+# result, status, count, the folder (a new one), existing, path and name kept (no), the caller's path kept (yes)
+assert (got[0], got[1], got[2], got[3] < 1 << 31, got[4], got[7], got[8], got[11]) == ((-13) % (1 << 64), (-13) % (1 << 64), 0, True, 1, 0, 0, 1), ('read refusal', got)
+saved = struct.unpack_from('<q', r.stdout, 24 + 96 * (rows + 1))[0]
+locked_after = locked.stat()
+locked.chmod(0o600)
+assert saved == -116 and good.read_bytes() == b'line1\r\nline2\r\n' and locked.read_bytes() == b'locked\n', (saved, good.read_bytes())
+assert (locked_after.st_ino, locked_after.st_size, locked_after.st_mtime_ns) == (locked_before.st_ino, locked_before.st_size, locked_before.st_mtime_ns)
+result('load-refused-at-the-leaf-stat-keeps-the-handle-a-read-refusal-does-not', True, refusals=rows + 1)
+
+# The recovery-folder scan (file_scan) and the one read of the newest folder's copy (file_load_inside): entries of the
+# document's folder named .herbert-notes-* that are folders themselves are counted (a symbolic link, a plain file or a
+# FIFO wearing the name is not), the newest is chosen by modification time, never by the process number, serial or
+# order of the names (the same two names are run with their ages swapped), and only that folder's recovery.txt is
+# read, through descriptors, at most the handle's capacity (65536 here, so a larger copy is refused with 27 after
+# capacity + 1 bytes). A second scan of the same folder gives the same answer. The driver prints the newest name,
+# then (open status, count, count again, load result, copy present, its size, copy equals the document); a load not
+# attempted is 1. Asked to preload, the handle the copy is read into holds the document first (so a refusal that
+# keeps it shows it present at the document's size), and asked a name, it reads that name instead of recovery.txt.
+scan = compile('folder-scan', r"""func main():
+ let args = linux_arguments()
+ let f = file_open(linux_argument(args, 1), 65536)
+ let g = file_new(65536)
+ if equal(linux_argument(args, 3), "preload"):
+  let document = linux_argument(args, 1)
+  do file_load(g, linux_cstring(document), length(document))
+ end
+ let leafname = linux_argument(args, 4)
+ if equal(leafname, ""): leafname = "recovery.txt" end
+ let scan = file_scan_new()
+ let found = file_scan(f, scan, ".herbert-notes-")
+ let again = file_scan(f, scan, ".herbert-notes-")
+ let name = file_scan_name(scan)
+ do file_write_bytes(1, name, 0, linux_nul_end(name, 0, buffer_length(name)))
+ do file_write_bytes(1, linux_cstring("\n"), 0, 1)
+ let asked = linux_argument(args, 2)
+ let folder = name
+ if not equal(asked, ""): folder = linux_cstring(asked) end
+ let loaded = 1
+ if not equal(asked, "") or (found != 0 and not linux_error(found)): loaded = file_load_inside(g, f, folder, leafname) end
+ let present = 0
+ if g.state.exists: present = 1 end
+ let same = 0
+ if loaded == 0 and present == 1 and file_count(g) == file_count(f):
+  if file_bytes_same(g.bytes, f.bytes, file_count(f), 0): same = 1 end
+ end
+ let closed = file_close(g)
+ let closedfile = file_close(f)
+ return (file_status(f), found, again, loaded, present, file_count(g), same)
+end
+""")
+scanned_text = b'the document\n'
+scan_now = time.time_ns()
+
+def scan_folder(d, name, text, age, mode=0o600):
+    """A session folder as Notes makes one (0700, recovery.txt 0600), last written age seconds before scan_now."""
+    folder = d / name
+    folder.mkdir(mode=0o700)
+    if text is not None:
+        (folder / 'recovery.txt').write_bytes(text)
+        (folder / 'recovery.txt').chmod(mode)
+    when = scan_now - int(age * 1000000000)
+    os.utime(folder, ns=(when, when))
+    return folder
+
+def scan_case(label, entries, *, found, newest, loaded=0, present=1, size=len(scanned_text), same=1, ask='', preload=False, name='', after=None):
+    d = work / ('case-scan-' + label)
+    d.mkdir()
+    doc = d / 'doc.txt'
+    doc.write_bytes(scanned_text)
+    entries(d)
+    r = subprocess.run([str(scan), str(doc), ask, 'preload' if preload else '', name], capture_output=True, timeout=30)
+    if after:
+        after(d)
+    (d / 'stdout').write_bytes(r.stdout)
+    expected = newest.encode() + b'\n(0, ' + b', '.join(u(n) for n in (found, found, loaded, present, size, same)) + b')\n'
+    assert r.returncode == 0 and not r.stderr and r.stdout == expected, (label, r.stdout, r.stderr, expected)
+    result('scan-' + label, True, output=r.stdout.decode().replace('\n', ' ').strip())
+
+def unrelated(d):
+    for name in ('notes', '.herbert-notes', '.herbert-note-1-1', '.herbert-notesX-1'):
+        (d / name).mkdir()
+    for name in ('.herbert-save-1-1.tmp', 'herbert-rescue-1-1.txt'):
+        (d / name).write_bytes(b'not a session\n')
+
+def disguised(d):
+    # A real folder, older; then, newer, a symlink to a folder holding a copy, a plain file, a symlink to a file and a
+    # FIFO, each wearing the name.
+    scan_folder(d, '.herbert-notes-3-1', scanned_text, 100)
+    scan_folder(d, 'elsewhere', b'linked copy\n', 0)
+    (d / '.herbert-notes-1-1').symlink_to('elsewhere')
+    (d / '.herbert-notes-2-1').write_bytes(scanned_text)
+    (d / '.herbert-notes-4-1').symlink_to('doc.txt')
+    os.mkfifo(d / '.herbert-notes-5-1')
+
+def by_name_and_number(d):
+    # By process number the newest would be 4194304-1, by serial 9-12, by name 9-12 (greatest) or 100-1 (least).
+    scan_folder(d, '.herbert-notes-100-1', b'older 1\n', 30)
+    scan_folder(d, '.herbert-notes-7-9', b'older 2\n', 60)
+    scan_folder(d, '.herbert-notes-20-3', scanned_text, 10)
+    scan_folder(d, '.herbert-notes-3-2', b'older 3\n', 90)
+    scan_folder(d, '.herbert-notes-4194304-1', b'older 4\n', 120)
+    scan_folder(d, '.herbert-notes-9-12', b'older 5\n', 150)
+
+def by_nanoseconds(newer):
+    # Two folders in one second, newer apart by 800 ns; a third last written in 1969 (a negative time). Run with
+    # either name newer, so the order the folder lists them in cannot decide it.
+    def entries(d):
+        base = scan_now - scan_now % 1000000000 - 5000000000
+        for name in ('.herbert-notes-1-1', '.herbert-notes-1-2'):
+            scan_folder(d, name, scanned_text if name == newer else b'older\n', 0)
+            ns = base + (900 if name == newer else 100)
+            os.utime(d / name, ns=(ns, ns))
+        scan_folder(d, '.herbert-notes-1-3', b'from 1969\n', 0)
+        os.utime(d / '.herbert-notes-1-3', ns=(-1000000000000, -1000000000000))
+    return entries
+
+def crowded(d):
+    # Enough entries that the 32 KiB listing buffer is filled several times.
+    scan_folder(d, '.herbert-notes-1-1', b'older\n', 20)
+    for i in range(1500):
+        (d / f'unrelated-entry-with-a-longish-name-{i:05d}').write_bytes(b'')
+    scan_folder(d, '.herbert-notes-2-1', scanned_text, 0)
+    scan_folder(d, '.herbert-notes-3-1', b'older\n', 10)
+
+scan_case('absent', unrelated, found=0, newest='', loaded=1, present=0, size=0, same=0)
+scan_case('one-copy-equal', lambda d: scan_folder(d, '.herbert-notes-4242-1', scanned_text, 5), found=1, newest='.herbert-notes-4242-1')
+scan_case('newest-differs-older-equal', lambda d: (scan_folder(d, '.herbert-notes-10-1', scanned_text, 100), scan_folder(d, '.herbert-notes-10-2', b'more text\n', 1)),
+          found=2, newest='.herbert-notes-10-2', size=10, same=0)
+scan_case('older-differs-newest-equal', lambda d: (scan_folder(d, '.herbert-notes-10-1', scanned_text, 1), scan_folder(d, '.herbert-notes-10-2', b'more text\n', 100)),
+          found=2, newest='.herbert-notes-10-1')
+scan_case('symlink-file-and-fifo-wearing-the-name-skipped', disguised, found=1, newest='.herbert-notes-3-1')
+scan_case('load-inside-refuses-a-symlinked-folder', disguised, found=1, newest='.herbert-notes-3-1', ask='.herbert-notes-1-1', loaded=-20, present=0, size=0, same=0)
+scan_case('load-inside-refuses-a-plain-file', disguised, found=1, newest='.herbert-notes-3-1', ask='.herbert-notes-2-1', loaded=-20, present=0, size=0, same=0)
+scan_case('load-inside-refuses-a-path', disguised, found=1, newest='.herbert-notes-3-1', ask='elsewhere/../.herbert-notes-3-1', loaded=-22, present=0, size=0, same=0)
+scan_case('load-inside-refuses-dot-dot', disguised, found=1, newest='.herbert-notes-3-1', ask='..', loaded=-22, present=0, size=0, same=0)
+scan_case('newest-by-time-not-process-serial-or-name', by_name_and_number, found=6, newest='.herbert-notes-20-3')
+scan_case('newest-by-nanoseconds-and-signed-seconds', by_nanoseconds('.herbert-notes-1-2'), found=3, newest='.herbert-notes-1-2')
+scan_case('newest-by-nanoseconds-names-swapped', by_nanoseconds('.herbert-notes-1-1'), found=3, newest='.herbert-notes-1-1')
+scan_case('many-entries', crowded, found=3, newest='.herbert-notes-2-1')
+scan_case('newest-copy-unreadable', lambda d: (scan_folder(d, '.herbert-notes-1-1', scanned_text, 9), scan_folder(d, '.herbert-notes-1-2', scanned_text, 0, mode=0)),
+          found=2, newest='.herbert-notes-1-2', loaded=-13, present=1, size=0, same=0)
+scan_case('newest-without-a-copy', lambda d: (scan_folder(d, '.herbert-notes-1-1', scanned_text, 9), scan_folder(d, '.herbert-notes-1-2', None, 0)),
+          found=2, newest='.herbert-notes-1-2', present=0, size=0, same=0)
+scan_case('newest-copy-over-capacity', lambda d: scan_folder(d, '.herbert-notes-1-1', b'x' * 70000, 0),
+          found=1, newest='.herbert-notes-1-1', loaded=-27, present=1, size=65537, same=0)
+
+def by_modification_not_access(d):
+    # The older folder (written 100 s ago) has the newer access time (now: listed or read since); the newer one
+    # (written 10 s ago) was last accessed 200 s ago. Newest is by modification time: 1-2, whose copy is the document.
+    scan_folder(d, '.herbert-notes-1-1', b'older\n', 100)
+    scan_folder(d, '.herbert-notes-1-2', scanned_text, 10)
+    os.utime(d / '.herbert-notes-1-1', ns=(scan_now, scan_now - 100000000000))
+    os.utime(d / '.herbert-notes-1-2', ns=(scan_now - 200000000000, scan_now - 10000000000))
+
+def copy_is_a_symlink(d):
+    scan_folder(d, '.herbert-notes-1-1', None, 0)
+    (d / '.herbert-notes-1-1' / 'recovery.txt').symlink_to('../doc.txt')
+
+def unsearchable_newest(d):
+    scan_folder(d, '.herbert-notes-1-1', scanned_text, 0)
+    (d / '.herbert-notes-1-1').chmod(0o600)
+
+scan_case('newest-by-modification-time-not-access-time', by_modification_not_access, found=2, newest='.herbert-notes-1-2')
+# file_load_inside, like file_load, decides on the copy's own stat, through the folder it opened, before the handle it
+# reads into changes: a copy that is a symbolic link (40), or in a folder that can be read but not searched (13), is
+# refused and the handle (here holding the document, 13 bytes) is kept; a name over 255 bytes is refused (36) before
+# the folder opens, so for a folder that does not exist too.
+scan_case('load-inside-refused-at-the-copy-s-stat-keeps-the-handle', copy_is_a_symlink, found=1, newest='.herbert-notes-1-1',
+          loaded=-40, present=1, size=len(scanned_text), same=0, preload=True)
+scan_case('load-inside-refused-in-a-folder-readable-not-searchable-keeps-the-handle', unsearchable_newest, found=1,
+          newest='.herbert-notes-1-1', loaded=-13, present=1, size=len(scanned_text), same=0, preload=True,
+          after=lambda d: (d / '.herbert-notes-1-1').chmod(0o700))
+scan_case('load-inside-refuses-a-name-over-255-bytes-before-the-folder-opens', lambda d: scan_folder(d, '.herbert-notes-1-1', scanned_text, 0),
+          found=1, newest='.herbert-notes-1-1', ask='.herbert-notes-missing', name='n' * 256, loaded=-36, present=1,
+          size=len(scanned_text), same=0, preload=True)
+
 # Warm and sample the actual history/search/checkpoint path at full document size.
 recovery_reuse = compile('session-reuse', r"""func run(original, recovery, text, query, poll, left, sampling):
  if left == 0: return 0 end

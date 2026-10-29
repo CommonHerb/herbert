@@ -14,7 +14,10 @@
 -- detached is true while the wheel has moved the view away from the cursor;
 -- the next key (other than a bare modifier), click or drag re-attaches it, and
 -- the view follows the cursor every frame as before. going is the Go to line
--- field, with the number typed so far and its digit count.
+-- field, with the number typed so far and its digit count. scan is the folder
+-- scan's storage, allocated here once; found is how many session folders sat
+-- beside the document when it opened, and found_differs whether the newest
+-- one's copy differs from the file (notes_recovery_scan).
 -- No per-event/frame/save string or tuple creation.
 
 ref record NotesState:
@@ -52,6 +55,9 @@ ref record NotesState:
     going: bool
     line_value: int
     line_digits: int
+    scan: FileScan
+    found: int
+    found_differs: bool
 end
 
 -- The largest document, in bytes on disk.
@@ -527,6 +533,30 @@ func notes_open_error(status):
     return 28
 end
 
+-- Session folders from earlier sessions beside the document just opened (at
+-- startup and after Ctrl+O): the .herbert-notes-* folders in its folder,
+-- counted by one scan of the folder its File already holds (file_scan; a
+-- symlink or a plain file wearing the name is not one). Only the newest, by
+-- modification time, is read: its recovery.txt, loaded once into the spare File
+-- (free at open time; at most the document capacity) and compared byte for byte
+-- with the bytes just opened. A copy that cannot be read is not called
+-- different. Line y=85 says so until the first edit (notes_draw_found).
+func notes_recovery_scan(s):
+    let f = s.doc
+    let g = s.spare
+    s.found = 0
+    s.found_differs = false
+    let found = file_scan(f, s.scan, ".herbert-notes-")
+    if linux_error(found) or found == 0: return 0 end
+    s.found = found
+    let loaded = file_load_inside(g, f, file_scan_name(s.scan), "recovery.txt")
+    if loaded == 0 and g.state.exists:
+        s.found_differs = file_count(g) != file_count(f) or not file_bytes_same(g.bytes, f.bytes, file_count(f), 0)
+    end
+    do file_close(g)
+    return 0
+end
+
 -- Load the typed path into the spare File, then its text, and swap. A refusal
 -- leaves the open document, its text, history and recovery session as they were.
 func notes_open(t, s, recovery):
@@ -561,6 +591,7 @@ func notes_open(t, s, recovery):
     s.recovery_attempted = false
     s.opening = false
     s.query_matched = false
+    do notes_recovery_scan(s)
     if g.state.exists: return notes_message(s, 20) end
     return notes_message(s, 21)
 end
@@ -1139,6 +1170,42 @@ func notes_status(c, f, t, s, query):
     return 0
 end
 
+-- At most cells characters of text, from x.
+func notes_text_cut(c, text, x, y, cells):
+    let i = 0
+    while i < length(text) and i < cells:
+        do pixel_letter(c, pixel_glyph(index(text, i)), x + i * 6, y, 1, 0)
+        i = i + 1
+    end
+    return 0
+end
+
+-- Line y=85 from the open of a document beside session folders until its first
+-- edit (notes_recovery_scan): how many there are and the newest one's copy to
+-- open, in amber, saying that copy differs from the file, when it does.
+-- The folder's name is drawn as listed; a name too long for the row is cut at
+-- the row's end, so the line keeps to its 130 characters (Notes's own names
+-- fit).
+func notes_draw_found(c, s):
+    let name = file_scan_name(s.scan)
+    let copies = "Recovery copies from earlier sessions sit beside this file ("
+    let newest = "). Newest: "
+    if s.found_differs:
+        do x11_color(c, 16173151)
+        copies = "Recovery copies beside this file ("
+        newest = "). The newest differs from this file. Open "
+    end
+    do pixel_text(c, copies, 28, 85, 1)
+    let x = pixel_number(c, s.found, 28 + 6 * length(copies), 85, 1)
+    do pixel_text(c, newest, x, 85, 1)
+    x = x + 6 * length(newest)
+    let count = linux_nul_end(name, 0, buffer_length(name))
+    if count > (808 - x) / 6: count = (808 - x) / 6 end
+    do pixel_text_buffer(c, name, 0, count, x, 85, 1)
+    x = x + 6 * count
+    return notes_text_cut(c, "/recovery.txt", x, 85, (808 - x) / 6)
+end
+
 func notes_draw(c, f, t, s, recovery, query, blink):
     do notes_view(t, s)
     do x11_color(c, 1054759)
@@ -1161,7 +1228,11 @@ func notes_draw(c, f, t, s, recovery, query, blink):
         end
         do pixel_text_buffer(c, recovery.2, 0, linux_nul_end(recovery.2, 0, buffer_length(recovery.2)), 352, 85, 1)
     end
-    do pixel_text(c, recoverylabel, 28, 85, 1)
+    if s.found > 0 and not s.recovery_attempted:
+        do notes_draw_found(c, s)
+    else:
+        do pixel_text(c, recoverylabel, 28, 85, 1)
+    end
     do x11_color(c, 2767956)
     do x11_rect(c, 24, 96, 852, 428)
     do x11_color(c, 1384240)
@@ -1259,7 +1330,8 @@ func main():
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
-    let s = NotesState(f, file_new(notes_capacity()), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0, false, false, 0, 0)
+    let s = NotesState(f, file_new(notes_capacity()), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0, false, false, 0, 0, file_scan_new(), 0, false)
+    do notes_recovery_scan(s)
     let recovery = recovery_new(notes_capacity())
     let query = linux_buffer(64)
     s.needs_draw = true
