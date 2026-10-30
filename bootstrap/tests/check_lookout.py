@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """Lookout's checks: its figures against hand-written answers, then its window on a private display.
 
-Part one runs `lookout --sample STAT1 STAT2 MEMINFO HOSTNAME` on fixed input files and compares every line it prints
-with an answer written here by hand: one-processor and 64-processor /proc/stat files, old and new kernels' field
-counts, meminfo fields missing, reordered or malformed, and the edges of the arithmetic (0 %, 100 %, half a percent,
-a zero-length interval, counters that did not move or went back, numbers at and past 2^64, tenths that carry).
+Part one runs `lookout --sample STAT1 STAT2 [STAT3 ...] MEMINFO HOSTNAME` on fixed input files and compares every
+line it prints with an answer written here by hand: one-processor and 64-processor /proc/stat files, old and new
+kernels' field counts, tabs, meminfo fields missing, reordered or malformed, files at the 1 MiB bound, and the edges
+of the arithmetic (0 %, 100 %, half a percent and 99.5 % exactly, also past 2^56, a zero-length interval after a
+figure, counters that did not move or went back one by one or all together, numbers at and past 2^64, tenths that
+carry).
 
-Part two opens the window on a private Xvfb display and drives it with XTest: the window appears, draws this
-machine's name and both figures (read back from its pixels against /proc), redraws, and quits on Escape, on q and on
-the window manager's close. With `--test` it reads files this check writes, so the exact text and bar lengths are
-checked for known figures, and for files that vanish (the "unavailable" state) and come back. Last, it reads the real
-/proc files every 10 ms for --seconds (default 120) and must stay the same size in memory.
+Part two opens the window on a private Xvfb display and drives it with XTest. With the real /proc it must draw this
+machine's name, a processor figure, and memory figures that agree with /proc/meminfo read just before and just after
+a frame that shows a new reading; it quits on Escape, q, Shift+Q and the window manager's close. With `--test` it
+reads files this check writes: the redraw light must change at every reading while nothing else does, and the exact
+text, inks and bar lengths are checked for known figures, a zero-length interval, MiB, names of 48 and 60 bytes, and
+files that vanish ("unavailable") and come back. Last, for --seconds (default 120) it reads every 10 ms through links
+this check turns between the real /proc, files without a final newline (MiB, a 60-byte name), missing files and
+malformed files, and must stay the same size in memory.
 
 Python, Xvfb, libX11 and libXtst are test tools only; Lookout links none of them. Evidence (frames, input history,
 outputs, memory samples) is kept in /tmp/herbert-hosted-apps-lookout-*.
@@ -93,9 +98,13 @@ def meminfo(total, available, *, before=b'', between=b'', after=b''):
     return before + b'MemTotal:       %d kB\n' % total + between + b'MemAvailable:   %d kB\n' % available + after
 
 
-# Every case starts from these four files and this answer, then changes what it names. Each answer was worked out
-# by hand from the case's own numbers: busy = total - idle - iowait, where total is the first eight fields; the
-# figure is the change in busy over the change in total, to the nearest percent; a bar is four pixels a percent.
+# Every case starts from these four files and this answer, then changes what it names; a case may add stat3 and
+# stat4, read in order after stat2. Each answer was worked out by hand from the case's own numbers. A statN line is
+# that sample's total (its first eight counters) and busy (the total less idle and iowait). The figure is worked out
+# counter by counter: each counter's rise since the last sample (none if it went back) is its time; the figure is the
+# rise of all but idle and iowait over the rise of all eight, to the nearest percent, a half rounding up. A sample
+# whose total went back shows a dash; one with no rise at all leaves the figure as it was. A bar is four pixels a
+# percent.
 FILES = {'stat1': STAT_ONE_1, 'stat2': STAT_ONE_2, 'meminfo': MEM_TYPICAL, 'host': b'test-host\n'}
 ANSWER = {'stat1': '10000 1500', 'stat2': '11000 1900', 'meminfo': '16384000 4096000', 'host': 'test-host',
           'processor': '40%', 'processor-bar': '160', 'memory': '75%', 'memory-bar': '300',
@@ -104,6 +113,22 @@ UNREADABLE = {'processor': 'unavailable', 'processor-bar': '0'}
 NO_MEMORY = {'meminfo': 'unavailable', 'memory': 'unavailable', 'memory-bar': '0', 'detail': ''}
 LONG_LINE = b'intr ' + b'0 ' * 10000 + b'\n'
 STRADDLE = b'intr ' + b'7' * 4084 + b'\n'          # 4090 bytes, so the cpu line crosses the first 4096-byte read
+MIB = 1048576
+FIRST_MIB = b'intr ' + b'0' * (MIB - 6) + b'\n'      # one line of exactly 1 MiB
+CPU_LINE_2 = b'cpu  1300 0 600 8550 550 0 0 0 0 0\n'  # STAT_ONE_2's first line
+
+
+def ending_at_1_mib(tail):
+    """A long first line, then tail, the whole exactly 1 MiB."""
+    return b'intr ' + b'0' * (MIB - len(tail) - 6) + b'\n' + tail
+
+
+# Large numbers for the exact percent, where rounding by halving went wrong: 2^64 - 9216 with a busy part just over
+# half a percent; a memory total of 2^56 + 65 with just under half a percent in use; 2^56 + 264 with exactly 99.5 %
+# and 1 KiB less.
+BIG_TOTAL, BIG_BUSY = 18446744073709542400, 92233720368547839
+BIG_MEMORY, BIG_USED = 72057594037928001, 360287970189640
+HALF_TOTAL, HALF_PART = 72057594037928200, 71697306067738559
 
 CASES = [
     # name, files that differ, answer lines that differ
@@ -124,6 +149,19 @@ CASES = [
      {'stat1': '1000 100', 'stat2': '2000 100', 'processor': '0%', 'processor-bar': '0'}),
     ('zero-length-interval', {'stat2': STAT_ONE_1},
      {'stat2': '10000 1500', 'processor': '-', 'processor-bar': '0'}),
+    ('zero-length-interval-keeps-the-figure', {'stat3': STAT_ONE_2},
+     {'stat3': '11000 1900'}),
+    ('next-interval-starts-at-the-zero-length-sample', {'stat3': STAT_ONE_2,
+                                                        'stat4': stat_line(1400, 0, 600, 8650, 550, 0, 0, 0, 0, 0)},
+     {'stat3': '11000 1900', 'stat4': '11200 2000', 'processor': '50%', 'processor-bar': '200'}),
+    ('total-went-back-after-a-figure', {'stat3': STAT_ONE_1},
+     {'stat3': '10000 1500', 'processor': '-', 'processor-bar': '0'}),
+    ('iowait-went-back', {'stat1': stat_line(100, 0, 0, 800, 100, 0, 0, 0, 0, 0),
+                          'stat2': stat_line(101, 0, 0, 899, 1, 0, 0, 0, 0, 0)},
+     {'stat1': '1000 100', 'stat2': '1001 101', 'processor': '1%', 'processor-bar': '4'}),
+    ('user-went-back-then-on', {'stat1': b'cpu  500 0 0 500 0 0 0 0\n', 'stat2': b'cpu  400 0 0 600 0 0 0 0\n',
+                                'stat3': b'cpu  450 0 0 650 0 0 0 0\n'},
+     {'stat1': '1000 500', 'stat2': '1000 400', 'stat3': '1100 450', 'processor': '50%', 'processor-bar': '200'}),
     ('busy-counters-did-not-move', {'stat1': stat_line(500, 0, 500, 1000, 0, 0, 0, 0, 0, 0),
                                     'stat2': stat_line(500, 0, 500, 3000, 0, 0, 0, 0, 0, 0)},
      {'stat1': '2000 1000', 'stat2': '4000 1000', 'processor': '0%', 'processor-bar': '0'}),
@@ -141,6 +179,24 @@ CASES = [
     ('99.5-percent-shows-100', {'stat1': stat_line(0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
                                 'stat2': stat_line(199, 0, 0, 1, 0, 0, 0, 0, 0, 0)},
      {'stat1': '0 0', 'stat2': '200 199', 'processor': '100%', 'processor-bar': '400'}),
+    ('just-over-half-a-percent-near-2^64-and-just-under-past-2^56',
+     {'stat1': b'cpu 0 0 0 0\n', 'stat2': b'cpu %d 0 0 %d\n' % (BIG_BUSY, BIG_TOTAL - BIG_BUSY),
+      'meminfo': meminfo(BIG_MEMORY, BIG_MEMORY - BIG_USED)},
+     {'stat1': '0 0', 'stat2': '18446744073709542400 92233720368547839', 'processor': '1%', 'processor-bar': '4',
+      'meminfo': '72057594037928001 71697306067738361', 'memory': '0%', 'memory-bar': '0',
+      'detail': '343597383.7 GiB of 68719476736.0 GiB in use'}),
+    ('exactly-99.5-percent-past-2^56', {'stat1': b'cpu 0 0 0 0\n',
+                                        'stat2': b'cpu %d 0 0 %d\n' % (HALF_PART, HALF_TOTAL - HALF_PART),
+                                        'meminfo': meminfo(HALF_TOTAL, HALF_TOTAL - HALF_PART)},
+     {'stat1': '0 0', 'stat2': '72057594037928200 71697306067738559', 'processor': '100%', 'processor-bar': '400',
+      'meminfo': '72057594037928200 360287970189641', 'memory': '100%', 'memory-bar': '400',
+      'detail': '68375879352.3 GiB of 68719476736.0 GiB in use'}),
+    ('just-under-99.5-percent-past-2^56', {'stat1': b'cpu 0 0 0 0\n',
+                                           'stat2': b'cpu %d 0 0 %d\n' % (HALF_PART - 1, HALF_TOTAL - HALF_PART + 1),
+                                           'meminfo': meminfo(HALF_TOTAL, HALF_TOTAL - HALF_PART + 1)},
+     {'stat1': '0 0', 'stat2': '72057594037928200 71697306067738558', 'processor': '99%', 'processor-bar': '396',
+      'meminfo': '72057594037928200 360287970189642', 'memory': '99%', 'memory-bar': '396',
+      'detail': '68375879352.3 GiB of 68719476736.0 GiB in use'}),
     ('counters-went-back-start-again', {'stat1': STAT_ONE_2, 'stat2': STAT_ONE_1},
      {'stat1': '11000 1900', 'stat2': '10000 1500', 'processor': '-', 'processor-bar': '0'}),
     ('busy-went-back-counts-none', {'stat1': stat_line(100, 0, 0, 800, 100, 0, 0, 0, 0, 0),
@@ -154,6 +210,9 @@ CASES = [
      {'stat1': '18446744073709551615 18446744073709551615', 'stat2': '18446744073709551615 18446744073709551615',
       'processor': '-', 'processor-bar': '0'}),
     ('number-past-2^64', {'stat2': b'cpu  18446744073709551616 0 0 0\n'}, {'stat2': 'unavailable', **UNREADABLE}),
+    ('number-of-21-digits', {'stat2': b'cpu  100000000000000000000 0 0 0\n'}, {'stat2': 'unavailable', **UNREADABLE}),
+    ('tabs-between-fields', {'stat2': CPU_LINE_2.replace(b' ', b'\t'),
+                             'meminfo': b'MemTotal:\t16384000 kB\nMemAvailable:\t4096000\tkB\n'}, {}),
     ('total-past-2^64', {'stat2': b'cpu  18446744073709551615 1 0 0\n'}, {'stat2': 'unavailable', **UNREADABLE}),
     ('letter-in-a-field', {'stat2': b'cpu  100 0 x0 800 0 0 0 0 0 0\n'}, {'stat2': 'unavailable', **UNREADABLE}),
     ('three-fields', {'stat2': b'cpu  100 0 0\n'}, {'stat2': 'unavailable', **UNREADABLE}),
@@ -167,13 +226,21 @@ CASES = [
     ('cpu-line-without-newline', {'stat2': b'cpu  1300 0 600 8550 550 0 0 0 0 0'}, {}),
     ('past-1-MiB-before-the-cpu-line', {'stat2': b'intr ' + b'0 ' * 600000 + b'\n' + STAT_ONE_2},
      {'stat2': 'unavailable', **UNREADABLE}),
+    ('cpu-line-starting-at-1-MiB', {'stat2': FIRST_MIB + CPU_LINE_2}, {'stat2': 'unavailable', **UNREADABLE}),
+    ('cpu-line-starting-at-1-MiB-without-newline', {'stat2': FIRST_MIB + CPU_LINE_2[:-1]},
+     {'stat2': 'unavailable', **UNREADABLE}),
+    ('cpu-line-ending-at-1-MiB', {'stat2': ending_at_1_mib(CPU_LINE_2)}, {}),
+    ('file-of-1-MiB-ending-in-the-cpu-line', {'stat2': ending_at_1_mib(CPU_LINE_2[:-1])}, {}),
+    ('cpu-line-newline-past-1-MiB', {'stat2': ending_at_1_mib(CPU_LINE_2[:-1]) + b'\n'},
+     {'stat2': 'unavailable', **UNREADABLE}),
+    ('meminfo-after-1-MiB', {'meminfo': FIRST_MIB + meminfo(16384000, 4096000)}, NO_MEMORY),
+    ('name-on-a-line-past-1-MiB', {'host': b'my-box-' + b'a' * MIB}, {'host': 'my-box-' + 'a' * 57}),
     ('meminfo-reordered', {'meminfo': b'MemAvailable:    3145728 kB\nMemFree: 5 kB\nCached: 6 kB\n'
                                       b'MemTotal:        4194304 kB\n'},
      {'meminfo': '4194304 3145728', 'memory': '25%', 'memory-bar': '100', 'detail': '1.0 GiB of 4.0 GiB in use'}),
     ('meminfo-without-MemAvailable', {'meminfo': b'MemTotal:       16384000 kB\nMemFree:  1024000 kB\n'}, NO_MEMORY),
     ('meminfo-without-MemTotal', {'meminfo': b'MemFree:  1024000 kB\nMemAvailable:    4096000 kB\n'}, NO_MEMORY),
-    ('meminfo-total-zero', {'meminfo': meminfo(0, 0)},
-     {'meminfo': '0 0', 'memory': 'unavailable', 'memory-bar': '0', 'detail': ''}),
+    ('meminfo-total-zero', {'meminfo': meminfo(0, 0)}, NO_MEMORY),
     ('more-available-than-total', {'meminfo': meminfo(2097152, 3000000)},
      {'meminfo': '2097152 3000000', 'memory': '0%', 'memory-bar': '0', 'detail': '0.0 GiB of 2.0 GiB in use'}),
     ('nothing-available', {'meminfo': meminfo(2097152, 0)},
@@ -210,7 +277,7 @@ CASES = [
      {'stat1': 'unavailable', 'stat2': 'unavailable', 'host': 'unavailable', **UNREADABLE, **NO_MEMORY}),
 ]
 
-ORDER = ('stat1', 'stat2', 'meminfo', 'host', 'processor', 'processor-bar', 'memory', 'memory-bar', 'detail')
+ORDER = ('meminfo', 'host', 'processor', 'processor-bar', 'memory', 'memory-bar', 'detail')
 
 
 def sample_checks(args, evidence, passed):
@@ -224,9 +291,11 @@ def sample_checks(args, evidence, passed):
         names.add(name)
         directory = root / name
         directory.mkdir()
+        stats = sorted((key for key in set(FILES) | set(files) if key.startswith('stat')), key=lambda k: int(k[4:]))
+        assert stats == [f'stat{n}' for n in range(1, len(stats) + 1)], (name, stats)
         paths = []
-        for key in ('stat1', 'stat2', 'meminfo', 'host'):
-            data = files.get(key, FILES[key])
+        for key in (*stats, 'meminfo', 'host'):
+            data = files.get(key, FILES.get(key))
             path = directory / key
             if data is not None:
                 path.write_bytes(data)
@@ -236,14 +305,14 @@ def sample_checks(args, evidence, passed):
         (directory / 'stdout').write_bytes(result.stdout)
         (directory / 'stderr').write_bytes(result.stderr)
         answer = dict(ANSWER, **changes)
-        expected = ''.join(f'{key}={answer[key]}\n' for key in ORDER).encode()
+        expected = ''.join(f'{key}={answer[key]}\n' for key in (*stats, *ORDER)).encode()
         assert (result.returncode, result.stderr) == (0, b''), (name, result.returncode, result.stderr)
         assert result.stdout == expected, (name, result.stdout.decode(errors='replace'), expected.decode())
         passed('lookout-sample-' + name)
 
     for label, extra, message in (
             ('extra-argument', ['x'], b'lookout: usage: lookout\n'),
-            ('sample-needs-four-files', ['--sample', 'a', 'b', 'c'], b'lookout: usage: lookout\n'),
+            ('sample-needs-two-processor-files', ['--sample', 'a', 'b', 'c'], b'lookout: usage: lookout\n'),
             ('test-interval-zero', ['--test', 'a', 'b', 'c', '0'], b'lookout: usage: lookout\n'),
             ('test-interval-over-a-minute', ['--test', 'a', 'b', 'c', '60001'], b'lookout: usage: lookout\n'),
             ('test-interval-not-a-number', ['--test', 'a', 'b', 'c', '1x'], b'lookout: usage: lookout\n'),
@@ -372,91 +441,206 @@ def real_memory():
     return total, available
 
 
-def tenths(kib, unit):
-    whole, rest = divmod(kib, unit)
-    tenth = (rest * 10 + unit // 2) // unit
-    return f'{whole + tenth // 10}.{tenth % 10}'
+def memory_expected(total, available):
+    """What Lookout shows for these two figures, worked out exactly: the percent rounded half up, and the used and
+    total amounts in tenths of the unit, rounded half up, with the unit's name."""
+    used = total - available if available < total else 0
+    quotient, rest = divmod(100 * used, total)
+    unit, name = (1048576, 'GiB') if total >= 1048576 else (1024, 'MiB')
+    def tenths(kib):
+        whole, part = divmod(kib, unit)
+        return whole * 10 + (part * 10 + unit // 2) // unit
+    return quotient + (2 * rest >= total), tenths(used), tenths(total), name
 
 
-def window_checks(args, x, display, evidence, passed):
-    # The real /proc: the name, both figures and their bars, the redraw light; then Escape.
+LIGHT_AT, LIGHT_BOX = (604, 44), (596, 36, 16, 16)    # the light's middle, and a box round it (lookout_draw)
+LIGHT_DIM, LIGHT_BRIGHT = 3832176, 6867876
+LABELS = (('PROCESSOR', {WHITE}), ('MEMORY', {WHITE}), ('ESC OR Q TO CLOSE', {GREY}))
+TYPICAL_SHOWN = {'memory': ('75%', {WHITE}), 'memory-bar': 300, 'detail': ('11.7 GiB of 15.6 GiB in use', {GREY})}
+
+
+def light(frame):
+    return colour(frame, *LIGHT_AT)
+
+
+def without_light(frame):
+    """A digest of the frame with the light's box blanked: everything else Lookout draws."""
+    rgb, width = bytearray(frame['rgb']), frame['width']
+    x, y, w, h = LIGHT_BOX
+    for row in range(y, y + h):
+        rgb[(row * width + x) * 3:(row * width + x + w) * 3] = bytes(w * 3)
+    return hashlib.sha256(rgb).hexdigest()
+
+
+def put(path, data):
+    spare = path.with_name(path.name + '.new')
+    spare.write_bytes(data)
+    os.replace(spare, path)
+
+
+def memory_at_a_reading(app, evidence, attempts=6):
+    """Lookout's memory figures against /proc/meminfo at the moment it read them. Frames are taken back to back, with
+    /proc/meminfo read just before and just after each; when the light changes, the reading it shows was taken between
+    the last two frames, so it must lie between the figures read around them. That bracket, about a tenth of a second
+    wide, is the only tolerance; a reading that falls outside it (memory moving faster than that) is tried again, up
+    to attempts readings."""
+    tries = []
+    last = light(app.frame())
+    around = [real_memory()]
+    deadline = time.monotonic() + 30
+    while len(tries) < attempts and time.monotonic() < deadline:
+        before = real_memory()
+        frame = app.frame()
+        after = real_memory()
+        if light(frame) == last:
+            around = [before, after]
+            continue
+        last = light(frame)
+        expected = [memory_expected(*reading) for reading in around + [before, after]]
+        around = [before, after]
+        reading = shown(frame)
+        detail = re.fullmatch(r'(\d+)\.(\d) (GiB|MiB) of (\d+)\.(\d) (GiB|MiB) in use', reading['detail'][0])
+        figure = re.fullmatch(r'(\d{1,3})%', reading['memory'][0])
+        got = None
+        if detail and figure:
+            got = (int(figure.group(1)), int(detail.group(1)) * 10 + int(detail.group(2)),
+                   int(detail.group(4)) * 10 + int(detail.group(5)), detail.group(3), detail.group(6))
+        tries.append({'shown': [reading['memory'], reading['memory-bar'], reading['detail']],
+                      'expected_range': expected})
+        if (got is not None and reading['memory'][1] == {WHITE} and reading['detail'][1] == {GREY}
+                and min(e[0] for e in expected) <= got[0] <= max(e[0] for e in expected)
+                and min(e[1] for e in expected) <= got[1] <= max(e[1] for e in expected)
+                and got[2] == expected[0][2] and got[3] == got[4] == expected[0][3]
+                and reading['memory-bar'] == 4 * got[0]):
+            (evidence / 'lookout-real-memory-tries.json').write_text(json.dumps(tries, indent=2, default=list) + '\n')
+            return reading, len(tries)
+    (evidence / 'lookout-real-memory-tries.json').write_text(json.dumps(tries, indent=2, default=list) + '\n')
+    assert tries, 'no new reading seen in 30 seconds: the light never changed'
+    raise AssertionError(('memory figures never matched /proc/meminfo at a reading', tries))
+
+
+def real_checks(args, x, display, evidence, passed):
+    # The real /proc: the name, the labels, a processor figure with its bar, and the memory figures exactly as
+    # /proc/meminfo gave them when Lookout read it; then Escape.
     app = Lookout(args.lookout, [], x, display, evidence, 'lookout-real')
     try:
-        first = app.frame('start')
         name = real_name()
-        reading = shown(first)
-        assert reading['host'] == (name, {WHITE}), (reading['host'], name)
-        assert reading['labels'] == (('PROCESSOR', {WHITE}), ('MEMORY', {WHITE}), ('ESC OR Q TO CLOSE', {GREY})), \
-            reading['labels']
+        show_until(app, {'host': (name, {WHITE}), 'labels': LABELS}, 'name and labels', 10)
+        reading = {}
         def figure():
             reading.update(shown(app.frame()))
             return re.fullmatch(r'\d{1,3}%', reading['processor'][0]) is not None
-        wait_for(figure, 'a processor figure after the second sample', 4)
-        frame = app.frame('figures')
-        reading = shown(frame)
+        wait_for(figure, 'a processor figure after the second sample', 10)
         cpu = int(reading['processor'][0][:-1])
-        assert 0 <= cpu <= 100 and reading['processor'][1] == {WHITE}, reading['processor']
+        assert cpu <= 100 and reading['processor'][1] == {WHITE}, reading['processor']
         assert reading['processor-bar'] == 4 * cpu, (reading['processor-bar'], cpu)
-        total, available = real_memory()
-        unit, unit_name = (1048576, 'GiB') if total >= 1048576 else (1024, 'MiB')
-        detail = re.fullmatch(r'(\d+\.\d) (GiB|MiB) of (\d+\.\d) (GiB|MiB) in use', reading['detail'][0])
-        assert detail and detail.group(2) == detail.group(4) == unit_name, reading['detail']
-        assert detail.group(3) == tenths(total, unit), (reading['detail'], total)
-        mem = int(reading['memory'][0][:-1])
-        mine = round(100 * (total - available) / total)
-        assert abs(mem - mine) <= 5 and reading['memory-bar'] == 4 * mem, (reading['memory'], mine)
-        passed('lookout-shows-this-machine', name_matches_proc=True, processor=cpu, memory=mem, memory_now=mine,
-               detail=reading['detail'][0])
-        digests = {first['digest'], frame['digest']}
-        started = time.monotonic()
-        while len(digests) < 3 and time.monotonic() - started < 5:
-            time.sleep(.25)
-            digests.add(app.frame()['digest'])
-        assert len(digests) >= 3, 'the window does not keep redrawing'
-        passed('lookout-redraws', distinct_frames=len(digests), seconds=round(time.monotonic() - started, 2))
+        memory, tries = memory_at_a_reading(app, evidence)
+        app.frame('figures')
+        passed('lookout-shows-this-machine', name_matches_proc=True, processor=cpu, memory=memory['memory'][0],
+               detail=memory['detail'][0], readings_tried=tries)
         app.tap('Escape')
         app.finish()
         passed('lookout-escape-quits')
     finally:
         app.close()
 
-    for label, how in (('q', lambda app: app.tap('q')), ('window-close', lambda app: x.delete(app.window))):
+
+def quit_checks(args, x, display, evidence, passed):
+    for label, how in (('q', lambda app: app.tap('q')), ('shift-q', lambda app: app.tap('q', 'Shift_L')),
+                       ('window-close', lambda app: x.delete(app.window))):
         app = Lookout(args.lookout, [], x, display, evidence, 'lookout-' + label)
         try:
-            show_until(app, {'host': (real_name(), {WHITE})}, label + ' window drawn')
+            show_until(app, {'host': (real_name(), {WHITE})}, label + ' window drawn', 10)
             how(app)
             app.finish()
             passed('lookout-' + label + '-quits')
         finally:
             app.close()
 
-    # Files this check writes: exact text and bars for known figures, the unavailable state, and recovery.
+
+def light_checks(args, x, display, evidence, passed):
+    # Files that never change, read every 200 ms: the figures stay as they are, so the light alone shows the readings.
+    # It must change again and again while nothing else in the window does. The first frame looked at comes a second
+    # after the start, so a slow start changes nothing here.
+    files = evidence / 'light-files'
+    files.mkdir()
+    stat, mem, host = files / 'stat', files / 'meminfo', files / 'hostname'
+    put(stat, STAT_ONE_1); put(mem, MEM_TYPICAL); put(host, b'test-host\n')
+    app = Lookout(args.lookout, ['--test', str(stat), str(mem), str(host), '200'], x, display, evidence,
+                  'lookout-light')
+    try:
+        time.sleep(1)
+        show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), 'processor-bar': 0,
+                         **TYPICAL_SHOWN}, 'steady figures', 10)
+        lights, rest, changes = [], set(), 0
+        started = time.monotonic()
+        while changes < 8 and time.monotonic() - started < 20:
+            frame = app.frame()
+            assert light(frame) in (LIGHT_DIM, LIGHT_BRIGHT), ('light colour', light(frame))
+            rest.add(without_light(frame))
+            changes += bool(lights) and light(frame) != lights[-1]
+            lights.append(light(frame))
+            time.sleep(.03)
+        assert changes >= 8, ('the light does not change at each reading', changes, len(lights))
+        assert len(rest) == 1, 'more than the light changed while the figures stood still'
+        app.frame('light')
+        app.tap('Escape')
+        app.finish()
+        passed('lookout-light-changes-at-every-reading', changes=changes, frames_looked_at=len(lights),
+               seconds=round(time.monotonic() - started, 2), rest_of_window_unchanged=True)
+    finally:
+        app.close()
+
+
+def files_checks(args, x, display, evidence, passed):
+    # Files this check writes: exact text, inks and bars for known figures, the unavailable state, and recovery.
     files = evidence / 'window-files'
     files.mkdir()
     stat, mem, host = files / 'stat', files / 'meminfo', files / 'hostname'
-    def put(path, data):
-        spare = path.with_suffix('.new')
-        spare.write_bytes(data)
-        os.replace(spare, path)
     put(stat, STAT_ONE_1); put(mem, MEM_TYPICAL); put(host, b'test-host\n')
     app = Lookout(args.lookout, ['--test', str(stat), str(mem), str(host), '100'], x, display, evidence,
                   'lookout-files')
     try:
-        memory_shown = {'memory': ('75%', {WHITE}), 'memory-bar': 300,
-                        'detail': ('11.7 GiB of 15.6 GiB in use', {GREY})}
         show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), 'processor-bar': 0,
-                         **memory_shown}, 'first sample only: a dash')
+                         'labels': LABELS, **TYPICAL_SHOWN}, 'first sample only: a dash')
         app.frame('dash')
         steps = [(STAT_ONE_2, '40%', 160),
                  (stat_line(2300, 0, 600, 8550, 550, 0, 0, 0, 0, 0), '100%', 400),
                  (stat_line(2300, 0, 600, 9550, 550, 0, 0, 0, 0, 0), '0%', 0)]
         for data, text, width in steps:
             put(stat, data)
-            show_until(app, {'processor': (text, {WHITE}), 'processor-bar': width, **memory_shown}, 'processor ' + text)
+            show_until(app, {'processor': (text, {WHITE}), 'processor-bar': width, **TYPICAL_SHOWN},
+                       'processor ' + text)
             app.frame('processor-' + text.rstrip('%'))
         passed('lookout-draws-exact-figures-and-bars', processor=[s[1] for s in steps], memory='75%')
+        # The same file again and again: every interval is zero-length, and the figure must stay.
+        put(stat, stat_line(2600, 0, 600, 9750, 550, 0, 0, 0, 0, 0))
+        show_until(app, {'processor': ('60%', {WHITE}), 'processor-bar': 240}, 'processor 60%')
+        time.sleep(.6)
+        kept = shown(app.frame())
+        assert (kept['processor'], kept['processor-bar']) == (('60%', {WHITE}), 240), kept['processor']
+        passed('lookout-zero-length-interval-keeps-the-figure', figure='60%', seconds_unchanged=0.6)
+        put(mem, meminfo(524288, 104858))
+        show_until(app, {'memory': ('80%', {WHITE}), 'memory-bar': 320,
+                         'detail': ('409.6 MiB of 512.0 MiB in use', {GREY})}, 'memory in MiB')
+        app.frame('mib')
+        put(mem, MEM_TYPICAL)
+        show_until(app, TYPICAL_SHOWN, 'memory in GiB again')
+        passed('lookout-draws-memory-in-mib-and-gib', mib='409.6 MiB of 512.0 MiB in use',
+               gib='11.7 GiB of 15.6 GiB in use')
+        name48 = ('forty-eight-' + 'abcdefghij' * 4)[:48]
+        name60 = ('sixty-' + 'abcdefghij' * 6)[:60]
+        put(host, name48.encode() + b'\n')
+        wait_for(lambda: read_text(app.frame(), *HOST_AT, 48, BACKGROUND, 2) == (name48, {WHITE}), '48-byte name')
+        put(host, name60.encode() + b'\n')
+        wait_for(lambda: read_text(app.frame(), *HOST_AT, 64, BACKGROUND, 1) == (name60, {WHITE}),
+                 '60-byte name drawn smaller')
+        app.frame('long-name')
+        put(host, b'test-host\n')
+        show_until(app, {'host': ('test-host', {WHITE})}, 'short name again')
+        passed('lookout-draws-a-name-over-48-bytes-smaller', name_48_scale=2, name_60_scale=1)
         stat.unlink()
-        show_until(app, {'processor': ('unavailable', {AMBER}), 'processor-bar': 0, **memory_shown},
+        show_until(app, {'processor': ('unavailable', {AMBER}), 'processor-bar': 0, **TYPICAL_SHOWN},
                    'processor unavailable')
         mem.unlink()
         show_until(app, {'memory': ('unavailable', {AMBER}), 'memory-bar': 0, 'detail': ('', set())},
@@ -465,12 +649,12 @@ def window_checks(args, x, display, evidence, passed):
         show_until(app, {'host': ('unavailable', {AMBER})}, 'name unavailable')
         app.frame('unavailable')
         passed('lookout-shows-unavailable-and-keeps-running')
-        put(stat, stat_line(2300, 0, 600, 9550, 550, 0, 0, 0, 0, 0))
+        put(stat, stat_line(2600, 0, 600, 9750, 550, 0, 0, 0, 0, 0))
         put(mem, MEM_TYPICAL)
         put(host, b'test-host\n')
-        show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), **memory_shown},
+        show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), **TYPICAL_SHOWN},
                    'files back: a new first sample')
-        put(stat, stat_line(2800, 0, 700, 10050, 650, 0, 0, 0, 0, 0))
+        put(stat, stat_line(3000, 0, 700, 10150, 650, 0, 0, 0, 0, 0))
         show_until(app, {'processor': ('50%', {WHITE}), 'processor-bar': 200}, 'processor after recovery')
         app.frame('recovered')
         passed('lookout-recovers-when-the-files-return')
@@ -480,46 +664,119 @@ def window_checks(args, x, display, evidence, passed):
         app.close()
 
 
+def window_checks(args, x, display, evidence, passed):
+    real_checks(args, x, display, evidence, passed)
+    quit_checks(args, x, display, evidence, passed)
+    light_checks(args, x, display, evidence, passed)
+    files_checks(args, x, display, evidence, passed)
+
+
 def io_counts(pid):
     fields = dict(line.split(': ') for line in Path(f'/proc/{pid}/io').read_text().splitlines())
     return int(fields['syscr']), int(fields['rchar'])
 
 
 def memory_checks(args, x, display, evidence, passed):
-    # The real /proc files every 10 ms: about a hundred times the window's own rate, so that even a few bytes kept
-    # per frame would add up to more than the tolerance in the time given.
+    # Every 10 ms, about a hundred times the window's own rate, so that even a few bytes kept per frame add up to more
+    # than the tolerance in the time given. Lookout reads three links that this check turns, every 0.4 s, through
+    # five states: the real /proc; files without a final newline (memory under 1 GiB, a 60-byte name); the next such
+    # processor file (a figure from files); all three missing; all three malformed (unavailable). Each state's picture
+    # is read back once per turn; every state must have been seen as it should look.
+    fixtures, links = evidence / 'memory-fixtures', evidence / 'memory-links'
+    fixtures.mkdir()
+    links.mkdir()
+    long_name = ('a-name-longer-than-48-bytes-' + 'x' * 40)[:60]
+    # stat-a to stat-b: user +100, system +50, idle +50, iowait +10: 150 of 210, 71 %.
+    for name, data in (('stat-a', CPU_LINE_2[:-1]), ('stat-b', b'cpu  1400 0 650 8600 560 0 0 0 0 0'),
+                       ('stat-bad', b'cpu  1 2 x 4\n'),
+                       ('meminfo-small', b'MemTotal:  524288 kB\nMemAvailable:  104858 kB'),
+                       ('meminfo-bad', b'MemTotal:  524288 kB\n'), ('name-long', long_name.encode()),
+                       ('name-empty', b'')):
+        (fixtures / name).write_bytes(data)
+    def missing(reading):
+        return (reading['host'] == ('unavailable', {AMBER}) and reading['processor'] == ('unavailable', {AMBER})
+                and reading['memory'] == ('unavailable', {AMBER}) and reading['detail'] == ('', set()))
+    def live(reading):
+        return (reading['host'] == (real_name(), {WHITE}) and re.fullmatch(r'\d{1,3}%|-', reading['processor'][0])
+                and re.fullmatch(r'\d{1,3}%', reading['memory'][0]) is not None)
+    def files_shown(processor, width):
+        def check(reading):
+            return (read_text(reading['frame'], *HOST_AT, 64, BACKGROUND, 1) == (long_name, {WHITE})
+                    and reading['processor'][0] == processor and reading['processor-bar'] == width
+                    and reading['memory'] == ('80%', {WHITE})
+                    and reading['detail'] == ('409.6 MiB of 512.0 MiB in use', {GREY}))
+        return check
+    proc = {'stat': '/proc/stat', 'meminfo': '/proc/meminfo', 'hostname': '/proc/sys/kernel/hostname'}
+    states = [('live', proc, live),
+              ('files', {'stat': fixtures / 'stat-a', 'meminfo': fixtures / 'meminfo-small',
+                         'hostname': fixtures / 'name-long'}, files_shown('-', 0)),
+              ('files-moving', {'stat': fixtures / 'stat-b', 'meminfo': fixtures / 'meminfo-small',
+                                'hostname': fixtures / 'name-long'}, files_shown('71%', 284)),
+              ('missing', {'stat': None, 'meminfo': None, 'hostname': None}, missing),
+              ('malformed', {'stat': fixtures / 'stat-bad', 'meminfo': fixtures / 'meminfo-bad',
+                             'hostname': fixtures / 'name-empty'}, missing)]
+    def point(targets):
+        for key, target in targets.items():
+            link = links / key
+            if target is None:
+                if link.is_symlink():
+                    link.unlink()
+            else:
+                spare = links / (key + '.new')
+                os.symlink(target, spare)
+                os.replace(spare, link)
+    point(proc)
     interval = 10
-    app = Lookout(args.lookout, ['--test', '/proc/stat', '/proc/meminfo', '/proc/sys/kernel/hostname', str(interval)],
-                 x, display, evidence, 'lookout-memory')
+    app = Lookout(args.lookout, ['--test', str(links / 'stat'), str(links / 'meminfo'), str(links / 'hostname'),
+                                 str(interval)], x, display, evidence, 'lookout-memory')
     try:
-        show_until(app, {'host': (real_name(), {WHITE})}, 'memory run drawn')
-        time.sleep(2)
-        samples, digests = [], set()
-        started = time.monotonic()
+        show_until(app, {'host': (real_name(), {WHITE})}, 'memory run drawn', 10)
+        seen = {name: [0, 0] for name, _, _ in states}
+        samples, turns, started = [], 0, None
         while True:
-            sample = process_memory(app.p.pid)
-            sample['seconds'] = round(time.monotonic() - started, 3)
-            sample['syscr'], sample['rchar'] = io_counts(app.p.pid)
-            samples.append(sample)
-            (evidence / 'lookout-memory.json').write_text(json.dumps(samples, indent=2) + '\n')
-            digests.add(app.frame()['digest'])
-            if time.monotonic() - started >= args.seconds:
-                break
-            time.sleep(2)
+            name, targets, check = states[turns % len(states)]
+            point(targets)
+            turned = time.monotonic()
+            time.sleep(.15)
+            frame = app.frame()
+            reading = dict(shown(frame), frame=frame)
+            seen[name][1] += 1
+            if check(reading):
+                seen[name][0] += 1
+            elif seen[name][1] <= 2 * len(states):
+                app.frame(f'state-{name}-not-yet')
+            turns += 1
+            # Two whole turns of every state before the first sample, so each path has run before it is measured.
+            if started is None and turns == 2 * len(states):
+                started = time.monotonic()
+                last_sample = None
+            if started is not None and (last_sample is None or time.monotonic() - last_sample >= 2):
+                last_sample = time.monotonic()
+                sample = process_memory(app.p.pid)
+                sample['seconds'] = round(last_sample - started, 3)
+                sample['syscr'], sample['rchar'] = io_counts(app.p.pid)
+                samples.append(sample)
+                (evidence / 'lookout-memory.json').write_text(json.dumps(samples, indent=2) + '\n')
+                if last_sample - started >= args.seconds:
+                    break
+            time.sleep(max(0, .4 - (time.monotonic() - turned)))
         seconds = samples[-1]['seconds']
-        # A frame reads three files, with at most two read calls each (the data, and one more at the end of a file
-        # whose figure the first read did not finish); the display socket's receives are not read calls. So a sixth
-        # of the read calls is a lower bound on the frames drawn.
+        (evidence / 'lookout-memory-states.json').write_text(json.dumps(seen, indent=2) + '\n')
+        assert all(matched for matched, _ in seen.values()), ('a state never looked as it should', seen)
+        # Every file in this run gives its figure, or shows its end, by its second read call: the live /proc files
+        # finish within their first read (their figures come first, and a read takes up to 4096 bytes), the files
+        # written here are shorter than one read, so a second read finds their end, and a missing file is not read.
+        # The display socket's receives are not read calls. So a sixth of the read calls is a lower bound on frames.
         reads = samples[-1]['syscr'] - samples[0]['syscr']
         frames_at_least = reads // 6
         assert frames_at_least >= seconds * 1000 / interval / 10, ('too few frames to judge memory', reads, seconds)
-        assert len(digests) >= 2, 'the window did not change during the run'
-        stable_memory(samples, 'lookout reading /proc and redrawing every 10 ms')
+        stable_memory(samples, 'lookout redrawing every 10 ms through the real /proc, odd, missing and bad files')
         rss = [s['Rss'] for s in samples]
+        point(proc)
         x.delete(app.window)
         app.finish()
         passed('lookout-memory-flat', seconds=seconds, samples=len(samples), read_calls=reads,
-               frames_at_least=frames_at_least, distinct_frames=len(digests),
+               frames_at_least=frames_at_least, states_seen_as_they_should_look=seen,
                rss_kib_start=rss[0], rss_kib_end=rss[-1], rss_kib_min=min(rss), rss_kib_max=max(rss),
                rss_tolerance_kib=64, vm_size_kib=samples[0]['VmSize'], vm_size_must_not_change=True)
     finally:

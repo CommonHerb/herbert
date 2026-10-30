@@ -10,8 +10,10 @@
 -- neither the chunk size, the number of processors nor the length of any line
 -- matters. phase, label, which and pos say where in the current line it is;
 -- value and digits hold the number being read. done stops the reading early.
--- /proc/stat fills found, total, idle and iowait; /proc/meminfo has_total,
--- mem_total, has_available and available; the name file uses pos as its length.
+-- /proc/stat fills found, total, idle, iowait and counts, its first eight
+-- counters as eight 64-bit fields (zero past the last one given); /proc/meminfo
+-- has_total, mem_total, has_available and available; the name file uses pos as
+-- its length.
 ref record LookoutScan:
     done: bool
     found: bool
@@ -30,13 +32,14 @@ ref record LookoutScan:
     mem_total: int
     has_available: bool
     available: int
+    counts: buffer
 end
 
 -- The window's state. The three paths are NUL-terminated. cpu_state is 0 while
 -- a second processor sample is awaited (a dash), 1 with a reading, 2 when
--- /proc/stat cannot be read or used; mem_state is 1 or 2 the same way.
--- prev_total and prev_busy are the last processor sample, where the next
--- interval starts.
+-- /proc/stat cannot be read or used; mem_state is 1 or 2 the same way. prev
+-- holds the last processor sample's eight counters, as counts does, and
+-- prev_total their sum: where the next interval starts.
 -- The three text buffers hold exactly what the window draws for the processor,
 -- memory and the memory detail line; interval is the time between samples, ms.
 ref record Lookout:
@@ -50,7 +53,7 @@ ref record Lookout:
     host_ok: bool
     have_prev: bool
     prev_total: int
-    prev_busy: int
+    prev: buffer
     cpu_state: int
     cpu_percent: int
     mem_state: int
@@ -67,8 +70,8 @@ ref record Lookout:
 end
 
 func lookout_new(stat, meminfo, host, interval):
-    let scan = LookoutScan(false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, false, 0)
-    return Lookout(linux_cstring(stat), linux_cstring(meminfo), linux_cstring(host), linux_buffer(4096), scan, linux_buffer(64), 0, false, false, 0, 0, 0, 0, 2, 0, 0, 0, linux_buffer(96), 0, linux_buffer(96), 0, linux_buffer(96), 0, interval)
+    let scan = LookoutScan(false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, false, 0, linux_buffer(64))
+    return Lookout(linux_cstring(stat), linux_cstring(meminfo), linux_cstring(host), linux_buffer(4096), scan, linux_buffer(64), 0, false, false, 0, linux_buffer(64), 0, 0, 2, 0, 0, 0, linux_buffer(96), 0, linux_buffer(96), 0, linux_buffer(96), 0, interval)
 end
 
 func lookout_scan_reset(s):
@@ -89,6 +92,11 @@ func lookout_scan_reset(s):
     s.mem_total = 0
     s.has_available = false
     s.available = 0
+    let i = 0
+    while i < 64:
+        do buffer_set(s.counts, i, 0)
+        i = i + 1
+    end
     return 0
 end
 
@@ -115,6 +123,7 @@ func lookout_stat_field(s):
     if s.fields <= 8:
         if s.total + s.value < s.total: s.bad = true end
         s.total = s.total + s.value
+        do linux_put64(s.counts, (s.fields - 1) * 8, s.value)
     end
     if s.fields == 4: s.idle = s.value end
     if s.fields == 5: s.iowait = s.value end
@@ -262,14 +271,15 @@ func lookout_mem_eof(s):
     return 0
 end
 
--- The machine's name: the file's first line, its first 64 bytes at most (the
--- longest name Linux allows).
+-- The machine's name: the file's first line, cut at 64 bytes (the longest
+-- name Linux allows); reading stops there.
 func lookout_host_byte(st, s, b):
     if b == 10:
         s.done = true
-    elif s.pos < 64:
+    else:
         do buffer_set(st.host, s.pos, b)
         s.pos = s.pos + 1
+        s.done = s.pos == 64
     end
     return 0
 end
@@ -292,9 +302,12 @@ func lookout_feed(st, kind, n):
 end
 
 -- Reads the file at path (kind 0 /proc/stat, 1 /proc/meminfo, 2 the name) into
--- its scanner until the scanner has what it wants or the file ends. False if
--- the file cannot be opened or read, or runs past 1 MiB, so no file can keep a
--- frame reading for ever.
+-- its scanner until the scanner has what it wants or the file ends. Only the
+-- first 1 MiB is ever looked at, so no file can keep a frame reading for ever:
+-- each read asks for no more than is left of it, and once it is all seen one
+-- more byte is asked for only to learn whether the file ends there. False if
+-- the file cannot be opened or read, or goes on past 1 MiB without the scanner
+-- having finished.
 func lookout_read(st, path, kind):
     let s = st.scan
     let fd = linux_syscall6(2, buffer_address(path), 524288, 0, 0, 0, 0)
@@ -303,22 +316,23 @@ func lookout_read(st, path, kind):
     let ok = true
     let going = true
     while going:
-        let n = linux_syscall6(0, fd, buffer_address(st.chunk), buffer_length(st.chunk), 0, 0, 0)
+        let want = buffer_length(st.chunk)
+        if 1048576 - seen < want: want = 1048576 - seen end
+        if want == 0: want = 1 end
+        let n = linux_syscall6(0, fd, buffer_address(st.chunk), want, 0, 0, 0)
         if n != 0 - 4:
-            if linux_error(n) or n > buffer_length(st.chunk):
+            if linux_error(n) or n > want:
                 ok = false
                 going = false
             elif n == 0:
                 going = false
+            elif seen == 1048576:
+                ok = false
+                going = false
             else:
                 do lookout_feed(st, kind, n)
                 seen = seen + n
-                if s.done:
-                    going = false
-                elif seen > 1048576:
-                    ok = false
-                    going = false
-                end
+                if s.done: going = false end
             end
         end
     end
@@ -336,14 +350,15 @@ func lookout_read_stat(st):
     return (false, 0, 0)
 end
 
--- (readable, MemTotal, MemAvailable), both in KiB.
+-- (usable, MemTotal, MemAvailable), both in KiB. A total of zero cannot be
+-- shown, so it is unusable too.
 func lookout_read_meminfo(st):
     let s = st.scan
     do lookout_scan_reset(s)
     do lookout_mem_reset(s)
     let ok = lookout_read(st, st.meminfo_path, 1)
     if ok: do lookout_mem_eof(s) end
-    if ok and s.has_total and s.has_available: return (true, s.mem_total, s.available) end
+    if ok and s.has_total and s.has_available and s.mem_total > 0: return (true, s.mem_total, s.available) end
     return (false, 0, 0)
 end
 
@@ -356,22 +371,38 @@ func lookout_read_host(st):
     return 0
 end
 
--- part / whole as a whole percent, to the nearest (a half rounds up). whole is
--- never zero here and part never above it. Both are halved together while
--- whole is 2^56 or more, so part * 100 stays below 2^64.
+-- part / whole as a whole percent, to the nearest, a half rounding up, exact
+-- for any 64-bit numbers; whole is above zero and part not above it. 100 *
+-- part is never formed: part is added up 100 times modulo whole, rest staying
+-- below whole and the sum never passing 2^64, and the wraps counted are the
+-- quotient. Then rest is the remainder, and rest >= whole - rest says it is at
+-- least half of whole.
 func lookout_percent(part, whole):
-    while whole >= 72057594037927936:
-        part = part / 2
-        whole = whole / 2
+    let quotient = 0
+    let rest = 0
+    let i = 0
+    while i < 100:
+        if part >= whole - rest:
+            rest = part - (whole - rest)
+            quotient = quotient + 1
+        else:
+            rest = rest + part
+        end
+        i = i + 1
     end
-    return (part * 100 + whole / 2) / whole
+    if rest >= whole - rest: return quotient + 1 end
+    return quotient
 end
 
--- A new processor sample. The first, or one after the counters went back (a
--- restart), only starts an interval. When no time was counted since the last
--- one (a zero-length interval) nothing changes, so there is no division by
--- zero. Busy time that went back, as iowait can, counts as none.
-func lookout_cpu(st, ok, total, busy):
+-- A new processor sample, whose counters are in the scanner's counts and sum
+-- to total. Each counter's change since the last sample is its time in the
+-- interval; a counter that went back, as iowait can, counts none. spent is all
+-- of it and worked all but idle (the 4th) and iowait (the 5th). The first
+-- sample, and one whose total went back (the counters restart only with the
+-- computer, which ends Lookout too), show a dash for one interval. When no
+-- time was counted the figure stays as it was, so nothing divides by zero.
+-- Every sample becomes the start of the next interval.
+func lookout_cpu(st, ok, total):
     if not ok:
         st.cpu_state = 2
         st.have_prev = false
@@ -379,27 +410,34 @@ func lookout_cpu(st, ok, total, busy):
     end
     if not st.have_prev or total < st.prev_total:
         st.cpu_state = 0
-        st.have_prev = true
-        st.prev_total = total
-        st.prev_busy = busy
-        return 0
+    else:
+        let spent = 0
+        let worked = 0
+        let i = 0
+        while i < 8:
+            let now = linux_u64(st.scan.counts, i * 8)
+            let before = linux_u64(st.prev, i * 8)
+            if now > before:
+                spent = spent + (now - before)
+                if i != 3 and i != 4: worked = worked + (now - before) end
+            end
+            i = i + 1
+        end
+        if spent != 0:
+            st.cpu_percent = lookout_percent(worked, spent)
+            st.cpu_state = 1
+        end
     end
-    if total == st.prev_total: return 0 end
-    let spent = total - st.prev_total
-    let worked = 0
-    if busy > st.prev_busy: worked = busy - st.prev_busy end
-    if worked > spent: worked = spent end
-    st.cpu_percent = lookout_percent(worked, spent)
-    st.cpu_state = 1
+    do linux_copy(st.prev, 0, st.scan.counts, 0, 64)
     st.prev_total = total
-    st.prev_busy = busy
+    st.have_prev = true
     return 0
 end
 
 -- Memory in use is MemTotal less MemAvailable, none if more is available than
--- there is; a total of zero cannot be shown.
+-- there is.
 func lookout_memory(st, ok, total, available):
-    if not ok or total == 0:
+    if not ok:
         st.mem_state = 2
         return 0
     end
@@ -469,7 +507,7 @@ end
 
 func lookout_sample(st):
     let cpu = lookout_read_stat(st)
-    do lookout_cpu(st, cpu.0, cpu.1, cpu.2)
+    do lookout_cpu(st, cpu.0, cpu.1)
     let mem = lookout_read_meminfo(st)
     do lookout_memory(st, mem.0, mem.1, mem.2)
     do lookout_read_host(st)
@@ -614,19 +652,23 @@ func lookout_out_pair(out, label, reading):
     return lookout_out(out, "\n")
 end
 
--- lookout --sample STAT1 STAT2 MEMINFO HOSTNAME: the two processor samples,
--- the memory figures and the name go through the same steps as the window's,
--- and what the window would show is printed, one "name=value" line each.
-func lookout_sample_mode(args):
-    let st = lookout_new(linux_argument(args, 2), linux_argument(args, 4), linux_argument(args, 5), 1000)
+-- lookout --sample STAT1 STAT2 [STAT3 ...] MEMINFO HOSTNAME: the processor
+-- samples in order, the memory figures and the name go through the same steps
+-- as the window's, and what the window would then show is printed, one
+-- "name=value" line each; there are count - 4 processor samples.
+func lookout_sample_mode(args, count):
+    let st = lookout_new(linux_argument(args, 2), linux_argument(args, count - 2), linux_argument(args, count - 1), 1000)
     let out = new_buffer()
-    let first = lookout_read_stat(st)
-    do lookout_cpu(st, first.0, first.1, first.2)
-    do lookout_out_pair(out, "stat1", first)
-    st.stat_path = linux_cstring(linux_argument(args, 3))
-    let second = lookout_read_stat(st)
-    do lookout_cpu(st, second.0, second.1, second.2)
-    do lookout_out_pair(out, "stat2", second)
+    let k = 2
+    while k < count - 2:
+        if k > 2: st.stat_path = linux_cstring(linux_argument(args, k)) end
+        let reading = lookout_read_stat(st)
+        do lookout_cpu(st, reading.0, reading.1)
+        do lookout_out(out, "stat")
+        do lookout_out_number(out, k - 1)
+        do lookout_out_pair(out, "", reading)
+        k = k + 1
+    end
     let mem = lookout_read_meminfo(st)
     do lookout_memory(st, mem.0, mem.1, mem.2)
     do lookout_out_pair(out, "meminfo", mem)
@@ -685,7 +727,7 @@ func main():
         return lookout_window(lookout_new("/proc/stat", "/proc/meminfo", "/proc/sys/kernel/hostname", 1000))
     end
     let mode = linux_argument(args, 1)
-    if count == 6 and equal(mode, "--sample"): return lookout_sample_mode(args) end
+    if count >= 6 and equal(mode, "--sample"): return lookout_sample_mode(args, count) end
     -- lookout --test STAT MEMINFO HOSTNAME MILLISECONDS: the window, reading
     -- those files at that interval. The tests use it; see examples/lookout.md.
     if count == 6 and equal(mode, "--test"):

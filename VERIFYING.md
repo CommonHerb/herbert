@@ -110,13 +110,15 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   typing, navigation, Unicode entry, search, save, reopen, rescue, recovery and editing copies of the project's own
   documents; with strace, the visible warning after a failed sync and its retry; plus 120-second memory checks of
   Maze play and of Notes editing LF and CRLF files. Evidence includes
-  screenshots, input history, saved bytes and memory samples. Then `check_lookout.py` checks Lookout: its `--sample`
-  output on 55 fixed `/proc/stat`, `/proc/meminfo` and name files against hand-written answers (one and 64
-  processors, long lines and lines across reads, fields missing, reordered or malformed, 0 %, 100 %, half a percent,
-  a zero-length interval, counters that did not move or went back, numbers past 2^64) and six refused command
-  lines; its window's name, figures and bars read back from its pixels, from the real `/proc` and from files the
-  check writes, removes (amber `unavailable`) and restores; quitting on Escape, Q and the close button; and 120
-  seconds reading the real `/proc` every 10 ms with the same virtual size throughout and resident memory within
+  screenshots, input history, saved bytes and memory samples. Then `check_lookout.py` checks Lookout:
+  its `--sample` output on 72 sets of fixed `/proc/stat`, `/proc/meminfo` and name files against hand-written answers
+  (one and 64 processors, long lines, lines across reads and at the 1 MiB bound, tabs, fields missing, reordered or
+  malformed, exact rounding at half a percent and 99.5 % also past 2^56, zero-length intervals, counters that went
+  back, numbers past 2^64) and six refused command lines; its window's name, figures, inks and bars read back from
+  its pixels, from the real `/proc` (memory against `/proc/meminfo` read around the frame of a new reading) and from
+  files the check writes, removes (amber `unavailable`) and restores; the redraw light changing at every reading;
+  quitting on Escape, q, Shift+Q and the close button; and 120 seconds redrawing every 10 ms through the real
+  `/proc`, missing, malformed and unusual files with the same virtual size throughout and resident memory within
   64 KiB. `make check-lookout` runs those checks alone.
 
 Python, GNU time, strace, GDB, binutils, Xvfb, libX11 and libXtst are test tools, never dependencies of the programs.
