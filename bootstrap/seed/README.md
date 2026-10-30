@@ -32,7 +32,7 @@ bytes) is the deferred Oberon-ideal hardening.
   linker, no libc.
 - Integrity is pinned by `gen1.seed.sha256` -- that file is the single authority for the
   value (it is NOT repeated here: a hash copied into prose rots on every legitimate
-  reseed, and this README carried a stale one until the 2026-08-29 blind audit).
+  reseed).
   The suite validates magic + sha256 before use and fails closed if either is wrong.
 
 ## Re-seeding (when the backend legitimately changes)

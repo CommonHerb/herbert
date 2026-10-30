@@ -1,198 +1,75 @@
 # Herbert
 
-Herbert is a self-hosting language and native compiler. The current priority is
-making it useful for ordinary Linux programs. New OS feature development is
-paused; existing kernel work, history and evidence are preserved. The production
-compiler is a committed Linux/x86-64 executable that compiles Herbert source
-without a foreign compiler or runtime.
+Herbert is a programming language that is fully its own. Its compiler is written in Herbert, rebuilds itself byte for
+byte from the committed seed (`bootstrap/seed/gen1.seed`), and writes finished x86-64 Linux programs by itself, with no
+assembler, linker, C library or foreign runtime. It is built to make programs that get used, and grows by what those
+programs need. The paused operating-system work is kept; see [ROADMAP.md](ROADMAP.md).
 
-The Linux examples now include [a maze game](examples/maze.md) and
-[a plain-text notes editor](examples/notes.md). The original
-[First steps](examples/first_steps.md) window remains available as a small baseline;
-Gulpin completed its manual trial and authorized this expansion on September 13.
+## Build and run
+
+On Linux/x86-64, from this checkout:
 
 ```sh
-make maze notes
-./build/maze
-./build/notes ~/my-notes.txt
+make notes && ./build/notes ~/my-notes.txt
+make maze && ./build/maze
+make first-steps && ./build/first-steps
 ```
 
-Notes keeps its recovery and rescue copies beside the file it opens
-(`.herbert-notes-*/`, `herbert-rescue-*.txt`), so keep notes outside this
-checkout, as above; the repository ignores those names in case you do not.
+- [Notes](examples/notes.md) is a plain-text editor for UTF-8 files up to 4 MiB: selection, the desktop clipboard,
+  undo, find, go to line, careful saves and crash-recovery copies. Keep your notes outside this checkout: Notes writes
+  its recovery and rescue copies beside the file it opens (`.herbert-notes-*/`, `herbert-rescue-*.txt`); the
+  repository ignores those names in case you do not.
+- [Maze](examples/maze.md) is a small game played on an editable text map.
+- [First steps](examples/first_steps.md) is the first, smallest window: one character to move.
+- [The word counter](examples/wordcount.md) counts lines, words and bytes on standard input, and is a good first
+  program to read.
 
-The maze reads an editable text map, checks walls, counts collected dots and
-supports completion and restart. Notes opens, edits and saves a bounded UTF-8
-text file, preserving uniform LF or CRLF line endings through saves and recovery.
-It has whole-character navigation/deletion, undo/redo, wrapped search and private
-session recovery copies. Latin prose and common punctuation have original bitmap
-glyphs; unsupported glyphs are visibly marked without changing their bytes. These are small usable applications, not a general game engine or a
-full word processor. The [support guide](lib/README.md) explains the reusable
-Herbert code and the actual host boundary: Linux and X11/XWayland supply system,
-display and device services; no foreign runtime or graphics library is linked
-into the applications.
-
-Start with [the language guide](docs/LANGUAGE.md) for grammar, types, primitives,
-worked examples and the current limits. [The word counter](examples/wordcount.md)
-is a useful first program. Build your own with:
+To build your own program:
 
 ```sh
 make program SOURCE=my-program.herb
 ./build/program
 ```
 
-The [build guide](docs/BUILDING.md) covers support libraries, named outputs and
-source-file diagnostics. [Compiler maintenance](docs/COMPILER.md) describes the
-checked source stages. Current capabilities are established by source and
-executable checks.
+[docs/BUILDING.md](docs/BUILDING.md) covers support libraries, output names and source-file diagnostics, and
+[lib/README.md](lib/README.md) the reusable Herbert code the programs share. The windowed programs need an X11 or
+XWayland desktop: Herbert speaks the X11 protocol itself, and no graphics library or foreign runtime is linked in.
+Linux and the desktop's display server and drivers are the host services Herbert relies on.
 
-The [streaming long64 counter](examples/wordcount_long64.md) performs the same
-calculation on Herbert's own runtime, with a host adapter carrying input bytes
-over its serial port.
+## What it cannot do yet
 
-The [binary file viewer](examples/hexview_long64.md) reads a raw file supplied
-at boot through `boot_read()` and renders hexadecimal on the same runtime.
-The guest handles both EOF and rendering; the host carries the input and output.
+- Whole numbers from zero up only (64-bit, wrapping): no negative numbers or decimals.
+- Memory is not given back while a program runs; long-lived programs build their storage once and reuse it.
+- One loop form, `while`, with no `for`, `break` or `continue`; `==` does not work on true/false values or on text.
 
-The [ELF inspector](examples/elfinfo_long64.md) uses that file input to report
-the compiler's executable headers and its own boot image's headers. Both formats
-are parsed and rendered by the Herbert program.
+Every rule and limit, with its error number, is in [the language guide](docs/LANGUAGE.md); its G items are the ones
+people hit first. The editor's own limits are in [the Notes guide](examples/notes.md).
+
+## The documents
+
+- [docs/LANGUAGE.md](docs/LANGUAGE.md): the language, its builtins, input and output, errors, limits and examples;
+  enough to write correct Herbert from.
+- [docs/BUILDING.md](docs/BUILDING.md): building a program with `make program`.
+- [docs/COMPILER.md](docs/COMPILER.md): the compiler's source stages and how to change it.
+- [docs/UNICODE.md](docs/UNICODE.md): UTF-8 text, grapheme boundaries and the bitmap font.
+- [lib/README.md](lib/README.md): the support libraries (Linux, X11, files, text).
+- [VERIFYING.md](VERIFYING.md): the tests, what each proves, and CI.
+- [ROADMAP.md](ROADMAP.md): where the project is going.
+- [docs/os-tools.md](docs/os-tools.md): three small tools from the paused OS work.
+- [docs/native-ecosystem.md](docs/native-ecosystem.md): what counts as Herbert's own code.
+- [bootstrap/seed/README.md](bootstrap/seed/README.md): the committed seed and re-seeding.
 
 ## Layout
 
-- `bootstrap/` contains the committed native gen-1 seed, verification harnesses,
-  native-codegen goldens and references.
-- [Compiler maintenance](docs/COMPILER.md) maps the ordered source stages and
-  their checked assembled artifact.
-- `stack/` contains the Herbert-written language, VM, native compiler, and kernel
-  proof programs. Some historical kernel emit modes replay frozen machine-code
-  blobs originally generated by Python references. These remain verification
-  fixtures; they are not Herbert-authored capability. The source-emitted long64
-  path is separate. The maintainers keep the provenance breakdown in a private
-  canon that is not published; link counts alone are not a progress measure.
-- `bootstrap/tests/` contains sample interpreter tests, stack probes, native-codegen links, Python reference builders, golden artifacts, and kernel runners.
-- `tools/` contains host adapters, guard and verification helpers, including the
-  remaining C governance scanner.
-- `.github/workflows/` contains CI verification surfaces.
+- `stack/`: Herbert source of the compiler (`stack/compiler/`, assembled into `stack/native_compile_fragment.herb`),
+  the older interpreter and VM fragments the tests run, and the kernel experiments. Some old kernel emit modes replay
+  frozen machine-code blobs first generated by Python reference builders; they are test fixtures, not Herbert-authored
+  capability.
+- `lib/` and `examples/`: the support libraries and the programs.
+- `bootstrap/seed/`: the committed compiler and its checksum. `bootstrap/tests/`: the test harnesses, goldens, Python
+  reference builders and kernel runners.
+- `tools/`: host adapters and test helpers, including `scan.c`, the one C file left (the allowlist scanner).
+- `BOOTSTRAP-ALLOWLIST`: every tracked file that is not `.herb`, checked by `make check`.
 
-## Development Rule
-
-Prefer executable verification over claims. If a statement about Herbert cannot be tied to code, a test, a golden, or a runner, treat it as provisional.
-
-Start with `VERIFYING.md` before changing behavior.
-
-Use `ROADMAP.md` as the living map for what is proven, aspirational, unknown,
-and next.
-
-## Hosted process I/O
-
-`stdin_read()` reads standard input to EOF and returns `(status, bytes)`, an
-`(int, string)` tuple. Zero status means complete input, including empty or
-binary input. Positive short reads accumulate and interrupted reads retry.
-Other failures return a positive Linux errno and an empty string, never a
-successful partial prefix. EAGAIN is an error, not a wait/retry request.
-
-The reader uses the existing arena. At its limit, a one-byte probe distinguishes
-exact-fit EOF from excess input; excess input returns synthetic ENOMEM (12).
-This probe consumes the excess byte. Failure does not roll back the stream or
-erase consumed bytes, but leaves the allocation bump unchanged. Success commits
-the complete input; earlier allocations remain valid. This adds no reclamation
-or promise that further allocations succeed after an exact-fit read. Initial
-arena mapping failure still occurs before main and is not returned by this API.
-
-Use the value builtin in `main`, with at most one syntactic input operation
-across `stdin_read` and legacy `clogger`. Mutually exclusive branches still
-count separately. Existing reachable-function checking is unchanged; this is
-not a new validation pass over unused helper bodies. The builtin takes no
-arguments. As a statement, `do stdin_read()` reads standard input to EOF and
-discards the bytes and the status; it is still the one input operation (see
-"Statement calls" in the language guide). Its function name is reserved, while
-local and parameter names may use that spelling. It is native hosted-only,
-not an addition to VM or kernel target interfaces.
-
-Ordinary Linux/x86_64 programs can use `stderr_write(bytes)` with one string
-argument. It writes raw bytes to standard error and returns an integer: zero
-after complete transfer, otherwise a positive Linux errno. It retries EINTR and
-continues after partial writes; a nonempty write making zero progress returns
-EIO (5). Empty input succeeds without a syscall. Failure may follow a partial
-transfer: the result is not a byte count or an all-or-nothing guarantee. The
-inherited SIGPIPE disposition is unchanged, so a broken pipe may terminate the
-process rather than return an error.
-
-Use `stderr_write` in an expression (for example, bind its result with `let`)
-to see the status, or as a statement: `do stderr_write(...)` writes the bytes
-and discards the status.
-
-`do process_exit(status)` accepts one integer and terminates the process with
-its low eight bits as the exit status, without rendering `main`'s return value.
-It is not a value expression. The compiler still requires the existing return
-structure and checks statements following this call; it does not treat
-this call as never returning. Both names are reserved builtin function names. These
-operations are not additions to the VM or kernel target interfaces.
-
-These two builtins do not change how `main`'s result is rendered or how `clogger`
-and `flogger` behave. `docs/LANGUAGE.md` gives the message, best effort, that a
-program prints when it divides by zero, uses up its heap (`clogger` input larger
-than the heap left included) or cannot write `main`'s result (sections 3 and 4);
-a failed `flogger` write ends it with status 1 and no message.
-
-## Compiler invocation
-
-The compiler reads source from stdin before parsing or dispatching an emit mode.
-Successful compilation publishes `a.out`, prints `0` plus newline to stdout,
-and exits 0. A hosted compile writes the marker after publication, with SIGPIPE
-blocked; if it cannot be written (for example stdout closed or full, or its reader
-gone), it
-writes `compiler: output published, but the success marker could not be written`
-plus newline to stderr, best effort (with stderr closed or gone too, the status 1
-is silent), and exits 1, leaving the new `a.out`, which is complete.
-The kernel emit routes still print the marker as `main`'s rendered result, after
-the new image is in place: when it cannot be written they exit 1 with
-`herbert: cannot write output (error N)` plus newline on stderr, best effort
-(with stderr closed too, the status 1 is silent; with stderr's reader gone too,
-they are killed by SIGPIPE unless it is ignored or blocked), or, if stdout's
-reader has gone and SIGPIPE is neither ignored nor blocked, are killed by
-SIGPIPE (status 141 in a shell). A checked input error writes
-`compiler: stdin read failed (errno N)` plus newline to stderr and exits 1.
-Lexical, structural and native diagnostics retain their
-text but now go to stderr with status 1 and empty stdout. This deliberately
-changes the old status-zero/stdout rejection convention, including shared native
-diagnostics in historical emit modes. Callers must check the compiler status
-before using `a.out`. A rejection, an input error or a publication failure
-preserves the previous artifact; a status 1 after publication does not, and
-leaves the new one in place: a hosted compile or a kernel emit route whose marker
-could not be written.
-The internal `-- emit: ast-dump` inspection route writes the parsed tree to
-stdout without publishing `a.out`. It and every emit route that reads its
-input now run the checked lexer and parser first, so lexically or
-structurally malformed source gets the same located diagnostic as the hosted
-path; the tree they then build still comes from the unchecked parser.
-Rejections specific to an emit route (codes above 442) print the message of the
-check that fired, which names the route that owns it, for example
-`program: native-subset: multiboot32-long64: too many locals (max 15) (ERR 504)`,
-where they used to print `unknown error`. They carry no line number, and one code
-can name different checks on different routes.
-The 45 i386 kernel routes are built by a separate oracle compiler, assembled into
-`stack/i386_oracle_fragment.herb` and compiled by the seed when their gates run.
-The production compiler rejects those route lines with ERR 443, naming the route.
-
-`fwriter(bytes)` now publishes through an exclusive `.herbert*.tmp` file in
-an opened current-directory descriptor. It obtains the unpredictable name from
-Linux `getrandom` (failure has no weak fallback), handles partial writes and
-EINTR, checks `fsync` and `close`, and renames the finished file to `a.out`.
-Linux close is never retried, including after EINTR. Creation uses mode 0644
-subject to the process umask; replacement also resets a prior output's mode,
-including any executable bits. Every failure before rename leaves the previous
-`a.out` intact and attempts to remove its own temporary file, reports
-`compiler: output publication failed` on stderr and exits 1. This behavior also
-applies to generated hosted programs using `fwriter`.
-
-Rename replaces an existing symlink itself; its target and other hardlinks to
-an old output remain untouched. Concurrent writers publish complete artifacts;
-the last successful rename wins. This assumes a directory whose other writers
-do not maliciously replace a compiler's private temporary entry. It guarantees
-atomic visibility, not crash durability of directory metadata. A killed process
-or failed cleanup can leave a `.herbert*.tmp` file. Directory-descriptor close
-after successful rename is cleanup only and cannot undo the committed output.
-Failure to write an error diagnostic still terminates; inherited SIGPIPE may
-terminate with a signal instead of status 1.
+A claim about Herbert counts when a test, a golden file or a runner shows it; start with
+[VERIFYING.md](VERIFYING.md) before changing behavior.

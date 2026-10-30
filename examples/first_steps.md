@@ -14,8 +14,7 @@ The character blinks and the small green indicator changes while idle.
 
 This was the first interactive checkpoint for making Herbert useful for ordinary
 programs, and it stays small: one character to move, with no obstacles, score
-or audio. Development stopped here for Gulpin to try it before the game
-expanded; [the maze](maze.md) and [the notes editor](notes.md) followed.
+or audio. [The maze](maze.md) and [the notes editor](notes.md) followed.
 
 ## What runs
 
@@ -62,7 +61,7 @@ no X11/XWayland connection is not supported by this checkpoint.
 
 Steady-state frames reuse byte buffers and a server pixmap. This does not add
 general garbage collection to Herbert. Its hosted runtime still reserves a
-3.5 GiB virtual arena; reservation is not physical memory consumption. The new
+3.5 GiB virtual arena; reservation is not physical memory consumption. The
 raw system-call and buffer-address interfaces are deliberately unsafe; the
 library checks its buffer spans before passing pointers to Linux.
 
@@ -80,9 +79,6 @@ libX11, libXtst and Xvfb belong to the independent tests, not to the executable.
 smoke check: window, idle animation, held Right/release, and window-manager close.
 It addresses synthetic events only to its test window. The full control and
 sustained-memory checks run on the private display.
-Gulpin reported a successful manual trial on September 13 and authorized the maze
-and notes-editor expansion. His report is separate from automated observations
-and does not identify the cause of the original Down-test failure.
 
 Build diagnostics refer to the combined source retained at
 `build/first-steps-work/source.herb`. Source ownership and the low-level interfaces

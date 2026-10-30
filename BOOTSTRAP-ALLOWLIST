@@ -22,13 +22,11 @@ Makefile
 README.md
 VERIFYING.md
 docs/native-ecosystem.md
+docs/os-tools.md
 examples/native_today_arithmetic.expected
 examples/native_today_collections.expected
 examples/native_today_io.expected
 examples/wordcount.md
-examples/wordcount_long64.md
-examples/hexview_long64.md
-examples/elfinfo_long64.md
 examples/first_steps.md
 examples/maze.md
 examples/maze.txt

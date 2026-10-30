@@ -152,11 +152,6 @@ check separately scans the function body for each candidate; this does not claim
 linear complexity for the full pass or compiler, or control-flow fixed-point
 verification.
 
-## Comprehensibility evidence
-
-A source map is not proof that another maintainer can repair the stage. Cold
-maintenance exercises pin guide/source/seed hashes, withhold the defect and
-expected answer, and execute the returned repair against held tests. The
-September 15 quality audit records that bounded exercise separately from model
-review. A successful narrow task does not establish comprehension of the whole
-compiler, kernel or stack.
+A source map is not proof that another maintainer can repair a stage, and a
+successful narrow repair does not establish understanding of the whole compiler,
+kernel or stack.

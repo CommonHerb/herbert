@@ -24,12 +24,6 @@ not count as Herbert-native progress.
 | `.github/workflows/*` | CI substrate | Required external substrate | Keep as public evidence, not Herbert-native code |
 | committed `.expected` and golden artifacts | Regression or oracle data | Required evidence | Keep until Herbert-native generation and checking can prove parity |
 
-## First Mergeable Slice
-
-The first slice (June 2026) was documentation plus `.herb` programs only:
-examples that show what Herbert can make today, and a native ledger candidate
-that records the current replacement map from inside Herbert.
-
 ## Native Ledger Candidate
 
 `stack/native_surface_ledger.herb` is the first Herbert-authored surface ledger

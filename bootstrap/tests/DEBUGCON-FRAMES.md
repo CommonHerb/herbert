@@ -85,11 +85,10 @@ Both local Bochs 2.7 and pinned CI Bochs 2.8 raw captures anchor this rule.
 `fixtures/rollcall-bochs-2.8.e9` is the unchanged link46 `b3` capture from
 GitHub run34570498624, group44..51, capture20260911T064008.567276Z-8_chlhxp;
 SHA256 `f604235d8f8577cfddff269bef565a4059f36df4cf3e9e2bbb05eac6c119ef59`.
-The existing kernel and mutation gates must still run against the repaired parser.
+The existing kernel and mutation gates must still run against this parser.
 
-`fixtures/cairn-bochs-ci-seed.e9` is the actual September 11 audit capture for seed
-`691708f82b0bf856`, copied unchanged from that audit's log `cairn-bochs-get.e9`, which
-is kept in the maintainers' private canon and is not published.
+`fixtures/cairn-bochs-ci-seed.e9` is an unchanged real link55 Bochs capture,
+recorded on September 11, for seed `691708f82b0bf856`.
 Its expected payload is independently fixed in `check_debugcon_frames.py`.
 The early D4 is a wake-record value; the later closed write is the answer.
 `CAIRN_BOCHS_SEED=691708f82b0bf856` reproduces the same live link55 Bochs
