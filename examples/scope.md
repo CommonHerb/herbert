@@ -56,8 +56,8 @@ a second first.
 
 ## What comes next
 
-The next piece adds the owner's other computers to the window, each with whether it answers. That needs Herbert to
-reach the network, which it cannot do yet ([ROADMAP.md](../ROADMAP.md)).
+The next piece adds the owner's other computers to the window, each with whether it answers, by knocking on them
+with `lib/net.herb` ([knock.md](knock.md)).
 
 ## Test modes
 

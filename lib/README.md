@@ -4,7 +4,7 @@ These are Herbert source units, with no `main`. The Makefile concatenates the
 selected units before their application, then the Herbert seed compiles the
 result. This is explicit source composition, not a new import/module system or
 another language. Names use prefixes because the current function namespace is
-flat. The fixed `make first-steps`, `make maze`, `make notes` and `make scope`
+flat. The fixed `make first-steps`, `make maze`, `make notes`, `make scope` and `make knock`
 targets report locations in the combined source kept in their build directories.
 The developer [`make program` workflow](../docs/BUILDING.md) maps checked compiler rejections
 back to original files and lines. Runtime bounds faults still refer to combined
@@ -13,6 +13,11 @@ source; the retained source map identifies its original units.
 - `linux.herb`: fixed byte buffers and endian fields; bounded file/environment
   reading; startup command-line arguments; unsigned decimal formatting; hostname; monotonic clock; polling; complete socket transfers with
   partial-transfer, EINTR, EOF, broken-peer and deadline handling.
+- `net.herb`: strict dotted IPv4, port and time-limit parsing, and a TCP knock:
+  answered, refused, no answer, unreachable or a named error, within a time
+  limit, never sending a byte, the socket closed on every path. A `Net` record
+  (`net_new()`, once) holds the state and every buffer a knock uses, so a knock
+  allocates nothing. Addresses only, no names. Used by knock.
 - `x11.herb`: local display/authentication, a fixed-size window, server pixmap,
   keyboard mapping and key/focus/close events, rectangle/ellipse requests and
   presentation. X11 itself remains an external desktop service. Its supported

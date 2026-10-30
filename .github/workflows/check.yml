@@ -15,7 +15,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential python3 time xxd xvfb libx11-6 libxtst6 gdb strace binutils
+            build-essential python3 time xxd xvfb libx11-6 libxtst6 gdb strace binutils nftables
       - name: record actual hosted test environment
         run: |
           set -euo pipefail
@@ -23,7 +23,7 @@ jobs:
           cat /etc/os-release
           dpkg-query -W -f='${Package}=${Version}\n' \
             bash coreutils build-essential make gcc libc6 python3 time xxd \
-            xvfb libx11-6 libxtst6 gdb strace binutils
+            xvfb libx11-6 libxtst6 gdb strace binutils nftables
           /usr/bin/time --version
           python3 --version
           cc --version
@@ -48,7 +48,16 @@ jobs:
         run: make check-desktop
       - name: Herbert reusable map, text and atomic-file support
         run: make check-app-support
-      - name: Herbert maze, notes and scope interaction and sustained memory
+      # knock's unreachable, error and firewall cases run in a private network namespace (unshare -rn), which
+      # Ubuntu's AppArmor keeps unprivileged users from making; this throwaway runner allows it.
+      - name: allow private network namespaces for knock's checks
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Herbert maze, notes, scope and knock interaction and sustained memory
+        env:
+          HERBERT_NET_REQUIRE_ALL: "1"
         run: make check-hosted-apps
       - name: compiler invocation fault contract
         run: make compiler-cli-contract

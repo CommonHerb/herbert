@@ -26,6 +26,7 @@ make scope && ./build/scope
   how much memory is in use, read again once a second. It is the first piece of a window on the owner's computers.
 - [The word counter](examples/wordcount.md) counts lines, words and bytes on standard input, and is a good first
   program to read.
+- [Knock](examples/knock.md) asks whether a computer answers at an IPv4 address and port (`./build/knock 127.0.0.1 22`).
 
 To build your own program:
 

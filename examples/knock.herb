@@ -1,0 +1,224 @@
+-- knock: does a computer answer at this IPv4 address and TCP port? Linked
+-- after lib/linux.herb and lib/net.herb by Make. See examples/knock.md.
+--   knock ADDRESS PORT [MILLISECONDS]
+-- knocks once (waiting at most MILLISECONDS, 1000 if not given), prints one
+-- line and exits with the outcome's status: 0 answered, 3 refused, 4 no
+-- answer, 5 unreachable, 6 error. A malformed command line prints why on
+-- stderr and exits 2 before any socket is made. (1 is left to Herbert's own
+-- faults, such as a used-up heap.)
+-- The line is built in one fixed buffer and written with write(2), so the
+-- test mode below, which knocks thousands of times, allocates nothing per knock.
+
+func knock_put(b, at, text):
+    do linux_text(b, at, text)
+    return at + length(text)
+end
+
+func knock_put_address(b, at, address):
+    at = linux_decimal(b, at, address >> 24)
+    at = knock_put(b, at, ".")
+    at = linux_decimal(b, at, (address >> 16) & 255)
+    at = knock_put(b, at, ".")
+    at = linux_decimal(b, at, (address >> 8) & 255)
+    at = knock_put(b, at, ".")
+    return linux_decimal(b, at, address & 255)
+end
+
+-- All count bytes of b to descriptor fd; partial writes and EINTR go on.
+func knock_write(fd, b, count):
+    let done = 0
+    while done < count:
+        let r = linux_syscall6(1, fd, buffer_address(b) + done, count - done, 0, 0, 0)
+        if r != 0 - 4:
+            if linux_error(r) or r == 0: return linux_die("knock: cannot write the result\n") end
+            done = done + r
+        end
+    end
+    return 0
+end
+
+-- "<outcome>: A.B.C.D port P in N ms", then for unreachable and error
+-- " (<what Linux said>, errno E)", and for an answer that was then reset
+-- " (then <what Linux said>, errno E)".
+func knock_line(b, address, port, st):
+    let at = knock_put(b, 0, net_outcome_name(st.outcome))
+    at = knock_put(b, at, ": ")
+    at = knock_put_address(b, at, address)
+    at = knock_put(b, at, " port ")
+    at = linux_decimal(b, at, port)
+    at = knock_put(b, at, " in ")
+    at = linux_decimal(b, at, st.elapsed)
+    at = knock_put(b, at, " ms")
+    if st.outcome == 3 or st.outcome == 4 or (st.outcome == 0 and st.error != 0):
+        at = knock_put(b, at, " (")
+        if st.outcome == 0: at = knock_put(b, at, "then ") end
+        let name = net_error_name(st.error)
+        if length(name) > 0:
+            at = knock_put(b, at, name)
+            at = knock_put(b, at, ", ")
+        end
+        at = knock_put(b, at, "errno ")
+        at = linux_decimal(b, at, st.error)
+        at = knock_put(b, at, ")")
+    end
+    return knock_put(b, at, "\n")
+end
+
+func knock_status(outcome):
+    if outcome == 0: return 0 end
+    return outcome + 2
+end
+
+func knock_refuse(message):
+    do stderr_write(message)
+    do process_exit(2)
+    return 0
+end
+
+-- (address, port, limit) from three argument texts, or a refusal and exit 2.
+func knock_target(address_text, port_text, limit_text):
+    let address = net_ipv4(address_text)
+    let refusal = "knock: not an IPv4 address; write four numbers 0 to 255 joined by dots, like 127.0.0.1\n"
+    if not address.0: do knock_refuse(refusal) end
+    let port = net_port(port_text)
+    if not port.0: do knock_refuse("knock: not a port; write a number 1 to 65535\n") end
+    let limit = net_limit(limit_text)
+    if not limit.0: do knock_refuse("knock: not a time limit; write whole milliseconds, 1 to 60000\n") end
+    return (address.1, port.1, limit.1)
+end
+
+func knock_arguments(args):
+    let argc = 0
+    let offset = 0
+    while offset < args.1:
+        offset = linux_nul_end(args.0, offset, args.1) + 1
+        argc = argc + 1
+    end
+    return argc
+end
+
+func knock_once(target):
+    let n = net_new()
+    let line = linux_buffer(256)
+    let outcome = net_knock(n, target.0, target.1, target.2)
+    do knock_write(1, line, knock_line(line, target.0, target.1, n.state))
+    do process_exit(knock_status(outcome))
+    return 0
+end
+
+-- knock --parse ADDRESS PORT [MILLISECONDS]: what the command line means,
+-- "address A.B.C.D port P limit L", and no knock. For the tests.
+func knock_parse(target):
+    let line = linux_buffer(256)
+    let at = knock_put(line, 0, "address ")
+    at = knock_put_address(line, at, target.0)
+    at = knock_put(line, at, " port ")
+    at = linux_decimal(line, at, target.1)
+    at = knock_put(line, at, " limit ")
+    at = linux_decimal(line, at, target.2)
+    at = knock_put(line, at, "\n")
+    do knock_write(1, line, at)
+    do process_exit(0)
+    return 0
+end
+
+-- One byte from standard input, the test's go-ahead; exit 1 at its end.
+func knock_wait(one):
+    while true:
+        let r = linux_syscall6(0, 0, buffer_address(one), 1, 0, 0, 0)
+        if r == 1: return 0 end
+        if r != 0 - 4: return linux_die("knock: standard input ended\n") end
+    end
+    return 0
+end
+
+-- "round R answered A refused B no-answer C unreachable D error E", the
+-- counts so far, from the five 64-bit counters in counts.
+func knock_report(line, round, counts):
+    let at = knock_put(line, 0, "round ")
+    at = linux_decimal(line, at, round)
+    at = knock_put(line, at, " answered ")
+    at = linux_decimal(line, at, linux_u64(counts, 0))
+    at = knock_put(line, at, " refused ")
+    at = linux_decimal(line, at, linux_u64(counts, 8))
+    at = knock_put(line, at, " no-answer ")
+    at = linux_decimal(line, at, linux_u64(counts, 16))
+    at = knock_put(line, at, " unreachable ")
+    at = linux_decimal(line, at, linux_u64(counts, 24))
+    at = knock_put(line, at, " error ")
+    at = linux_decimal(line, at, linux_u64(counts, 32))
+    return knock_put(line, at, "\n")
+end
+
+-- A count, 1 to 999999999, in plain decimal: (true, n) or (false, 0).
+func knock_count(text):
+    let n = net_number(text, 0, 9)
+    if not n.0 or n.2 != length(text) or n.1 == 0: return (false, 0) end
+    return (true, n.1)
+end
+
+-- knock --rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]: for the
+-- tests. Knocks each target in turn, ROUNDS times, through one Net. After every
+-- EVERY rounds and after the last it prints the counts so far (knock_report)
+-- and waits for a byte on standard input before going on; then it exits 0.
+-- Everything is made before the first knock; nothing is allocated after.
+func knock_rounds(args, argc):
+    let rounds = knock_count(linux_argument(args, 2))
+    let every = knock_count(linux_argument(args, 3))
+    if not rounds.0 or not every.0:
+        return knock_refuse("knock: usage: knock --rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]\n")
+    end
+    let addresses = new_array(int)
+    let ports = new_array(int)
+    let limits = new_array(int)
+    let k = 4
+    while k < argc:
+        let target = knock_target(linux_argument(args, k), linux_argument(args, k + 1), linux_argument(args, k + 2))
+        do add(addresses, target.0)
+        do add(ports, target.1)
+        do add(limits, target.2)
+        k = k + 3
+    end
+    let n = net_new()
+    let counts = linux_buffer(40)
+    let line = linux_buffer(256)
+    let one = linux_buffer(1)
+    let round = 1
+    while round <= rounds.1:
+        let i = 0
+        while i < count(addresses):
+            let outcome = net_knock(n, get(addresses, i), get(ports, i), get(limits, i))
+            do linux_put64(counts, outcome * 8, linux_u64(counts, outcome * 8) + 1)
+            i = i + 1
+        end
+        if round % every.1 == 0 or round == rounds.1:
+            do knock_write(1, line, knock_report(line, round, counts))
+            do knock_wait(one)
+        end
+        round = round + 1
+    end
+    do process_exit(0)
+    return 0
+end
+
+func main():
+    let args = linux_arguments()
+    let argc = knock_arguments(args)
+    let mode = linux_argument(args, 1)
+    if equal(mode, "--rounds"):
+        if argc >= 7 and (argc - 4) % 3 == 0: return knock_rounds(args, argc) end
+        return knock_refuse("knock: usage: knock --rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]\n")
+    end
+    if equal(mode, "--parse"):
+        if argc != 4 and argc != 5: return knock_refuse("knock: usage: knock --parse ADDRESS PORT [MILLISECONDS]\n") end
+        let limit = "1000"
+        if argc == 5: limit = linux_argument(args, 4) end
+        return knock_parse(knock_target(linux_argument(args, 2), linux_argument(args, 3), limit))
+    end
+    if argc == 3 or argc == 4:
+        let limit = "1000"
+        if argc == 4: limit = linux_argument(args, 3) end
+        return knock_once(knock_target(linux_argument(args, 1), linux_argument(args, 2), limit))
+    end
+    return knock_refuse("knock: usage: knock ADDRESS PORT [MILLISECONDS]\n")
+end

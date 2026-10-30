@@ -32,12 +32,14 @@ examples/maze.md
 examples/maze.txt
 examples/notes.md
 examples/scope.md
+examples/knock.md
 lib/README.md
 # Independent Linux syscall/memory and interactive desktop TEST tooling.
 bootstrap/tests/check_hosted_memory_io.py
 bootstrap/tests/check_desktop.py
 bootstrap/tests/check_hosted_apps.py
 bootstrap/tests/check_scope.py
+bootstrap/tests/check_net.py
 bootstrap/tests/check_grid_map.py
 bootstrap/tests/check_notes_support.py
 bootstrap/tests/check_x11_text.py

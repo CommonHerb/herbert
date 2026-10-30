@@ -1,0 +1,248 @@
+-- Knocking on a computer over TCP: does it answer at this IPv4 address and
+-- port? Requires lib/linux.herb; no main, no libc. Addresses only: no name
+-- (DNS, /etc/hosts) is looked up. A knock starts a connection, waits for it at
+-- most a time limit, closes it on every path and never sends a byte.
+-- A Net record (net_new, once) holds everything a knock needs: a knock
+-- allocates nothing, so a program may knock every few seconds for weeks.
+-- Layouts and numbers: Linux x86-64 UAPI. sockaddr_in is 16 bytes (family 2,
+-- then port and address in network byte order, then 8 zero bytes); pollfd 8;
+-- timespec 16. socket 41, connect 42, getsockopt 55, close 3.
+-- https://man7.org/linux/man-pages/man2/connect.2.html (EINPROGRESS, SO_ERROR)
+-- https://man7.org/linux/man-pages/man7/tcp.7.html
+-- https://man7.org/linux/man-pages/man7/ip.7.html (the errors)
+
+-- What the last knock found. outcome:
+--   0 answered     the connection was accepted (error 0), or accepted and then
+--                  reset (ECONNRESET) or closed and reset (EPIPE): Linux gives
+--                  those only once the handshake is done, since a reset before
+--                  it is ECONNREFUSED; error keeps which;
+--   1 refused      the computer said no (a reset; ECONNREFUSED): it is there,
+--                  but nothing takes connections on that port;
+--   2 no answer    nothing came back within the time limit (also the kernel's
+--                  own give-up, ETIMEDOUT, which a limit of a minute or less
+--                  never reaches with Linux's default retries);
+--   3 unreachable  the network says there is no way there: ENETUNREACH,
+--                  EHOSTUNREACH, ENETDOWN or EHOSTDOWN, from this computer's
+--                  own routes at once or from an ICMP message later;
+--   4 error        anything else, the Linux error in error.
+-- error is the Linux error number that decided the outcome, 0 when none did
+-- (a plain answer, and the time limit reached); elapsed is the knock's length
+-- in whole milliseconds on the monotonic clock.
+ref record NetState:
+    outcome: int
+    error: int
+    elapsed: int
+end
+
+-- The state, then the sockaddr_in, pollfd and timespec buffers, and SO_ERROR's
+-- value and length (two 32-bit fields).
+record Net:
+    state: NetState
+    address: buffer
+    poll: buffer
+    clock: buffer
+    option: buffer
+end
+
+func net_new():
+    return Net(NetState(4, 0, 0), linux_buffer(16), linux_buffer(8), linux_buffer(16), linux_buffer(8))
+end
+
+func net_digit(b): return b >= 48 and b <= 57 end
+
+-- Up to most digits from at: (ok, value, next). Not ok with no digit, more
+-- than most, or a zero in front of another digit.
+func net_number(text, at, most):
+    let start = at
+    let value = 0
+    while at < length(text) and net_digit(index(text, at)):
+        if at - start == most: return (false, 0, at) end
+        value = value * 10 + index(text, at) - 48
+        at = at + 1
+    end
+    if at == start: return (false, 0, at) end
+    if at - start > 1 and index(text, start) == 48: return (false, 0, at) end
+    return (true, value, at)
+end
+
+-- Dotted IPv4 text: exactly four numbers 0 to 255 joined by single dots, and
+-- nothing else, not even a space. (true, address), the first number in the top
+-- byte, or (false, 0). A leading zero is refused, since some tools read "010"
+-- as octal 8; so are signs, hex, empty parts and any text before or after.
+func net_ipv4(text):
+    let address = 0
+    let at = 0
+    let parts = 0
+    while parts < 4:
+        if parts > 0:
+            if at >= length(text) or index(text, at) != 46: return (false, 0) end
+            at = at + 1
+        end
+        let part = net_number(text, at, 3)
+        if not part.0 or part.1 > 255: return (false, 0) end
+        address = (address << 8) | part.1
+        at = part.2
+        parts = parts + 1
+    end
+    if at != length(text): return (false, 0) end
+    return (true, address)
+end
+
+-- A whole decimal number from 1 to most, the whole text: (true, n) or (false, 0).
+func net_whole(text, most):
+    let n = net_number(text, 0, 5)
+    if not n.0 or n.2 != length(text) or n.1 == 0 or n.1 > most: return (false, 0) end
+    return (true, n.1)
+end
+
+-- A TCP port, 1 to 65535.
+func net_port(text): return net_whole(text, 65535) end
+
+-- A time limit in whole milliseconds, 1 to 60000.
+func net_limit(text): return net_whole(text, 60000) end
+
+func net_classify(e):
+    if e == 111: return 1 end
+    if e == 101 or e == 113 or e == 100 or e == 112: return 3 end
+    if e == 110: return 2 end
+    return 4
+end
+
+-- Microseconds on the monotonic clock, through n.clock, or raw -errno. A knock
+-- times itself in microseconds so that rounding to whole milliseconds can
+-- never cut its time limit short.
+func net_clock(n):
+    let result = linux_syscall6(228, 1, buffer_address(n.clock), 0, 0, 0, 0)
+    if linux_error(result): return result end
+    return linux_u64(n.clock, 0) * 1000000 + linux_u64(n.clock, 8) / 1000
+end
+
+-- Whole milliseconds since started (microseconds).
+func net_since(n, started):
+    let now = net_clock(n)
+    if linux_error(now) or now < started: return 0 end
+    return (now - started) / 1000
+end
+
+-- poll says the attempt on fd has ended (revents in ready): SO_ERROR says how.
+-- A reset (ECONNRESET) or a close and reset (EPIPE) comes only after the
+-- computer took the connection, so it answered. Otherwise connected means no
+-- error, and writable without a hang-up (an unconnected socket polls as
+-- POLLOUT|POLLHUP with no error). (outcome, error).
+func net_ended(n, fd, ready):
+    do linux_put32(n.option, 0, 0)
+    do linux_put32(n.option, 4, 4)
+    let got = linux_syscall6(55, fd, 1, 4, buffer_address(n.option), buffer_address(n.option) + 4, 0)
+    if linux_error(got): return (4, 0 - got) end
+    let e = linux_u32(n.option, 0)
+    if e == 104 or e == 32: return (0, e) end
+    if e != 0: return (net_classify(e), e) end
+    if (ready & 4) != 0 and (ready & 16) == 0: return (0, 0) end
+    return (4, 107)
+end
+
+-- The connection started on fd is under way: wait for it to end, until limit
+-- milliseconds after started (microseconds). Every pass polls: for the time
+-- left, rounded up to a whole millisecond, or, once the limit has passed, for
+-- none; so "no answer" is said only after a poll at or past the limit that
+-- could have seen an answer and did not. EINTR, or a poll that comes back
+-- before the limit, polls again for what is left. (outcome, error).
+func net_wait(n, fd, started, limit):
+    let deadline = started + limit * 1000
+    while true:
+        let now = net_clock(n)
+        if linux_error(now): return (4, 0 - now) end
+        let wait = 0
+        if now < deadline: wait = (deadline - now + 999) / 1000 end
+        let ready = linux_poll(fd, n.poll, 4, wait)
+        if ready != 0 and ready != 0 - 4:
+            if linux_error(ready): return (4, 0 - ready) end
+            return net_ended(n, fd, ready)
+        end
+        if ready == 0 and wait == 0: return (2, 0) end
+    end
+    return (4, 0)
+end
+
+-- connect on a non-blocking socket either ends at once (loopback can accept or
+-- refuse in the call; a missing route fails in it) or is under way (EINPROGRESS).
+func net_attempt(n, fd, started, limit):
+    let connected = linux_syscall6(42, fd, buffer_address(n.address), 16, 0, 0, 0)
+    if connected == 0: return (0, 0) end
+    if connected != 0 - 115: return (net_classify(0 - connected), 0 - connected) end
+    return net_wait(n, fd, started, limit)
+end
+
+-- Knock once on address (a 32-bit IPv4 address, as net_ipv4 gives it) at TCP
+-- port, waiting at most limit milliseconds (1 to 60000). Returns the outcome
+-- and leaves outcome, error and elapsed in n.state. A port, address or limit
+-- out of range is an error, 22 (EINVAL), before any socket is made. The socket
+-- is SOCK_NONBLOCK|SOCK_CLOEXEC and is closed before the knock returns,
+-- whatever happened; close's own result cannot change what was found (Linux
+-- frees the descriptor either way), so it is not looked at.
+func net_knock(n, address, port, limit):
+    let st = n.state
+    st.outcome = 4
+    st.error = 0
+    st.elapsed = 0
+    let started = net_clock(n)
+    if linux_error(started):
+        st.error = 0 - started
+        return 4
+    end
+    if address > 4294967295 or port == 0 or port > 65535 or limit == 0 or limit > 60000:
+        st.error = 22
+        return 4
+    end
+    do buffer_set(n.address, 0, 2)
+    do buffer_set(n.address, 1, 0)
+    do buffer_set(n.address, 2, port >> 8)
+    do buffer_set(n.address, 3, port & 255)
+    do buffer_set(n.address, 4, address >> 24)
+    do buffer_set(n.address, 5, (address >> 16) & 255)
+    do buffer_set(n.address, 6, (address >> 8) & 255)
+    do buffer_set(n.address, 7, address & 255)
+    do linux_put64(n.address, 8, 0)
+    let fd = linux_syscall6(41, 2, 526337, 6, 0, 0, 0)
+    if linux_error(fd):
+        st.error = 0 - fd
+        st.elapsed = net_since(n, started)
+        return 4
+    end
+    let found = net_attempt(n, fd, started, limit)
+    do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    st.outcome = found.0
+    st.error = found.1
+    st.elapsed = net_since(n, started)
+    return st.outcome
+end
+
+func net_outcome_name(outcome):
+    if outcome == 0: return "answered" end
+    if outcome == 1: return "refused" end
+    if outcome == 2: return "no answer" end
+    if outcome == 3: return "unreachable" end
+    return "error"
+end
+
+-- Plain words for the Linux errors a knock can meet; "" for any other.
+func net_error_name(e):
+    if e == 101: return "network is unreachable" end
+    if e == 113: return "no route to host" end
+    if e == 100: return "network is down" end
+    if e == 112: return "host is down" end
+    if e == 111: return "connection refused" end
+    if e == 32: return "broken pipe" end
+    if e == 110: return "timed out" end
+    if e == 13: return "permission denied" end
+    if e == 1: return "operation not permitted" end
+    if e == 22: return "invalid argument" end
+    if e == 99: return "address not available" end
+    if e == 104: return "connection reset" end
+    if e == 107: return "not connected" end
+    if e == 24: return "too many open files" end
+    if e == 23: return "too many open files in the system" end
+    if e == 105: return "no buffer space" end
+    if e == 12: return "out of memory" end
+    return ""
+end

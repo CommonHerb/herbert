@@ -119,7 +119,15 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   files the check writes, removes (amber `unavailable`) and restores; the redraw light changing at every reading;
   quitting on Escape, q, Shift+Q and the close button; and 120 seconds redrawing every 10 ms through the real
   `/proc`, missing, malformed and unusual files with the same virtual size throughout and resident memory within
-  64 KiB. `make check-scope` runs those checks alone.
+  64 KiB. `make check-scope` runs those checks alone. Last, `check_net.py` checks knock (`lib/net.herb`), knocking
+  only on 127.x and inside a private network namespace it makes: malformed command lines refused before any socket
+  (under strace), the library's own range guard and error classes through a probe it compiles, one knock's system
+  calls in order, answered at three loopback addresses (a listener that must receive no byte), refused, no answer at
+  a full accept queue within its time limit plus 100 ms and only after a last poll at the limit, strace-injected
+  EINTR, late connects, connect results and resets after accept, and 24,000 knocks in one process with the same descriptors,
+  virtual size and resident memory within 64 KiB; where an unprivileged network namespace can be made, also
+  unreachable and error from its routes and firewall and the memory check with all five outcomes, and otherwise a
+  plain "NOT TESTED here" line. `make check-net` runs those checks alone.
 
 Python, GNU time, strace, GDB, binutils, Xvfb, libX11 and libXtst are test tools, never dependencies of the programs.
 So is a C compiler, now used only for one stand-in compiler in the reseed tests of `check_verification_helpers.py`.
@@ -128,7 +136,7 @@ Verifiers that rely on Python `assert` must run with assertions enabled.
 Standalone targets re-run one `make test` gate for diagnosis: `evaluator-native`, `vm-native`, `parser-native`,
 `lexer-native`, `klondike-native`, `emitter-native` (each a fragment gate and its mutation proof),
 `closed-loop-memory-diet`, `compiler-conformance`, `stdin-contract`, `wordcount`, `hosted-memory-io` and
-`stack-headroom`. `verify-local` does not call them. `check-scope` re-runs Scope's part of `check-hosted-apps`.
+`stack-headroom`. `verify-local` does not call them. `check-scope` and `check-net` re-run Scope's and knock's parts of `check-hosted-apps`.
 
 ## Bite proofs
 
