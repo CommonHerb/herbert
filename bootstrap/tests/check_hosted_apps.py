@@ -569,6 +569,26 @@ def status_text(frame, y=560):
     return decoded(frame, 28, y, 130)
 
 
+def footer_numbers(frame):
+    """The footer's line, column and byte count as drawn (notes_status, y=542)."""
+    return decoded(frame, 62, 542, 8)[0], decoded(frame, 170, 542, 8)[0], decoded(frame, 288, 542, 8)[0]
+
+
+def drawn_frame(app, state, description, timeout=20):
+    """Wait until a frame of app's window satisfies state, and return that frame: a picture of what the
+    application has drawn, not one taken before it caught up with its input."""
+    seen = []
+    def ready():
+        seen[:] = [app.frame()]
+        return state(seen[0])
+    try:
+        wait_for(ready, description, timeout)
+    except AssertionError as error:
+        last = f'footer {footer_numbers(seen[0])}, status {status_text(seen[0])[0]!r}' if seen else 'no frame'
+        raise AssertionError(f'{error}; last drawn {last}') from None
+    return seen[0]
+
+
 # The sentences N1 reads back by their exact text (examples/notes.herb notes_status).
 READY = 'Ready. UTF-8 text; original bytes and newline style are preserved.'
 SAVED = 'Saved. File and containing directory synced.'
@@ -825,11 +845,16 @@ def notes_checks(args, x, display, evidence, passed):
     with application(args.notes, conflict, b'Herbert - Notes', (900,600), x, display, evidence, 'notes-conflict') as app:
         app.type('edited ')
         app.tap('Down')
-        before_save_frame = app.frame()
+        # The refused save is compared with the frame Notes draws for these keys (Line 2, Column 1, Bytes 16),
+        # not with whatever shows 40 ms after the last one: on a busy machine Notes is still drawing earlier keys.
+        before_save_frame = drawn_frame(app, lambda frame: footer_numbers(frame) == ('2', '1', '16'),
+                                        'the edit and the Down move drawn')
         before_failure = region(before_save_frame,28,102,838,14)
         conflict.write_text('external\n')
         app.tap('s', 'Control_L')
-        time.sleep(.2)
+        # Judge the save once Notes has drawn its answer to Ctrl+S: a fixed 0.2 s pause missed it at 5% of a CPU,
+        # and the file read below would then come before the save attempt it checks.
+        drawn_frame(app, lambda frame: status_text(frame)[0] == CHANGED, 'the refused save drawn')
         assert conflict.read_text()=='external\n', 'external change overwritten'
         refused = app.frame('refused-save')
         assert region(refused,28,102,838,14) == before_failure, 'failed save changed in-memory text'

@@ -73,35 +73,56 @@ end
 HERB
 scorrect='("\n", 99)'
 
+# A compiler built from a mutated backend can loop instead of emitting (one that
+# miscompiles + as - did, and make test hung until an outer cap killed it), and one
+# that emits can emit an image that loops. Each compile and each run of an emitted
+# image is bounded: they take milliseconds, so the bound is far above any honest
+# run, and one still running at the bound fails its step by name.
+compile_bound="${AGGREGATE_RENDER_MUTATION_COMPILE_TIMEOUT:-60s}"
+
 # emit_with(compiler, probe, out_image): the given native compiler ELF emits the
 # probe; copies the emitted image to out_image (empty file if it did not emit).
+# Returns 3 if the compiler was stopped at the bound.
 emit_with() {
     local compiler="$1" pr="$2" out="$3" wd; wd="$(mktemp -d "$tmp/e.XXXX")"
-    native_codegen_compile_success "$compiler" "$pr" "$wd" || { : >"$out"; return 2; }
+    if ! native_codegen_compile_success "$compiler" "$pr" "$wd" "$PATH" "$compile_bound"; then
+        : >"$out"
+        if [[ "$(cat "$wd/compile.status" 2>/dev/null)" == 124 ]]; then
+            echo "    (compiler stopped: still running after the $compile_bound bound)" >&2
+            return 3
+        fi
+        return 2
+    fi
     if [[ -f "$wd/a.out" ]]; then cp "$wd/a.out" "$out"; chmod +x "$out"; else : >"$out"; fi
 }
 
 # render_of(image): runs the emitted image and echoes its rendered line (empty if
-# the image is empty / did not run).
+# the image is empty / did not run). Returns 3 if the image was still running at
+# the bound and 4 if it did not exit 0: a crash after "(" is not a wrong render.
 render_of() {
-    local img="$1"
+    local img="$1" out rc=0
     [[ -s "$img" ]] || { echo ""; return 0; }
     chmod +x "$img"
-    "$img" 2>/dev/null | tr -d '\n'
+    out="$(timeout "$compile_bound" "$img" 2>/dev/null)" || rc=$?
+    printf '%s' "${out//$'\n'/}"
+    if [[ "$rc" -eq 124 ]]; then echo "    (image stopped: still running after the $compile_bound bound)" >&2; return 3; fi
+    if [[ "$rc" -ne 0 ]]; then echo "    (image exited with status $rc)" >&2; return 4; fi
 }
 
 # seed_compile(backend_src, out_compiler): the C-free seed compiles a (mutated)
 # backend into a native gen-1' compiler ELF. Echoes "" if it did not compile.
 seed_compile() {
     local src="$1" out="$2" wd; wd="$(mktemp -d "$tmp/sc.XXXX")"
-    native_codegen_compile_success "$SEED" "$src" "$wd" || return 2
+    native_codegen_compile_success "$SEED" "$src" "$wd" "$PATH" "$compile_bound" || return 2
     if [[ -f "$wd/a.out" ]]; then cp "$wd/a.out" "$out"; chmod +x "$out"; echo "$out"; else echo ""; fi
 }
 
-# render_with_compiler(compiler, probe): emit the probe with the compiler, echo render.
+# render_with_compiler(compiler, probe): emit the probe with the compiler, echo render;
+# fails like render_of, or returns 3 if the compiler was stopped at the bound.
 render_with_compiler() {
-    local compiler="$1" pr="$2" img; img="$(mktemp "$tmp/img.XXXX")"
-    emit_with "$compiler" "$pr" "$img"
+    local compiler="$1" pr="$2" img emitted=0; img="$(mktemp "$tmp/img.XXXX")"
+    emit_with "$compiler" "$pr" "$img" || emitted=$?
+    [[ "$emitted" -ne 3 ]] || return 3
     render_of "$img"
 }
 
@@ -131,9 +152,9 @@ mutate_in_func() {
 }
 
 # --- CONTROL: the unmutated seed compiler renders BOTH probes CORRECTLY (C-free) -
-ctl="$(render_with_compiler "$SEED" "$probe")"
+ctl="$(render_with_compiler "$SEED" "$probe")" || fail "CONTROL: unmutated seed's flat probe did not compile and run within the bound (status $?, got [$ctl])"
 [[ "$ctl" == "$correct" ]] || fail "CONTROL: unmutated seed did not render the correct flat tuple (got [$ctl])"
-sctl="$(render_with_compiler "$SEED" "$sprobe")"
+sctl="$(render_with_compiler "$SEED" "$sprobe")" || fail "CONTROL: unmutated seed's string probe did not compile and run within the bound (status $?, got [$sctl])"
 [[ "$sctl" == "$scorrect" ]] || fail "CONTROL: unmutated seed did not render the correct string tuple (got [$sctl])"
 [[ "$XCHECK" == "1" ]] && echo "  (retireable C cross-check ON: each mutation's native two-stage image is asserted byte-identical to the C image)"
 
@@ -152,12 +173,15 @@ bite() {
     mutate_in_func "$backend" "$mb" "$fname" "$old" "$new" || fail "$name: mutation did not apply uniquely in $fname (vacuous)"
     local gen1x; gen1x=$(seed_compile "$mb" "$tmp/gen1x.$name")
     [[ -n "$gen1x" ]] || fail "$name: seed could not compile the mutated backend (two-stage stage-1 failed)"
-    local nimg="$tmp/nat.$name.img"; emit_with "$gen1x" "$pr" "$nimg"
+    local nimg="$tmp/nat.$name.img" emitted=0; emit_with "$gen1x" "$pr" "$nimg" || emitted=$?
+    [[ "$emitted" -ne 3 ]] || fail "$name: mutated compiler still running after the $compile_bound bound -- a hang, not a wrong render"
     # these mutations are length-preserving -- the mutated compiler MUST still emit a
     # (wrong) image; a NO-image / empty render is a broken compile, NOT a valid
     # divergence, and must FAIL rather than vacuously count as "diverged".
     [[ -s "$nimg" ]] || fail "$name: mutated compiler produced no qualified image -- compilation contract or image failure, not a wrong render"
-    local got; got="$(render_of "$nimg")"
+    local got rendered=0; got="$(render_of "$nimg")" || rendered=$?
+    [[ "$rendered" -ne 3 ]] || fail "$name: mutated image still running after the $compile_bound bound -- a hang, not a wrong render"
+    [[ "$rendered" -eq 0 ]] || fail "$name: mutated image did not exit 0 -- a crash, not a wrong render (got [$got])"
     [[ -n "$got" ]] || fail "$name: mutated image produced an EMPTY render -- not a valid divergence"
     if [[ "$got" == "$want" ]]; then
         fail "$name: mutated renderer STILL produced the correct output -- the byte is not load-bearing (got [$got])"

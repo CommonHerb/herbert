@@ -29,6 +29,10 @@ func probe_keys(c, b):
     return probe_keys(c, b)
 end
 func probe_loop(c, b, pause):
+    -- x11_events reads at most 512 events, which for press/release pairs is also
+    -- 256 presses; reading up to 1024 first leaves the key queue's own limit as
+    -- the only thing that can stop a drain at 256.
+    do x11_events_loop(c, 1024)
     let got = x11_events(c)
     if x11_closed(c):
         let closed = x11_close(c)
@@ -162,14 +166,27 @@ def run(evidence):
                 # queue limit itself, rather than spending the drain budget on
                 # interleaved focus/mapping events. Status records delimit each
                 # application iteration's actual queue drain.
+                #
+                # The probe's socket cannot hold a whole burst. Xvfb writes each
+                # key event to it separately, and Linux charges every such 32-byte
+                # write 768 bytes of Xvfb's send allowance (212,992 bytes, the
+                # net.core.wmem_default), so the socket is full at 278 events (139
+                # presses) and Xvfb keeps the rest until the probe reads. A drain
+                # that starts on that socket reaches 256 only if Xvfb runs and
+                # refills it while that drain is still reading, which a busy
+                # machine prevents: 300 presses then drain as [139, 161]. Once a
+                # drain has emptied the socket, Xvfb writes everything it kept in
+                # one piece. With 600 presses, a first drain that stops short of
+                # 256 leaves at least 345 waiting in that piece, so some drain
+                # meets the limit however the processes are scheduled.
                 stopped()
                 saturation_start = len(records())
-                burst(300)
+                burst(600)
                 app.process.send_signal(signal.SIGCONT)
-                current = await_condition(lambda rs: len([r for r in rs if r[0] != 0xffffffff]) >= 901,
+                current = await_condition(lambda rs: len([r for r in rs if r[0] != 0xffffffff]) >= 1201,
                                           "saturation burst lost presses")
                 saturated_keys = [r[0] for r in current[saturation_start:] if r[0] != 0xffffffff]
-                assert saturated_keys == [98, 99] * 150, saturated_keys
+                assert saturated_keys == [98, 99] * 300, saturated_keys
                 batches = []
                 for record in current[saturation_start:]:
                     if record[0] == 0xffffffff:
@@ -179,7 +196,7 @@ def run(evidence):
                         batches[-1] += 1
                 assert 256 in batches and max(batches) == 256, ("queue capacity was not exercised", batches)
                 result["saturation_press_count"] = len(saturated_keys)
-                result["saturation_symbols_in_order"] = "b,c repeated 150 times"
+                result["saturation_symbols_in_order"] = "b,c repeated 300 times"
                 result["saturation_batch_sizes"] = batches
                 connection.delete(app.window)
                 app.finished()
@@ -198,7 +215,7 @@ def run(evidence):
     finally:
         desktop.TITLE = old_title
         (evidence / "result.json").write_text(json.dumps(result, indent=2) + "\n")
-    print("PASS X11 text: 600 ordered focus/remap presses, 300 saturation presses including a 256-key batch, new symbol and clean close")
+    print("PASS X11 text: 600 ordered focus/remap presses, 600 saturation presses including a 256-key batch, new symbol and clean close")
     print(f"X11 text evidence: {evidence}")
 
 
