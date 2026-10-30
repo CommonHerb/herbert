@@ -173,6 +173,8 @@ cmp -s "$nat_nest" "$want_nest" || fail "nested-tuple native render != independe
 # disk. The PASS line below names the tests this run actually graded.
 foundational="test_01_arith test_03_if_elif test_04_recursion test_05_block_scope test_06_tuples test_07_array test_08_strings_buffer test_09_ref_vs_value test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap"
 : >"${MUSTER_MANIFEST:-/dev/null}"
+# MUSTER_PINNED_MANIFEST, if set, receives each ungraded test whose reason 4b/4c checked.
+: >"${MUSTER_PINNED_MANIFEST:-/dev/null}"
 graded_n=0; graded_ids=""
 for t in $foundational; do
     src="$tests_dir/$t.herb"; exp="$tests_dir/$t.expected"
@@ -218,6 +220,7 @@ if [[ -f "$t02" ]]; then
     ( cd "$t02wd" && "$GEN1" <"$t02" >t02.log 2>t02.err ) || true
     [[ ! -f "$t02wd/a.out" ]] || fail "test_02 UNEXPECTEDLY compiled natively -- its retire-with-C reason (native rejects ERR431) is now invalid; reclassify it"
     grep -q "ERR 431" "$t02wd/t02.log" "$t02wd/t02.err" 2>/dev/null || fail "test_02 native rejection is not ERR 431 (retire-with-C reason changed): $(head -1 "$t02wd/t02.log")"
+    printf '%s\n' test_02_short_circuit >>"${MUSTER_PINNED_MANIFEST:-/dev/null}"
 fi
 
 # --- 4c. muster (link 13) REASON pin: test_11/12 are in RETIRE-WITH-C because native
@@ -244,6 +247,7 @@ for t_rec in test_11_non_tail_self_recursion test_12_non_tail_mutual_recursion; 
     # keep any core in the trap-cleaned temp dir, off the tracked tree.
     rc_rec=$( cd "$recwd"; ulimit -c 0 2>/dev/null; ./a.out >/dev/null 2>&1; echo $? ) 2>/dev/null
     [[ "$rc_rec" -eq 139 ]] || fail "$t_rec no longer SIGSEGVs natively (rc=$rc_rec) -- its retire-with-C reason (deep recursion overflows the native stack) is invalid; reclassify it"
+    printf '%s\n' "$t_rec" >>"${MUSTER_PINNED_MANIFEST:-/dev/null}"
 done
 
 # --- 5. C-FREE proven, not asserted: run gen-1 with an EMPTY PATH (so no external

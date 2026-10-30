@@ -110,7 +110,10 @@ if [[ "${1:-}" == "--check-pinned" ]]; then
         if [[ "$s" =~ ^run_native_codegen_link([1-9][0-9]*)(_mutation)?\.sh$ ]]; then
             n="${BASH_REMATCH[1]}"
             [[ -z "${BASH_REMATCH[2]}" ]] && (( n <= 16 )) && continue
-            (( n >= ${gate_lo:-1000} && n <= ${gate_hi:-0} )) && continue
+            # Mutation proofs start one link above GATE_LO: link 17 has none, and
+            # neither kernel_verify.sh (mutation_expected) nor the CI runs one.
+            lo="${gate_lo:-1000}"; [[ -n "${BASH_REMATCH[2]}" ]] && lo=$((lo + 1))
+            (( n >= lo && n <= ${gate_hi:-0} )) && continue
         fi
         grep -qxF $'\t'"@bash bootstrap/tests/$s" ../../Makefile && continue
         unwired="$unwired $s"
@@ -159,11 +162,13 @@ run_mutation_proof() {
 # test_*.herb on disk is in exactly one list, so a test cannot be dropped from
 # grading, or added without grading, while make test stays green. Each ungraded
 # test's reason is pinned by behavior inside the gate (test_02: the compiler
-# rejects it, ERR 431; test_11/12: deep recursion overflows the native stack); a
-# name added to FOUNDATIONAL_UNGRADED needs such a pin there too.
+# rejects it, ERR 431; test_11/12: deep recursion overflows the native stack), and
+# the gate writes each test whose reason it checked to MUSTER_PINNED_MANIFEST,
+# which must equal FOUNDATIONAL_UNGRADED: a name cannot join that list unpinned.
 FOUNDATIONAL_GRADED="test_01_arith test_03_if_elif test_04_recursion test_05_block_scope test_06_tuples test_07_array test_08_strings_buffer test_09_ref_vs_value test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap"
 FOUNDATIONAL_UNGRADED="test_02_short_circuit test_11_non_tail_self_recursion test_12_non_tail_mutual_recursion"
 foundational_manifest="$native_codegen_dispatch_tmp/foundational_graded"
+foundational_pinned="$native_codegen_dispatch_tmp/foundational_pinned"
 set_diff() { # want got (sorted line lists) -> "missing: ...; extra: ..."
     printf 'missing: %s; extra: %s' \
         "$(comm -23 <(printf '%s\n' "$1") <(printf '%s\n' "$2") | xargs)" \
@@ -175,6 +180,9 @@ check_foundational_partition() {
     want=$(printf '%s\n' $FOUNDATIONAL_GRADED | sort)
     got=$(sort "$foundational_manifest" 2>/dev/null)
     [[ "$got" == "$want" ]] || bad="$bad [the gate graded a different set -- $(set_diff "$want" "$got")]"
+    want=$(printf '%s\n' $FOUNDATIONAL_UNGRADED | sort)
+    got=$(sort "$foundational_pinned" 2>/dev/null)
+    [[ "$got" == "$want" ]] || bad="$bad [the gate checked the reason of a different set -- $(set_diff "$want" "$got")]"
     both=$(printf '%s\n' $FOUNDATIONAL_GRADED $FOUNDATIONAL_UNGRADED | sort | uniq -d | xargs)
     [[ -z "$both" ]] || bad="$bad [in both lists: $both]"
     listed=$(printf '%s\n' $FOUNDATIONAL_GRADED $FOUNDATIONAL_UNGRADED | sort -u)
@@ -359,8 +367,8 @@ if [[ -d ../../stack ]]; then
         total=$((total + 1))
         # muster (link 13): the enduring leg grades the 12 native-output foundational
         # tests C-FREE against their committed .expected files.
-        : >"$foundational_manifest"
-        if AGGREGATE_RENDER_NATIVE_NO_C=1 MUSTER_MANIFEST="$foundational_manifest" HERBERT="$HERBERT" "$PWD/run_aggregate_render_native.sh"; then
+        : >"$foundational_manifest"; : >"$foundational_pinned"
+        if AGGREGATE_RENDER_NATIVE_NO_C=1 MUSTER_MANIFEST="$foundational_manifest" MUSTER_PINNED_MANIFEST="$foundational_pinned" HERBERT="$HERBERT" "$PWD/run_aggregate_render_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
