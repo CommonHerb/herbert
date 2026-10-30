@@ -124,7 +124,7 @@ if [[ -f "$CAIRN_REF" ]]; then
     else fail_test "(D) cairn's assert_cairn FAILED on the larder kernel -- larder disturbed the FS arms (not purely additive)"; fi
 fi
 
-# ---- (PY) Python byte-pin / assert layer (mirrors larder_phaseA_gate.sh) ----
+# ---- (PY) Python byte-pin / assert layer ----
 if LARDER_TDIR="$script_dir" python3 - <<'PY'
 import os, sys
 sys.path.insert(0, os.environ['LARDER_TDIR'])

@@ -95,4 +95,3 @@ anchors; reproducing a seed establishes consistency, not independent provenance.
 
 Current decisions and open debts are kept in the maintainers' private canon,
 which is not published.
-Historical responsibility details remain in `BOOTSTRAP-RESPONSIBILITIES.md`.

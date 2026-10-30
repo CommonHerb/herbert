@@ -609,10 +609,9 @@ qemu-system-x86_64'''
         refused = dict.fromkeys((
             'NATIVE_CODEGEN_GOLDENS_DIR', 'NATIVE_CODEGEN_MANIFEST', 'NATIVE_CODEGEN_ORACLE_CAPTURE',
             'NATIVE_CODEGEN_CAPTURE_MANIFEST', 'NATIVE_CODEGEN_ALLOW_C_MINT',
-            'HERBERT_C_GRADE_CROSSCHECK', 'FOUNDATIONAL_C_GRADE_CROSSCHECK',
             'ERROR_VOCAB_CAPTURE', 'ERROR_VOCAB_FRAGMENT'), '1')
         refused['NATIVE_CODEGEN_ORACLE'] = 'c'
-        clean = {k: v for k, v in os.environ.items() if k not in refused and k != 'SWITCHOVER_MANIFEST'}
+        clean = {k: v for k, v in os.environ.items() if k not in refused}
         golden = ROOT/'stack/error_probes_native.expected'
         before = hashlib.sha256(golden.read_bytes()).hexdigest()
         suite = ['bash', str(TESTS/'run_tests.sh'), '--check-pinned']
@@ -627,21 +626,6 @@ qemu-system-x86_64'''
                 self.assertIn(name.encode(), r.stdout)
                 self.assertNotIn(b'pinned proof scripts present', r.stdout)
                 self.assertEqual(hashlib.sha256(golden.read_bytes()).hexdigest(), before)
-        # make switchover-cfree reaches the error-vocab gate without run_tests.sh. Run a lone
-        # copy of the real driver: with no manifest or seed beside it, a lost refusal stops at
-        # the manifest check instead of starting the 26-gate surface, and the test goes RED.
-        with tempfile.TemporaryDirectory() as d:
-            driver = Path(d)/'run_switchover_cfree.sh'
-            driver.write_bytes((TESTS/driver.name).read_bytes())
-            for name in ('ERROR_VOCAB_CAPTURE', 'ERROR_VOCAB_FRAGMENT'):
-                with self.subTest(entrypoint=driver.name, name=name):
-                    r = subprocess.run(['bash', str(driver)], env=dict(clean, **{name: '1'}),
-                                       capture_output=True, timeout=10)
-                    self.assertEqual(r.returncode, 1, (r.stdout, r.stderr))
-                    self.assertIn(b'Refusing', r.stdout)
-                    self.assertIn(name.encode(), r.stdout)
-                    self.assertNotIn(b'missing switchover_manifest.tsv', r.stdout)
-                    self.assertNotIn(b'partition COMPLETE', r.stdout)
 
     def test_raw_evidence_survives_cleanup(self):
         with tempfile.TemporaryDirectory() as d:

@@ -40,7 +40,7 @@ fail_test() {
 
 link8_fixtures="$NATIVE_CODEGEN_GOLDENS_DIR/fixtures/link8"
 if [[ ! -d "$link8_fixtures" ]]; then
-    echo "FAIL: stack/native_compile_fragment.herb (missing link8 oracle fixtures; run bootstrap/tests/capture_native_goldens.sh)"
+    echo "FAIL: stack/native_compile_fragment.herb (missing link8 oracle fixtures in the committed goldens)"
     exit 1
 fi
 

@@ -24,7 +24,8 @@ Runs:
 - `make test-timeout`: checks the repo-local portable `timeout` shim.
 - `make test`: the full non-emulator harness (see below). This already includes
   all six fragment/mutation pairs (`evaluator-native`, `vm-native`, `parser-native`,
-  `lexer-native`, `klondike-native`, `emitter-native`) and `switchover-cfree`.
+  `lexer-native`, `klondike-native`, `emitter-native`), the closed-loop memory diet
+  and the error-vocabulary gate.
   Since 2026-10-27 it also runs the hosted memory/I/O check, the word counter and the
   stack-headroom guard.
   Each fragment is compiled to ELF by the committed gen-1 seed, runs with **no C**,
@@ -32,12 +33,10 @@ Runs:
   and run before producing a wrong runtime value. These fragment checks, plus the aggregate-render and error-vocabulary gates, require compiler success status
   0, exactly `0\n` stdout and empty stderr before any image is inspected.
   The standalone targets remain available for diagnosis; `verify-local` does not
-  dispatch those same targets a second time. The C-free proof retains both its
-  absent-interpreter and counting-tombstone phases, with the toolchain excluded.
+  dispatch those same targets a second time.
 - `make error-vocab-native`: the C-free re-gating of klondike.herb's located **front-end error vocabulary** (ERR 101–316) — the gen-1 seed compiles klondike (a 1-line `main` adapter; `klondike.herb` byte-identical) and feeds it the 54 malformed `error_probes` fixtures; each must emit the hand-authored manifest's ERR code (independent anchor) **and** the committed golden diagnostic (regression pin), with gate-time metamorphic checks (line-shift + payload-rename at five extraction sites) proving the diagnostic tracks the input, plus a RED-first mutation proof. Restores the assurance `castoff` spent when it deleted the C-driven `error_probes` differential (`klaxon`, sovereignty link 19). Distinct from the native-codegen seed's own subset vocabulary (ERR 4xx/5xx), which the native-codegen reject battery gates.
 - `make lexer-copy-sync`: checks that accepted-token lexer copies in the stdin/parser/evaluator/emitter and Suke fragments stay synchronized with `stack/lexer_fragment.herb` (the line-aware token contract).
 - `make native-codegen-diagnostics`: checks the local helper used to enrich kernel QEMU mismatch logs.
-- `make switchover-dry-run`: checks that the existing C-free mutation proofs still detect faults with the retired C toolchain absent.
 - `make compiler-cli-contract`: checks atomic output publication, including syscall fault injection and the emitted writer's instruction layout (tools described below).
 - `make wordcount`: compiles the maintained word counter with the committed seed and checks its output, input failures, and sustained input processing (also run by `make test`).
 - `make hosted-memory-io`: checks the general hosted byte-buffer/syscall interfaces,
@@ -133,6 +132,8 @@ This suite exercises the native gen-1 toolchain, the stack fragments run nativel
 ## Kernel/Module Gate
 
 The heavy kernel/module proof chain lives in `.github/workflows/kernel-codegen-l1.yml`.
+A push to `main` or a pull request starts it only when the change touches a path that can change
+the kernel route or its gates (listed in the workflow); otherwise it runs by hand (`workflow_dispatch`).
 
 That workflow installs QEMU, Bochs, GRUB, Xvfb, and disk tooling on Linux, then runs the later native-codegen kernel/module links and mutation gates with `KERNEL_CODEGEN_REQUIRE_EMU=1`.
 

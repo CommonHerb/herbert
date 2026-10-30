@@ -790,8 +790,8 @@ BEOF
 }
 
 if [[ "${LINK66_CAPTURE_GOLDENS:-0}" == "1" ]]; then
-    # Deliberate recapture, never called by `make test` -- the same shape as
-    # `capture_native_goldens.sh`. Guarded by an env var rather than a new tracked script,
+    # Deliberate recapture, never called by `make test` -- the same shape as the
+    # retired native-codegen golden capture script. Guarded by an env var rather than a new tracked script,
     # because the design's allowlist moves by its enumerated path list and no other.
     #
     # TWO REFUSALS, both closing holes a byte-pin invites rather than waiting to be told about them.

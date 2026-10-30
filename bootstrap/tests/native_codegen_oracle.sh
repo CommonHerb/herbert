@@ -43,7 +43,7 @@ native_codegen_oracle_begin() {
     native_codegen_oracle_consumed="$(mktemp)"
     case "$NATIVE_CODEGEN_ORACLE" in
         ""|golden) ;;
-        c) native_codegen_oracle_fail "NATIVE_CODEGEN_ORACLE=c is RETIRED -- the C bootstrap no longer exists (capture_native_goldens.sh is a historical record; the goldens are a frozen snapshot, LEDGER D24)"; return 1 ;;
+        c) native_codegen_oracle_fail "NATIVE_CODEGEN_ORACLE=c is RETIRED -- the C bootstrap no longer exists (the goldens are a frozen snapshot, LEDGER D24)"; return 1 ;;
         *) native_codegen_oracle_fail "unknown NATIVE_CODEGEN_ORACLE=$NATIVE_CODEGEN_ORACLE"; return 1 ;;
     esac
     if [[ "$NATIVE_CODEGEN_CAPTURE" == "1" ]]; then
@@ -52,7 +52,7 @@ native_codegen_oracle_begin() {
             printf 'case_id\tscript\tprobe_label\tinput_label\tkind\texpected\tprobe_sha256\tinput_sha256\tc_transform\n' >"$NATIVE_CODEGEN_CAPTURE_MANIFEST"
         fi
     elif [[ ! -f "$NATIVE_CODEGEN_MANIFEST" ]]; then
-        native_codegen_oracle_fail "missing manifest $NATIVE_CODEGEN_MANIFEST; run bootstrap/tests/capture_native_goldens.sh"
+        native_codegen_oracle_fail "missing manifest $NATIVE_CODEGEN_MANIFEST (the committed goldens are a frozen snapshot, LEDGER D24)"
         return 1
     fi
 }
@@ -194,7 +194,7 @@ native_codegen_seed_acquire() {
     echo "native-codegen: acquired C-free gen-1 seed at $NATIVE_CODEGEN_COMPILER (sha256=$got; C interpreter NOT invoked)"
     # Golden provenance, stated once where the oracle is staged (blind-audit R3, 2026-08-29): the
     # default oracle for links 2..16 + rejects is a FROZEN SNAPSHOT captured from the retired C
-    # bootstrap (capture_native_goldens.sh needs the deleted build/herbert), so a green here is
+    # bootstrap (capturing them needed the deleted build/herbert), so a green here is
     # byte-equality with a committed C-derived golden -- NOT a live differential against C, and NOT
     # regenerable in this tree (MEWTWO LEDGER D24). The C mode is inert dead code.
     if [[ "$NATIVE_CODEGEN_ORACLE" == "golden" && -z "${NATIVE_CODEGEN_GOLDEN_BANNER_SHOWN:-}" ]]; then

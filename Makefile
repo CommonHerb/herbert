@@ -13,7 +13,7 @@ TRACKED := $(BUILD)/tracked.txt
 # code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
 # Constitution's day-one governance meta-tool, not the Herbert interpreter.
 
-.PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify switchover-cfree switchover-dry-run closed-loop-memory-diet reseed verify-local clean
+.PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify closed-loop-memory-diet reseed verify-local clean
 
 all: $(SCANNER)
 
@@ -34,8 +34,8 @@ test:
 	@python3 bootstrap/tests/check_wordcount.py
 	@python3 bootstrap/tests/check_stack_headroom.py
 
-# Hosted language behavior through the ordinary seed, independently counted from
-# the historical 43-test bootstrap/switchover suite. CI reaches it via make test.
+# Hosted language behavior through the ordinary seed, counted separately from
+# the bootstrap/tests/run_tests.sh suite. CI reaches it via make test.
 compiler-conformance:
 	@python3 bootstrap/tests/compiler_conformance.py
 
@@ -297,27 +297,11 @@ native-codegen-diagnostics:
 kernel-verify:
 	@bash bootstrap/tests/kernel_verify.sh
 
-# switchover-cfree: prove the C-free production surface stands with the C
-# interpreter PHYSICALLY ABSENT (the driver self-scrubs cc/gcc/as/ld and runs the
-# CFREE surface on the committed gen-1 seed), then proves it bites RED-first.
-switchover-cfree:
-	@bash bootstrap/tests/run_switchover_cfree.sh
-	@bash bootstrap/tests/run_switchover_cfree_mutation.sh
-
-# switchover-dry-run: now a standing C-free guard. Post-switchover the C
-# interpreter is gone, so this proves the 7 C-free bite-proofs STILL bite with C
-# physically absent (the permanent reality) -- a stronger regression guard against
-# C creeping back. The on-demand deletion recipe (apply_switchover.sh) + SWITCHOVER.md
-# remain as the historical record of the event.
-switchover-dry-run:
-	@bash bootstrap/tests/run_switchover_dryrun.sh
-	@bash bootstrap/tests/run_switchover_dryrun_mutation.sh
-
 # Self-compile must reproduce the seed within the pinned RSS ceiling.
-# make test already reaches this through the frozen C-free surface in both its
-# absent and tombstone phases. This standalone target diagnoses that same gate;
-# adding it again to verify-local would duplicate enforcement. Prior enforcement
-# evidence: a 2026-09-02 report in the maintainers' private canon (not published).
+# make test already runs this gate (bootstrap/tests/run_tests.sh). This standalone
+# target diagnoses that same gate; adding it again to verify-local would duplicate
+# enforcement. Prior enforcement evidence: a 2026-09-02 report in the maintainers'
+# private canon (not published).
 closed-loop-memory-diet:
 	@bash bootstrap/tests/run_closed_loop_memory_diet.sh
 
@@ -432,10 +416,10 @@ compiler-metadata:
 reseed: compiler-source-check
 	@bash bootstrap/tests/reseed_gen1.sh
 
-# make test already dispatches the six fragment/mutation pairs and both
-# switchover-cfree scripts. Preserve their standalone targets above for diagnosis;
-# the C-free proof's absent/tombstone phases still run as distinct environments.
-verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics switchover-dry-run compiler-cli-contract check-desktop check-app-support check-hosted-apps
+# make test already dispatches the six fragment/mutation pairs, the closed-loop
+# memory diet and the error-vocab gate. Their standalone targets above remain for
+# diagnosis; error-vocab-native also runs that gate's mutation proof.
+verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics compiler-cli-contract check-desktop check-app-support check-hosted-apps
 
 $(SCANNER): tools/scan.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<

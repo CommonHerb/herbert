@@ -1,43 +1,95 @@
 name: kernel-codegen-l1
 
-# The far-axis silicon gate for the kernel-arc links. The native compiler's
-# freestanding 32-bit Multiboot emit mode (selected by the "-- emit: multiboot32"
-# directive) is graded NOT against the C reference but on a dual-substrate
-# oracle: each emitted image must boot under BOTH QEMU (-kernel direct multiboot)
-# and Bochs (GRUB on a partitioned HDD) and emit a runtime-computed byte that
-# matches a HOST-DERIVED golden. This workflow is the authoritative run of the
-# kernel-codegen link harnesses, with KERNEL_CODEGEN_REQUIRE_EMU=1 so a missing
-# emulator is a hard failure, never a silent skip. `make test` keeps its
-# emulator-free C-golden scope; this is the separate, emulator-graded kernel gate.
+# The kernel CI for the paused OS work. Eight jobs run the kernel gates for links
+# 17-67 and their mutation proofs (kernel_ci_group.sh): each boots the kernel
+# images the compiler emits under QEMU and Bochs, at the versions pinned below,
+# with KERNEL_CODEGEN_REQUIRE_EMU=1 so a missing emulator fails instead of
+# skipping. Every job also runs the QEMU diagnostics suite, and the 60..61 job
+# checks the long64 word counter and ELF inspector. `make test` runs no emulator.
 #
-# Links gated here:
-#   L1 = lingo  (link17): "boot and emit a byte" (literal * literal).
-#   L2 = toakie (link18): first data-dependent branch on bare metal (control
-#        flow + locals), plus a mutation proof that the dual-substrate gate bites.
-#   L3 = zonday (link19): installs its own GDT+IDT and catches the CPU's own #DE
-#        divide-error fault, vectoring to a compiled-Herbert handler, plus a
-#        mutation proof that the fault-catch gate bites.
-#   L4 = chosen (link20): turns on paging and proves a mapping by catching the
-#        CPU's own #PF (page-fault, vector 14) on the deliberately-unmapped
-#        neighbor, vectoring to a compiled-Herbert handler, plus a mutation
-#        proof that the paging / #PF-catch gate bites.
-#   L5 = link21 (fifth kernel-arc link): writes a page-table entry at a
-#        RUNTIME-COMPUTED address (candidate (d), the first computed store),
-#        mapping a build-time-unmapped page, then accesses it and the MMU
-#        honors it; a broken store #PFs into a fail-closed IDT -> triple-fault.
-#        Plus a mutation proof that the runtime-store / MMU-judge gate bites.
-#   L6 = link22 (sixth kernel-arc link): DEMAND PAGING / iret-RESUMPTION --
-#        touches an unmapped page, takes the CPU's own #PF, a handler maps the
-#        page at runtime + flushes the TLB + drops the error code + iret, and the
-#        faulting load RE-EXECUTES and reads a seeded frame (the first link whose
-#        fault handler RESUMES). Plus a mutation proof that the resume gate bites.
+# A push to main or a pull request starts this workflow only when it changes a
+# file that can change the kernel route or its gates (the paths below; the five
+# *_goldens directories hold the answers links 62-66 are graded against).
+# workflow_dispatch runs it by hand on any branch.
 
 on:
   push:
     branches:
       - main
       - l1-kernel-boot-emit
+    paths:
+      - 'stack/**'
+      - 'bootstrap/seed/**'
+      - 'bootstrap/tests/run_native_codegen_link1[7-9].sh'
+      - 'bootstrap/tests/run_native_codegen_link1[7-9]_mutation.sh'
+      - 'bootstrap/tests/run_native_codegen_link[2-5][0-9].sh'
+      - 'bootstrap/tests/run_native_codegen_link[2-5][0-9]_mutation.sh'
+      - 'bootstrap/tests/run_native_codegen_link6[0-7].sh'
+      - 'bootstrap/tests/run_native_codegen_link6[0-7]_mutation.sh'
+      - 'bootstrap/tests/*_ref.py'
+      - 'bootstrap/tests/*_latebound.py'
+      - 'bootstrap/tests/gyre_goldens/**'
+      - 'bootstrap/tests/hearken_goldens/**'
+      - 'bootstrap/tests/link66_goldens/**'
+      - 'bootstrap/tests/riposte_goldens/**'
+      - 'bootstrap/tests/taproot_goldens/**'
+      - 'bootstrap/tests/kernel_ci_group.sh'
+      - 'bootstrap/tests/kernel_verify.sh'
+      - 'bootstrap/tests/kernel_evidence.*'
+      - 'bootstrap/tests/kernel_input_feed.py'
+      - 'bootstrap/tests/kernel_io_feed.py'
+      - 'bootstrap/tests/debugcon_frames.py'
+      - 'bootstrap/tests/longbuf_spec.py'
+      - 'bootstrap/tests/qemu_prefix.sh'
+      - 'bootstrap/tests/replay_discriminator.sh'
+      - 'bootstrap/tests/bochs_f2_harness.sh'
+      - 'bootstrap/tests/native_codegen_qemu_diag.sh'
+      - 'bootstrap/tests/run_native_codegen_qemu_diag_tests.sh'
+      - 'bootstrap/tests/check_boot_input.py'
+      - 'bootstrap/tests/check_wordcount_long64.py'
+      - 'bootstrap/tests/check_elfinfo_long64.py'
+      - 'bootstrap/tests/native_codegen_oracle.sh'
+      - 'examples/*_long64*'
+      - 'tools/*_long64.py'
+      - 'Makefile'
+      - '.github/workflows/kernel-codegen-l1.yml'
   pull_request:
+    paths:
+      - 'stack/**'
+      - 'bootstrap/seed/**'
+      - 'bootstrap/tests/run_native_codegen_link1[7-9].sh'
+      - 'bootstrap/tests/run_native_codegen_link1[7-9]_mutation.sh'
+      - 'bootstrap/tests/run_native_codegen_link[2-5][0-9].sh'
+      - 'bootstrap/tests/run_native_codegen_link[2-5][0-9]_mutation.sh'
+      - 'bootstrap/tests/run_native_codegen_link6[0-7].sh'
+      - 'bootstrap/tests/run_native_codegen_link6[0-7]_mutation.sh'
+      - 'bootstrap/tests/*_ref.py'
+      - 'bootstrap/tests/*_latebound.py'
+      - 'bootstrap/tests/gyre_goldens/**'
+      - 'bootstrap/tests/hearken_goldens/**'
+      - 'bootstrap/tests/link66_goldens/**'
+      - 'bootstrap/tests/riposte_goldens/**'
+      - 'bootstrap/tests/taproot_goldens/**'
+      - 'bootstrap/tests/kernel_ci_group.sh'
+      - 'bootstrap/tests/kernel_verify.sh'
+      - 'bootstrap/tests/kernel_evidence.*'
+      - 'bootstrap/tests/kernel_input_feed.py'
+      - 'bootstrap/tests/kernel_io_feed.py'
+      - 'bootstrap/tests/debugcon_frames.py'
+      - 'bootstrap/tests/longbuf_spec.py'
+      - 'bootstrap/tests/qemu_prefix.sh'
+      - 'bootstrap/tests/replay_discriminator.sh'
+      - 'bootstrap/tests/bochs_f2_harness.sh'
+      - 'bootstrap/tests/native_codegen_qemu_diag.sh'
+      - 'bootstrap/tests/run_native_codegen_qemu_diag_tests.sh'
+      - 'bootstrap/tests/check_boot_input.py'
+      - 'bootstrap/tests/check_wordcount_long64.py'
+      - 'bootstrap/tests/check_elfinfo_long64.py'
+      - 'bootstrap/tests/native_codegen_oracle.sh'
+      - 'examples/*_long64*'
+      - 'tools/*_long64.py'
+      - 'Makefile'
+      - '.github/workflows/kernel-codegen-l1.yml'
   workflow_dispatch:
 
 concurrency:

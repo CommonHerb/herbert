@@ -65,7 +65,7 @@
 #
 # The answer the guest must return is (idx*7+259) & 0xFF with idx = hi*256+lo --
 # an ARITHMETIC stand-in for the not-yet-admitted indexed load, so the caller
-# must treat t_serve as a LOWER bound (see run_meas_n.sh's honesty note).
+# must treat t_serve as a LOWER bound.
 #
 # Prints, in addition to the default markers: T_LISTEN/T_ACCEPT/T_HS/T_FILL_END/
 # T_QUERY_END (absolute epoch seconds, so the caller can subtract its own launch
@@ -171,9 +171,9 @@ if echo_timeout <= 0 or not (echo_timeout == echo_timeout):
 # Negative counts made `range()` empty, so the feeder sent nothing and still printed ok=1.
 #
 # THE LOWER BOUND DIFFERS BY MODE, and getting this wrong is exactly the regression the
-# "purely additive" claim exists to prevent. `--serve 0:0` is a LANDED, LIVE invocation: MEAS-N's
-# bare-boot phase calls `run_one "$sub" bare 0 0 0 "$r"`, which reaches
-# `python3 "$feeder" "$port" --serve "$N:$Q" ...` with N=0 (`run_meas_n.sh:402`) to time a boot
+# "purely additive" claim exists to prevent. `--serve 0:0` was a LANDED, LIVE invocation: the
+# MEAS-N measurement's bare-boot phase (removed 2026-10-30; it is in git history) called
+# `python3 "$feeder" "$port" --serve "$N:$Q" ...` with N=0 to time a boot
 # with no fill and no queries. A blanket `1 <= N` would have broken that phase silently, so
 # `--serve` admits 0 and only `--grade` -- where a zero-length challenge is vacuous, and already
 # refused by GRADE_Q_TOO_SMALL -- requires at least one byte.

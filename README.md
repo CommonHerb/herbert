@@ -61,7 +61,7 @@ are parsed and rendered by the Herbert program.
 ## Layout
 
 - `bootstrap/` contains the committed native gen-1 seed, verification harnesses,
-  native-codegen goldens, references, and switchover machinery.
+  native-codegen goldens and references.
 - [Compiler maintenance](docs/COMPILER.md) maps the ordered source stages and
   their checked assembled artifact.
 - `stack/` contains the Herbert-written language, VM, native compiler, and kernel
@@ -83,8 +83,6 @@ Start with `VERIFYING.md` before changing behavior.
 
 Use `ROADMAP.md` as the living map for what is proven, aspirational, unknown,
 and next.
-`BOOTSTRAP-RESPONSIBILITIES.md` is a historical map of the completed C-bootstrap
-retirement, not a queue of next development tasks.
 
 ## Hosted process I/O
 

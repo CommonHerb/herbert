@@ -164,13 +164,11 @@ cmp -s "$nat_nest" "$want_nest" || fail "nested-tuple native render != independe
 # 12 of the 15 foundational tests: the 6 rendering tests (link11/12) PLUS 04/05
 # (scalar return, kringle) and 10/13/14a/14b (the resource-bound tests, whose
 # OUTPUT native reproduces -- only their C-GC INSTRUMENTATION .maxscopes/.maxheap
-# retires WITH C, asserted separately on run_tests.sh's retire-with-C path). NOT
+# retired WITH C). NOT
 # here (native diverges on OUTPUT, not rendering, so they retire WITH C): test_02
 # (native correctly REJECTS dead out-of-range code, ERR431 -- native is stricter)
 # and test_11/12 (1,000,000-deep non-tail recursion SIGSEGVs on the native
-# hardware stack). MUSTER_MANIFEST, if set, receives the exact graded list so
-# run_tests.sh's static backstop can prove this gate grades precisely the fenced
-# set (no vacuous pass from a silently-shrunk list).
+# hardware stack). MUSTER_MANIFEST, if set, receives the exact graded list.
 foundational="test_01_arith test_03_if_elif test_04_recursion test_05_block_scope test_06_tuples test_07_array test_08_strings_buffer test_09_ref_vs_value test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap"
 : >"${MUSTER_MANIFEST:-/dev/null}"
 for t in $foundational; do
@@ -209,8 +207,7 @@ end'
 # out-of-range tuple access (ERR431 -- native is MORE correct than C's lazy eval;
 # parity would be a regression). Pin that reason C-FREE here (the seed has it), so
 # the retire-with-C disposition cannot be silently invalidated -- e.g. by relaxing
-# the verifier so test_02 starts compiling -- while keeping its blessed name. This
-# is the assertion-granular complement to run_tests.sh's structural backstop.
+# the verifier so test_02 starts compiling -- while keeping its blessed name.
 t02="$tests_dir/test_02_short_circuit.herb"
 if [[ -f "$t02" ]]; then
     t02wd="$(mktemp -d "$tmp/t02.XXXX")"
