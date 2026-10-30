@@ -19,7 +19,7 @@ not count as Herbert-native progress.
 | `stack/*.herb` and `stack/compiler/*.herb` | Herbert-owned lexer, parser, evaluator, VM, compiler, and probes | Native core | Expand only with executable proof |
 | `bootstrap/tests/*.sh` | Existing host harnesses for C-free proofs, goldens, mutation gates, and CI-local coordination | Required substrate | Replace gradually with Herbert-owned manifests and native runners after parity |
 | `bootstrap/tests/*_ref.py` | Reference builders and graders for kernel/module links | Replaceable later | Preserve until Herbert-native reference builders or substrate witnesses exist |
-| `tools/scan.c` | Governance scanner for `BOOTSTRAP-ALLOWLIST` | Replaceable soon | Build a Herbert candidate beside it before deleting C |
+| `tools/scan.herb` | Governance scanner for `BOOTSTRAP-ALLOWLIST`, built by the seed | Native core | Replaced the C scanner after a differential against it; checked by `bootstrap/tests/check_scan.py` |
 | `BOOTSTRAP-ALLOWLIST` | Explicit non-`.herb` boundary | Intentionally external for now | Keep strict; shrink only when replacements are verified |
 | `.github/workflows/*` | CI substrate | Required external substrate | Keep as public evidence, not Herbert-native code |
 | committed `.expected` and golden artifacts | Regression or oracle data | Required evidence | Keep until Herbert-native generation and checking can prove parity |
@@ -27,6 +27,6 @@ not count as Herbert-native progress.
 ## Native Ledger Candidate
 
 `stack/native_surface_ledger.herb` is the first Herbert-authored surface ledger
-candidate. It does not replace `BOOTSTRAP-ALLOWLIST`, `tools/scan.c`, or any
+candidate. It does not replace `BOOTSTRAP-ALLOWLIST`, the allowlist scanner, or any
 shell/Python harness. It exists beside them until a future branch proves parity
 and makes deletion safe.

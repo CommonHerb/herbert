@@ -42,6 +42,8 @@ bootstrap/tests/check_x11_text.py
 bootstrap/tests/check_link44_attempts.py
 # Test tooling for the Herbert-authored sustained input utility.
 bootstrap/tests/check_wordcount.py
+# Hand-written answers for the Herbert allowlist scanner (tools/scan.herb).
+bootstrap/tests/check_scan.py
 # Stack-headroom guard: generated deep programs compiled at an explicit 8 MiB stack.
 bootstrap/tests/check_stack_headroom.py
 # Serial host adapter and focused checks; counting runs in the Herbert guest.
@@ -471,7 +473,6 @@ stack/evaluator_probe.expected
 stack/lexer_probe.expected
 stack/parser_probe.expected
 stack/klondike_native_probe.expected
-tools/scan.c
 tools/check_timeout.py
 tools/check_full_test_host.sh
 tools/timeout

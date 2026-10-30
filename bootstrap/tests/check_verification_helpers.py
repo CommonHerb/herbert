@@ -854,7 +854,7 @@ int main(void) {
 ''')
         compiler = shutil.which('cc')
         if compiler is None:
-            raise RuntimeError('reseed invocation tests require the host C compiler used by make check')
+            raise RuntimeError('reseed invocation tests require a host C compiler (cc) to build their stand-in compiler')
         image = directory/'protocol'
         result = subprocess.run([compiler, '-std=c99', '-O0', str(source), '-o', str(image)],
                                 capture_output=True, timeout=30)

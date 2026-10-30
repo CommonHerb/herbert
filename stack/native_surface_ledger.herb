@@ -1,6 +1,6 @@
 -- Herbert-written candidate ledger for native ecosystem surface tracking.
 -- It does not replace BOOTSTRAP-ALLOWLIST yet; it proves the ledger can exist
--- inside Herbert before any host scanner or manifest is deleted.
+-- inside Herbert before any host manifest is deleted.
 
 func emit_line(s):
     do flogger(s)
@@ -12,7 +12,7 @@ func main():
     let l0 = emit_line("native: stack/*.herb + stack/compiler/*.herb")
     let l1 = emit_line("required-substrate: bootstrap/seed/gen1.seed")
     let l2 = emit_line("required-substrate: .github/workflows")
-    let l3 = emit_line("replace-soon: tools/scan.c")
+    let l3 = emit_line("native: tools/scan.herb")
     let l4 = emit_line("replace-later: bootstrap/tests/*.sh")
     let l5 = emit_line("replace-later: bootstrap/tests/*_ref.py")
     let l6 = emit_line("evidence: committed expected/golden artifacts")

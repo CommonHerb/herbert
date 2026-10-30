@@ -1,0 +1,312 @@
+-- The allowlist scanner: the boundary guard `make check` runs on every change.
+-- Built from lib/linux.herb followed by this file (the Makefile's scan target).
+--
+-- Usage: scan TRACKED-LIST, run from the repository root. TRACKED-LIST holds one
+-- repository-relative path per line, as `git ls-files` writes them; the scanner
+-- also reads BOOTSTRAP-ALLOWLIST from the current directory. Every tracked path
+-- that does not end in `.herb` must be listed there, and every listed path must
+-- be tracked:
+--   - a tracked non-.herb path that is not listed   -> "unlisted: PATH"
+--   - a listed path that is not tracked              -> "stale: PATH"
+--   - a perfect match -> one "OK: N tracked non-.herb file(s) ..." line, status 0
+-- Any mismatch prints every unlisted line, then every stale line, each group in
+-- byte order, and exits 1. A wrong argument count or an input that cannot be
+-- opened or read exits 2 with a message on stderr and nothing on stdout.
+--
+-- Lines of the tracked list lose trailing CR bytes; empty lines are skipped.
+-- Allowlist lines lose trailing CR, space and tab, then leading space and tab;
+-- blank lines and lines starting with `#` are skipped. A NUL byte ends a line's
+-- text, as it did for the C scanner this replaces. Both sides are compared as
+-- multisets: a path listed twice but tracked once is one stale line.
+--
+-- Where this differs from that C scanner: a line of any length is one path (C
+-- split lines longer than 4095 bytes in two); a read that fails after the file
+-- opened (a directory, say) is refused with status 2, where C took it for the
+-- end of the list; and a failed write to stdout ends with status 1, where C
+-- kept its status. Both inputs share the program's 3.5 GiB heap.
+
+record ScanList:
+    bytes: buffer
+    starts: array(int)
+    lengths: array(int)
+    order: buffer
+end
+
+-- Read a whole file through one descriptor, growing the buffer as it fills, so
+-- a pipe is read once. Returns (status, bytes, count); status is 0 or -errno.
+func scan_read(path):
+    let pathname = linux_cstring(path)
+    let fd = linux_syscall6(2, buffer_address(pathname), 524288, 0, 0, 0, 0)
+    if linux_error(fd):
+        return (fd, new_buffer(), 0)
+    end
+    let b = linux_buffer(65536)
+    let incoming = linux_read_file_loop(fd, b, 0, buffer_length(b) - 1)
+    while incoming.0 == 0 - 27:
+        do buffer_fill(b, buffer_length(b), 0)
+        incoming = linux_read_file_loop(fd, b, incoming.1, buffer_length(b) - 1)
+    end
+    do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    return (incoming.0, b, incoming.1)
+end
+
+func scan_text(out, s):
+    let i = 0
+    while i < length(s):
+        do append(out, index(s, i))
+        i = i + 1
+    end
+    return 0
+end
+
+func scan_span(out, src, from, n):
+    let at = buffer_length(out)
+    do buffer_fill(out, n, 0)
+    do buffer_copy(out, at, src, from, n)
+    return 0
+end
+
+func scan_number(out, n):
+    let digits = linux_buffer(20)
+    return scan_span(out, digits, 0, linux_decimal(digits, 0, n))
+end
+
+func scan_fail(path, status):
+    let message = new_buffer()
+    do scan_text(message, "scan: cannot read ")
+    do scan_text(message, path)
+    do scan_text(message, " (error ")
+    do scan_number(message, 0 - status)
+    do scan_text(message, ")\n")
+    do stderr_write(freeze(message))
+    do process_exit(2)
+    return 0
+end
+
+func scan_line_end(b, from, limit):
+    while from < limit:
+        if buffer_get(b, from) == 10: return from end
+        from = from + 1
+    end
+    return limit
+end
+
+func scan_ends_with(b, from, n, suffix):
+    if n < length(suffix): return false end
+    let at = from + n - length(suffix)
+    let i = 0
+    while i < length(suffix):
+        if buffer_get(b, at + i) != index(suffix, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+func scan_blank(c):
+    return c == 32 or c == 9
+end
+
+-- Byte order, as C's strcmp compares: 0 when the first path sorts before the
+-- second, 1 when they are equal, 2 when it sorts after.
+func scan_order(x, xs, xn, y, ys, yn):
+    let i = 0
+    while i < xn and i < yn:
+        let p = buffer_get(x, xs + i)
+        let q = buffer_get(y, ys + i)
+        if p != q:
+            if p < q: return 0 end
+            return 2
+        end
+        i = i + 1
+    end
+    if xn < yn: return 0 end
+    if xn > yn: return 2 end
+    return 1
+end
+
+-- True when the entry at position x of `order` sorts no later than the one at y.
+func scan_no_later(b, starts, lengths, order, x, y):
+    let e = linux_u32(order, 4 * x)
+    let f = linux_u32(order, 4 * y)
+    return scan_order(b, get(starts, e), get(lengths, e), b, get(starts, f), get(lengths, f)) != 2
+end
+
+func scan_min(a, b):
+    if a < b: return a end
+    return b
+end
+
+-- Merge the sorted runs [lo, mid) and [mid, hi) of `from` into `into`. Entry
+-- numbers are 4-byte little-endian fields.
+func scan_merge(b, starts, lengths, from, into, lo, mid, hi):
+    let x = lo
+    let y = mid
+    let k = lo
+    while k < hi:
+        let take = y
+        if x < mid and (y >= hi or scan_no_later(b, starts, lengths, from, x, y)):
+            take = x
+            x = x + 1
+        else:
+            y = y + 1
+        end
+        do linux_put32(into, 4 * k, linux_u32(from, 4 * take))
+        k = k + 1
+    end
+    return 0
+end
+
+-- Bottom-up merge sort of the entry numbers, in two fixed buffers.
+func scan_sorted(b, starts, lengths):
+    let n = count(starts)
+    let order = linux_buffer(4 * n)
+    let spare = linux_buffer(4 * n)
+    let i = 0
+    while i < n:
+        do linux_put32(order, 4 * i, i)
+        i = i + 1
+    end
+    let width = 1
+    while width < n:
+        let lo = 0
+        while lo < n:
+            let mid = scan_min(lo + width, n)
+            let hi = scan_min(lo + 2 * width, n)
+            do scan_merge(b, starts, lengths, order, spare, lo, mid, hi)
+            lo = hi
+        end
+        let done = order
+        order = spare
+        spare = done
+        width = width * 2
+    end
+    return order
+end
+
+-- The tracked paths that do not end in `.herb`, sorted.
+func scan_tracked(b, used):
+    let starts = new_array(int)
+    let lengths = new_array(int)
+    let from = 0
+    while from < used:
+        let stop = scan_line_end(b, from, used)
+        let last = linux_nul_end(b, from, stop)
+        while last > from and buffer_get(b, last - 1) == 13:
+            last = last - 1
+        end
+        if last > from and not scan_ends_with(b, from, last - from, ".herb"):
+            do add(starts, from)
+            do add(lengths, last - from)
+        end
+        from = stop + 1
+    end
+    return ScanList(b, starts, lengths, scan_sorted(b, starts, lengths))
+end
+
+-- The allowlist's paths, sorted.
+func scan_allowlist(b, used):
+    let starts = new_array(int)
+    let lengths = new_array(int)
+    let from = 0
+    while from < used:
+        let stop = scan_line_end(b, from, used)
+        let last = linux_nul_end(b, from, stop)
+        while last > from and (scan_blank(buffer_get(b, last - 1)) or buffer_get(b, last - 1) == 13):
+            last = last - 1
+        end
+        let first = from
+        while first < last and scan_blank(buffer_get(b, first)):
+            first = first + 1
+        end
+        if first < last and buffer_get(b, first) != 35:
+            do add(starts, first)
+            do add(lengths, last - first)
+        end
+        from = stop + 1
+    end
+    return ScanList(b, starts, lengths, scan_sorted(b, starts, lengths))
+end
+
+func scan_line(out, label, list, k):
+    let e = linux_u32(list.order, 4 * k)
+    do scan_text(out, label)
+    do scan_span(out, list.bytes, get(list.starts, e), get(list.lengths, e))
+    do append(out, 10)
+    return 0
+end
+
+func scan_path_order(tracked, i, allowed, j):
+    let e = linux_u32(tracked.order, 4 * i)
+    let f = linux_u32(allowed.order, 4 * j)
+    let xs = get(tracked.starts, e)
+    let ys = get(allowed.starts, f)
+    return scan_order(tracked.bytes, xs, get(tracked.lengths, e), allowed.bytes, ys, get(allowed.lengths, f))
+end
+
+func main():
+    let args = scan_read("/proc/self/cmdline")
+    if args.0 != 0:
+        do scan_fail("/proc/self/cmdline", args.0)
+    end
+    let argc = 0
+    let i = 0
+    while i < args.2:
+        if buffer_get(args.1, i) == 0: argc = argc + 1 end
+        i = i + 1
+    end
+    if argc != 2:
+        do stderr_write("usage: scan <tracked-files-list>\n")
+        do process_exit(2)
+    end
+    let path = linux_argument((args.1, args.2), 1)
+    let listed = scan_read(path)
+    if listed.0 != 0:
+        do scan_fail(path, listed.0)
+    end
+    let allowed_file = scan_read("BOOTSTRAP-ALLOWLIST")
+    if allowed_file.0 != 0:
+        do scan_fail("BOOTSTRAP-ALLOWLIST", allowed_file.0)
+    end
+    let tracked = scan_tracked(listed.1, listed.2)
+    let allowed = scan_allowlist(allowed_file.1, allowed_file.2)
+    let n = count(tracked.starts)
+    let m = count(allowed.starts)
+    let unlisted = new_buffer()
+    let stale = new_buffer()
+    i = 0
+    let j = 0
+    while i < n and j < m:
+        let c = scan_path_order(tracked, i, allowed, j)
+        if c == 1:
+            i = i + 1
+            j = j + 1
+        elif c == 0:
+            do scan_line(unlisted, "unlisted: ", tracked, i)
+            i = i + 1
+        else:
+            do scan_line(stale, "stale: ", allowed, j)
+            j = j + 1
+        end
+    end
+    while i < n:
+        do scan_line(unlisted, "unlisted: ", tracked, i)
+        i = i + 1
+    end
+    while j < m:
+        do scan_line(stale, "stale: ", allowed, j)
+        j = j + 1
+    end
+    if buffer_length(unlisted) == 0 and buffer_length(stale) == 0:
+        let ok = new_buffer()
+        do scan_text(ok, "OK: ")
+        do scan_number(ok, n)
+        do scan_text(ok, " tracked non-.herb file(s) match BOOTSTRAP-ALLOWLIST\n")
+        do flogger(freeze(ok))
+        do process_exit(0)
+        return 0
+    end
+    do flogger(freeze(unlisted))
+    do flogger(freeze(stale))
+    do process_exit(1)
+    return 1
+end

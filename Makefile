@@ -1,23 +1,19 @@
-CC      ?= cc
-CFLAGS  ?= -std=c11 -Wall -Wextra -Wpedantic -O2
-
 BUILD   := build
 
 # --- Guard scanner -----------------------------------------------------
+# tools/scan.herb checks BOOTSTRAP-ALLOWLIST against the tracked files. Like every
+# Herbert program here, the committed seed builds it (the rule beside the hosted
+# apps, below), so make check needs no C compiler.
 SCANNER := $(BUILD)/scan
 TRACKED := $(BUILD)/tracked.txt
-
-# The C bootstrap interpreter was RETIRED at the switchover (sovereignty link 18):
-# the native gen-1 ELF compiler -- the committed bootstrap/seed/gen1.seed, run as
-# the production toolchain -- is now the sole way Herbert source becomes machine
-# code. tools/scan.c (the from-scratch boundary guard, below) is KEPT: it is the
-# Constitution's day-one governance meta-tool, not the Herbert interpreter.
+scan_SOURCES := lib/linux.herb tools/scan.herb
 
 .PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify closed-loop-memory-diet reseed verify-local clean
 
 all: $(SCANNER)
 
 check: $(SCANNER) compiler-source-check oracle-source-check
+	@python3 bootstrap/tests/check_scan.py --scanner $(SCANNER)
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
 	@bash bootstrap/tests/run_tests.sh --check-pinned
@@ -179,7 +175,8 @@ hosted-apps: first-steps maze notes
 $(BUILD)/first-steps: $(first-steps_SOURCES)
 $(BUILD)/maze: $(maze_SOURCES)
 $(BUILD)/notes: $(notes_SOURCES)
-$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes: bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+$(SCANNER): $(scan_SOURCES)
+$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
 	@set -eu; \
 	  mkdir -p $@-work; \
@@ -420,12 +417,6 @@ reseed: compiler-source-check
 # memory diet and the error-vocab gate. Their standalone targets above remain for
 # diagnosis; error-vocab-native also runs that gate's mutation proof.
 verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics compiler-cli-contract check-desktop check-app-support check-hosted-apps
-
-$(SCANNER): tools/scan.c | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $<
-
-$(BUILD):
-	@mkdir -p $(BUILD)
 
 clean:
 	rm -rf $(BUILD)

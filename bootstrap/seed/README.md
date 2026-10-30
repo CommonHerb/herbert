@@ -4,9 +4,9 @@
 (`stack/native_compile_fragment.herb`) compiled to a runnable binary. It is the
 committed **C-free seed**: the test suite mints the production compiler by
 running this seed, **not** by running the retired C bootstrap interpreter. Since
-`castoff` (sovereignty link 18), the C interpreter is gone from the checkout;
-the remaining tracked C source is `tools/scan.c`, a governance scanner used by
-`make check`, not a Herbert execution path.
+`castoff` (sovereignty link 18), the C interpreter is gone from the checkout,
+and no tracked C source remains: the governance scanner `make check` runs is
+the Herbert program `tools/scan.herb`, built by this seed.
 
 ## What seed reproduction establishes
 

@@ -36,6 +36,6 @@ with it.
 - No foreign compiler, language runtime or graphics library goes into Herbert programs. Linux, its desktop display
   server and drivers are host services we accept for now.
 - Tools that are not Herbert are listed in `BOOTSTRAP-ALLOWLIST` and replaced with Herbert when a replacement is
-  useful; the next is `tools/scan.c`, the last C file.
+  useful. The last C file, the allowlist scanner, is now Herbert (`tools/scan.herb`).
 - A claim counts when a test shows it. Tests are tied to real behavior, and a passing part is never called a passing
   whole.

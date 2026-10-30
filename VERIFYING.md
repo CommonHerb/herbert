@@ -4,16 +4,19 @@ Each command proves only what it runs. Run the checks that cover what you change
 local set. Two of its tests use copies of `docs/LANGUAGE.md` and `docs/BUILDING.md` as sample text, so even a
 documents change runs them.
 
-Almost everything here builds and runs Linux programs, so it needs Linux/x86-64. Only `make check`,
-`make test-timeout` and `make lexer-copy-sync` also run elsewhere; `make test` refuses any other host. QEMU-emulated
-x86-64 Linux (on Apple Silicon, say) can reproduce a failure but may be too slow for the default time limits; CI or
-real Linux/x86-64 hardware is the authority for `make test`.
+Almost everything here builds and runs Linux programs, so it needs Linux/x86-64, `make check` included: its scanner is
+a Herbert program. Only `make test-timeout` and `make lexer-copy-sync` also run elsewhere; `make test` refuses any other
+host. QEMU-emulated x86-64 Linux (on Apple Silicon, say) can reproduce a failure but may be too slow for the default
+time limits; CI or real Linux/x86-64 hardware is the authority for `make test`.
 
 ## make check (seconds)
 
-- Builds `tools/scan.c`, the one C file left, and checks that the tracked files whose names do not end in `.herb`
-  match `BOOTSTRAP-ALLOWLIST` exactly, in both directions. Adding, removing or renaming such a file needs its
-  allowlist row in the same commit.
+- Builds the allowlist scanner `tools/scan.herb` with the committed seed (no C compiler is involved) and checks that
+  the tracked files whose names do not end in `.herb` match `BOOTSTRAP-ALLOWLIST` exactly, in both directions.
+  Adding, removing or renaming such a file needs its allowlist row in the same commit. Before trusting the scanner,
+  `check_scan.py` runs it on 36 cases with hand-written answers: matches, unlisted and stale paths, byte-order
+  sorting, CRLF, comments, whitespace, duplicates, `.herb` look-alikes, lists larger than its first read (one
+  through a pipe), and the refusals (status 2) for a wrong argument count or an input that cannot be read.
 - Checks that `stack/native_compile_fragment.herb` is exactly the ordered stage files under `stack/compiler/`, and
   `stack/i386_oracle_fragment.herb` exactly its units ([docs/COMPILER.md](docs/COMPILER.md)). `make compiler-source`
   and `make oracle-source` refresh them; no check regenerates them for you.
@@ -110,6 +113,7 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   screenshots, input history, saved bytes and memory samples.
 
 Python, GNU time, strace, GDB, binutils, Xvfb, libX11 and libXtst are test tools, never dependencies of the programs.
+So is a C compiler, now used only for one stand-in compiler in the reseed tests of `check_verification_helpers.py`.
 Verifiers that rely on Python `assert` must run with assertions enabled.
 
 Standalone targets re-run one `make test` gate for diagnosis: `evaluator-native`, `vm-native`, `parser-native`,
