@@ -1,11 +1,11 @@
-# Herbert Lookout
+# Herbert Scope
 
 A window to leave open on this computer. It shows the computer's name, how busy its processor is and how much of
 its memory is in use, read again once a second. It is the first piece of a window on all of the owner's computers.
 
 ```sh
-make lookout
-./build/lookout
+make scope
+./build/scope
 ```
 
 Run it from a terminal inside your graphical desktop. A 640 by 370 window opens and stays until you close it with
@@ -17,7 +17,7 @@ Run it from a terminal inside your graphical desktop. A 640 by 370 window opens 
   characters Linux allows. A name longer than 48 characters is drawn smaller so that it fits.
 - **Processor**: how much of the time since the last reading, about a second, the processors spent working, all of
   them together, as a percent and a bar. Linux counts time in the first line of `/proc/stat`, the one labelled
-  `cpu`, in counters that only go up. Lookout takes the first eight (user, nice, system, idle, iowait, irq, softirq,
+  `cpu`, in counters that only go up. Scope takes the first eight (user, nice, system, idle, iowait, irq, softirq,
   steal; guest time is already inside user and nice). Each counter's rise since the last reading is the time it
   counted; the figure is the rise of all of them but idle and iowait (the time spent waiting for a disk) over the
   rise of all eight. It needs two readings, so it shows a dash for the first second.
@@ -44,15 +44,15 @@ a second first.
 - Readings are about a second apart, plus the few milliseconds a frame takes to draw. It is not a clock.
 - A counter in `/proc/stat` that goes backwards between two readings, as iowait can, counts no time for that
   interval. If two readings count no time at all, the figure stays as it was rather than dividing by zero. The
-  counters start again only when the computer does, which ends Lookout too; if their total ever went backwards
+  counters start again only when the computer does, which ends Scope too; if their total ever went backwards
   anyway (only test files can do that), the processor shows a dash for one interval and goes on from there.
 - Each file is read a byte at a time through one 4096-byte buffer, keeping only the numbers wanted and none of the
   lines, so the number of processors and the length of other lines do not matter. Only the first 1 MiB of a file is
   looked at: a figure's line must end within it, with a newline or with the end of the file, or the figure is
   unavailable. In Linux's own files the figures are at the top. The name is read only as far as its 64th byte.
-- Everything Lookout uses is made once when it starts and reused for every frame, so it does not grow while it
+- Everything Scope uses is made once when it starts and reused for every frame, so it does not grow while it
   runs; the check below holds it to that at a hundred times its normal rate. Herbert still never gives memory back,
-  so this rests on Lookout allocating nothing after it starts.
+  so this rests on Scope allocating nothing after it starts.
 
 ## What comes next
 
@@ -63,7 +63,7 @@ reach the network, which it cannot do yet ([ROADMAP.md](../ROADMAP.md)).
 
 These are for the tests; the window itself takes no arguments.
 
-`lookout --sample STAT1 STAT2 [STAT3 ...] MEMINFO HOSTNAME` reads two or more processor samples in order, one
+`scope --sample STAT1 STAT2 [STAT3 ...] MEMINFO HOSTNAME` reads two or more processor samples in order, one
 memory file and one name file, puts them through the same steps as the window and prints what the window would then
 show, then exits:
 
@@ -83,23 +83,23 @@ detail=11.7 GiB of 15.6 GiB in use
 iowait), `meminfo` is `MemTotal` and `MemAvailable` in KiB, the two bars are their lengths in pixels, and a file that
 cannot be used says `unavailable`; for memory that includes a `MemTotal` of zero.
 
-`lookout --test STAT MEMINFO HOSTNAME MILLISECONDS` opens the window but reads those files every MILLISECONDS (1 to
-60000) instead of the files in `/proc` every second. Any other arguments print `lookout: usage: lookout` and exit
+`scope --test STAT MEMINFO HOSTNAME MILLISECONDS` opens the window but reads those files every MILLISECONDS (1 to
+60000) instead of the files in `/proc` every second. Any other arguments print `scope: usage: scope` and exit
 with status 1, before a window opens.
 
 ## How it is built
 
-The build joins `lib/linux.herb`, `lib/x11.herb`, `lib/pixel_text.herb` and `examples/lookout.herb` and compiles them
-with the committed Herbert compiler, as for First steps. Lookout reads `/proc` with Linux system calls and draws
+The build joins `lib/linux.herb`, `lib/x11.herb`, `lib/pixel_text.herb` and `examples/scope.herb` and compiles them
+with the committed Herbert compiler, as for First steps. Scope reads `/proc` with Linux system calls and draws
 through its own X11 client; no foreign runtime or graphics library is linked in.
 
 ## Verification
 
 ```sh
-make check-lookout
+make check-scope
 ```
 
-`make check-hosted-apps` runs the same checks (`bootstrap/tests/check_lookout.py`), and so do `make verify-local`
+`make check-hosted-apps` runs the same checks (`bootstrap/tests/check_scope.py`), and so do `make verify-local`
 and CI. First `--sample` runs on fixed files and every printed line must match an answer written by hand: one and
 64 processors, an 18 KB line, a cpu line across two reads or after a 20 KB line, tabs, old kernels' four counters,
 guest, irq, softirq, steal and iowait each in its place, `meminfo` fields missing, reordered, repeated, look-alike

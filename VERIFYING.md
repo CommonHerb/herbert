@@ -110,7 +110,7 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   typing, navigation, Unicode entry, search, save, reopen, rescue, recovery and editing copies of the project's own
   documents; with strace, the visible warning after a failed sync and its retry; plus 120-second memory checks of
   Maze play and of Notes editing LF and CRLF files. Evidence includes
-  screenshots, input history, saved bytes and memory samples. Then `check_lookout.py` checks Lookout:
+  screenshots, input history, saved bytes and memory samples. Then `check_scope.py` checks Scope:
   its `--sample` output on 72 sets of fixed `/proc/stat`, `/proc/meminfo` and name files against hand-written answers
   (one and 64 processors, long lines, lines across reads and at the 1 MiB bound, tabs, fields missing, reordered or
   malformed, exact rounding at half a percent and 99.5 % also past 2^56, zero-length intervals, counters that went
@@ -119,7 +119,7 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   files the check writes, removes (amber `unavailable`) and restores; the redraw light changing at every reading;
   quitting on Escape, q, Shift+Q and the close button; and 120 seconds redrawing every 10 ms through the real
   `/proc`, missing, malformed and unusual files with the same virtual size throughout and resident memory within
-  64 KiB. `make check-lookout` runs those checks alone.
+  64 KiB. `make check-scope` runs those checks alone.
 
 Python, GNU time, strace, GDB, binutils, Xvfb, libX11 and libXtst are test tools, never dependencies of the programs.
 So is a C compiler, now used only for one stand-in compiler in the reseed tests of `check_verification_helpers.py`.
@@ -128,7 +128,7 @@ Verifiers that rely on Python `assert` must run with assertions enabled.
 Standalone targets re-run one `make test` gate for diagnosis: `evaluator-native`, `vm-native`, `parser-native`,
 `lexer-native`, `klondike-native`, `emitter-native` (each a fragment gate and its mutation proof),
 `closed-loop-memory-diet`, `compiler-conformance`, `stdin-contract`, `wordcount`, `hosted-memory-io` and
-`stack-headroom`. `verify-local` does not call them. `check-lookout` re-runs Lookout's part of `check-hosted-apps`.
+`stack-headroom`. `verify-local` does not call them. `check-scope` re-runs Scope's part of `check-hosted-apps`.
 
 ## Bite proofs
 

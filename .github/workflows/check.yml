@@ -48,7 +48,7 @@ jobs:
         run: make check-desktop
       - name: Herbert reusable map, text and atomic-file support
         run: make check-app-support
-      - name: Herbert maze, notes and lookout interaction and sustained memory
+      - name: Herbert maze, notes and scope interaction and sustained memory
         run: make check-hosted-apps
       - name: compiler invocation fault contract
         run: make compiler-cli-contract

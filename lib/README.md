@@ -4,7 +4,7 @@ These are Herbert source units, with no `main`. The Makefile concatenates the
 selected units before their application, then the Herbert seed compiles the
 result. This is explicit source composition, not a new import/module system or
 another language. Names use prefixes because the current function namespace is
-flat. The fixed `make first-steps`, `make maze`, `make notes` and `make lookout`
+flat. The fixed `make first-steps`, `make maze`, `make notes` and `make scope`
 targets report locations in the combined source kept in their build directories.
 The developer [`make program` workflow](../docs/BUILDING.md) maps checked compiler rejections
 back to original files and lines. Runtime bounds faults still refer to combined

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Lookout's checks: its figures against hand-written answers, then its window on a private display.
+"""Scope's checks: its figures against hand-written answers, then its window on a private display.
 
-Part one runs `lookout --sample STAT1 STAT2 [STAT3 ...] MEMINFO HOSTNAME` on fixed input files and compares every
+Part one runs `scope --sample STAT1 STAT2 [STAT3 ...] MEMINFO HOSTNAME` on fixed input files and compares every
 line it prints with an answer written here by hand: one-processor and 64-processor /proc/stat files, old and new
 kernels' field counts, tabs, meminfo fields missing, reordered or malformed, files at the 1 MiB bound, and the edges
 of the arithmetic (0 %, 100 %, half a percent and 99.5 % exactly, also past 2^56, a zero-length interval after a
@@ -17,8 +17,8 @@ files that vanish ("unavailable") and come back. Last, for --seconds (default 12
 this check turns between the real /proc, files without a final newline (MiB, a 60-byte name), missing files and
 malformed files, and must stay the same size in memory.
 
-Python, Xvfb, libX11 and libXtst are test tools only; Lookout links none of them. Evidence (frames, input history,
-outputs, memory samples) is kept in /tmp/herbert-hosted-apps-lookout-*.
+Python, Xvfb, libX11 and libXtst are test tools only; Scope links none of them. Evidence (frames, input history,
+outputs, memory samples) is kept in /tmp/herbert-hosted-apps-scope-*.
 """
 
 if not __debug__:
@@ -40,9 +40,9 @@ from check_desktop import memory as process_memory
 from check_hosted_apps import App, glyphs, stable_memory, static_elf, wait_for
 
 ROOT = Path(__file__).resolve().parents[2]
-TITLE, SIZE = b'Herbert - Lookout', (640, 370)
+TITLE, SIZE = b'Herbert - Scope', (640, 370)
 
-# Colours and places from examples/lookout.herb (lookout_draw, lookout_row).
+# Colours and places from examples/scope.herb (scope_draw, scope_row).
 BACKGROUND, PANEL, TRACK = 1054759, 1384240, 2767956
 WHITE, AMBER, GREY = 15265527, 16173151, 11255503
 CPU_FILL, MEMORY_FILL = 6867876, 7317724
@@ -65,7 +65,7 @@ STAT_ONE_2 = stat_line(1300, 0, 600, 8550, 550, 0, 0, 0, 0, 0) + STAT_ONE_TAIL %
 
 
 def stat_many(*fields):
-    """64 processors and an interrupt line of about 18 KB, longer than Lookout's 4096-byte reads."""
+    """64 processors and an interrupt line of about 18 KB, longer than Scope's 4096-byte reads."""
     cpus = b''.join(b'cpu%d 100000 0 25000 875000 0 0 0 0 0 0\n' % n for n in range(64))
     return stat_line(*fields) + cpus + b'intr ' + b' '.join(b'%d' % (n * 7) for n in range(4000)) + b'\nctxt 9\n'
 
@@ -267,7 +267,7 @@ CASES = [
     ('meminfo-without-final-newline', {'meminfo': b'MemTotal:  2097152 kB\nMemAvailable:  524288 kB'},
      {'meminfo': '2097152 524288', 'memory': '75%', 'memory-bar': '300', 'detail': '1.5 GiB of 2.0 GiB in use'}),
     ('missing-meminfo', {'meminfo': None}, NO_MEMORY),
-    ('name-without-newline', {'host': b'lookout-box'}, {'host': 'lookout-box'}),
+    ('name-without-newline', {'host': b'scope-box'}, {'host': 'scope-box'}),
     ('name-on-the-first-line-only', {'host': b'first\nsecond\n'}, {'host': 'first'}),
     ('name-of-70-bytes-shows-64', {'host': b'a' * 70 + b'\n'}, {'host': 'a' * 64}),
     ('empty-name', {'host': b''}, {'host': 'unavailable'}),
@@ -300,7 +300,7 @@ def sample_checks(args, evidence, passed):
             if data is not None:
                 path.write_bytes(data)
             paths.append(str(path))
-        result = subprocess.run([str(args.lookout.resolve()), '--sample', *paths], cwd=directory, env=env,
+        result = subprocess.run([str(args.scope.resolve()), '--sample', *paths], cwd=directory, env=env,
                                 capture_output=True, timeout=30)
         (directory / 'stdout').write_bytes(result.stdout)
         (directory / 'stderr').write_bytes(result.stderr)
@@ -308,16 +308,16 @@ def sample_checks(args, evidence, passed):
         expected = ''.join(f'{key}={answer[key]}\n' for key in (*stats, *ORDER)).encode()
         assert (result.returncode, result.stderr) == (0, b''), (name, result.returncode, result.stderr)
         assert result.stdout == expected, (name, result.stdout.decode(errors='replace'), expected.decode())
-        passed('lookout-sample-' + name)
+        passed('scope-sample-' + name)
 
     for label, extra, message in (
-            ('extra-argument', ['x'], b'lookout: usage: lookout\n'),
-            ('sample-needs-two-processor-files', ['--sample', 'a', 'b', 'c'], b'lookout: usage: lookout\n'),
-            ('test-interval-zero', ['--test', 'a', 'b', 'c', '0'], b'lookout: usage: lookout\n'),
-            ('test-interval-over-a-minute', ['--test', 'a', 'b', 'c', '60001'], b'lookout: usage: lookout\n'),
-            ('test-interval-not-a-number', ['--test', 'a', 'b', 'c', '1x'], b'lookout: usage: lookout\n'),
+            ('extra-argument', ['x'], b'scope: usage: scope\n'),
+            ('sample-needs-two-processor-files', ['--sample', 'a', 'b', 'c'], b'scope: usage: scope\n'),
+            ('test-interval-zero', ['--test', 'a', 'b', 'c', '0'], b'scope: usage: scope\n'),
+            ('test-interval-over-a-minute', ['--test', 'a', 'b', 'c', '60001'], b'scope: usage: scope\n'),
+            ('test-interval-not-a-number', ['--test', 'a', 'b', 'c', '1x'], b'scope: usage: scope\n'),
             ('no-display', [], None)):
-        result = subprocess.run([str(args.lookout.resolve()), *extra], cwd=root, env=env, capture_output=True,
+        result = subprocess.run([str(args.scope.resolve()), *extra], cwd=root, env=env, capture_output=True,
                                 timeout=30)
         (root / (label + '.stderr')).write_bytes(result.stderr)
         assert result.returncode == 1 and result.stdout == b'', (label, result.returncode, result.stdout)
@@ -325,11 +325,11 @@ def sample_checks(args, evidence, passed):
             assert result.stderr == b'desktop: DISPLAY is missing; run from your desktop terminal\n', result.stderr
         else:
             assert result.stderr == message, (label, result.stderr)
-        passed('lookout-refuses-' + label)
+        passed('scope-refuses-' + label)
 
 
-class Lookout(App):
-    """check_hosted_apps.App (input, frames, shutdown), started with Lookout's own arguments, not a document path."""
+class Scope(App):
+    """check_hosted_apps.App (input, frames, shutdown), started with Scope's own arguments, not a document path."""
 
     def __init__(self, image, arguments, x, display, evidence, label):
         self.x, self.evidence, self.label = x, evidence, label
@@ -404,7 +404,7 @@ def bar(frame, row, fill):
 
 
 def shown(frame):
-    """Everything Lookout writes, read back from one frame."""
+    """Everything Scope writes, read back from one frame."""
     host = read_text(frame, *HOST_AT, 48, BACKGROUND, 2)
     if '\0' in host[0]:
         host = read_text(frame, *HOST_AT, 64, BACKGROUND, 1)
@@ -442,7 +442,7 @@ def real_memory():
 
 
 def memory_expected(total, available):
-    """What Lookout shows for these two figures, worked out exactly: the percent rounded half up, and the used and
+    """What Scope shows for these two figures, worked out exactly: the percent rounded half up, and the used and
     total amounts in tenths of the unit, rounded half up, with the unit's name."""
     used = total - available if available < total else 0
     quotient, rest = divmod(100 * used, total)
@@ -453,7 +453,7 @@ def memory_expected(total, available):
     return quotient + (2 * rest >= total), tenths(used), tenths(total), name
 
 
-LIGHT_AT, LIGHT_BOX = (604, 44), (596, 36, 16, 16)    # the light's middle, and a box round it (lookout_draw)
+LIGHT_AT, LIGHT_BOX = (604, 44), (596, 36, 16, 16)    # the light's middle, and a box round it (scope_draw)
 LIGHT_DIM, LIGHT_BRIGHT = 3832176, 6867876
 LABELS = (('PROCESSOR', {WHITE}), ('MEMORY', {WHITE}), ('ESC OR Q TO CLOSE', {GREY}))
 TYPICAL_SHOWN = {'memory': ('75%', {WHITE}), 'memory-bar': 300, 'detail': ('11.7 GiB of 15.6 GiB in use', {GREY})}
@@ -464,7 +464,7 @@ def light(frame):
 
 
 def without_light(frame):
-    """A digest of the frame with the light's box blanked: everything else Lookout draws."""
+    """A digest of the frame with the light's box blanked: everything else Scope draws."""
     rgb, width = bytearray(frame['rgb']), frame['width']
     x, y, w, h = LIGHT_BOX
     for row in range(y, y + h):
@@ -479,7 +479,7 @@ def put(path, data):
 
 
 def memory_at_a_reading(app, evidence, attempts=6):
-    """Lookout's memory figures against /proc/meminfo at the moment it read them. Frames are taken back to back, with
+    """Scope's memory figures against /proc/meminfo at the moment it read them. Frames are taken back to back, with
     /proc/meminfo read just before and just after each; when the light changes, the reading it shows was taken between
     the last two frames, so it must lie between the figures read around them. That bracket, about a tenth of a second
     wide, is the only tolerance; a reading that falls outside it (memory moving faster than that) is tried again, up
@@ -512,17 +512,17 @@ def memory_at_a_reading(app, evidence, attempts=6):
                 and min(e[1] for e in expected) <= got[1] <= max(e[1] for e in expected)
                 and got[2] == expected[0][2] and got[3] == got[4] == expected[0][3]
                 and reading['memory-bar'] == 4 * got[0]):
-            (evidence / 'lookout-real-memory-tries.json').write_text(json.dumps(tries, indent=2, default=list) + '\n')
+            (evidence / 'scope-real-memory-tries.json').write_text(json.dumps(tries, indent=2, default=list) + '\n')
             return reading, len(tries)
-    (evidence / 'lookout-real-memory-tries.json').write_text(json.dumps(tries, indent=2, default=list) + '\n')
+    (evidence / 'scope-real-memory-tries.json').write_text(json.dumps(tries, indent=2, default=list) + '\n')
     assert tries, 'no new reading seen in 30 seconds: the light never changed'
     raise AssertionError(('memory figures never matched /proc/meminfo at a reading', tries))
 
 
 def real_checks(args, x, display, evidence, passed):
     # The real /proc: the name, the labels, a processor figure with its bar, and the memory figures exactly as
-    # /proc/meminfo gave them when Lookout read it; then Escape.
-    app = Lookout(args.lookout, [], x, display, evidence, 'lookout-real')
+    # /proc/meminfo gave them when Scope read it; then Escape.
+    app = Scope(args.scope, [], x, display, evidence, 'scope-real')
     try:
         name = real_name()
         show_until(app, {'host': (name, {WHITE}), 'labels': LABELS}, 'name and labels', 10)
@@ -536,11 +536,11 @@ def real_checks(args, x, display, evidence, passed):
         assert reading['processor-bar'] == 4 * cpu, (reading['processor-bar'], cpu)
         memory, tries = memory_at_a_reading(app, evidence)
         app.frame('figures')
-        passed('lookout-shows-this-machine', name_matches_proc=True, processor=cpu, memory=memory['memory'][0],
+        passed('scope-shows-this-machine', name_matches_proc=True, processor=cpu, memory=memory['memory'][0],
                detail=memory['detail'][0], readings_tried=tries)
         app.tap('Escape')
         app.finish()
-        passed('lookout-escape-quits')
+        passed('scope-escape-quits')
     finally:
         app.close()
 
@@ -548,12 +548,12 @@ def real_checks(args, x, display, evidence, passed):
 def quit_checks(args, x, display, evidence, passed):
     for label, how in (('q', lambda app: app.tap('q')), ('shift-q', lambda app: app.tap('q', 'Shift_L')),
                        ('window-close', lambda app: x.delete(app.window))):
-        app = Lookout(args.lookout, [], x, display, evidence, 'lookout-' + label)
+        app = Scope(args.scope, [], x, display, evidence, 'scope-' + label)
         try:
             show_until(app, {'host': (real_name(), {WHITE})}, label + ' window drawn', 10)
             how(app)
             app.finish()
-            passed('lookout-' + label + '-quits')
+            passed('scope-' + label + '-quits')
         finally:
             app.close()
 
@@ -566,8 +566,8 @@ def light_checks(args, x, display, evidence, passed):
     files.mkdir()
     stat, mem, host = files / 'stat', files / 'meminfo', files / 'hostname'
     put(stat, STAT_ONE_1); put(mem, MEM_TYPICAL); put(host, b'test-host\n')
-    app = Lookout(args.lookout, ['--test', str(stat), str(mem), str(host), '200'], x, display, evidence,
-                  'lookout-light')
+    app = Scope(args.scope, ['--test', str(stat), str(mem), str(host), '200'], x, display, evidence,
+                  'scope-light')
     try:
         time.sleep(1)
         show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), 'processor-bar': 0,
@@ -586,7 +586,7 @@ def light_checks(args, x, display, evidence, passed):
         app.frame('light')
         app.tap('Escape')
         app.finish()
-        passed('lookout-light-changes-at-every-reading', changes=changes, frames_looked_at=len(lights),
+        passed('scope-light-changes-at-every-reading', changes=changes, frames_looked_at=len(lights),
                seconds=round(time.monotonic() - started, 2), rest_of_window_unchanged=True)
     finally:
         app.close()
@@ -598,8 +598,8 @@ def files_checks(args, x, display, evidence, passed):
     files.mkdir()
     stat, mem, host = files / 'stat', files / 'meminfo', files / 'hostname'
     put(stat, STAT_ONE_1); put(mem, MEM_TYPICAL); put(host, b'test-host\n')
-    app = Lookout(args.lookout, ['--test', str(stat), str(mem), str(host), '100'], x, display, evidence,
-                  'lookout-files')
+    app = Scope(args.scope, ['--test', str(stat), str(mem), str(host), '100'], x, display, evidence,
+                  'scope-files')
     try:
         show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), 'processor-bar': 0,
                          'labels': LABELS, **TYPICAL_SHOWN}, 'first sample only: a dash')
@@ -612,21 +612,21 @@ def files_checks(args, x, display, evidence, passed):
             show_until(app, {'processor': (text, {WHITE}), 'processor-bar': width, **TYPICAL_SHOWN},
                        'processor ' + text)
             app.frame('processor-' + text.rstrip('%'))
-        passed('lookout-draws-exact-figures-and-bars', processor=[s[1] for s in steps], memory='75%')
+        passed('scope-draws-exact-figures-and-bars', processor=[s[1] for s in steps], memory='75%')
         # The same file again and again: every interval is zero-length, and the figure must stay.
         put(stat, stat_line(2600, 0, 600, 9750, 550, 0, 0, 0, 0, 0))
         show_until(app, {'processor': ('60%', {WHITE}), 'processor-bar': 240}, 'processor 60%')
         time.sleep(.6)
         kept = shown(app.frame())
         assert (kept['processor'], kept['processor-bar']) == (('60%', {WHITE}), 240), kept['processor']
-        passed('lookout-zero-length-interval-keeps-the-figure', figure='60%', seconds_unchanged=0.6)
+        passed('scope-zero-length-interval-keeps-the-figure', figure='60%', seconds_unchanged=0.6)
         put(mem, meminfo(524288, 104858))
         show_until(app, {'memory': ('80%', {WHITE}), 'memory-bar': 320,
                          'detail': ('409.6 MiB of 512.0 MiB in use', {GREY})}, 'memory in MiB')
         app.frame('mib')
         put(mem, MEM_TYPICAL)
         show_until(app, TYPICAL_SHOWN, 'memory in GiB again')
-        passed('lookout-draws-memory-in-mib-and-gib', mib='409.6 MiB of 512.0 MiB in use',
+        passed('scope-draws-memory-in-mib-and-gib', mib='409.6 MiB of 512.0 MiB in use',
                gib='11.7 GiB of 15.6 GiB in use')
         name48 = ('forty-eight-' + 'abcdefghij' * 4)[:48]
         name60 = ('sixty-' + 'abcdefghij' * 6)[:60]
@@ -638,7 +638,7 @@ def files_checks(args, x, display, evidence, passed):
         app.frame('long-name')
         put(host, b'test-host\n')
         show_until(app, {'host': ('test-host', {WHITE})}, 'short name again')
-        passed('lookout-draws-a-name-over-48-bytes-smaller', name_48_scale=2, name_60_scale=1)
+        passed('scope-draws-a-name-over-48-bytes-smaller', name_48_scale=2, name_60_scale=1)
         stat.unlink()
         show_until(app, {'processor': ('unavailable', {AMBER}), 'processor-bar': 0, **TYPICAL_SHOWN},
                    'processor unavailable')
@@ -648,7 +648,7 @@ def files_checks(args, x, display, evidence, passed):
         host.unlink()
         show_until(app, {'host': ('unavailable', {AMBER})}, 'name unavailable')
         app.frame('unavailable')
-        passed('lookout-shows-unavailable-and-keeps-running')
+        passed('scope-shows-unavailable-and-keeps-running')
         put(stat, stat_line(2600, 0, 600, 9750, 550, 0, 0, 0, 0, 0))
         put(mem, MEM_TYPICAL)
         put(host, b'test-host\n')
@@ -657,7 +657,7 @@ def files_checks(args, x, display, evidence, passed):
         put(stat, stat_line(3000, 0, 700, 10150, 650, 0, 0, 0, 0, 0))
         show_until(app, {'processor': ('50%', {WHITE}), 'processor-bar': 200}, 'processor after recovery')
         app.frame('recovered')
-        passed('lookout-recovers-when-the-files-return')
+        passed('scope-recovers-when-the-files-return')
         app.tap('Escape')
         app.finish()
     finally:
@@ -678,7 +678,7 @@ def io_counts(pid):
 
 def memory_checks(args, x, display, evidence, passed):
     # Every 10 ms, about a hundred times the window's own rate, so that even a few bytes kept per frame add up to more
-    # than the tolerance in the time given. Lookout reads three links that this check turns, every 0.4 s, through
+    # than the tolerance in the time given. Scope reads three links that this check turns, every 0.4 s, through
     # five states: the real /proc; files without a final newline (memory under 1 GiB, a 60-byte name); the next such
     # processor file (a figure from files); all three missing; all three malformed (unavailable). Each state's picture
     # is read back once per turn; every state must have been seen as it should look.
@@ -727,8 +727,8 @@ def memory_checks(args, x, display, evidence, passed):
                 os.replace(spare, link)
     point(proc)
     interval = 10
-    app = Lookout(args.lookout, ['--test', str(links / 'stat'), str(links / 'meminfo'), str(links / 'hostname'),
-                                 str(interval)], x, display, evidence, 'lookout-memory')
+    app = Scope(args.scope, ['--test', str(links / 'stat'), str(links / 'meminfo'), str(links / 'hostname'),
+                                 str(interval)], x, display, evidence, 'scope-memory')
     try:
         show_until(app, {'host': (real_name(), {WHITE})}, 'memory run drawn', 10)
         seen = {name: [0, 0] for name, _, _ in states}
@@ -756,12 +756,12 @@ def memory_checks(args, x, display, evidence, passed):
                 sample['seconds'] = round(last_sample - started, 3)
                 sample['syscr'], sample['rchar'] = io_counts(app.p.pid)
                 samples.append(sample)
-                (evidence / 'lookout-memory.json').write_text(json.dumps(samples, indent=2) + '\n')
+                (evidence / 'scope-memory.json').write_text(json.dumps(samples, indent=2) + '\n')
                 if last_sample - started >= args.seconds:
                     break
             time.sleep(max(0, .4 - (time.monotonic() - turned)))
         seconds = samples[-1]['seconds']
-        (evidence / 'lookout-memory-states.json').write_text(json.dumps(seen, indent=2) + '\n')
+        (evidence / 'scope-memory-states.json').write_text(json.dumps(seen, indent=2) + '\n')
         assert all(matched for matched, _ in seen.values()), ('a state never looked as it should', seen)
         # Every file in this run gives its figure, or shows its end, by its second read call: the live /proc files
         # finish within their first read (their figures come first, and a read takes up to 4096 bytes), the files
@@ -770,12 +770,12 @@ def memory_checks(args, x, display, evidence, passed):
         reads = samples[-1]['syscr'] - samples[0]['syscr']
         frames_at_least = reads // 6
         assert frames_at_least >= seconds * 1000 / interval / 10, ('too few frames to judge memory', reads, seconds)
-        stable_memory(samples, 'lookout redrawing every 10 ms through the real /proc, odd, missing and bad files')
+        stable_memory(samples, 'scope redrawing every 10 ms through the real /proc, odd, missing and bad files')
         rss = [s['Rss'] for s in samples]
         point(proc)
         x.delete(app.window)
         app.finish()
-        passed('lookout-memory-flat', seconds=seconds, samples=len(samples), read_calls=reads,
+        passed('scope-memory-flat', seconds=seconds, samples=len(samples), read_calls=reads,
                frames_at_least=frames_at_least, states_seen_as_they_should_look=seen,
                rss_kib_start=rss[0], rss_kib_end=rss[-1], rss_kib_min=min(rss), rss_kib_max=max(rss),
                rss_tolerance_kib=64, vm_size_kib=samples[0]['VmSize'], vm_size_must_not_change=True)
@@ -785,21 +785,21 @@ def memory_checks(args, x, display, evidence, passed):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--lookout', type=Path, default=ROOT / 'build/lookout')
+    parser.add_argument('--scope', type=Path, default=ROOT / 'build/scope')
     parser.add_argument('--seconds', type=float, default=120, help='length of the memory run')
     parser.add_argument('--only', choices=['all', 'sample', 'window', 'memory'], default='all')
     parser.add_argument('--evidence', type=Path)
     args = parser.parse_args()
     assert args.seconds >= 3, 'at least 3 seconds required; release qualification uses the default 120'
-    evidence = (args.evidence or Path(tempfile.mkdtemp(prefix='herbert-hosted-apps-lookout-'))).resolve()
+    evidence = (args.evidence or Path(tempfile.mkdtemp(prefix='herbert-hosted-apps-scope-'))).resolve()
     evidence.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(__file__, evidence / 'check_lookout.py')
-    shutil.copyfile(args.lookout, evidence / 'lookout.elf')
-    combined = args.lookout.parent / (args.lookout.name + '-work') / 'source.herb'
+    shutil.copyfile(__file__, evidence / 'check_scope.py')
+    shutil.copyfile(args.scope, evidence / 'scope.elf')
+    combined = args.scope.parent / (args.scope.name + '-work') / 'source.herb'
     if combined.exists():
-        shutil.copyfile(combined, evidence / 'lookout-source.herb')
+        shutil.copyfile(combined, evidence / 'scope-source.herb')
     result = {'mode': 'sample-files and private-Xvfb-XTest', 'scope': args.only, 'memory_seconds': args.seconds,
-              'image': static_elf(args.lookout), 'checks': []}
+              'image': static_elf(args.scope), 'checks': []}
     def passed(name, **details):
         result['checks'].append(dict(name=name, **details))
         print('PASS:', name, json.dumps(details, sort_keys=True) if details else '', flush=True)
@@ -823,7 +823,7 @@ def main():
         raise
     finally:
         (evidence / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-    print(f'lookout: {len(result["checks"])}/{len(result["checks"])} PASS; evidence {evidence}')
+    print(f'scope: {len(result["checks"])}/{len(result["checks"])} PASS; evidence {evidence}')
 
 
 if __name__ == '__main__':
