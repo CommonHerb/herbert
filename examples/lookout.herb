@@ -1,0 +1,698 @@
+-- Lookout: a window on this machine. It shows the machine's name, how busy its
+-- processor is and how much of its memory is in use, read again once a second.
+-- Linked after lib/linux.herb, lib/x11.herb and lib/pixel_text.herb by Make.
+-- Every buffer and both state records are built once in main. A frame reads
+-- each /proc file through one fixed 4096-byte chunk, a byte at a time, keeping
+-- only the numbers it wants, and draws from fixed text buffers, so a run of
+-- days allocates nothing after startup.
+
+-- One pass over one file. The scanner sees each byte once and keeps no line, so
+-- neither the chunk size, the number of processors nor the length of any line
+-- matters. phase, label, which and pos say where in the current line it is;
+-- value and digits hold the number being read. done stops the reading early.
+-- /proc/stat fills found, total, idle and iowait; /proc/meminfo has_total,
+-- mem_total, has_available and available; the name file uses pos as its length.
+ref record LookoutScan:
+    done: bool
+    found: bool
+    bad: bool
+    phase: int
+    label: int
+    which: int
+    pos: int
+    value: int
+    digits: int
+    fields: int
+    total: int
+    idle: int
+    iowait: int
+    has_total: bool
+    mem_total: int
+    has_available: bool
+    available: int
+end
+
+-- The window's state. The three paths are NUL-terminated. cpu_state is 0 while
+-- a second processor sample is awaited (a dash), 1 with a reading, 2 when
+-- /proc/stat cannot be read or used; mem_state is 1 or 2 the same way.
+-- prev_total and prev_busy are the last processor sample, where the next
+-- interval starts.
+-- The three text buffers hold exactly what the window draws for the processor,
+-- memory and the memory detail line; interval is the time between samples, ms.
+ref record Lookout:
+    stat_path: buffer
+    meminfo_path: buffer
+    host_path: buffer
+    chunk: buffer
+    scan: LookoutScan
+    host: buffer
+    host_count: int
+    host_ok: bool
+    have_prev: bool
+    prev_total: int
+    prev_busy: int
+    cpu_state: int
+    cpu_percent: int
+    mem_state: int
+    mem_percent: int
+    mem_used: int
+    mem_total: int
+    cpu_text: buffer
+    cpu_count: int
+    mem_text: buffer
+    mem_count: int
+    detail: buffer
+    detail_count: int
+    interval: int
+end
+
+func lookout_new(stat, meminfo, host, interval):
+    let scan = LookoutScan(false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, false, 0)
+    return Lookout(linux_cstring(stat), linux_cstring(meminfo), linux_cstring(host), linux_buffer(4096), scan, linux_buffer(64), 0, false, false, 0, 0, 0, 0, 2, 0, 0, 0, linux_buffer(96), 0, linux_buffer(96), 0, linux_buffer(96), 0, interval)
+end
+
+func lookout_scan_reset(s):
+    s.done = false
+    s.found = false
+    s.bad = false
+    s.phase = 0
+    s.label = 0
+    s.which = 0
+    s.pos = 0
+    s.value = 0
+    s.digits = 0
+    s.fields = 0
+    s.total = 0
+    s.idle = 0
+    s.iowait = 0
+    s.has_total = false
+    s.mem_total = 0
+    s.has_available = false
+    s.available = 0
+    return 0
+end
+
+func lookout_digit(b): return b >= 48 and b <= 57 end
+func lookout_blank(b): return b == 32 or b == 9 end
+
+-- value * 10 + the digit b; false, leaving value alone, past 2^64 - 1.
+func lookout_accumulate(s, b):
+    let d = b - 48
+    if s.value > 1844674407370955161 or (s.value == 1844674407370955161 and d > 5): return false end
+    s.value = s.value * 10 + d
+    s.digits = s.digits + 1
+    return true
+end
+
+-- /proc/stat (proc_stat(5)). The line whose first word is exactly "cpu" counts
+-- the whole machine's time, in order user nice system idle iowait irq softirq
+-- steal guest guest_nice; older kernels give fewer, at least four. Linux counts
+-- guest time inside user and nice already, so the total is the first eight.
+-- phase 0 reads a line's first word (label: bytes of "cpu" matched, 4 once it
+-- cannot be "cpu"), 1 the numbers of the cpu line, 2 skips any other line.
+func lookout_stat_field(s):
+    s.fields = s.fields + 1
+    if s.fields <= 8:
+        if s.total + s.value < s.total: s.bad = true end
+        s.total = s.total + s.value
+    end
+    if s.fields == 4: s.idle = s.value end
+    if s.fields == 5: s.iowait = s.value end
+    s.value = 0
+    s.digits = 0
+    return 0
+end
+
+func lookout_stat_end(s):
+    if s.digits > 0: do lookout_stat_field(s) end
+    s.done = true
+    s.found = not s.bad and s.fields >= 4
+    return 0
+end
+
+func lookout_stat_byte(s, b):
+    if s.phase == 0:
+        if b == 10:
+            if s.label == 3: return lookout_stat_end(s) end
+            s.label = 0
+        elif lookout_blank(b):
+            s.phase = 2
+            if s.label == 3: s.phase = 1 end
+        elif s.label < 3 and b == index("cpu", s.label):
+            s.label = s.label + 1
+        else:
+            s.label = 4
+        end
+    elif s.phase == 1:
+        if lookout_digit(b):
+            if not lookout_accumulate(s, b): s.bad = true end
+        elif b == 10:
+            return lookout_stat_end(s)
+        elif lookout_blank(b):
+            if s.digits > 0: do lookout_stat_field(s) end
+        else:
+            s.bad = true
+        end
+    elif b == 10:
+        s.phase = 0
+        s.label = 0
+    end
+    return 0
+end
+
+-- A cpu line the file ends inside, with no newline, still counts.
+func lookout_stat_eof(s):
+    if s.done: return 0 end
+    if s.phase == 1 or (s.phase == 0 and s.label == 3): return lookout_stat_end(s) end
+    return 0
+end
+
+-- /proc/meminfo (proc_meminfo(5)): one "Name:   value kB" line per figure, in
+-- any order. Only MemTotal and MemAvailable are kept, each the first time it
+-- comes on a well-formed line; values are in KiB. phase 0 reads the name (pos
+-- bytes so far; label bit 1 while it can still be MemTotal, bit 2 while it can
+-- be MemAvailable), 1 the blanks before the value, 2 its digits, 3 the blanks
+-- before the unit, 4 the unit's B, 5 the rest of the line, 6 skips the line.
+func lookout_mem_reset(s):
+    s.phase = 0
+    s.label = 3
+    s.pos = 0
+    s.which = 0
+    s.value = 0
+    s.digits = 0
+    return 0
+end
+
+func lookout_mem_name(s, b):
+    let keep = 0
+    if (s.label & 1) != 0 and s.pos < 8 and b == index("MemTotal", s.pos): keep = 1 end
+    if (s.label & 2) != 0 and s.pos < 12 and b == index("MemAvailable", s.pos): keep = keep + 2 end
+    s.label = keep
+    s.pos = s.pos + 1
+    return 0
+end
+
+func lookout_mem_line(s):
+    if s.which == 1 and not s.has_total:
+        s.has_total = true
+        s.mem_total = s.value
+    elif s.which == 2 and not s.has_available:
+        s.has_available = true
+        s.available = s.value
+    end
+    s.done = s.has_total and s.has_available
+    return lookout_mem_reset(s)
+end
+
+func lookout_mem_digit(s, b):
+    if not lookout_accumulate(s, b): s.phase = 6 end
+    return 0
+end
+
+func lookout_mem_byte(s, b):
+    if b == 10:
+        if s.phase == 5: return lookout_mem_line(s) end
+        return lookout_mem_reset(s)
+    end
+    if s.phase == 0:
+        if b == 58:
+            s.phase = 6
+            if s.label == 1 and s.pos == 8:
+                s.which = 1
+                s.phase = 1
+            elif s.label == 2 and s.pos == 12:
+                s.which = 2
+                s.phase = 1
+            end
+        else:
+            do lookout_mem_name(s, b)
+        end
+    elif s.phase == 1:
+        if lookout_digit(b):
+            s.phase = 2
+            do lookout_mem_digit(s, b)
+        elif not lookout_blank(b):
+            s.phase = 6
+        end
+    elif s.phase == 2:
+        if lookout_digit(b):
+            do lookout_mem_digit(s, b)
+        elif lookout_blank(b):
+            s.phase = 3
+        else:
+            s.phase = 6
+        end
+    elif s.phase == 3:
+        if b == 107:
+            s.phase = 4
+        elif not lookout_blank(b):
+            s.phase = 6
+        end
+    elif s.phase == 4:
+        s.phase = 6
+        if b == 66: s.phase = 5 end
+    elif s.phase == 5:
+        if not lookout_blank(b): s.phase = 6 end
+    end
+    return 0
+end
+
+func lookout_mem_eof(s):
+    if s.phase == 5: return lookout_mem_line(s) end
+    return 0
+end
+
+-- The machine's name: the file's first line, its first 64 bytes at most (the
+-- longest name Linux allows).
+func lookout_host_byte(st, s, b):
+    if b == 10:
+        s.done = true
+    elif s.pos < 64:
+        do buffer_set(st.host, s.pos, b)
+        s.pos = s.pos + 1
+    end
+    return 0
+end
+
+func lookout_feed(st, kind, n):
+    let s = st.scan
+    let i = 0
+    while i < n and not s.done:
+        let b = buffer_get(st.chunk, i)
+        if kind == 0:
+            do lookout_stat_byte(s, b)
+        elif kind == 1:
+            do lookout_mem_byte(s, b)
+        else:
+            do lookout_host_byte(st, s, b)
+        end
+        i = i + 1
+    end
+    return 0
+end
+
+-- Reads the file at path (kind 0 /proc/stat, 1 /proc/meminfo, 2 the name) into
+-- its scanner until the scanner has what it wants or the file ends. False if
+-- the file cannot be opened or read, or runs past 1 MiB, so no file can keep a
+-- frame reading for ever.
+func lookout_read(st, path, kind):
+    let s = st.scan
+    let fd = linux_syscall6(2, buffer_address(path), 524288, 0, 0, 0, 0)
+    if linux_error(fd): return false end
+    let seen = 0
+    let ok = true
+    let going = true
+    while going:
+        let n = linux_syscall6(0, fd, buffer_address(st.chunk), buffer_length(st.chunk), 0, 0, 0)
+        if n != 0 - 4:
+            if linux_error(n) or n > buffer_length(st.chunk):
+                ok = false
+                going = false
+            elif n == 0:
+                going = false
+            else:
+                do lookout_feed(st, kind, n)
+                seen = seen + n
+                if s.done:
+                    going = false
+                elif seen > 1048576:
+                    ok = false
+                    going = false
+                end
+            end
+        end
+    end
+    do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    return ok
+end
+
+-- (readable, total, busy): busy is the total less idle and iowait time.
+func lookout_read_stat(st):
+    let s = st.scan
+    do lookout_scan_reset(s)
+    let ok = lookout_read(st, st.stat_path, 0)
+    if ok: do lookout_stat_eof(s) end
+    if ok and s.found: return (true, s.total, s.total - s.idle - s.iowait) end
+    return (false, 0, 0)
+end
+
+-- (readable, MemTotal, MemAvailable), both in KiB.
+func lookout_read_meminfo(st):
+    let s = st.scan
+    do lookout_scan_reset(s)
+    do lookout_mem_reset(s)
+    let ok = lookout_read(st, st.meminfo_path, 1)
+    if ok: do lookout_mem_eof(s) end
+    if ok and s.has_total and s.has_available: return (true, s.mem_total, s.available) end
+    return (false, 0, 0)
+end
+
+func lookout_read_host(st):
+    let s = st.scan
+    do lookout_scan_reset(s)
+    let ok = lookout_read(st, st.host_path, 2)
+    st.host_ok = ok and s.pos > 0
+    st.host_count = s.pos
+    return 0
+end
+
+-- part / whole as a whole percent, to the nearest (a half rounds up). whole is
+-- never zero here and part never above it. Both are halved together while
+-- whole is 2^56 or more, so part * 100 stays below 2^64.
+func lookout_percent(part, whole):
+    while whole >= 72057594037927936:
+        part = part / 2
+        whole = whole / 2
+    end
+    return (part * 100 + whole / 2) / whole
+end
+
+-- A new processor sample. The first, or one after the counters went back (a
+-- restart), only starts an interval. When no time was counted since the last
+-- one (a zero-length interval) nothing changes, so there is no division by
+-- zero. Busy time that went back, as iowait can, counts as none.
+func lookout_cpu(st, ok, total, busy):
+    if not ok:
+        st.cpu_state = 2
+        st.have_prev = false
+        return 0
+    end
+    if not st.have_prev or total < st.prev_total:
+        st.cpu_state = 0
+        st.have_prev = true
+        st.prev_total = total
+        st.prev_busy = busy
+        return 0
+    end
+    if total == st.prev_total: return 0 end
+    let spent = total - st.prev_total
+    let worked = 0
+    if busy > st.prev_busy: worked = busy - st.prev_busy end
+    if worked > spent: worked = spent end
+    st.cpu_percent = lookout_percent(worked, spent)
+    st.cpu_state = 1
+    st.prev_total = total
+    st.prev_busy = busy
+    return 0
+end
+
+-- Memory in use is MemTotal less MemAvailable, none if more is available than
+-- there is; a total of zero cannot be shown.
+func lookout_memory(st, ok, total, available):
+    if not ok or total == 0:
+        st.mem_state = 2
+        return 0
+    end
+    let used = 0
+    if available < total: used = total - available end
+    st.mem_used = used
+    st.mem_total = total
+    st.mem_percent = lookout_percent(used, total)
+    st.mem_state = 1
+    return 0
+end
+
+func lookout_put(b, at, text):
+    do linux_text(b, at, text)
+    return at + length(text)
+end
+
+func lookout_put_percent(b, at, percent):
+    return lookout_put(b, linux_decimal(b, at, percent), "%")
+end
+
+-- kib in the unit of size unit KiB (1024 for MiB, 1048576 for GiB), to the
+-- nearest tenth. Whole numbers only: the tenths are worked out by hand, and
+-- ten tenths carry into the whole part (9.96 is 10.0).
+func lookout_put_amount(b, at, kib, unit):
+    let whole = kib / unit
+    let tenths = ((kib % unit) * 10 + unit / 2) / unit
+    if tenths == 10:
+        whole = whole + 1
+        tenths = 0
+    end
+    let next = linux_decimal(b, at, whole)
+    do buffer_set(b, next, 46)
+    do buffer_set(b, next + 1, 48 + tenths)
+    return next + 2
+end
+
+-- What the window shows, into the fixed text buffers.
+func lookout_texts(st):
+    if st.cpu_state == 0:
+        st.cpu_count = lookout_put(st.cpu_text, 0, "-")
+    elif st.cpu_state == 1:
+        st.cpu_count = lookout_put_percent(st.cpu_text, 0, st.cpu_percent)
+    else:
+        st.cpu_count = lookout_put(st.cpu_text, 0, "unavailable")
+    end
+    if st.mem_state != 1:
+        st.mem_count = lookout_put(st.mem_text, 0, "unavailable")
+        st.detail_count = 0
+        return 0
+    end
+    st.mem_count = lookout_put_percent(st.mem_text, 0, st.mem_percent)
+    let unit = 1048576
+    let name = " GiB"
+    if st.mem_total < 1048576:
+        unit = 1024
+        name = " MiB"
+    end
+    let at = lookout_put_amount(st.detail, 0, st.mem_used, unit)
+    at = lookout_put(st.detail, at, name)
+    at = lookout_put(st.detail, at, " of ")
+    at = lookout_put_amount(st.detail, at, st.mem_total, unit)
+    at = lookout_put(st.detail, at, name)
+    st.detail_count = lookout_put(st.detail, at, " in use")
+    return 0
+end
+
+func lookout_sample(st):
+    let cpu = lookout_read_stat(st)
+    do lookout_cpu(st, cpu.0, cpu.1, cpu.2)
+    let mem = lookout_read_meminfo(st)
+    do lookout_memory(st, mem.0, mem.1, mem.2)
+    do lookout_read_host(st)
+    return lookout_texts(st)
+end
+
+-- A bar is 400 pixels long, four to a percent shown.
+func lookout_bar_width(state, percent):
+    if state == 1: return percent * 4 end
+    return 0
+end
+
+func lookout_ink(state):
+    if state == 1: return 15265527 end
+    if state == 2: return 16173151 end
+    return 11255503
+end
+
+func lookout_row(c, label, y, state, percent, text, count, fill):
+    do x11_color(c, 15265527)
+    do pixel_text(c, label, 46, y, 2)
+    do x11_color(c, 2767956)
+    do x11_rect(c, 46, y + 22, 400, 22)
+    let width = lookout_bar_width(state, percent)
+    if width > 0:
+        do x11_color(c, fill)
+        do x11_rect(c, 46, y + 22, width, 22)
+    end
+    do x11_color(c, lookout_ink(state))
+    return pixel_text_buffer(c, text, 0, count, 464, y + 26, 2)
+end
+
+func lookout_draw(c, st, pulse):
+    do x11_color(c, 1054759)
+    do x11_rect(c, 0, 0, 640, 370)
+    do x11_color(c, 15265527)
+    do pixel_text(c, "HERBERT", 28, 27, 3)
+    do x11_color(c, 8820395)
+    do pixel_text(c, "LOOKOUT", 192, 40, 1)
+    do pixel_text(c, "THIS COMPUTER", 28, 80, 1)
+    if st.host_ok:
+        let scale = 2
+        if st.host_count > 48: scale = 1 end
+        do x11_color(c, 15265527)
+        do pixel_text_buffer(c, st.host, 0, st.host_count, 28, 96, scale)
+    else:
+        do x11_color(c, 16173151)
+        do pixel_text(c, "unavailable", 28, 96, 2)
+    end
+    do x11_color(c, 2767956)
+    do x11_rect(c, 24, 128, 592, 168)
+    do x11_color(c, 1384240)
+    do x11_rect(c, 26, 130, 588, 164)
+    do lookout_row(c, "PROCESSOR", 146, st.cpu_state, st.cpu_percent, st.cpu_text, st.cpu_count, 6867876)
+    do lookout_row(c, "MEMORY", 212, st.mem_state, st.mem_percent, st.mem_text, st.mem_count, 7317724)
+    do x11_color(c, 11255503)
+    do pixel_text_buffer(c, st.detail, 0, st.detail_count, 46, 270, 1)
+    do pixel_text(c, "ESC OR Q TO CLOSE", 28, 318, 1)
+    do x11_color(c, 5793911)
+    do pixel_text(c, "MADE IN HERBERT", 28, 340, 1)
+    -- The small light changes at every new sample, so a running window shows it.
+    let light = 3832176
+    if pulse == 1: light = 6867876 end
+    do x11_color(c, light)
+    do x11_ellipse(c, 600, 40, 8, 8)
+    return x11_present(c)
+end
+
+-- Escape, q or Q. Every queued press is read, so none is left for later.
+func lookout_quit(c, event):
+    let quit = false
+    while x11_next_key(c, event):
+        let key = linux_u32(event, 0)
+        if key == 65307 or key == 113 or key == 81: quit = true end
+    end
+    return quit
+end
+
+func lookout_loop(c, st, event, last, pulse):
+    while true:
+        do x11_events(c)
+        if x11_closed(c) or lookout_quit(c, event):
+            let closed = x11_close(c)
+            do x11_need(closed == 0, "lookout: display close failed\n")
+            do process_exit(0)
+            return 0
+        end
+        let now = linux_clock_ms(c.clock)
+        do x11_need(not linux_error(now), "lookout: monotonic clock failed\n")
+        if now - last >= st.interval:
+            do lookout_sample(st)
+            pulse = 1 - pulse
+            do lookout_draw(c, st, pulse)
+            last = now
+        elif x11_exposed(c):
+            do x11_present(c)
+        end
+        do x11_ack_expose(c)
+        let waited = linux_poll(c.state.fd, c.poll, 1, st.interval - (now - last))
+        do x11_need(not linux_error(waited) or waited == 0 - 4, "lookout: input wait failed\n")
+    end
+    return 0
+end
+
+func lookout_window(st):
+    do lookout_sample(st)
+    let c = x11_open(640, 370, "Herbert - Lookout")
+    do x11_enable_text(c)
+    let event = linux_buffer(16)
+    do lookout_draw(c, st, 0)
+    let now = linux_clock_ms(c.clock)
+    do x11_need(not linux_error(now), "lookout: monotonic clock failed\n")
+    return lookout_loop(c, st, event, now, 0)
+end
+
+-- Test mode output, built once; nothing here runs in the window.
+func lookout_out(out, text):
+    return x11_append_text(out, text, 0)
+end
+
+func lookout_out_span(out, b, count):
+    let i = 0
+    while i < count:
+        do append(out, buffer_get(b, i))
+        i = i + 1
+    end
+    return 0
+end
+
+func lookout_out_number(out, n):
+    let digits = linux_buffer(20)
+    return lookout_out_span(out, digits, linux_decimal(digits, 0, n))
+end
+
+func lookout_out_pair(out, label, reading):
+    do lookout_out(out, label)
+    if not reading.0: return lookout_out(out, "=unavailable\n") end
+    do lookout_out(out, "=")
+    do lookout_out_number(out, reading.1)
+    do lookout_out(out, " ")
+    do lookout_out_number(out, reading.2)
+    return lookout_out(out, "\n")
+end
+
+-- lookout --sample STAT1 STAT2 MEMINFO HOSTNAME: the two processor samples,
+-- the memory figures and the name go through the same steps as the window's,
+-- and what the window would show is printed, one "name=value" line each.
+func lookout_sample_mode(args):
+    let st = lookout_new(linux_argument(args, 2), linux_argument(args, 4), linux_argument(args, 5), 1000)
+    let out = new_buffer()
+    let first = lookout_read_stat(st)
+    do lookout_cpu(st, first.0, first.1, first.2)
+    do lookout_out_pair(out, "stat1", first)
+    st.stat_path = linux_cstring(linux_argument(args, 3))
+    let second = lookout_read_stat(st)
+    do lookout_cpu(st, second.0, second.1, second.2)
+    do lookout_out_pair(out, "stat2", second)
+    let mem = lookout_read_meminfo(st)
+    do lookout_memory(st, mem.0, mem.1, mem.2)
+    do lookout_out_pair(out, "meminfo", mem)
+    do lookout_read_host(st)
+    do lookout_texts(st)
+    do lookout_out(out, "host=")
+    if st.host_ok:
+        do lookout_out_span(out, st.host, st.host_count)
+    else:
+        do lookout_out(out, "unavailable")
+    end
+    do lookout_out(out, "\nprocessor=")
+    do lookout_out_span(out, st.cpu_text, st.cpu_count)
+    do lookout_out(out, "\nprocessor-bar=")
+    do lookout_out_number(out, lookout_bar_width(st.cpu_state, st.cpu_percent))
+    do lookout_out(out, "\nmemory=")
+    do lookout_out_span(out, st.mem_text, st.mem_count)
+    do lookout_out(out, "\nmemory-bar=")
+    do lookout_out_number(out, lookout_bar_width(st.mem_state, st.mem_percent))
+    do lookout_out(out, "\ndetail=")
+    do lookout_out_span(out, st.detail, st.detail_count)
+    do lookout_out(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+
+func lookout_arguments(args):
+    let count = 0
+    let offset = 0
+    while offset < args.1:
+        offset = linux_nul_end(args.0, offset, args.1) + 1
+        count = count + 1
+    end
+    return count
+end
+
+-- A whole number of milliseconds, 1 to 60000; 0 for anything else.
+func lookout_milliseconds(text):
+    if length(text) == 0 or length(text) > 5: return 0 end
+    let n = 0
+    let i = 0
+    while i < length(text):
+        if not lookout_digit(index(text, i)): return 0 end
+        n = n * 10 + index(text, i) - 48
+        i = i + 1
+    end
+    if n > 60000: return 0 end
+    return n
+end
+
+func main():
+    let args = linux_arguments()
+    let count = lookout_arguments(args)
+    if count == 1:
+        return lookout_window(lookout_new("/proc/stat", "/proc/meminfo", "/proc/sys/kernel/hostname", 1000))
+    end
+    let mode = linux_argument(args, 1)
+    if count == 6 and equal(mode, "--sample"): return lookout_sample_mode(args) end
+    -- lookout --test STAT MEMINFO HOSTNAME MILLISECONDS: the window, reading
+    -- those files at that interval. The tests use it; see examples/lookout.md.
+    if count == 6 and equal(mode, "--test"):
+        let ms = lookout_milliseconds(linux_argument(args, 5))
+        if ms != 0:
+            return lookout_window(lookout_new(linux_argument(args, 2), linux_argument(args, 3), linux_argument(args, 4), ms))
+        end
+    end
+    return linux_die("lookout: usage: lookout\n")
+end

@@ -13,6 +13,7 @@ On Linux/x86-64, from this checkout:
 make notes && ./build/notes ~/my-notes.txt
 make maze && ./build/maze
 make first-steps && ./build/first-steps
+make lookout && ./build/lookout
 ```
 
 - [Notes](examples/notes.md) is a plain-text editor for UTF-8 files up to 4 MiB: selection, the desktop clipboard,
@@ -21,6 +22,8 @@ make first-steps && ./build/first-steps
   repository ignores those names in case you do not.
 - [Maze](examples/maze.md) is a small game played on an editable text map.
 - [First steps](examples/first_steps.md) is the first, smallest window: one character to move.
+- [Lookout](examples/lookout.md) is a window to leave open: this computer's name, how busy its processor is and
+  how much memory is in use, read again once a second. It is the first piece of a window on the owner's computers.
 - [The word counter](examples/wordcount.md) counts lines, words and bytes on standard input, and is a good first
   program to read.
 

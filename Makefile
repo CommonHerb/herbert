@@ -166,17 +166,20 @@ DESKTOP_LIBS := lib/linux.herb lib/x11.herb lib/pixel_text.herb
 first-steps_SOURCES := $(DESKTOP_LIBS) examples/first_steps.herb
 maze_SOURCES := $(DESKTOP_LIBS) lib/grid_map.herb examples/maze.herb
 notes_SOURCES := $(DESKTOP_LIBS) lib/x11_clipboard.herb lib/utf8.herb lib/unicode_tables.herb lib/unicode_grapheme.herb lib/unicode_display.herb lib/file_io.herb lib/text_buffer.herb lib/session_recovery.herb examples/notes.herb
-.PHONY: first-steps maze notes hosted-apps hosted-memory-io check-desktop check-hosted-apps
+lookout_SOURCES := $(DESKTOP_LIBS) examples/lookout.herb
+.PHONY: first-steps maze notes lookout hosted-apps hosted-memory-io check-desktop check-hosted-apps check-lookout
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze
 notes: $(BUILD)/notes
-hosted-apps: first-steps maze notes
+lookout: $(BUILD)/lookout
+hosted-apps: first-steps maze notes lookout
 
 $(BUILD)/first-steps: $(first-steps_SOURCES)
 $(BUILD)/maze: $(maze_SOURCES)
 $(BUILD)/notes: $(notes_SOURCES)
+$(BUILD)/lookout: $(lookout_SOURCES)
 $(SCANNER): $(scan_SOURCES)
-$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/lookout $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
 	@set -eu; \
 	  mkdir -p $@-work; \
@@ -209,8 +212,13 @@ check-app-support: maze
 	@python3 bootstrap/tests/check_utf8_text.py
 	@python3 bootstrap/tests/check_x11_text.py
 
-check-hosted-apps: maze notes
+check-hosted-apps: maze notes lookout
 	@python3 bootstrap/tests/check_hosted_apps.py --maze $(BUILD)/maze --notes $(BUILD)/notes
+	@python3 bootstrap/tests/check_lookout.py --lookout $(BUILD)/lookout
+
+# Lookout's checks alone, for diagnosis; check-hosted-apps runs them too.
+check-lookout: lookout
+	@python3 bootstrap/tests/check_lookout.py --lookout $(BUILD)/lookout
 
 # Useful programs on the sovereign long64 runtime, built by the same seed.
 .PHONY: long64-wordcount check-long64-wordcount long64-hexview long64-elfinfo check-long64-elfinfo

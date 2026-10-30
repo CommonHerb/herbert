@@ -6,9 +6,11 @@ checkable on demand.
 
 ## Next: programs people use
 
-- **A live window on the owner's computers**: whether each of them answers, and how busy this one is. It is expected
-  to need Herbert to reach the network and read the machine's own load, and to run for days without growing.
-- Notes, Maze, First steps and the word counter keep working, and change when using them shows a need.
+- **A live window on the owner's computers**: whether each of them answers, and how busy this one is, running for
+  days without growing. The first piece exists: [Lookout](examples/lookout.md) shows this computer's name, processor
+  and memory use, read from `/proc` once a second, with nothing allocated after it starts. Next it shows the owner's
+  other computers and whether each answers, which needs Herbert to reach the network.
+- Notes, Maze, First steps, Lookout and the word counter keep working, and change when using them shows a need.
 
 ## Memory
 

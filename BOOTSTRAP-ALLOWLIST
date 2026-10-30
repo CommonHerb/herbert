@@ -31,11 +31,13 @@ examples/first_steps.md
 examples/maze.md
 examples/maze.txt
 examples/notes.md
+examples/lookout.md
 lib/README.md
 # Independent Linux syscall/memory and interactive desktop TEST tooling.
 bootstrap/tests/check_hosted_memory_io.py
 bootstrap/tests/check_desktop.py
 bootstrap/tests/check_hosted_apps.py
+bootstrap/tests/check_lookout.py
 bootstrap/tests/check_grid_map.py
 bootstrap/tests/check_notes_support.py
 bootstrap/tests/check_x11_text.py

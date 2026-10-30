@@ -110,7 +110,14 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   typing, navigation, Unicode entry, search, save, reopen, rescue, recovery and editing copies of the project's own
   documents; with strace, the visible warning after a failed sync and its retry; plus 120-second memory checks of
   Maze play and of Notes editing LF and CRLF files. Evidence includes
-  screenshots, input history, saved bytes and memory samples.
+  screenshots, input history, saved bytes and memory samples. Then `check_lookout.py` checks Lookout: its `--sample`
+  output on 55 fixed `/proc/stat`, `/proc/meminfo` and name files against hand-written answers (one and 64
+  processors, long lines and lines across reads, fields missing, reordered or malformed, 0 %, 100 %, half a percent,
+  a zero-length interval, counters that did not move or went back, numbers past 2^64) and six refused command
+  lines; its window's name, figures and bars read back from its pixels, from the real `/proc` and from files the
+  check writes, removes (amber `unavailable`) and restores; quitting on Escape, Q and the close button; and 120
+  seconds reading the real `/proc` every 10 ms with the same virtual size throughout and resident memory within
+  64 KiB. `make check-lookout` runs those checks alone.
 
 Python, GNU time, strace, GDB, binutils, Xvfb, libX11 and libXtst are test tools, never dependencies of the programs.
 So is a C compiler, now used only for one stand-in compiler in the reseed tests of `check_verification_helpers.py`.
@@ -119,7 +126,7 @@ Verifiers that rely on Python `assert` must run with assertions enabled.
 Standalone targets re-run one `make test` gate for diagnosis: `evaluator-native`, `vm-native`, `parser-native`,
 `lexer-native`, `klondike-native`, `emitter-native` (each a fragment gate and its mutation proof),
 `closed-loop-memory-diet`, `compiler-conformance`, `stdin-contract`, `wordcount`, `hosted-memory-io` and
-`stack-headroom`. `verify-local` does not call them.
+`stack-headroom`. `verify-local` does not call them. `check-lookout` re-runs Lookout's part of `check-hosted-apps`.
 
 ## Bite proofs
 
