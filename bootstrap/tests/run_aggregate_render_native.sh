@@ -168,9 +168,12 @@ cmp -s "$nat_nest" "$want_nest" || fail "nested-tuple native render != independe
 # here (native diverges on OUTPUT, not rendering, so they retire WITH C): test_02
 # (native correctly REJECTS dead out-of-range code, ERR431 -- native is stricter)
 # and test_11/12 (1,000,000-deep non-tail recursion SIGSEGVs on the native
-# hardware stack). MUSTER_MANIFEST, if set, receives the exact graded list.
+# hardware stack). MUSTER_MANIFEST, if set, receives the exact graded list;
+# run_tests.sh checks it against its own copy of the set and the test_*.herb on
+# disk. The PASS line below names the tests this run actually graded.
 foundational="test_01_arith test_03_if_elif test_04_recursion test_05_block_scope test_06_tuples test_07_array test_08_strings_buffer test_09_ref_vs_value test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap"
 : >"${MUSTER_MANIFEST:-/dev/null}"
+graded_n=0; graded_ids=""
 for t in $foundational; do
     src="$tests_dir/$t.herb"; exp="$tests_dir/$t.expected"
     [[ -f "$src" && -f "$exp" ]] || fail "missing foundational probe $t"
@@ -178,6 +181,7 @@ for t in $foundational; do
     native_render "$src" "$out" || fail "foundational $t did not render natively"
     cmp -s "$out" "$exp" || fail "foundational $t native render != committed .expected (native=$(cat "$out" | tr -d '\n'))"
     printf '%s\n' "$t" >>"${MUSTER_MANIFEST:-/dev/null}"
+    graded_n=$((graded_n + 1)); t_id="${t#test_}"; graded_ids="$graded_ids${graded_ids:+/}${t_id%%_*}"
 done
 
 # --- 4. Out-of-scope cases are STILL rejected (the scope boundary is real, not
@@ -286,7 +290,7 @@ if [[ "${AGGREGATE_RENDER_NATIVE_NO_C:-0}" != "1" && -x "$HERBERT" ]]; then
         "$HERBERT" "$tests_dir/$t.herb" >"$cf" 2>/dev/null || fail "C interpreter could not run $t"
         cmp -s "$tmp/$t.out" "$cf" || fail "native $t diverges from the C interpreter (faithfulness)"
     done
-    c_checked="(faithfulness vs C interpreter: native == C-interp == oracle, held-back flat/string/nested + 12 foundational)"
+    c_checked="(faithfulness vs C interpreter: native == C-interp == oracle, held-back flat/string/nested + $graded_n foundational)"
 fi
 
-echo "PASS: aggregate-render native execution (gen-1 renders flat/string/NESTED tuples C-FREE: held-back flat+string+nested probes + the 12 native-output foundational tests 01/03/04/05/06/07/08/09/10/13/14a/14b == committed .expected; array/array-elem/width-16 still ERR432; $c_checked)"
+echo "PASS: aggregate-render native execution (gen-1 renders flat/string/NESTED tuples C-FREE: held-back flat+string+nested probes + the $graded_n native-output foundational tests ${graded_ids:-none} == committed .expected; array/array-elem/width-16 still ERR432; $c_checked)"

@@ -4,9 +4,11 @@
 # gates and their mutation proofs, the aggregate-render gate and its mutation
 # proof, hosted native-codegen links 1-16 and the reject battery against the
 # committed goldens, the non-vacuity, corrupt-compiler and seed-integrity checks,
-# the closed-loop memory diet and the error-vocabulary gate. The number of tests
-# is pinned (EXPECTED_SUITE_TOTAL). `--check-pinned` (make check) only confirms
-# that the pinned gate and proof scripts are present and executable.
+# the foundational-tests partition fence, the closed-loop memory diet and the
+# error-vocabulary gate. A mutation proof counts only with its own PASS: verdict.
+# The number of tests is pinned (EXPECTED_SUITE_TOTAL). `--check-pinned` (make
+# check) only confirms that the pinned gate and proof scripts are present and
+# executable, and that every run_*.sh here is run by something.
 set -u
 
 # CDPATH is unset FIRST: `cd` with a RELATIVE operand searches $CDPATH before the current
@@ -71,7 +73,7 @@ PINNED_PROOFS=(
     run_emitter_native.sh run_emitter_native_mutation.sh
     run_closed_loop_memory_diet.sh run_error_vocab_native.sh
 )
-EXPECTED_SUITE_TOTAL=36
+EXPECTED_SUITE_TOTAL=37
 pinned_proof() { # name -> 0 iff present + executable; else prints FAIL, scores a FAILED test, returns 1
     if [[ -x "$PWD/$1" ]]; then return 0; fi
     echo "FAIL: pinned proof $1 is missing or not executable (fail-closed: a proof that cannot run is a FAILED test, never a silent skip)"
@@ -95,6 +97,33 @@ if [[ "${1:-}" == "--check-pinned" ]]; then
         [[ -x "$PWD/$pinned_s" ]] || { echo "FAIL: pinned proof $pinned_s is missing or not executable (bootstrap/tests/run_tests.sh PINNED_PROOFS)"; pinned_bad=1; }
     done
     [[ "$pinned_bad" -eq 0 ]] && echo "OK: ${#PINNED_PROOFS[@]} pinned proof scripts present + executable"
+    # Every run_*.sh here must be run by something: a pinned proof above, the hosted
+    # links 1-16 and the rejects battery (run by this script), a kernel link gate or
+    # mutation proof inside kernel_verify.sh's range (make kernel-verify and the
+    # kernel CI matrix, which check_verification_helpers.py holds equal to it), or a
+    # make target whose recipe calls it by name. A gate script wired into nothing
+    # fails make check instead of sitting unrun.
+    read -r gate_lo gate_hi < <(sed -nE 's/^GATE_LO=([0-9]+); GATE_HI=([0-9]+)$/\1 \2/p' kernel_verify.sh)
+    unwired=""
+    for s in run_*.sh; do
+        case " run_tests.sh run_native_codegen_rejects.sh ${PINNED_PROOFS[*]} " in *" $s "*) continue ;; esac
+        if [[ "$s" =~ ^run_native_codegen_link([1-9][0-9]*)(_mutation)?\.sh$ ]]; then
+            n="${BASH_REMATCH[1]}"
+            [[ -z "${BASH_REMATCH[2]}" ]] && (( n <= 16 )) && continue
+            (( n >= ${gate_lo:-1000} && n <= ${gate_hi:-0} )) && continue
+        fi
+        grep -qxF $'\t'"@bash bootstrap/tests/$s" ../../Makefile && continue
+        unwired="$unwired $s"
+    done
+    if [[ -z "${gate_hi:-}" ]]; then
+        echo "FAIL: could not read the kernel link range from bootstrap/tests/kernel_verify.sh"
+        pinned_bad=1
+    elif [[ -n "$unwired" ]]; then
+        echo "FAIL: gate scripts that nothing runs:$unwired -- pin each in PINNED_PROOFS, bring it inside kernel_verify.sh's range, or call it from a make target"
+        pinned_bad=1
+    else
+        echo "OK: every run_*.sh is run by make test, by make kernel-verify and the kernel CI (links $gate_lo-$gate_hi), or by its own make target"
+    fi
     exit "$pinned_bad"
 fi
 native_codegen_dispatch_tmp=
@@ -104,6 +133,61 @@ cleanup_run_tests() {
     fi
 }
 trap cleanup_run_tests EXIT
+native_codegen_dispatch_tmp="$(mktemp -d)" || { echo "FAIL: mktemp -d failed (TMPDIR=${TMPDIR:-unset}); refusing to grade"; exit 1; }
+
+# A mutation proof counts as passed only when it exits 0 AND prints its own
+# "PASS:" verdict line: exit status alone would accept a proof gutted to `exit 0`.
+# Its output (stderr merged into stdout) is shown as it runs.
+run_mutation_proof() {
+    pinned_proof "$1" || return 0
+    total=$((total + 1))
+    local -a st
+    "$PWD/$1" 2>&1 | awk '{ print; fflush() } /^PASS:/ { v = 1 } END { exit !v }'
+    st=("${PIPESTATUS[@]}")
+    if [[ "${st[0]}" -eq 0 && "${st[1]}" -eq 0 ]]; then
+        pass=$((pass + 1))
+    else
+        [[ "${st[0]}" -eq 0 ]] && echo "FAIL: $1 exited 0 but printed no PASS: verdict (a proof that never reached its verdict is a FAILED test)"
+        fail=$((fail + 1))
+    fi
+}
+
+# The aggregate-render gate grades the foundational language tests (test_*.herb
+# here) against their committed .expected files and writes each test it graded to
+# MUSTER_MANIFEST. The two lists below are an independent copy of its set. The
+# fence fails unless the gate graded exactly FOUNDATIONAL_GRADED and every
+# test_*.herb on disk is in exactly one list, so a test cannot be dropped from
+# grading, or added without grading, while make test stays green. Each ungraded
+# test's reason is pinned by behavior inside the gate (test_02: the compiler
+# rejects it, ERR 431; test_11/12: deep recursion overflows the native stack); a
+# name added to FOUNDATIONAL_UNGRADED needs such a pin there too.
+FOUNDATIONAL_GRADED="test_01_arith test_03_if_elif test_04_recursion test_05_block_scope test_06_tuples test_07_array test_08_strings_buffer test_09_ref_vs_value test_10_tco test_13_cross_function_tail_call test_14a_bounded_heap test_14b_bounded_heap"
+FOUNDATIONAL_UNGRADED="test_02_short_circuit test_11_non_tail_self_recursion test_12_non_tail_mutual_recursion"
+foundational_manifest="$native_codegen_dispatch_tmp/foundational_graded"
+set_diff() { # want got (sorted line lists) -> "missing: ...; extra: ..."
+    printf 'missing: %s; extra: %s' \
+        "$(comm -23 <(printf '%s\n' "$1") <(printf '%s\n' "$2") | xargs)" \
+        "$(comm -13 <(printf '%s\n' "$1") <(printf '%s\n' "$2") | xargs)"
+}
+check_foundational_partition() {
+    total=$((total + 1))
+    local bad="" want got listed on_disk both f
+    want=$(printf '%s\n' $FOUNDATIONAL_GRADED | sort)
+    got=$(sort "$foundational_manifest" 2>/dev/null)
+    [[ "$got" == "$want" ]] || bad="$bad [the gate graded a different set -- $(set_diff "$want" "$got")]"
+    both=$(printf '%s\n' $FOUNDATIONAL_GRADED $FOUNDATIONAL_UNGRADED | sort | uniq -d | xargs)
+    [[ -z "$both" ]] || bad="$bad [in both lists: $both]"
+    listed=$(printf '%s\n' $FOUNDATIONAL_GRADED $FOUNDATIONAL_UNGRADED | sort -u)
+    on_disk=$(for f in "$PWD"/test_*.herb; do basename "$f" .herb; done | sort)
+    [[ "$on_disk" == "$listed" ]] || bad="$bad [test_*.herb on disk != the two lists -- $(set_diff "$listed" "$on_disk")]"
+    if [[ -z "$bad" ]]; then
+        echo "PASS: foundational tests partition (the aggregate-render gate graded exactly the $(wc -w <<<"$FOUNDATIONAL_GRADED") listed tests; each of the $(wc -l <<<"$on_disk") test_*.herb on disk is graded or one of the $(wc -w <<<"$FOUNDATIONAL_UNGRADED") with a pinned reason)"
+        pass=$((pass + 1))
+    else
+        echo "FAIL: foundational tests partition:$bad"
+        fail=$((fail + 1))
+    fi
+}
 
 run_native_codegen_non_vacuity_check() {
     total=$((total + 1))
@@ -219,14 +303,7 @@ if [[ -d ../../stack ]]; then
     # Prove the lexer native-execution gate BITES (RED-first): a mutated lex rule
     # (a character-class -> token-kind classification) still compiles natively but
     # makes the C-free ELF emit a divergent token stream.
-    if pinned_proof run_lexer_native_mutation.sh; then
-        total=$((total + 1))
-        if "$PWD/run_lexer_native_mutation.sh"; then
-            pass=$((pass + 1))
-        else
-            fail=$((fail + 1))
-        fi
-    fi
+    run_mutation_proof run_lexer_native_mutation.sh
 
 
 
@@ -249,14 +326,7 @@ if [[ -d ../../stack ]]; then
     # Prove the parser native-execution gate BITES (RED-first): a mutated parse rule
     # (an operator -> AST-tag mapping) still compiles natively but makes the C-free
     # ELF emit a divergent S-expression.
-    if pinned_proof run_parser_native_mutation.sh; then
-        total=$((total + 1))
-        if "$PWD/run_parser_native_mutation.sh"; then
-            pass=$((pass + 1))
-        else
-            fail=$((fail + 1))
-        fi
-    fi
+    run_mutation_proof run_parser_native_mutation.sh
 
 
     # Evaluator NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction): the
@@ -278,14 +348,7 @@ if [[ -d ../../stack ]]; then
     # Prove the evaluator native-execution gate BITES (RED-first): a mutated
     # evaluator rule still compiles natively but makes the C-free ELF diverge
     # from the oracle.
-    if pinned_proof run_evaluator_native_mutation.sh; then
-        total=$((total + 1))
-        if "$PWD/run_evaluator_native_mutation.sh"; then
-            pass=$((pass + 1))
-        else
-            fail=$((fail + 1))
-        fi
-    fi
+    run_mutation_proof run_evaluator_native_mutation.sh
 
     # link11 (sovereignty axis, D14 aggregate half): the native back end now
     # canonically renders a `main` returning a FLAT int/bool TUPLE, so the
@@ -296,23 +359,19 @@ if [[ -d ../../stack ]]; then
         total=$((total + 1))
         # muster (link 13): the enduring leg grades the 12 native-output foundational
         # tests C-FREE against their committed .expected files.
-        if AGGREGATE_RENDER_NATIVE_NO_C=1 HERBERT="$HERBERT" "$PWD/run_aggregate_render_native.sh"; then
+        : >"$foundational_manifest"
+        if AGGREGATE_RENDER_NATIVE_NO_C=1 MUSTER_MANIFEST="$foundational_manifest" HERBERT="$HERBERT" "$PWD/run_aggregate_render_native.sh"; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1))
         fi
     fi
+    # The gate's graded list against the fenced set and the test_*.herb on disk.
+    check_foundational_partition
 
     # Prove the aggregate-render gate BITES (RED-first): a mutated renderer still
     # compiles but makes the rendered tuple diverge from the canonical key.
-    if pinned_proof run_aggregate_render_native_mutation.sh; then
-        total=$((total + 1))
-        if "$PWD/run_aggregate_render_native_mutation.sh"; then
-            pass=$((pass + 1))
-        else
-            fail=$((fail + 1))
-        fi
-    fi
+    run_mutation_proof run_aggregate_render_native_mutation.sh
 
 
     # VM NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction): the C-free
@@ -334,14 +393,7 @@ if [[ -d ../../stack ]]; then
     # Prove the VM native-execution gate BITES (RED-first): a mutated bytecode-VM
     # opcode handler still compiles natively but makes the C-free ELF diverge from
     # the oracle.
-    if pinned_proof run_vm_native_mutation.sh; then
-        total=$((total + 1))
-        if "$PWD/run_vm_native_mutation.sh"; then
-            pass=$((pass + 1))
-        else
-            fail=$((fail + 1))
-        fi
-    fi
+    run_mutation_proof run_vm_native_mutation.sh
 
     # Klondike NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction -- the LAST
     # and FIFTH metacircular fragment). The C-free gen-1 seed compiles a one-line
@@ -364,14 +416,7 @@ if [[ -d ../../stack ]]; then
     # Prove the klondike native-execution gate BITES (RED-first): a mutated VM rule
     # (int_binop's + / < / == ) still compiles natively but makes the C-free ELF emit
     # a divergent result tuple.
-    if pinned_proof run_klondike_native_mutation.sh; then
-        total=$((total + 1))
-        if "$PWD/run_klondike_native_mutation.sh"; then
-            pass=$((pass + 1))
-        else
-            fail=$((fail + 1))
-        fi
-    fi
+    run_mutation_proof run_klondike_native_mutation.sh
 
     # Emitter NATIVE-EXECUTION gate (sovereignty axis, Role-C reduction -- the SIXTH and
     # FINAL metacircular fragment). The C-free gen-1 seed compiles a one-line main-adapted
@@ -397,18 +442,10 @@ if [[ -d ../../stack ]]; then
     # Prove the emitter native-execution gate BITES (RED-first): a mutated reachable
     # LOWERING rule (an opcode mapping / a frame-slot allocation / a control-flow branch)
     # still compiles natively but makes the C-free ELF emit a divergent bytecode listing.
-    if pinned_proof run_emitter_native_mutation.sh; then
-        total=$((total + 1))
-        if "$PWD/run_emitter_native_mutation.sh"; then
-            pass=$((pass + 1))
-        else
-            fail=$((fail + 1))
-        fi
-    fi
+    run_mutation_proof run_emitter_native_mutation.sh
 
     NATIVE_CODEGEN_LINK1="$PWD/run_native_codegen_link1.sh"
     backend="$STACK_DIR/native_compile_fragment.herb"
-    native_codegen_dispatch_tmp="$(mktemp -d)"
     # michoi: source the production gen-1 from the committed C-free seed (the C
     # interpreter is no longer in the mint path). ensure_compiler reuses a preset
     # NATIVE_CODEGEN_COMPILER, else acquires the seed, else (only with
