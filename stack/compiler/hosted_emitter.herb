@@ -7,8 +7,36 @@
 -- block was emitted only for a program with one of the located-fault ops
 -- (23/29/31/43/44/60/61/66/67), and any other program ended silently on a full
 -- heap or a failed write. nc_drive appends the fault rodata when this is 1.
+-- It is 2 when the emitted code stores with set (ARR_SET, op 68): the block
+-- then also carries diag_set after exit1, and the rodata ": set: position "
+-- after the write prefix, so no earlier offset moves and every program
+-- without set keeps its image.
 func nc_prog_has_faultable(prog):
+    if nc_funcs_have_op_loop(prog.0, 68, 0, count(prog.0)):
+        return 2
+    end
     return 1
+end
+
+func nc_code_has_op_loop(code, op, i, n):
+    while i < n:
+        if get(code, i).0 == op:
+            return true
+        end
+        i = i + 1
+    end
+    return false
+end
+
+func nc_funcs_have_op_loop(funcs, op, i, n):
+    while i < n:
+        let code = get(funcs, i).4
+        if nc_code_has_op_loop(code, op, 0, count(code)):
+            return true
+        end
+        i = i + 1
+    end
+    return false
 end
 
 -- Little-endian byte-serialization helpers. Now that tonka added * / %, these
@@ -277,12 +305,27 @@ func nc_fault_rodata_len():
     return 284
 end
 
+-- A program that stores with set (has_faultable 2) also has ": set: position "
+-- (16 bytes) after those 284 (nc_append_set_fault_rodata).
+func nc_set_fault_rodata_len(has_faultable):
+    if has_faultable == 2:
+        return 16
+    end
+    return 0
+end
+
 -- The fault-helper block, placed after the entry head. Offsets from its start:
 -- diag_index 0 (106), diag_get 106 (106), diag_append 212 (95), diag_div 307
 -- (50), diag_oom 357 (22), diag_reserve 379 (22), diag_write 401 (60), write_fd2
 -- 461 (46), dec_fd2 507 (53), exit1 560 (12). 572 bytes (418 before K4).
+-- A program that stores with set (has_faultable 2) also carries diag_set at
+-- 572 (106), after everything else: 678 bytes.
 func nc_fault_helper_len():
     return 572
+end
+
+func nc_fault_diag_set_len():
+    return 106
 end
 
 func nc_write_helper_len():
@@ -332,6 +375,9 @@ func nc_entry_layout(has_heap, has_faultable, main_ret, rplan):
     if has_faultable != 0:
         fault_len = nc_fault_helper_len()
     end
+    if has_faultable == 2:
+        fault_len = fault_len + nc_fault_diag_set_len()
+    end
     let fault_start = heap_len + head_len
     let render_start = fault_start + fault_len
     let function_start = render_start + render_len
@@ -368,6 +414,10 @@ end
 
 func nc_fault_diag_write_rel():
     return 401
+end
+
+func nc_fault_diag_set_rel():
+    return nc_fault_helper_len()
 end
 
 func nc_fault_write_fd2_rel():
@@ -432,6 +482,10 @@ end
 
 func nc_fault_write_off():
     return 248
+end
+
+func nc_fault_sep_set_off():
+    return 284
 end
 
 func nc_arg_copy_len_loop(k, nwords, acc):
@@ -852,6 +906,9 @@ func nc_group(code, i, n, fn, funcs, meta, metas):
     end
     if op == 63:
         return (nc_arr_add_len(get(meta.heap_meta, i).1) - 4, i + 1)
+    end
+    if op == 68:
+        return (nc_arr_set_len(get(meta.heap_meta, i).1), i + 1)
     end
     if op == 64:
         return (nc_set_field_len(instr.1, instr.2), i + 1)
@@ -1469,6 +1526,18 @@ func nc_emit_diag_index(buf, ro_base, write_off, dec_off, exit_off):
 end
 
 func nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off):
+    return nc_emit_diag_position_count(buf, ro_base, nc_fault_sep_get_off(), write_off, dec_off, exit_off)
+end
+
+-- set's bounds fault: get's helper with ": set: position " (106 bytes).
+func nc_emit_diag_set(buf, ro_base, write_off, dec_off, exit_off):
+    return nc_emit_diag_position_count(buf, ro_base, nc_fault_sep_set_off(), write_off, dec_off, exit_off)
+end
+
+-- rcx = the position, r9 = the count, r10 = the line: "herbert: line N" +
+-- the 16-byte separator at sep_off + "P out of range (count C)" and a
+-- newline. 106 bytes.
+func nc_emit_diag_position_count(buf, ro_base, sep_off, write_off, dec_off, exit_off):
     do append(buf, 73)
     do append(buf, 137)
     do append(buf, 204)
@@ -1480,7 +1549,7 @@ func nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off):
     do append(buf, 214)
     buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
     buf = nc_emit_diag_dec_r14(buf, dec_off)
-    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_get_off(), 16, write_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, sep_off, 16, write_off)
     buf = nc_emit_diag_dec_r12(buf, dec_off)
     buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_mid_cnt_off(), 21, write_off)
     buf = nc_emit_diag_dec_r13(buf, dec_off)
@@ -2381,6 +2450,15 @@ func nc_emit_fault_helpers(buf, ro_base, helper_start):
     buf = nc_emit_write_fd2(buf)
     buf = nc_emit_dec_fd2(buf, write_off)
     return nc_emit_fault_exit1(buf)
+end
+
+-- diag_set, right after the block above, only in a program that stores with
+-- set (has_faultable 2); it uses the block's write, decimal and exit helpers.
+func nc_emit_set_fault_helper(buf, ro_base, helper_start, has_faultable):
+    if has_faultable != 2:
+        return buf
+    end
+    return nc_emit_diag_set(buf, ro_base, helper_start + nc_fault_write_fd2_rel(), helper_start + nc_fault_dec_fd2_rel(), helper_start + nc_fault_exit1_rel())
 end
 
 func nc_emit_rdi_store_rax(buf, mag):
@@ -4358,6 +4436,80 @@ func nc_emit_get(buf, width, line, diag_get_off, instr_off, oom_off):
     return nc_emit_get_loads(buf, width, 0)
 end
 
+-- ARR_SET (op 68), `do set(a, i, v)`: [array, position, w value words] ->
+-- nothing. get's bounds check, then the words stored over entry i in place:
+--   mov rcx, [rsp + 8w] (position); mov r8, [rsp + 8w + 8] (array header);
+--   mov r9, [r8]; cmp rcx, r9; jb +12; mov r10, line; jmp diag_set;
+--   mov r10, [r8 + 16]; then for w = 1: pop rax; mov [r10 + rcx*8], rax;
+--   else imul rsi, rcx, 8w; jno +12; heap trap; add rsi, r10 and
+--   (pop rax; mov [rsi + 8k], rax) for k = w-1..0, as add stores; add rsp, 16.
+-- No growth, no allocation: aliases see the change. nc_arr_set_len is its length.
+func nc_emit_rsp_load_rcx(buf, mag):
+    do append(buf, 72)
+    do append(buf, 139)
+    if mag <= 127:
+        do append(buf, 76)
+        do append(buf, 36)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 140)
+    do append(buf, 36)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_arr_set(buf, width, line, diag_set_off, instr_off, oom_off):
+    let mag = nc_mul8(width)
+    buf = nc_emit_rsp_load_rcx(buf, mag)
+    buf = nc_emit_rsp_load_r8(buf, mag + 8)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 114)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_set_off, instr_off + nc_disp_len_rsp(mag) + nc_disp_len_rsp_r8(mag + 8) + 8 + nc_fault_route_len())
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    if width == 1:
+        do append(buf, 88)
+        do append(buf, 73)
+        do append(buf, 137)
+        do append(buf, 4)
+        do append(buf, 202)
+    else:
+        do append(buf, 72)
+        do append(buf, 105)
+        do append(buf, 241)
+        buf = nc_append_le32(buf, mag)
+        do append(buf, 113)
+        do append(buf, 12)
+        buf = nc_emit_heap_trap(buf, oom_off)
+        do append(buf, 76)
+        do append(buf, 1)
+        do append(buf, 214)
+        buf = nc_emit_arr_add_stores(buf, width - 1)
+    end
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 16)
+    return buf
+end
+
+func nc_arr_set_len(width):
+    let mag = nc_mul8(width)
+    let head = nc_disp_len_rsp(mag) + nc_disp_len_rsp_r8(mag + 8) + 8 + nc_fault_route_len() + 4
+    if width == 1:
+        return head + 5 + 4
+    end
+    return head + 24 + nc_arr_add_store_len(width, width - 1, 0) + 4
+end
+
 func nc_emit_arr_add_stores(buf, k):
     while k != 0 - 1:
         do append(buf, 88)
@@ -4751,8 +4903,9 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
             return (ck, buf)
         end
         if has_faultable != 0:
-            let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
+            let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len() - nc_set_fault_rodata_len(has_faultable)
             buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan))
+            buf = nc_emit_set_fault_helper(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan), has_faultable)
         end
         ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
         if ck != 0:
@@ -4786,8 +4939,9 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
         return (ck, buf)
     end
     if has_faultable != 0:
-        let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
+        let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len() - nc_set_fault_rodata_len(has_faultable)
         buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan))
+        buf = nc_emit_set_fault_helper(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan), has_faultable)
     end
     ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
     if ck != 0:
@@ -4904,6 +5058,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
             buf = nc_emit_arr_add(buf, get(meta.heap_meta, i).1, oom_off)
         elif op == 63:
             buf = nc_emit_arr_add_keep(buf, get(meta.heap_meta, i).1, oom_off)
+        elif op == 68:
+            buf = nc_emit_arr_set(buf, get(meta.heap_meta, i).1, get(fn.6, i), diag_base + nc_fault_diag_set_rel(), instr_off, oom_off)
         elif op == 64:
             buf = nc_emit_set_field(buf, a, instr.2)
         elif op == 65:
@@ -5000,5 +5156,12 @@ func nc_append_fault_rodata(strings):
     do add(strings, "herbert: out of memory (the 3.5 GiB heap is used up)\n")
     do add(strings, "herbert: cannot reserve the 3.5 GiB heap\n")
     do add(strings, "herbert: cannot write output (error ")
+    return strings
+end
+
+-- set's separator, after the fault rodata, for a program that stores with set
+-- (nc_drive appends it when has_faultable is 2): nc_fault_sep_set_off.
+func nc_append_set_fault_rodata(strings):
+    do add(strings, ": set: position ")
     return strings
 end

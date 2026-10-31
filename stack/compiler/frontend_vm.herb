@@ -1689,6 +1689,14 @@ func op_buffer_fill():
     return 67
 end
 
+-- In-place array store (`do set(a, i, v)`), 68, the next free number. It
+-- replaces entry i of a with v: the same bounds check as get (its own `set:`
+-- wording), no growth and no allocation; it leaves nothing on the stack.
+-- Hosted only: the kernel routes refuse it by their whitelists, as they refuse add.
+func op_arr_set():
+    return 68
+end
+
 func nc_is_hosted_memory_builtin(name):
     return equal(name, "linux_syscall6") or equal(name, "buffer_address") or equal(name, "buffer_get") or equal(name, "buffer_set") or equal(name, "buffer_length") or equal(name, "buffer_copy") or equal(name, "buffer_fill")
 end
@@ -2022,7 +2030,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     if equal(name, "bufset"):
         return emit_instr_line(ir, op_bufset(), 0, 0, call_line)
     end
-    if equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "process_exit"):
+    if equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "flogger") or equal(name, "process_exit"):
         return fault("void builtin in expression")
     end
     return emit_instr_line(ir, op_call(), nc_poly_lowered_call_target(type_pool, poly, caller_inst_idx, call_node_idx, call_line), count(kids), call_line)
@@ -2186,6 +2194,12 @@ func emit_do_call(call_idx, stmt_line, env, ir, strings, nodes, prog_idx, type_p
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr_line(ir, op_arr_add(), 0, 0, stmt_line)
+    end
+    if equal(name, "set"):
+        -- The array, the position and the value, in source order; the call's
+        -- line locates the bounds fault, as get's does.
+        ir = emit_exprs(kids, 0, 3, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr_line(ir, op_arr_set(), 0, 0, node.3)
     end
     if equal(name, "flogger"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
@@ -3438,11 +3452,11 @@ func err_is_builtin_name(name):
     if equal(name, "process_exit") or equal(name, "stderr_write") or equal(name, "stdin_read"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
+    return equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
 end
 
 func err_is_void_builtin(name):
-    return equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "process_exit")
+    return equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "process_exit")
 end
 
 func err_value_builtin_arity(name):
@@ -3516,6 +3530,9 @@ func err_value_builtin_arity(name):
 end
 
 func err_void_builtin_arity(name):
+    if equal(name, "set"):
+        return 3
+    end
     if equal(name, "process_exit"):
         return 1
     end

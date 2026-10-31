@@ -258,6 +258,22 @@ never install an unpinned version instead. Not this class, and not cleared by a 
 (for example `EMULATOR PIN: runner is <codename> …`, a runner release change; move the pin deliberately) and
 `UNPINNED EMULATOR PACKAGE: …` (a new binary from source qemu or bochs; add it to `PINNED`).
 
+### F15 — hosted runner lost (infrastructure, cause unknown)
+
+`kernel-codegen-l1`, one job, mid-step: the job ends `failure` with the annotation `The hosted runner lost
+communication with the server. Anything in your workflow that terminates the runner process, starves it for
+CPU/Memory, or blocks its network access can cause this error.`, no step log is kept, the step it was in stays
+`in_progress` and every later step `pending`.
+
+Seen 2026-10-30: kernel run 41135927638 (`ci/net`, `a6d1e1c`), job `kernel links 58..59`, lost in "kernel gates and
+mutation proofs" after 66 minutes (22:07 to 23:13Z; that group usually takes about 30); the other seven jobs were green
+in 16 to 33 minutes. Re-running that job (attempt 2) was green. Nothing shows whether the runner died or our gates
+starved it.
+
+With no log there is no evidence of a gate failing, so one re-run of the lost job is allowed; record it here. A second
+loss of the same job, on that run or a later one, is no longer this class: treat it as our gates exhausting the runner
+(memory or CPU in that group's emulators) and investigate before any push.
+
 ---
 
 ## What the evidence can establish

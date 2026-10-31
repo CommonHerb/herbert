@@ -2840,34 +2840,24 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
                 if v.0 != 0:
                     return (v.0, v.2, v.3, nc_or_changed(a.4, v.4), 0)
                 end
-                let changed = nc_or_changed(a.4, v.4)
-                env = v.2
-                sig = v.3
-                if a.1 == nc_type_unknown():
-                    let elem = v.1
-                    if elem == nc_type_unknown():
-                        elem = nc_type_unknown()
-                    end
-                    let ar = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 0), env, nc_type_intern_array(pool, elem), sig, fn_idx, funcs, n_params)
-                    return (ar.0, ar.1, ar.2, nc_or_changed(changed, ar.3), 0)
+                return nc_infer_array_store(pool, nodes, prog_idx, get(ckids, 0), a.1, get(ckids, 1), v.1, v.2, v.3, fn_idx, funcs, n_params, call_node.3, nc_or_changed(a.4, v.4))
+            end
+            if equal(name, "set"):
+                -- add's typing with a position between: an array, an int (as
+                -- get's position), then a value of the array's element type.
+                let sa = nc_infer_expr(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params)
+                if sa.0 != 0:
+                    return (sa.0, sa.2, sa.3, sa.4, 0)
                 end
-                if not nc_type_is_array(pool, a.1):
-                    return (nc_infer_fail(pool, 435, call_node.3, ""), env, sig, changed, 0)
+                let sk = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 1), sa.2, nc_type_int(), sa.3, fn_idx, funcs, n_params)
+                if sk.0 != 0:
+                    return (sk.0, sk.1, sk.2, nc_or_changed(sa.4, sk.3), 0)
                 end
-                let elem_t = nc_type_array_elem(pool, a.1)
-                if v.1 == nc_type_unknown():
-                    let vc = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 1), env, elem_t, sig, fn_idx, funcs, n_params)
-                    return (vc.0, vc.1, vc.2, nc_or_changed(changed, vc.3), 0)
+                let sv = nc_infer_expr(pool, nodes, prog_idx, get(ckids, 2), sk.1, sk.2, fn_idx, funcs, n_params)
+                if sv.0 != 0:
+                    return (sv.0, sv.2, sv.3, nc_or_changed(nc_or_changed(sa.4, sk.3), sv.4), 0)
                 end
-                let ok = nc_expect_array_elem(pool, v.1, elem_t, call_node.3)
-                if ok != 0:
-                    return (ok, env, sig, changed, 0)
-                end
-                if nc_type_has_unknown(pool, elem_t) and v.1 != nc_type_unknown():
-                    let ar2 = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 0), env, nc_type_intern_array(pool, v.1), sig, fn_idx, funcs, n_params)
-                    return (ar2.0, ar2.1, ar2.2, nc_or_changed(changed, ar2.3), 0)
-                end
-                return (0, env, sig, changed, 0)
+                return nc_infer_array_store(pool, nodes, prog_idx, get(ckids, 0), sa.1, get(ckids, 2), sv.1, sv.2, sv.3, fn_idx, funcs, n_params, call_node.3, nc_or_changed(nc_or_changed(sa.4, sk.3), sv.4))
             end
             if equal(name, "flogger"):
                 let s = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
@@ -2893,6 +2883,40 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         return (w.0, w.1, w.2, w.3, 0)
     end
     return (nc_infer_fail(pool, 404, node.3, tag), env, sig, 0, 0)
+end
+
+-- The typing that `do add(a, v)` and `do set(a, i, v)` share, after their
+-- arguments are inferred (array a typed at, value v typed vt): an untyped array
+-- takes the value's type as its element type; a non-array is ERR 435; an
+-- untyped value takes the element type; otherwise the value must be of the
+-- element type (ERR 436), and refines an element type still partly unknown.
+-- Returns a statement result (error, env, sig, changed, 0).
+func nc_infer_array_store(pool, nodes, prog_idx, arr_idx, at, val_idx, vt, env, sig, fn_idx, funcs, n_params, line, changed):
+    if at == nc_type_unknown():
+        let elem = vt
+        if elem == nc_type_unknown():
+            elem = nc_type_unknown()
+        end
+        let ar = nc_constrain_expr(pool, nodes, prog_idx, arr_idx, env, nc_type_intern_array(pool, elem), sig, fn_idx, funcs, n_params)
+        return (ar.0, ar.1, ar.2, nc_or_changed(changed, ar.3), 0)
+    end
+    if not nc_type_is_array(pool, at):
+        return (nc_infer_fail(pool, 435, line, ""), env, sig, changed, 0)
+    end
+    let elem_t = nc_type_array_elem(pool, at)
+    if vt == nc_type_unknown():
+        let vc = nc_constrain_expr(pool, nodes, prog_idx, val_idx, env, elem_t, sig, fn_idx, funcs, n_params)
+        return (vc.0, vc.1, vc.2, nc_or_changed(changed, vc.3), 0)
+    end
+    let ok = nc_expect_array_elem(pool, vt, elem_t, line)
+    if ok != 0:
+        return (ok, env, sig, changed, 0)
+    end
+    if nc_type_has_unknown(pool, elem_t) and vt != nc_type_unknown():
+        let ar2 = nc_constrain_expr(pool, nodes, prog_idx, arr_idx, env, nc_type_intern_array(pool, vt), sig, fn_idx, funcs, n_params)
+        return (ar2.0, ar2.1, ar2.2, nc_or_changed(changed, ar2.3), 0)
+    end
+    return (0, env, sig, changed, 0)
 end
 
 func nc_infer_body(pool, nodes, prog_idx, stmts, i, n, env, sig, fn_idx, funcs, n_params, changed):

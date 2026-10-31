@@ -1689,6 +1689,14 @@ func op_buffer_fill():
     return 67
 end
 
+-- In-place array store (`do set(a, i, v)`), 68, the next free number. It
+-- replaces entry i of a with v: the same bounds check as get (its own `set:`
+-- wording), no growth and no allocation; it leaves nothing on the stack.
+-- Hosted only: the kernel routes refuse it by their whitelists, as they refuse add.
+func op_arr_set():
+    return 68
+end
+
 func nc_is_hosted_memory_builtin(name):
     return equal(name, "linux_syscall6") or equal(name, "buffer_address") or equal(name, "buffer_get") or equal(name, "buffer_set") or equal(name, "buffer_length") or equal(name, "buffer_copy") or equal(name, "buffer_fill")
 end
@@ -2022,7 +2030,7 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     if equal(name, "bufset"):
         return emit_instr_line(ir, op_bufset(), 0, 0, call_line)
     end
-    if equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "process_exit"):
+    if equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "flogger") or equal(name, "process_exit"):
         return fault("void builtin in expression")
     end
     return emit_instr_line(ir, op_call(), nc_poly_lowered_call_target(type_pool, poly, caller_inst_idx, call_node_idx, call_line), count(kids), call_line)
@@ -2186,6 +2194,12 @@ func emit_do_call(call_idx, stmt_line, env, ir, strings, nodes, prog_idx, type_p
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         ir = emit_expr(get(kids, 1), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
         return emit_instr_line(ir, op_arr_add(), 0, 0, stmt_line)
+    end
+    if equal(name, "set"):
+        -- The array, the position and the value, in source order; the call's
+        -- line locates the bounds fault, as get's does.
+        ir = emit_exprs(kids, 0, 3, env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
+        return emit_instr_line(ir, op_arr_set(), 0, 0, node.3)
     end
     if equal(name, "flogger"):
         ir = emit_expr(get(kids, 0), env, ir, strings, nodes, prog_idx, type_pool, caller_inst_idx, poly)
@@ -3438,11 +3452,11 @@ func err_is_builtin_name(name):
     if equal(name, "process_exit") or equal(name, "stderr_write") or equal(name, "stdin_read"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
+    return equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
 end
 
 func err_is_void_builtin(name):
-    return equal(name, "append") or equal(name, "add") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "process_exit")
+    return equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "process_exit")
 end
 
 func err_value_builtin_arity(name):
@@ -3516,6 +3530,9 @@ func err_value_builtin_arity(name):
 end
 
 func err_void_builtin_arity(name):
+    if equal(name, "set"):
+        return 3
+    end
     if equal(name, "process_exit"):
         return 1
     end
@@ -6369,34 +6386,24 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
                 if v.0 != 0:
                     return (v.0, v.2, v.3, nc_or_changed(a.4, v.4), 0)
                 end
-                let changed = nc_or_changed(a.4, v.4)
-                env = v.2
-                sig = v.3
-                if a.1 == nc_type_unknown():
-                    let elem = v.1
-                    if elem == nc_type_unknown():
-                        elem = nc_type_unknown()
-                    end
-                    let ar = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 0), env, nc_type_intern_array(pool, elem), sig, fn_idx, funcs, n_params)
-                    return (ar.0, ar.1, ar.2, nc_or_changed(changed, ar.3), 0)
+                return nc_infer_array_store(pool, nodes, prog_idx, get(ckids, 0), a.1, get(ckids, 1), v.1, v.2, v.3, fn_idx, funcs, n_params, call_node.3, nc_or_changed(a.4, v.4))
+            end
+            if equal(name, "set"):
+                -- add's typing with a position between: an array, an int (as
+                -- get's position), then a value of the array's element type.
+                let sa = nc_infer_expr(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params)
+                if sa.0 != 0:
+                    return (sa.0, sa.2, sa.3, sa.4, 0)
                 end
-                if not nc_type_is_array(pool, a.1):
-                    return (nc_infer_fail(pool, 435, call_node.3, ""), env, sig, changed, 0)
+                let sk = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 1), sa.2, nc_type_int(), sa.3, fn_idx, funcs, n_params)
+                if sk.0 != 0:
+                    return (sk.0, sk.1, sk.2, nc_or_changed(sa.4, sk.3), 0)
                 end
-                let elem_t = nc_type_array_elem(pool, a.1)
-                if v.1 == nc_type_unknown():
-                    let vc = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 1), env, elem_t, sig, fn_idx, funcs, n_params)
-                    return (vc.0, vc.1, vc.2, nc_or_changed(changed, vc.3), 0)
+                let sv = nc_infer_expr(pool, nodes, prog_idx, get(ckids, 2), sk.1, sk.2, fn_idx, funcs, n_params)
+                if sv.0 != 0:
+                    return (sv.0, sv.2, sv.3, nc_or_changed(nc_or_changed(sa.4, sk.3), sv.4), 0)
                 end
-                let ok = nc_expect_array_elem(pool, v.1, elem_t, call_node.3)
-                if ok != 0:
-                    return (ok, env, sig, changed, 0)
-                end
-                if nc_type_has_unknown(pool, elem_t) and v.1 != nc_type_unknown():
-                    let ar2 = nc_constrain_expr(pool, nodes, prog_idx, get(ckids, 0), env, nc_type_intern_array(pool, v.1), sig, fn_idx, funcs, n_params)
-                    return (ar2.0, ar2.1, ar2.2, nc_or_changed(changed, ar2.3), 0)
-                end
-                return (0, env, sig, changed, 0)
+                return nc_infer_array_store(pool, nodes, prog_idx, get(ckids, 0), sa.1, get(ckids, 2), sv.1, sv.2, sv.3, fn_idx, funcs, n_params, call_node.3, nc_or_changed(nc_or_changed(sa.4, sk.3), sv.4))
             end
             if equal(name, "flogger"):
                 let s = nc_constrain_flogger_string_value(pool, nodes, prog_idx, get(ckids, 0), env, sig, fn_idx, funcs, n_params, call_node.3)
@@ -6422,6 +6429,40 @@ func nc_infer_stmt(pool, nodes, prog_idx, stmt_idx, env, sig, fn_idx, funcs, n_p
         return (w.0, w.1, w.2, w.3, 0)
     end
     return (nc_infer_fail(pool, 404, node.3, tag), env, sig, 0, 0)
+end
+
+-- The typing that `do add(a, v)` and `do set(a, i, v)` share, after their
+-- arguments are inferred (array a typed at, value v typed vt): an untyped array
+-- takes the value's type as its element type; a non-array is ERR 435; an
+-- untyped value takes the element type; otherwise the value must be of the
+-- element type (ERR 436), and refines an element type still partly unknown.
+-- Returns a statement result (error, env, sig, changed, 0).
+func nc_infer_array_store(pool, nodes, prog_idx, arr_idx, at, val_idx, vt, env, sig, fn_idx, funcs, n_params, line, changed):
+    if at == nc_type_unknown():
+        let elem = vt
+        if elem == nc_type_unknown():
+            elem = nc_type_unknown()
+        end
+        let ar = nc_constrain_expr(pool, nodes, prog_idx, arr_idx, env, nc_type_intern_array(pool, elem), sig, fn_idx, funcs, n_params)
+        return (ar.0, ar.1, ar.2, nc_or_changed(changed, ar.3), 0)
+    end
+    if not nc_type_is_array(pool, at):
+        return (nc_infer_fail(pool, 435, line, ""), env, sig, changed, 0)
+    end
+    let elem_t = nc_type_array_elem(pool, at)
+    if vt == nc_type_unknown():
+        let vc = nc_constrain_expr(pool, nodes, prog_idx, val_idx, env, elem_t, sig, fn_idx, funcs, n_params)
+        return (vc.0, vc.1, vc.2, nc_or_changed(changed, vc.3), 0)
+    end
+    let ok = nc_expect_array_elem(pool, vt, elem_t, line)
+    if ok != 0:
+        return (ok, env, sig, changed, 0)
+    end
+    if nc_type_has_unknown(pool, elem_t) and vt != nc_type_unknown():
+        let ar2 = nc_constrain_expr(pool, nodes, prog_idx, arr_idx, env, nc_type_intern_array(pool, vt), sig, fn_idx, funcs, n_params)
+        return (ar2.0, ar2.1, ar2.2, nc_or_changed(changed, ar2.3), 0)
+    end
+    return (0, env, sig, changed, 0)
 end
 
 func nc_infer_body(pool, nodes, prog_idx, stmts, i, n, env, sig, fn_idx, funcs, n_params, changed):
@@ -7038,6 +7079,9 @@ func nc_opcode_name_for_diag(op):
     if op == 67:
         return "BUFFER_FILL"
     end
+    if op == 68:
+        return "ARR_SET"
+    end
     if op == 57:
         return "BOOT_READ"
     end
@@ -7580,7 +7624,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         elif na_type != 0:
             return MetaScan(nc_fail(439, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        if (op >= 26 and op <= 32) or op == 67:
+        if (op >= 26 and op <= 32) or op == 67 or op == 68:
             has_heap = 1
         end
         max_stack = nc_max_i(max_stack, nc_stack_word_depth(pool, stack))
@@ -7865,6 +7909,32 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             end
             heap_entry = (3, elem_w, elem_t)
             stack = arr.1
+        elif op == 68:
+            -- ARR_SET: [array, int position, value] -> nothing. Records the
+            -- element's width for the emitter, as GET and ARR_ADD do.
+            let val = nc_stack_pop(stack, line)
+            if val.0 != 0:
+                return MetaScan(val.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            let idx = nc_meta_pop_expect(pool, val.1, nc_type_int(), line)
+            if idx.0 != 0:
+                return MetaScan(idx.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            let arr = nc_stack_pop(idx.1, line)
+            if arr.0 != 0:
+                return MetaScan(arr.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            if not nc_type_is_array(pool, arr.2):
+                return MetaScan(nc_fail(435, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            let elem_t = nc_type_array_elem(pool, arr.2)
+            let elem_w = nc_type_width(pool, elem_t)
+            let ok = nc_expect_array_elem(pool, val.2, elem_t, line)
+            if ok != 0:
+                return MetaScan(ok, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            heap_entry = (5, elem_w, elem_t)
+            stack = arr.1
         elif op == 63:
             -- ARR_ADD_KEEP: add, leaving the array (a ref record) on the stack.
             let val = nc_stack_pop(stack, line)
@@ -8132,8 +8202,36 @@ end
 -- block was emitted only for a program with one of the located-fault ops
 -- (23/29/31/43/44/60/61/66/67), and any other program ended silently on a full
 -- heap or a failed write. nc_drive appends the fault rodata when this is 1.
+-- It is 2 when the emitted code stores with set (ARR_SET, op 68): the block
+-- then also carries diag_set after exit1, and the rodata ": set: position "
+-- after the write prefix, so no earlier offset moves and every program
+-- without set keeps its image.
 func nc_prog_has_faultable(prog):
+    if nc_funcs_have_op_loop(prog.0, 68, 0, count(prog.0)):
+        return 2
+    end
     return 1
+end
+
+func nc_code_has_op_loop(code, op, i, n):
+    while i < n:
+        if get(code, i).0 == op:
+            return true
+        end
+        i = i + 1
+    end
+    return false
+end
+
+func nc_funcs_have_op_loop(funcs, op, i, n):
+    while i < n:
+        let code = get(funcs, i).4
+        if nc_code_has_op_loop(code, op, 0, count(code)):
+            return true
+        end
+        i = i + 1
+    end
+    return false
 end
 
 -- Little-endian byte-serialization helpers. Now that tonka added * / %, these
@@ -8402,12 +8500,27 @@ func nc_fault_rodata_len():
     return 284
 end
 
+-- A program that stores with set (has_faultable 2) also has ": set: position "
+-- (16 bytes) after those 284 (nc_append_set_fault_rodata).
+func nc_set_fault_rodata_len(has_faultable):
+    if has_faultable == 2:
+        return 16
+    end
+    return 0
+end
+
 -- The fault-helper block, placed after the entry head. Offsets from its start:
 -- diag_index 0 (106), diag_get 106 (106), diag_append 212 (95), diag_div 307
 -- (50), diag_oom 357 (22), diag_reserve 379 (22), diag_write 401 (60), write_fd2
 -- 461 (46), dec_fd2 507 (53), exit1 560 (12). 572 bytes (418 before K4).
+-- A program that stores with set (has_faultable 2) also carries diag_set at
+-- 572 (106), after everything else: 678 bytes.
 func nc_fault_helper_len():
     return 572
+end
+
+func nc_fault_diag_set_len():
+    return 106
 end
 
 func nc_write_helper_len():
@@ -8457,6 +8570,9 @@ func nc_entry_layout(has_heap, has_faultable, main_ret, rplan):
     if has_faultable != 0:
         fault_len = nc_fault_helper_len()
     end
+    if has_faultable == 2:
+        fault_len = fault_len + nc_fault_diag_set_len()
+    end
     let fault_start = heap_len + head_len
     let render_start = fault_start + fault_len
     let function_start = render_start + render_len
@@ -8493,6 +8609,10 @@ end
 
 func nc_fault_diag_write_rel():
     return 401
+end
+
+func nc_fault_diag_set_rel():
+    return nc_fault_helper_len()
 end
 
 func nc_fault_write_fd2_rel():
@@ -8557,6 +8677,10 @@ end
 
 func nc_fault_write_off():
     return 248
+end
+
+func nc_fault_sep_set_off():
+    return 284
 end
 
 func nc_arg_copy_len_loop(k, nwords, acc):
@@ -8977,6 +9101,9 @@ func nc_group(code, i, n, fn, funcs, meta, metas):
     end
     if op == 63:
         return (nc_arr_add_len(get(meta.heap_meta, i).1) - 4, i + 1)
+    end
+    if op == 68:
+        return (nc_arr_set_len(get(meta.heap_meta, i).1), i + 1)
     end
     if op == 64:
         return (nc_set_field_len(instr.1, instr.2), i + 1)
@@ -9594,6 +9721,18 @@ func nc_emit_diag_index(buf, ro_base, write_off, dec_off, exit_off):
 end
 
 func nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off):
+    return nc_emit_diag_position_count(buf, ro_base, nc_fault_sep_get_off(), write_off, dec_off, exit_off)
+end
+
+-- set's bounds fault: get's helper with ": set: position " (106 bytes).
+func nc_emit_diag_set(buf, ro_base, write_off, dec_off, exit_off):
+    return nc_emit_diag_position_count(buf, ro_base, nc_fault_sep_set_off(), write_off, dec_off, exit_off)
+end
+
+-- rcx = the position, r9 = the count, r10 = the line: "herbert: line N" +
+-- the 16-byte separator at sep_off + "P out of range (count C)" and a
+-- newline. 106 bytes.
+func nc_emit_diag_position_count(buf, ro_base, sep_off, write_off, dec_off, exit_off):
     do append(buf, 73)
     do append(buf, 137)
     do append(buf, 204)
@@ -9605,7 +9744,7 @@ func nc_emit_diag_get(buf, ro_base, write_off, dec_off, exit_off):
     do append(buf, 214)
     buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_prefix_off(), 14, write_off)
     buf = nc_emit_diag_dec_r14(buf, dec_off)
-    buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_sep_get_off(), 16, write_off)
+    buf = nc_emit_fault_fragment(buf, ro_base, sep_off, 16, write_off)
     buf = nc_emit_diag_dec_r12(buf, dec_off)
     buf = nc_emit_fault_fragment(buf, ro_base, nc_fault_mid_cnt_off(), 21, write_off)
     buf = nc_emit_diag_dec_r13(buf, dec_off)
@@ -10506,6 +10645,15 @@ func nc_emit_fault_helpers(buf, ro_base, helper_start):
     buf = nc_emit_write_fd2(buf)
     buf = nc_emit_dec_fd2(buf, write_off)
     return nc_emit_fault_exit1(buf)
+end
+
+-- diag_set, right after the block above, only in a program that stores with
+-- set (has_faultable 2); it uses the block's write, decimal and exit helpers.
+func nc_emit_set_fault_helper(buf, ro_base, helper_start, has_faultable):
+    if has_faultable != 2:
+        return buf
+    end
+    return nc_emit_diag_set(buf, ro_base, helper_start + nc_fault_write_fd2_rel(), helper_start + nc_fault_dec_fd2_rel(), helper_start + nc_fault_exit1_rel())
 end
 
 func nc_emit_rdi_store_rax(buf, mag):
@@ -12483,6 +12631,80 @@ func nc_emit_get(buf, width, line, diag_get_off, instr_off, oom_off):
     return nc_emit_get_loads(buf, width, 0)
 end
 
+-- ARR_SET (op 68), `do set(a, i, v)`: [array, position, w value words] ->
+-- nothing. get's bounds check, then the words stored over entry i in place:
+--   mov rcx, [rsp + 8w] (position); mov r8, [rsp + 8w + 8] (array header);
+--   mov r9, [r8]; cmp rcx, r9; jb +12; mov r10, line; jmp diag_set;
+--   mov r10, [r8 + 16]; then for w = 1: pop rax; mov [r10 + rcx*8], rax;
+--   else imul rsi, rcx, 8w; jno +12; heap trap; add rsi, r10 and
+--   (pop rax; mov [rsi + 8k], rax) for k = w-1..0, as add stores; add rsp, 16.
+-- No growth, no allocation: aliases see the change. nc_arr_set_len is its length.
+func nc_emit_rsp_load_rcx(buf, mag):
+    do append(buf, 72)
+    do append(buf, 139)
+    if mag <= 127:
+        do append(buf, 76)
+        do append(buf, 36)
+        do append(buf, mag)
+        return buf
+    end
+    do append(buf, 140)
+    do append(buf, 36)
+    return nc_append_le32(buf, mag)
+end
+
+func nc_emit_arr_set(buf, width, line, diag_set_off, instr_off, oom_off):
+    let mag = nc_mul8(width)
+    buf = nc_emit_rsp_load_rcx(buf, mag)
+    buf = nc_emit_rsp_load_r8(buf, mag + 8)
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 8)
+    do append(buf, 76)
+    do append(buf, 57)
+    do append(buf, 201)
+    do append(buf, 114)
+    do append(buf, nc_fault_route_len())
+    buf = nc_emit_fault_route(buf, line, diag_set_off, instr_off + nc_disp_len_rsp(mag) + nc_disp_len_rsp_r8(mag + 8) + 8 + nc_fault_route_len())
+    do append(buf, 77)
+    do append(buf, 139)
+    do append(buf, 80)
+    do append(buf, 16)
+    if width == 1:
+        do append(buf, 88)
+        do append(buf, 73)
+        do append(buf, 137)
+        do append(buf, 4)
+        do append(buf, 202)
+    else:
+        do append(buf, 72)
+        do append(buf, 105)
+        do append(buf, 241)
+        buf = nc_append_le32(buf, mag)
+        do append(buf, 113)
+        do append(buf, 12)
+        buf = nc_emit_heap_trap(buf, oom_off)
+        do append(buf, 76)
+        do append(buf, 1)
+        do append(buf, 214)
+        buf = nc_emit_arr_add_stores(buf, width - 1)
+    end
+    do append(buf, 72)
+    do append(buf, 131)
+    do append(buf, 196)
+    do append(buf, 16)
+    return buf
+end
+
+func nc_arr_set_len(width):
+    let mag = nc_mul8(width)
+    let head = nc_disp_len_rsp(mag) + nc_disp_len_rsp_r8(mag + 8) + 8 + nc_fault_route_len() + 4
+    if width == 1:
+        return head + 5 + 4
+    end
+    return head + 24 + nc_arr_add_store_len(width, width - 1, 0) + 4
+end
+
 func nc_emit_arr_add_stores(buf, k):
     while k != 0 - 1:
         do append(buf, 88)
@@ -12876,8 +13098,9 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
             return (ck, buf)
         end
         if has_faultable != 0:
-            let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
+            let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len() - nc_set_fault_rodata_len(has_faultable)
             buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan))
+            buf = nc_emit_set_fault_helper(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan), has_faultable)
         end
         ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
         if ck != 0:
@@ -12911,8 +13134,9 @@ func nc_emit_entry_stub(buf, main_entry, has_clogger, has_heap, has_faultable, m
         return (ck, buf)
     end
     if has_faultable != 0:
-        let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len()
+        let ro_base = code_len + nc_rodata_len(strings) - nc_fault_rodata_len() - nc_set_fault_rodata_len(has_faultable)
         buf = nc_emit_fault_helpers(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan))
+        buf = nc_emit_set_fault_helper(buf, ro_base, nc_fault_helper_start(has_heap, has_faultable, main_ret, rplan), has_faultable)
     end
     ck = nc_emit_entry_check(start_len, buf, layout.5, "entry-fault")
     if ck != 0:
@@ -13029,6 +13253,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
             buf = nc_emit_arr_add(buf, get(meta.heap_meta, i).1, oom_off)
         elif op == 63:
             buf = nc_emit_arr_add_keep(buf, get(meta.heap_meta, i).1, oom_off)
+        elif op == 68:
+            buf = nc_emit_arr_set(buf, get(meta.heap_meta, i).1, get(fn.6, i), diag_base + nc_fault_diag_set_rel(), instr_off, oom_off)
         elif op == 64:
             buf = nc_emit_set_field(buf, a, instr.2)
         elif op == 65:
@@ -13125,6 +13351,13 @@ func nc_append_fault_rodata(strings):
     do add(strings, "herbert: out of memory (the 3.5 GiB heap is used up)\n")
     do add(strings, "herbert: cannot reserve the 3.5 GiB heap\n")
     do add(strings, "herbert: cannot write output (error ")
+    return strings
+end
+
+-- set's separator, after the fault rodata, for a program that stores with set
+-- (nc_drive appends it when has_faultable is 2): nc_fault_sep_set_off.
+func nc_append_set_fault_rodata(strings):
+    do add(strings, ": set: position ")
     return strings
 end
 
@@ -16001,6 +16234,9 @@ func nc_drive(source):
     let has_faultable = nc_prog_has_faultable(prog)
     if has_faultable != 0:
         do nc_append_fault_rodata(prog.1)
+    end
+    if has_faultable == 2:
+        do nc_append_set_fault_rodata(prog.1)
     end
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
     if analyzed.0 != 0:

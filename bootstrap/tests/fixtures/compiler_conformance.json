@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have. Two more cases the same day pin what that batch's review found still unpinned: an upward overlapping buffer_copy of twelve bytes, which runs the eight-byte backward step once and the byte tail four times, and a buffer_copy destination start past the destination's length. The 2026-10-27 diagnostics cases pin the nesting limit from both sides (a flat sum of 2,000 terms and 1,999 nested ifs compile; 2,001 terms and 2,000 ifs are refused with ERR 405 at the first node past the limit), the array-of-unknown ERR 438 program the K1 review wrote, and a located ERR 430 and ERR 433 on a never-returning helper's result; the same day the missing-return cases moved from ERR 424/415/416 to ERR 406 at the function's own line and the ERR 436 case gained its line. The K3 cases (2026-10-27) pin the \\t, \\r and \\0 escapes in strings and chars and how main renders them, a backslash-space still unnamed, and the four ERR 429 function-table texts; the same day the nine reserved-name cases took the ERR 429 text that names the builtin and the two unknown-escape cases the ERR 104 text that names the escape. The K4 cases (2026-10-28) pin the located division-by-zero message for / and % on different lines (a modulo inside a helper, and a modulo by zero in a tuple after good divisions), output written before the fault kept, and the out-of-memory message when one buffer_fill asks for more than the 3.5 GiB heap, which fails before any memory is touched.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have. Two more cases the same day pin what that batch's review found still unpinned: an upward overlapping buffer_copy of twelve bytes, which runs the eight-byte backward step once and the byte tail four times, and a buffer_copy destination start past the destination's length. The 2026-10-27 diagnostics cases pin the nesting limit from both sides (a flat sum of 2,000 terms and 1,999 nested ifs compile; 2,001 terms and 2,000 ifs are refused with ERR 405 at the first node past the limit), the array-of-unknown ERR 438 program the K1 review wrote, and a located ERR 430 and ERR 433 on a never-returning helper's result; the same day the missing-return cases moved from ERR 424/415/416 to ERR 406 at the function's own line and the ERR 436 case gained its line. The K3 cases (2026-10-27) pin the \\t, \\r and \\0 escapes in strings and chars and how main renders them, a backslash-space still unnamed, and the four ERR 429 function-table texts; the same day the nine reserved-name cases took the ERR 429 text that names the builtin and the two unknown-escape cases the ERR 104 text that names the escape. The K4 cases (2026-10-28) pin the located division-by-zero message for / and % on different lines (a modulo inside a helper, and a modulo by zero in a tuple after good divisions), output written before the fault kept, and the out-of-memory message when one buffer_fill asks for more than the 3.5 GiB heap, which fails before any memory is touched. The set cases (2026-10-31) pin `do set(a, i, v)`: in-place replacement of the first, last and a middle entry for ints, bools, strings, tuples, value and reference records, nested arrays, 18-word entries and 15-word entries (the one width whose position and array loads take different displacement sizes); an alias, a helper's parameter and a later add seeing the change; the located bounds fault in get's shape with `set:` at the count, far beyond, on an empty array, at a wrapped position and for 18- and 15-word entries, with output written before it kept and nothing after it; twenty million sets in a loop moving the heap by nothing; and ERR 420 (too few and too many arguments), 440, 429, 447, 435, 436 and 430 at their lines.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -3344,6 +3344,151 @@
       "stdout": "start\n",
       "stderr": "herbert: out of memory (the 3.5 GiB heap is used up)\n",
       "status": 1
+    },
+    {
+      "id": "set-int-first-last", "profile": "run",
+      "source": "func main():\n    let a = new_array(int)\n    do add(a, 1)\n    do add(a, 2)\n    do add(a, 3)\n    do add(a, 4)\n    do set(a, 0, 10)\n    do set(a, 3, 40)\n    do set(a, 1, 20)\n    do set(a, 1, 21)\n    return (get(a, 0), get(a, 1), get(a, 2), get(a, 3), count(a))\nend\n",
+      "stdin": "", "stdout": "(10, 21, 3, 40, 4)\n", "status": 0
+    },
+    {
+      "id": "set-bool", "profile": "run",
+      "source": "func main():\n    let a = new_array(bool)\n    do add(a, true)\n    do add(a, false)\n    do add(a, true)\n    do set(a, 0, false)\n    do set(a, 1, true)\n    do set(a, 2, true)\n    return (get(a, 0), get(a, 1), get(a, 2), count(a))\nend\n",
+      "stdin": "", "stdout": "(false, true, true, 3)\n", "status": 0
+    },
+    {
+      "id": "set-string", "profile": "run",
+      "source": "func main():\n    let a = new_array(string)\n    do add(a, \"first\")\n    do add(a, \"middle\")\n    do add(a, \"last\")\n    do set(a, 2, \"end\")\n    do set(a, 0, \"\")\n    let b = new_buffer()\n    do append(b, 104)\n    do append(b, 105)\n    do set(a, 1, freeze(b))\n    return (get(a, 0), get(a, 1), get(a, 2), length(get(a, 1)), count(a))\nend\n",
+      "stdin": "", "stdout": "(\"\", \"hi\", \"end\", 2, 3)\n", "status": 0
+    },
+    {
+      "id": "set-tuple", "profile": "run",
+      "source": "func main():\n    let a = new_array((int, (bool, string)))\n    do add(a, (1, (true, \"a\")))\n    do add(a, (2, (false, \"b\")))\n    do set(a, 1, (20, (true, \"bb\")))\n    do set(a, 0, (10, (false, \"aa\")))\n    let x = get(a, 0)\n    let y = get(a, 1)\n    return (x.0, x.1.0, x.1.1, y.0, y.1.0, y.1.1, count(a))\nend\n",
+      "stdin": "", "stdout": "(10, false, \"aa\", 20, true, \"bb\", 2)\n", "status": 0
+    },
+    {
+      "id": "set-record", "profile": "run",
+      "source": "record Point:\n    x: int\n    y: int\n    label: string\nend\n\nfunc main():\n    let a = new_array(Point)\n    do add(a, Point(1, 2, \"a\"))\n    do add(a, Point(3, 4, \"b\"))\n    do add(a, Point(5, 6, \"c\"))\n    do set(a, 1, Point(30, 40, \"B\"))\n    return (get(a, 0).x, get(a, 1).x, get(a, 1).y, get(a, 1).label, get(a, 2).label)\nend\n",
+      "stdin": "", "stdout": "(1, 30, 40, \"B\", \"c\")\n", "status": 0
+    },
+    {
+      "id": "set-ref-record", "profile": "run",
+      "source": "ref record Counter:\n    n: int\n    name: string\nend\n\nfunc main():\n    let a = new_array(Counter)\n    let c1 = Counter(1, \"one\")\n    let c2 = Counter(2, \"two\")\n    do add(a, c1)\n    do add(a, c1)\n    do set(a, 0, c2)\n    c2.n = 22\n    c1.n = 11\n    return (get(a, 0).n, get(a, 0).name, get(a, 1).n, get(a, 1).name)\nend\n",
+      "stdin": "", "stdout": "(22, \"two\", 11, \"one\")\n", "status": 0
+    },
+    {
+      "id": "set-nested-array", "profile": "run",
+      "source": "func main():\n    let grid = new_array(array(int))\n    let row0 = new_array(int)\n    do add(row0, 1)\n    do add(row0, 2)\n    let row1 = new_array(int)\n    do add(row1, 3)\n    do add(grid, row0)\n    do add(grid, row0)\n    do set(grid, 1, row1)\n    do set(get(grid, 0), 1, 20)\n    do set(get(grid, 1), 0, 30)\n    do add(row1, 4)\n    return (get(row0, 1), get(get(grid, 0), 1), get(get(grid, 1), 0), count(get(grid, 1)), get(row1, 0), count(grid))\nend\n",
+      "stdin": "", "stdout": "(20, 20, 30, 2, 30, 2)\n", "status": 0
+    },
+    {
+      "id": "set-alias-and-helper", "profile": "run",
+      "source": "func put(arr, i, v):\n    do set(arr, i, v)\n    return count(arr)\nend\n\nfunc main():\n    let a = new_array(int)\n    do add(a, 5)\n    do add(a, 6)\n    let b = a\n    do set(b, 0, 50)\n    let n = put(a, 1, 60)\n    let s = new_array(string)\n    do add(s, \"x\")\n    let m = put(s, 0, \"y\")\n    return (get(a, 0), get(b, 1), n, get(s, 0), m)\nend\n",
+      "stdin": "", "stdout": "(50, 60, 2, \"y\", 1)\n", "status": 0
+    },
+    {
+      "id": "set-wide-element", "profile": "run",
+      "source": "func main():\n    let a = new_array(((int, int, int, int, int, int, int, int), (int, int, int, int, int, int, int, int), string))\n    let z = (0, 0, 0, 0, 0, 0, 0, 0)\n    do add(a, (z, z, \"zero\"))\n    do add(a, (z, z, \"zero\"))\n    do set(a, 1, ((1, 2, 3, 4, 5, 6, 7, 8), (9, 10, 11, 12, 13, 14, 15, 16), \"wide\"))\n    let e = get(a, 1)\n    let f = get(a, 0)\n    return (e.0.0, e.0.7, e.1.0, e.1.7, e.2, f.1.7, f.2)\nend\n",
+      "stdin": "", "stdout": "(1, 8, 9, 16, \"wide\", 0, \"zero\")\n", "status": 0
+    },
+    {
+      "id": "set-out-of-range-at-count", "profile": "run-stdio",
+      "source": "func main():\n    let a = new_array(int)\n    do add(a, 7)\n    do add(a, 8)\n    do add(a, 9)\n    do set(a, 2, 90)\n    do flogger(\"before\\n\")\n    do set(a, 3, 100)\n    do flogger(\"after\\n\")\n    return get(a, 2)\nend\n",
+      "stdin": "",
+      "stdout": "before\n",
+      "stderr": "herbert: line 8: set: position 3 out of range (count 3)\n",
+      "status": 1
+    },
+    {
+      "id": "set-out-of-range-far", "profile": "run-stdio",
+      "source": "func poke(arr, i):\n    do set(arr, i, true)\n    return 0\nend\n\nfunc main():\n    let a = new_array(bool)\n    do add(a, false)\n    do flogger(\"kept\")\n    let r = poke(a, 0)\n    let s = poke(a, 1000000)\n    do flogger(\"lost\")\n    return get(a, 0)\nend\n",
+      "stdin": "",
+      "stdout": "kept",
+      "stderr": "herbert: line 2: set: position 1000000 out of range (count 1)\n",
+      "status": 1
+    },
+    {
+      "id": "set-out-of-range-empty", "profile": "run-stdio",
+      "source": "func main():\n    let a = new_array(string)\n    do set(a, 0, \"x\")\n    return 0\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 3: set: position 0 out of range (count 0)\n",
+      "status": 1
+    },
+    {
+      "id": "set-out-of-range-wrapped", "profile": "run-stdio",
+      "source": "func main():\n    let a = new_array((int, string))\n    do add(a, (1, \"a\"))\n    do set(a, 0 - 1, (2, \"b\"))\n    return 0\nend\n",
+      "stdin": "",
+      "stdout": "",
+      "stderr": "herbert: line 4: set: position 18446744073709551615 out of range (count 1)\n",
+      "status": 1
+    },
+    {
+      "id": "set-out-of-range-wide", "profile": "run-stdio",
+      "source": "func main():\n    let a = new_array(((int, int, int, int, int, int, int, int), (int, int, int, int, int, int, int, int), string))\n    let z = (0, 0, 0, 0, 0, 0, 0, 0)\n    do add(a, (z, z, \"zero\"))\n    do flogger(\"one\\n\")\n    do set(a, 1, (z, z, \"two\"))\n    return count(a)\nend\n",
+      "stdin": "",
+      "stdout": "one\n",
+      "stderr": "herbert: line 6: set: position 1 out of range (count 1)\n",
+      "status": 1
+    },
+    {
+      "id": "set-width-15", "profile": "run",
+      "source": "record W15:\n    f0: int\n    f1: int\n    f2: int\n    f3: int\n    f4: int\n    f5: int\n    f6: int\n    f7: int\n    f8: int\n    f9: int\n    f10: int\n    f11: int\n    f12: int\n    f13: int\n    f14: int\nend\n\nfunc main():\n    let a = new_array(W15)\n    do add(a, W15(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))\n    do add(a, W15(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))\n    do add(a, W15(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))\n    do set(a, 1, W15(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15))\n    let e = get(a, 1)\n    let z = get(a, 2)\n    return (e.f0, e.f7, e.f14, get(a, 0).f14, z.f0, count(a))\nend\n",
+      "stdin": "",
+      "stdout": "(1, 8, 15, 0, 0, 3)\n",
+      "status": 0
+    },
+    {
+      "id": "set-out-of-range-width-15", "profile": "run-stdio",
+      "source": "record W15:\n    f0: int\n    f1: int\n    f2: int\n    f3: int\n    f4: int\n    f5: int\n    f6: int\n    f7: int\n    f8: int\n    f9: int\n    f10: int\n    f11: int\n    f12: int\n    f13: int\n    f14: int\nend\n\nfunc main():\n    let a = new_array(W15)\n    do add(a, W15(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))\n    do add(a, W15(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))\n    do add(a, W15(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))\n    do flogger(\"before\\n\")\n    do set(a, 5, W15(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15))\n    do flogger(\"after\\n\")\n    return count(a)\nend\n",
+      "stdin": "",
+      "stdout": "before\n",
+      "stderr": "herbert: line 25: set: position 5 out of range (count 3)\n",
+      "status": 1
+    },
+    {
+      "id": "set-ten-million-heap-flat", "profile": "run",
+      "source": "func heap_mark():\n    return buffer_address(new_buffer())\nend\n\nfunc main():\n    let ints = new_array(int)\n    let pairs = new_array((int, string))\n    let k = 0\n    while k < 1000:\n        do add(ints, 0)\n        do add(pairs, (0, \"\"))\n        k = k + 1\n    end\n    let m0 = heap_mark()\n    let m1 = heap_mark()\n    let i = 0\n    while i < 10000000:\n        do set(ints, i % 1000, i)\n        do set(pairs, i % 1000, (i, \"s\"))\n        i = i + 1\n    end\n    let m2 = heap_mark()\n    return ((m2 - m1) - (m1 - m0), get(ints, 999), get(pairs, 0).0, get(pairs, 0).1, count(ints), count(pairs))\nend\n",
+      "stdin": "", "stdout": "(0, 9999999, 9999000, \"s\", 1000, 1000)\n", "status": 0
+    },
+    {
+      "id": "set-arity-under", "profile": "reject",
+      "source": "func main():\n    let a = new_array(int)\n    do add(a, 1)\n    do set(a, 0)\n    return 0\nend\n",
+      "diagnostic": "line 4: native-subset: arity mismatch at call to 'set' (ERR 420)"
+    },
+    {
+      "id": "set-arity-over", "profile": "reject",
+      "source": "func main():\n    let a = new_array(int)\n    do add(a, 1)\n    do add(a, 2)\n    do set(a, 0, 1, 2)\n    return 0\nend\n",
+      "diagnostic": "line 5: native-subset: arity mismatch at call to 'set' (ERR 420)"
+    },
+    {
+      "id": "set-as-value", "profile": "reject",
+      "source": "func main():\n    let a = new_array(int)\n    do add(a, 1)\n    let x = set(a, 0, 5)\n    return x\nend\n",
+      "diagnostic": "line 4: native-subset: value-less builtin used as a value (ERR 440)"
+    },
+    {
+      "id": "set-reserved-function-name", "profile": "reject",
+      "source": "func helper():\n    return 1\nend\n\nfunc set(a, i, v):\n    return 0\nend\n\nfunc main():\n    return helper()\nend\n",
+      "diagnostic": "line 5: native-subset: function name 'set' is a reserved builtin (ERR 429)"
+    },
+    {
+      "id": "set-reserved-record-name", "profile": "reject",
+      "source": "record set:\n    a: int\n    b: int\nend\n\nfunc main():\n    return 0\nend\n",
+      "diagnostic": "line 1: native-subset: record 'set' has the name of a builtin (ERR 447)"
+    },
+    {
+      "id": "set-non-array", "profile": "reject",
+      "source": "func main():\n    let b = new_buffer()\n    do append(b, 1)\n    do set(b, 0, 2)\n    return 0\nend\n",
+      "diagnostic": "line 4: native-subset: array operation on non-array (ERR 435)"
+    },
+    {
+      "id": "set-element-mismatch", "profile": "reject",
+      "source": "func main():\n    let a = new_array((int, int))\n    do add(a, (1, 2))\n    do set(a, 0, (1, true))\n    return 0\nend\n",
+      "diagnostic": "line 4: native-subset: array element type mismatch (ERR 436)"
+    },
+    {
+      "id": "set-position-not-int", "profile": "reject",
+      "source": "func main():\n    let a = new_array(int)\n    do add(a, 1)\n    do flogger(\"x\")\n    do set(a, true, 1)\n    return 0\nend\n",
+      "diagnostic": "line 5: native-subset: structural type conflict (ERR 430)"
     }
   ]
 }

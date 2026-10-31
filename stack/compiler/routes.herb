@@ -237,6 +237,9 @@ func nc_drive(source):
     if has_faultable != 0:
         do nc_append_fault_rodata(prog.1)
     end
+    if has_faultable == 2:
+        do nc_append_set_fault_rodata(prog.1)
+    end
     let analyzed = nc_analyze_program(type_pool, prog, ast_result.1)
     if analyzed.0 != 0:
         do nc_fail(analyzed.0, 0, "")

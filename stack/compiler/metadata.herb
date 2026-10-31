@@ -64,6 +64,9 @@ func nc_opcode_name_for_diag(op):
     if op == 67:
         return "BUFFER_FILL"
     end
+    if op == 68:
+        return "ARR_SET"
+    end
     if op == 57:
         return "BOOT_READ"
     end
@@ -606,7 +609,7 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
         elif na_type != 0:
             return MetaScan(nc_fail(439, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
         end
-        if (op >= 26 and op <= 32) or op == 67:
+        if (op >= 26 and op <= 32) or op == 67 or op == 68:
             has_heap = 1
         end
         max_stack = nc_max_i(max_stack, nc_stack_word_depth(pool, stack))
@@ -890,6 +893,32 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
                 return MetaScan(ok, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
             end
             heap_entry = (3, elem_w, elem_t)
+            stack = arr.1
+        elif op == 68:
+            -- ARR_SET: [array, int position, value] -> nothing. Records the
+            -- element's width for the emitter, as GET and ARR_ADD do.
+            let val = nc_stack_pop(stack, line)
+            if val.0 != 0:
+                return MetaScan(val.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            let idx = nc_meta_pop_expect(pool, val.1, nc_type_int(), line)
+            if idx.0 != 0:
+                return MetaScan(idx.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            let arr = nc_stack_pop(idx.1, line)
+            if arr.0 != 0:
+                return MetaScan(arr.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            if not nc_type_is_array(pool, arr.2):
+                return MetaScan(nc_fail(435, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            let elem_t = nc_type_array_elem(pool, arr.2)
+            let elem_w = nc_type_width(pool, elem_t)
+            let ok = nc_expect_array_elem(pool, val.2, elem_t, line)
+            if ok != 0:
+                return MetaScan(ok, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            heap_entry = (5, elem_w, elem_t)
             stack = arr.1
         elif op == 63:
             -- ARR_ADD_KEEP: add, leaving the array (a ref record) on the stack.
