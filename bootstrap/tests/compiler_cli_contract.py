@@ -96,6 +96,19 @@ def run_cases(compiler, work, faults):
             preserved(d)
         case('reject-'+name, reject)
 
+    # The ast-dump route prints the tree after the record retag pass only: a record
+    # construction shows as record-new, and a statement call shows as the do it was
+    # written as, not the let the hosted route rewrites it to (LANGUAGE.md, Statement calls).
+    ast_source = (b'-- emit: ast-dump\nrecord P:\n    x: int\n    y: int\nend\n\n'
+                  b'func id(v):\n    return v\nend\n\n'
+                  b'func main():\n    do id(7)\n    let p = P(4, 5)\n    return p.x\nend\n')
+    ast_dump = (b'(program (record P x y (type int) (type int)) (func id (params v) (body (return (name v))))'
+                b' (func main (params) (body (do (call id (int 7))) (let p (record-new P (int 4) (int 5)))'
+                b' (return (dot (name p) x)))))\n0\n')
+    def ast_dump_as_written(d):
+        exact(invoke(compiler, d, ast_source), 0, ast_dump, b'')
+    case('ast-dump-as-written', ast_dump_as_written)
+
     def symlink(d):
         victim = d / 'victim'
         victim.write_bytes(OLD)

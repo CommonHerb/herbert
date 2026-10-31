@@ -1105,24 +1105,26 @@ func record_decl_names(nodes, prog_idx):
     return record_decl_names_loop(nodes, get(nodes, prog_idx).1, 0, new_array(string))
 end
 
-func retag_record_calls_loop(nodes, names, out, i):
+-- Both retag passes change the pool in place: each caller hands over the pool
+-- the parser filled and keeps only the result. A pass reads node i before it
+-- changes it, and reads no node it has changed: the record pass reads only the
+-- declarations, and the statement pass reads a do's call, which it never changes.
+func retag_record_calls_loop(nodes, names, i):
     while i < count(nodes):
         let node = get(nodes, i)
         if equal(node.0, "call") and err_name_seen(names, get(node.1, 0)):
-            do add(out, ("record-new", node.1, node.2, node.3))
-        else:
-            do add(out, node)
+            do set(nodes, i, ("record-new", node.1, node.2, node.3))
         end
         i = i + 1
     end
-    return out
+    return nodes
 end
 
 func retag_record_calls(nodes, prog_idx):
     if count(get(nodes, prog_idx).1) == 0:
         return nodes
     end
-    return retag_record_calls_loop(nodes, record_decl_names(nodes, prog_idx), pool_new(), 0)
+    return retag_record_calls_loop(nodes, record_decl_names(nodes, prog_idx), 0)
 end
 
 -- A statement call: `do CALL(...)` whose callee is not a void builtin means
@@ -1147,25 +1149,23 @@ func do_calls_any(nodes, i):
     return false
 end
 
-func retag_do_calls_loop(nodes, out, i):
+func retag_do_calls_loop(nodes, i):
     while i < count(nodes):
         let node = get(nodes, i)
         if do_call_needs_let(nodes, node):
             let name = freeze(emit_decimal(append_str(new_buffer(), "do "), i))
-            do add(out, ("let", atoms1(name), node.2, node.3))
-        else:
-            do add(out, node)
+            do set(nodes, i, ("let", atoms1(name), node.2, node.3))
         end
         i = i + 1
     end
-    return out
+    return nodes
 end
 
 func retag_do_calls(nodes):
     if not do_calls_any(nodes, 0):
         return nodes
     end
-    return retag_do_calls_loop(nodes, pool_new(), 0)
+    return retag_do_calls_loop(nodes, 0)
 end
 
 func parse_funcdef(tokens, pos, pool):
@@ -1811,9 +1811,11 @@ func resolve_instr_lines(ir):
 end
 
 -- A lowering environment is (names, slots, next slot, count). Names and slots
--- are the persistent chunked arrays of types_and_inference.herb (nc_pget,
--- nc_pset_str, nc_pset_int): a copy shares them, and leaving a scope only lowers
--- count. The next slot keeps counting, so no two declarations share a slot.
+-- are the chunked arrays of types_and_inference.herb (nc_pget, nc_pput_str,
+-- nc_pput_int): a copy shares them, a declaration is stored in place at count,
+-- and leaving a scope only lowers count, as an if's arms and a while's body do
+-- (emit_if_arms, emit_while_stmt); nothing reads the cut-off names again. The
+-- next slot keeps counting, so no two declarations share a slot.
 func env_from_params_loop(params, i, n, env):
     if i >= n:
         return env
@@ -1826,7 +1828,7 @@ func env_from_params(params):
 end
 
 func env_let(env, name):
-    return (nc_pset_str(env.0, env.3, name), nc_pset_int(env.1, env.3, env.2), env.2 + 1, env.3 + 1)
+    return (nc_pput_str(env.0, env.3, name), nc_pput_int(env.1, env.3, env.2), env.2 + 1, env.3 + 1)
 end
 
 func env_lookup_loop(env, name, n):
@@ -4664,26 +4666,11 @@ func nc_check_input_scope(pool, nodes, fn_node):
 end
 
 -- A local environment is (count, names, classes). Names and classes are
--- persistent arrays in chunks of 32 entries: a copy shares every chunk, and a
--- change copies one chunk and the chunk list, so branches and assignments no
+-- arrays in chunks of 32 entries: a copy shares every chunk, and a change of a
+-- class copies one chunk and the chunk list, so branches and assignments no
 -- longer copy every local. Entries at count and above are dead; the next local
--- declared reuses its position. Every environment value stays valid as it was.
+-- declared reuses its position, in place (nc_pput_int, nc_pput_str).
 func nc_chunk_copy_int(src, i, n, slot, value, out):
-    while i < n:
-        if i == slot:
-            do add(out, value)
-        else:
-            do add(out, get(src, i))
-        end
-        i = i + 1
-    end
-    if slot == n:
-        do add(out, value)
-    end
-    return out
-end
-
-func nc_chunk_copy_str(src, i, n, slot, value, out):
     while i < n:
         if i == slot:
             do add(out, value)
@@ -4727,14 +4714,44 @@ func nc_pset_int(chunks, i, value):
     return nc_chunks_copy(chunks, 0, count(chunks), at, chunk, new_array(array(int)))
 end
 
-func nc_pset_str(chunks, i, value):
+-- Store value at position i, in place, where i is the count of the
+-- environment being extended. Environments share chunks, so this is safe only
+-- because no environment that is read again reads position i: environments
+-- nest like the blocks they belong to (an if's or while's entry, its arms,
+-- and their exits cut back to the entry's count), only the innermost is
+-- extended, and every read is below its own count.
+func nc_pput_int(chunks, i, value):
     let at = i / 32
-    let old = new_array(string)
-    if at < count(chunks):
-        old = get(chunks, at)
+    if at == count(chunks):
+        let fresh = new_array(int)
+        do add(fresh, value)
+        do add(chunks, fresh)
+        return chunks
     end
-    let chunk = nc_chunk_copy_str(old, 0, count(old), i % 32, value, new_array(string))
-    return nc_chunks_copy(chunks, 0, count(chunks), at, chunk, new_array(array(string)))
+    let chunk = get(chunks, at)
+    if i % 32 < count(chunk):
+        do set(chunk, i % 32, value)
+    else:
+        do add(chunk, value)
+    end
+    return chunks
+end
+
+func nc_pput_str(chunks, i, value):
+    let at = i / 32
+    if at == count(chunks):
+        let fresh = new_array(string)
+        do add(fresh, value)
+        do add(chunks, fresh)
+        return chunks
+    end
+    let chunk = get(chunks, at)
+    if i % 32 < count(chunk):
+        do set(chunk, i % 32, value)
+    else:
+        do add(chunk, value)
+    end
+    return chunks
 end
 
 func nc_class_env_new():
@@ -4751,7 +4768,7 @@ end
 
 func nc_class_env_add(env, name, klass):
     let n = env.0
-    return (n + 1, nc_pset_str(env.1, n, name), nc_pset_int(env.2, n, klass))
+    return (n + 1, nc_pput_str(env.1, n, name), nc_pput_int(env.2, n, klass))
 end
 
 func nc_class_env_clone(env):
@@ -4855,8 +4872,13 @@ func nc_sig_set_param(sig, fn_idx, param_idx, klass):
     return (nc_array_int_set(sig.0, fn_idx, new_parr), sig.1)
 end
 
+-- In place: one inference attempt has one return table, which every sig of
+-- that attempt shares (nc_poly_get_or_create already adds to it), and every
+-- read of it goes through the newest sig. A parameter list is copied as before:
+-- it is also an instance's key (nc_poly_lookup_instance).
 func nc_sig_set_ret(sig, fn_idx, klass):
-    return (sig.0, nc_int_array_set(sig.1, fn_idx, klass))
+    do set(sig.1, fn_idx, klass)
+    return sig
 end
 
 func nc_poly_max_instances():

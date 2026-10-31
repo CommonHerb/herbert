@@ -1118,26 +1118,11 @@ func nc_check_input_scope(pool, nodes, fn_node):
 end
 
 -- A local environment is (count, names, classes). Names and classes are
--- persistent arrays in chunks of 32 entries: a copy shares every chunk, and a
--- change copies one chunk and the chunk list, so branches and assignments no
+-- arrays in chunks of 32 entries: a copy shares every chunk, and a change of a
+-- class copies one chunk and the chunk list, so branches and assignments no
 -- longer copy every local. Entries at count and above are dead; the next local
--- declared reuses its position. Every environment value stays valid as it was.
+-- declared reuses its position, in place (nc_pput_int, nc_pput_str).
 func nc_chunk_copy_int(src, i, n, slot, value, out):
-    while i < n:
-        if i == slot:
-            do add(out, value)
-        else:
-            do add(out, get(src, i))
-        end
-        i = i + 1
-    end
-    if slot == n:
-        do add(out, value)
-    end
-    return out
-end
-
-func nc_chunk_copy_str(src, i, n, slot, value, out):
     while i < n:
         if i == slot:
             do add(out, value)
@@ -1181,14 +1166,44 @@ func nc_pset_int(chunks, i, value):
     return nc_chunks_copy(chunks, 0, count(chunks), at, chunk, new_array(array(int)))
 end
 
-func nc_pset_str(chunks, i, value):
+-- Store value at position i, in place, where i is the count of the
+-- environment being extended. Environments share chunks, so this is safe only
+-- because no environment that is read again reads position i: environments
+-- nest like the blocks they belong to (an if's or while's entry, its arms,
+-- and their exits cut back to the entry's count), only the innermost is
+-- extended, and every read is below its own count.
+func nc_pput_int(chunks, i, value):
     let at = i / 32
-    let old = new_array(string)
-    if at < count(chunks):
-        old = get(chunks, at)
+    if at == count(chunks):
+        let fresh = new_array(int)
+        do add(fresh, value)
+        do add(chunks, fresh)
+        return chunks
     end
-    let chunk = nc_chunk_copy_str(old, 0, count(old), i % 32, value, new_array(string))
-    return nc_chunks_copy(chunks, 0, count(chunks), at, chunk, new_array(array(string)))
+    let chunk = get(chunks, at)
+    if i % 32 < count(chunk):
+        do set(chunk, i % 32, value)
+    else:
+        do add(chunk, value)
+    end
+    return chunks
+end
+
+func nc_pput_str(chunks, i, value):
+    let at = i / 32
+    if at == count(chunks):
+        let fresh = new_array(string)
+        do add(fresh, value)
+        do add(chunks, fresh)
+        return chunks
+    end
+    let chunk = get(chunks, at)
+    if i % 32 < count(chunk):
+        do set(chunk, i % 32, value)
+    else:
+        do add(chunk, value)
+    end
+    return chunks
 end
 
 func nc_class_env_new():
@@ -1205,7 +1220,7 @@ end
 
 func nc_class_env_add(env, name, klass):
     let n = env.0
-    return (n + 1, nc_pset_str(env.1, n, name), nc_pset_int(env.2, n, klass))
+    return (n + 1, nc_pput_str(env.1, n, name), nc_pput_int(env.2, n, klass))
 end
 
 func nc_class_env_clone(env):
@@ -1309,8 +1324,13 @@ func nc_sig_set_param(sig, fn_idx, param_idx, klass):
     return (nc_array_int_set(sig.0, fn_idx, new_parr), sig.1)
 end
 
+-- In place: one inference attempt has one return table, which every sig of
+-- that attempt shares (nc_poly_get_or_create already adds to it), and every
+-- read of it goes through the newest sig. A parameter list is copied as before:
+-- it is also an instance's key (nc_poly_lookup_instance).
 func nc_sig_set_ret(sig, fn_idx, klass):
-    return (sig.0, nc_int_array_set(sig.1, fn_idx, klass))
+    do set(sig.1, fn_idx, klass)
+    return sig
 end
 
 func nc_poly_max_instances():
