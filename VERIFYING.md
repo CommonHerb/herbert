@@ -114,18 +114,30 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   its `--sample` output on 72 sets of fixed `/proc/stat`, `/proc/meminfo` and name files against hand-written answers
   (one and 64 processors, long lines, lines across reads and at the 1 MiB bound, tabs, fields missing, reordered or
   malformed, exact rounding at half a percent and 99.5 % also past 2^56, zero-length intervals, counters that went
-  back, numbers past 2^64) and six refused command lines; its window's name, figures, inks and bars read back from
-  its pixels, from the real `/proc` (memory against `/proc/meminfo` read around the frame of a new reading) and from
-  files the check writes, removes (amber `unavailable`) and restores; the redraw light changing at every reading;
-  quitting on Escape, q, Shift+Q and the close button; and 120 seconds redrawing every 10 ms through the real
-  `/proc`, missing, malformed and unusual files with the same virtual size throughout and resident memory within
-  64 KiB. `make check-scope` runs those checks alone. Last, `check_net.py` checks knock (`lib/net.herb`), knocking
+  back, numbers past 2^64) and eleven refused command lines; its `--computers` reading of 86 lists of other
+  computers (comments, blanks, tabs, CRLF, names at 24 and 25 bytes, every malformed address and port, 6 and 7
+  computers, more problems than rows, 64 KiB and one byte more), of files that are not lists (a FIFO and
+  `/dev/zero` within 2 s) and of the list in HOME, each line against a hand-written answer, with socket() made to
+  fail; its window's name, figures, inks and bars read back from its pixels, from the real `/proc` (memory against
+  `/proc/meminfo` read around the frame of a new reading) and from files the check writes, removes (amber
+  `unavailable`) and restores; the redraw light changing at every reading; quitting on Escape, q, Shift+Q and the
+  close button; the other computers' rows (names alone, nothing drawn under them; answers from a listener and from a
+  closed port, checking, no answer from a full accept queue, kept while the next knock is under way, problems, a
+  seventh computer never knocked, and unreachable and errors made by strace), with every knock on 127.x and every
+  run in a home of the check's own; a
+  knock that never answers holding nothing up (the light on time, Escape within 300 ms); under strace, knocks
+  700 ms apart, no answer only after a look at its 300 ms limit, answers seen within 50 ms and the knock under way
+  closed at exit; and 120 seconds redrawing every 10 ms through the real `/proc`, missing, malformed and unusual
+  files, knocking every 20 ms on a listener, a closed port and a full accept queue, with the same virtual size
+  throughout, resident memory within 64 KiB and no socket outliving its knock. `make check-scope` runs those checks
+  alone. Last, `check_net.py` checks knock (`lib/net.herb`), knocking
   only on 127.x and inside a private network namespace it makes: malformed command lines refused before any socket
   (under strace), the library's own range guard and error classes through a probe it compiles, one knock's system
   calls in order, answered at three loopback addresses (a listener that must receive no byte), refused, no answer at
   a full accept queue within its time limit plus 100 ms and only after a last poll at the limit, strace-injected
   EINTR, late connects, connect results and resets after accept, and 24,000 knocks in one process with the same descriptors,
-  virtual size and resident memory within 64 KiB; where an unprivileged network namespace can be made, also
+  virtual size and resident memory within 64 KiB, all of it both through `net_knock` and through the knock that does
+  not wait (`net_start`, `net_check`); where an unprivileged network namespace can be made, also
   unreachable and error from its routes and firewall and the memory check with all five outcomes, and otherwise a
   plain "NOT TESTED here" line. `make check-net` runs those checks alone.
 

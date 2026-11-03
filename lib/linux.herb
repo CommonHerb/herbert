@@ -130,6 +130,24 @@ func linux_poll(fd, pollbuf, events, timeout):
     return linux_u16(pollbuf, 6)
 end
 
+-- Waiting on several descriptors at once. linux_poll_entry writes pollfd entry
+-- i of pollbuf (fd, events, revents cleared) and returns i + 1, the count so
+-- far; linux_poll_many waits on the first count entries for at most timeout
+-- ms and returns how many are ready, zero on timeout, or raw -errno. EINTR is
+-- returned to the caller, which owns its deadline. No allocation.
+func linux_poll_entry(pollbuf, i, fd, events):
+    do linux_require_range(pollbuf, i * 8, 8)
+    do linux_put32(pollbuf, i * 8, fd)
+    do linux_put16(pollbuf, i * 8 + 4, events)
+    do linux_put16(pollbuf, i * 8 + 6, 0)
+    return i + 1
+end
+
+func linux_poll_many(pollbuf, count, timeout):
+    do linux_require_range(pollbuf, 0, count * 8)
+    return linux_syscall6(7, buffer_address(pollbuf), count, timeout, 0, 0, 0)
+end
+
 -- Shared exact socket transfer: every retry, including partial progress and
 -- EINTR, shares one five-second monotonic deadline. No heap allocation here.
 -- Send uses MSG_NOSIGNAL|MSG_DONTWAIT; receive uses MSG_DONTWAIT.

@@ -23,7 +23,8 @@ make scope && ./build/scope
 - [Maze](examples/maze.md) is a small game played on an editable text map.
 - [First steps](examples/first_steps.md) is the first, smallest window: one character to move.
 - [Scope](examples/scope.md) is a window to leave open: this computer's name, how busy its processor is and
-  how much memory is in use, read again once a second. It is the first piece of a window on the owner's computers.
+  how much memory is in use, read again once a second, and whether each of the owner's other computers answers,
+  checked every 5 seconds.
 - [The word counter](examples/wordcount.md) counts lines, words and bytes on standard input, and is a good first
   program to read.
 - [Knock](examples/knock.md) asks whether a computer answers at an IPv4 address and port (`./build/knock 127.0.0.1 22`).

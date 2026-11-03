@@ -166,7 +166,7 @@ DESKTOP_LIBS := lib/linux.herb lib/x11.herb lib/pixel_text.herb
 first-steps_SOURCES := $(DESKTOP_LIBS) examples/first_steps.herb
 maze_SOURCES := $(DESKTOP_LIBS) lib/grid_map.herb examples/maze.herb
 notes_SOURCES := $(DESKTOP_LIBS) lib/x11_clipboard.herb lib/utf8.herb lib/unicode_tables.herb lib/unicode_grapheme.herb lib/unicode_display.herb lib/file_io.herb lib/text_buffer.herb lib/session_recovery.herb examples/notes.herb
-scope_SOURCES := $(DESKTOP_LIBS) examples/scope.herb
+scope_SOURCES := $(DESKTOP_LIBS) lib/net.herb examples/scope.herb
 knock_SOURCES := lib/linux.herb lib/net.herb examples/knock.herb
 .PHONY: first-steps maze notes scope knock hosted-apps hosted-memory-io check-desktop check-hosted-apps check-scope check-net
 first-steps: $(BUILD)/first-steps

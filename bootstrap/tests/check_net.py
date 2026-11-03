@@ -42,13 +42,24 @@ On loopback, needing no privileges:
   and its resident memory (Rss) must stay within 64 KiB from the first stop to the last: 21,000 knocks, so even four
   bytes kept per knock would show. The listener must have seen 8,000 connections and not one byte.
 
+The knock that does not wait (net_start, net_check, net_left; `knock --split` and `--split-rounds`) goes through the
+same checks: refusals before any socket, the probe (net_start keeps net_knock's guard and leaves nothing under way),
+a second probe with the network open (net_start while a knock is under way on the same Net first closes that one,
+before asking for its own socket, and net_stop closes a knock under way and leaves no outcome),
+its system calls (socket, connect, then polls only, the answer found by a look that waits for nothing, SO_ERROR,
+close, nothing sent), answered, refused, no answer within the limit and only after a last look at it, the strace
+edges (EINTR on a look and on the wait, late connects, connect results, resets after accept) and 24,000 knocks in one
+process.
+
 In a private network namespace (`unshare -rn`), when this machine allows an unprivileged user to make one:
 - unreachable: an address with no route (ENETUNREACH), one whose route says unreachable (EHOSTUNREACH), and, with
   nft, a port whose firewall rule answers with ICMP host-unreachable, which arrives after connect has begun, through
   SO_ERROR (the namespace's own icmp_ratemask is set to 0 so Linux's ICMP rate limit cannot drop those answers);
 - error: an address whose route is "prohibit" (EACCES);
 - no answer again, from a firewall rule that drops the SYN (with nft);
-- No leaks with all five outcomes: 4,000 rounds of every target there, the same measures as above.
+- No leaks with all five outcomes: 4,000 rounds of every target there, the same measures as above; and 2,000 rounds
+  of the split knock.
+- unreachable, error and the firewall's two cases through the split knock as well.
 Where this machine does not allow such a namespace (Ubuntu's kernel.apparmor_restrict_unprivileged_userns=1 is one
 cause), or lacks ip or nft, those checks are not run, and the check says so plainly in its output and in result.json
 ("not_tested"); nothing else can make those outcomes on this machine without privileges. With
@@ -96,6 +107,8 @@ BAD_LIMIT = b'knock: not a time limit; write whole milliseconds, 1 to 60000\n'
 USAGE = b'knock: usage: knock ADDRESS PORT [MILLISECONDS]\n'
 PARSE_USAGE = b'knock: usage: knock --parse ADDRESS PORT [MILLISECONDS]\n'
 ROUNDS_USAGE = b'knock: usage: knock --rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]\n'
+SPLIT_USAGE = b'knock: usage: knock --split ADDRESS PORT [MILLISECONDS]\n'
+SPLIT_ROUNDS_USAGE = b'knock: usage: knock --split-rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]\n'
 
 # Each built around 127.x: whatever a broken parser made of them would still be this computer.
 MALFORMED_ADDRESSES = [
@@ -159,6 +172,33 @@ func probe_guard(out, n, address, port, limit):
     return probe_put(out, "\n")
 end
 
+func probe_start(out, n, address, port, limit):
+    let outcome = net_start(n, address, port, limit)
+    do probe_put(out, "start ")
+    do probe_number(out, address)
+    do probe_put(out, " ")
+    do probe_number(out, port)
+    do probe_put(out, " ")
+    do probe_number(out, limit)
+    do probe_put(out, " outcome ")
+    do probe_number(out, outcome)
+    do probe_put(out, " error ")
+    do probe_number(out, n.state.error)
+    if n.state.pending:
+        do probe_put(out, " pending")
+    end
+    do probe_put(out, " check ")
+    do probe_number(out, net_check(n))
+    do probe_put(out, " left ")
+    do probe_number(out, net_left(n))
+    do net_stop(n)
+    do probe_put(out, " after-stop ")
+    do probe_number(out, n.state.outcome)
+    do probe_put(out, " ")
+    do probe_number(out, n.state.error)
+    return probe_put(out, "\n")
+end
+
 func probe_classify(out, e):
     do probe_put(out, "classify ")
     do probe_number(out, e)
@@ -180,6 +220,14 @@ func main():
     do probe_guard(out, n, 2130706433, 9, 60001)
     do probe_guard(out, n, 2130706433, 65535, 60000)
     do probe_guard(out, n, 2130706433, 1, 1)
+    do probe_start(out, n, 4294967296, 9, 100)
+    do probe_start(out, n, 18446744073709551615, 9, 100)
+    do probe_start(out, n, 2130706433, 0, 100)
+    do probe_start(out, n, 2130706433, 65536, 100)
+    do probe_start(out, n, 2130706433, 9, 0)
+    do probe_start(out, n, 2130706433, 9, 60001)
+    do probe_start(out, n, 2130706433, 65535, 60000)
+    do probe_start(out, n, 2130706433, 1, 1)
     let errors = new_array(int)
     do add(errors, 111)
     do add(errors, 101)
@@ -210,10 +258,13 @@ func main():
 end
 '''
 # What the probe must print. The last two guard lines are inside the range: they ask for a socket (and get EPERM).
-PROBE_ANSWER = ''.join(f'guard {a} {p} {l} outcome 4 error {e}\n' for a, p, l, e in (
-    (4294967296, 9, 100, 22), (18446744073709551615, 9, 100, 22), (2130706433, 0, 100, 22),
-    (2130706433, 65536, 100, 22), (2130706433, 9, 0, 22), (2130706433, 9, 60001, 22),
-    (2130706433, 65535, 60000, 1), (2130706433, 1, 1, 1))) + ''.join(f'classify {e} {o} {w}\n' for e, o, w in (
+# net_start keeps the same guard: no knock is left under way, net_check gives the outcome again, net_left 0, and
+# net_stop changes nothing.
+GUARDED = ((4294967296, 9, 100, 22), (18446744073709551615, 9, 100, 22), (2130706433, 0, 100, 22),
+           (2130706433, 65536, 100, 22), (2130706433, 9, 0, 22), (2130706433, 9, 60001, 22),
+           (2130706433, 65535, 60000, 1), (2130706433, 1, 1, 1))
+PROBE_ANSWER = ''.join(f'guard {a} {p} {l} outcome 4 error {e}\n' for a, p, l, e in GUARDED) + ''.join(
+    f'start {a} {p} {l} outcome 4 error {e} check 4 left 0 after-stop 4 {e}\n' for a, p, l, e in GUARDED) + ''.join(f'classify {e} {o} {w}\n' for e, o, w in (
     (111, 1, 'connection refused'), (101, 3, 'network is unreachable'), (113, 3, 'no route to host'),
     (100, 3, 'network is down'), (112, 3, 'host is down'), (110, 2, 'timed out'), (13, 4, 'permission denied'),
     (1, 4, 'operation not permitted'), (22, 4, 'invalid argument'), (99, 4, 'address not available'),
@@ -222,14 +273,86 @@ PROBE_ANSWER = ''.join(f'guard {a} {p} {l} outcome 4 error {e}\n' for a, p, l, e
     (9999, 4, '')))
 
 
-class Listener:
-    """A free port at address, accepting at once. plain: reads each connection to its end, counting every byte sent;
-    reset: closes each at once with a reset; fin-reset: sends its own end first, then resets."""
+def bound(address, port):
+    """A TCP socket bound at address and port (0: a free port). A given port may have been used a moment ago, so
+    it is bound with SO_REUSEADDR."""
+    sock = socket.socket()
+    if port:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((address, port))
+    return sock
 
-    def __init__(self, address=LOOPBACK, mode='plain'):
+
+# A second probe, with the network open: knocks begun with net_start on one Net while another is still under way on it.
+# Its arguments are a black hole's port and a listener's, both on 127.0.0.1. It starts a knock on the black hole
+# (under way), then one on the listener (which must first give up the first, closing its socket), waits for that one
+# as knock --split does, then starts one on the black hole again and gives it up with net_stop.
+RESTART = r"""
+func probe_put(out, text):
+    let i = 0
+    while i < length(text):
+        do append(out, index(text, i))
+        i = i + 1
+    end
+    return 0
+end
+
+func probe_state(out, label, outcome, n):
+    do probe_put(out, label)
+    do probe_put(out, " ")
+    do append(out, 48 + outcome)
+    do probe_put(out, " ")
+    do append(out, 48 + n.state.outcome)
+    if n.state.pending:
+        do probe_put(out, " pending")
+    end
+    if n.state.error == 0:
+        do probe_put(out, " no-error")
+    end
+    return probe_put(out, "\n")
+end
+
+func main():
+    let args = linux_arguments()
+    let hole = net_port(linux_argument(args, 1))
+    let open = net_port(linux_argument(args, 2))
+    let n = net_new()
+    let out = new_buffer()
+    let first = net_start(n, 2130706433, hole.1, 5000)
+    do probe_state(out, "first", first, n)
+    let second = net_start(n, 2130706433, open.1, 5000)
+    do probe_state(out, "second", second, n)
+    while second == 5:
+        do linux_poll(n.state.fd, n.poll, 4, net_left(n))
+        second = net_check(n)
+    end
+    do probe_state(out, "second-ended", second, n)
+    let third = net_start(n, 2130706433, hole.1, 5000)
+    do probe_state(out, "third", third, n)
+    do net_stop(n)
+    do probe_state(out, "stopped", net_check(n), n)
+    do net_stop(n)
+    do probe_state(out, "stopped-again", net_check(n), n)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+"""
+# first and third are under way (5, outcome 4 with no error until they end); second is under way or answered at once;
+# once ended it is answered (0); after net_stop nothing is under way and the state keeps no outcome (4, no error).
+RESTART_ANSWER = re.compile('first 5 4 pending no-error\nsecond [05] [04](?: pending)? no-error\n'
+                            'second-ended 0 0 no-error\nthird 5 4 pending no-error\nstopped 4 4 no-error\n'
+                            'stopped-again 4 4 no-error\n')
+
+
+class Listener:
+    """A free port (or the one given) at address, accepting at once. plain: reads each connection to its end,
+    counting every byte sent; reset: closes each at once with a reset; fin-reset: sends its own end first, then
+    resets."""
+
+    def __init__(self, address=LOOPBACK, mode='plain', port=0):
         self.mode = mode
-        self.sock = socket.socket()
-        self.sock.bind((address, 0))
+        self.sock = bound(address, port)
         self.sock.listen(4096)
         self.port = self.sock.getsockname()[1]
         self.connections, self.received, self.errors = 0, 0, []
@@ -272,8 +395,7 @@ class ClosedPort:
     """A port held bound at address but not listening: Linux answers a SYN to it with a reset."""
 
     def __init__(self, address=LOOPBACK):
-        self.sock = socket.socket()
-        self.sock.bind((address, 0))
+        self.sock = bound(address, 0)
         self.port = self.sock.getsockname()[1]
 
     def close(self):
@@ -296,11 +418,11 @@ def pending(port, milliseconds, address=LOOPBACK):
 
 
 class BlackHole:
-    """A listener nobody accepts from, its accept queue full: Linux drops every further SYN to it, silently."""
+    """A listener nobody accepts from, its accept queue full: Linux drops every further SYN to it, silently. On a
+    free port, or the one given."""
 
-    def __init__(self):
-        self.sock = socket.socket()
-        self.sock.bind((LOOPBACK, 0))
+    def __init__(self, port=0):
+        self.sock = bound(LOOPBACK, port)
         self.sock.listen(0)
         self.port = self.sock.getsockname()[1]
         self.fillers = []
@@ -395,7 +517,16 @@ def refusal_checks(args, evidence, passed):
               ('parse-limit', ['--parse', LOOPBACK, '9', '60001'], BAD_LIMIT),
               ('rounds-count', ['--rounds', '0', '1', LOOPBACK, '9', '1'], ROUNDS_USAGE),
               ('rounds-every', ['--rounds', '5', '01', LOOPBACK, '9', '1'], ROUNDS_USAGE),
-              ('rounds-target', ['--rounds', '5', '1', LOOPBACK, '9', '1', '127.0.0.1x', '9', '1'], BAD_ADDRESS)]
+              ('rounds-target', ['--rounds', '5', '1', LOOPBACK, '9', '1', '127.0.0.1x', '9', '1'], BAD_ADDRESS),
+              ('split-usage', ['--split'], SPLIT_USAGE), ('split-usage', ['--split', LOOPBACK], SPLIT_USAGE),
+              ('split-usage', ['--split', LOOPBACK, '9', '100', 'x'], SPLIT_USAGE),
+              ('split-address', ['--split', '127.0.0.01', '9'], BAD_ADDRESS),
+              ('split-port', ['--split', LOOPBACK, '65536'], BAD_PORT),
+              ('split-limit', ['--split', LOOPBACK, '9', '0'], BAD_LIMIT),
+              ('split-rounds-usage', ['--split-rounds', '1', '1', LOOPBACK, '9'], SPLIT_ROUNDS_USAGE),
+              ('split-rounds-count', ['--split-rounds', '0', '1', LOOPBACK, '9', '1'], SPLIT_ROUNDS_USAGE),
+              ('split-rounds-target', ['--split-rounds', '5', '1', LOOPBACK, '9', '1', '127.0.0.1x', '9', '1'],
+               BAD_ADDRESS)]
     for number, (kind, argv, message) in enumerate(cases):
         result, trace = traced(args, root, f'{number:03d}-{kind}', argv, 'socket,connect', ['socket:error=EPERM'])
         assert (result.returncode, result.stdout, result.stderr) == (2, b'', message), (kind, argv, result)
@@ -411,9 +542,8 @@ def refusal_checks(args, evidence, passed):
     passed('net-parses-good-command-lines', cases=len(PARSED), socket_calls_seen=0)
 
 
-def library_checks(args, evidence, passed):
-    """net_knock's guard, net_classify and net_error_name through a probe compiled here with the committed seed."""
-    root = evidence / 'probe'
+def compile_probe(args, root, main):
+    """lib/linux.herb, the net.herb under test and main, compiled in root with the committed seed: the image."""
     root.mkdir()
     seed = ROOT / 'bootstrap/seed/gen1.seed'
     expected = (ROOT / 'bootstrap/seed/gen1.seed.sha256').read_text().split()[0]
@@ -421,7 +551,7 @@ def library_checks(args, evidence, passed):
     units = [ROOT / 'lib/linux.herb', ROOT / 'lib/net.herb']
     if args.library is not None:
         units = [ROOT / 'lib/linux.herb', args.library]
-    source = b''.join(unit.read_bytes() + b'\n' for unit in units) + PROBE.encode()
+    source = b''.join(unit.read_bytes() + b'\n' for unit in units) + main.encode()
     (root / 'source.herb').write_bytes(source)
     compiler = root / 'compiler'
     shutil.copyfile(seed, compiler)
@@ -433,6 +563,14 @@ def library_checks(args, evidence, passed):
     compiler.unlink()
     image = root / 'a.out'
     image.chmod(0o755)
+    return image, units
+
+
+def library_checks(args, evidence, passed):
+    """net_knock's guard, net_classify and net_error_name through a probe compiled here with the committed seed;
+    then net_start and net_stop on a Net whose knock is still under way."""
+    root = evidence / 'probe'
+    image, units = compile_probe(args, root, PROBE)
     result, trace = traced(None, root, 'probe', [str(image)], 'socket,connect', ['socket:error=EPERM'])
     (root / 'probe.stdout').write_bytes(result.stdout)
     assert (result.returncode, result.stderr) == (0, b''), ('the probe failed', result.returncode, result.stderr)
@@ -440,11 +578,41 @@ def library_checks(args, evidence, passed):
     assert got == PROBE_ANSWER, ('the library gave other answers', [(g, w) for g, w in
                                  zip(got.splitlines(), PROBE_ANSWER.splitlines()) if g != w] or got)
     sockets = [line for line in trace if line.startswith('socket(')]
-    assert len(sockets) == 2 and all('EPERM' in line for line in sockets), ('the guard let a socket be made, or the '
+    assert len(sockets) == 4 and all('EPERM' in line for line in sockets), ('the guard let a socket be made, or the '
                                                                             'edges inside it did not ask', trace)
     assert not [line for line in trace if line.startswith('connect(')], trace
     passed('net-library-guard-and-error-classes', guard_cases=6, edges_inside_the_guard=2, error_numbers=18,
-           sockets_asked_for=len(sockets), library=str(units[-1]) if args.library else 'lib/net.herb')
+           sockets_asked_for=len(sockets), library=str(units[-1]) if args.library else 'lib/net.herb',
+           net_start='the same guard; nothing left under way')
+    restart = evidence / 'probe-restart'
+    image, _ = compile_probe(args, restart, RESTART)
+    hole, listener = BlackHole(), Listener()
+    try:
+        result, trace = traced(None, restart, 'restart', [str(image), str(hole.port), str(listener.port)],
+                               'socket,connect,close,write,sendto,sendmsg')
+        (restart / 'restart.stdout').write_bytes(result.stdout)
+        assert (result.returncode, result.stderr) == (0, b''), ('the probe failed', result.returncode, result.stderr)
+        assert RESTART_ANSWER.fullmatch(result.stdout.decode()), result.stdout.decode()
+        wait_for(lambda: listener.connections == 1, 'the second knock accepted')
+        assert listener.received == 0, listener.received
+    finally:
+        hole.close()
+        listener.close()
+    # On the knocks' sockets, in order: the first knock, closed before the second's socket is asked for; the second,
+    # closed; the third, closed by net_stop. Nothing sent.
+    first = next(i for i, line in enumerate(trace) if line.startswith('socket(AF_INET'))
+    knocks = [line for line in trace[first:] if line.startswith(('socket(', 'connect(', 'close('))]
+    made = [re.search(r'= (\d+)$', line).group(1) for line in knocks if line.startswith('socket(')]
+    ports = [re.search(r'htons\((\d+)\)', line).group(1) for line in knocks if line.startswith('connect(')]
+    assert [line.split('(')[0] for line in knocks] == ['socket', 'connect', 'close'] * 3, knocks
+    assert all(line.startswith(('socket(AF_INET', f'connect({fd},', f'close({fd})'))
+               for fd, group in zip(made, (knocks[0:3], knocks[3:6], knocks[6:9])) for line in group), knocks
+    assert ports == [str(hole.port), str(listener.port), str(hole.port)], ports
+    sent = [line for line in trace[first:] if line.startswith(tuple(f'{call}({fd},' for fd in made
+                                                                    for call in ('write', 'sendto', 'sendmsg')))]
+    assert sent == [], ('bytes sent on a knock', sent)
+    passed('net-start-gives-up-a-knock-under-way', calls=[line.split('(')[0] for line in knocks],
+           ports=['black hole', 'listener', 'black hole'], closed_before_the_next_socket=True, stopped='closed')
 
 
 def syscall_checks(args, evidence, passed):
@@ -478,27 +646,68 @@ def syscall_checks(args, evidence, passed):
         listener.close()
     passed('net-knock-system-calls', order=[line.split('(')[0] for line in on_socket], socket=sockets[0],
            connect=on_socket[1], bytes_sent=0)
+    # The split knock (knock --split): the same socket and connect; then polls only, until a look (a poll that waits
+    # for nothing) finds the answer; then SO_ERROR and close, and nothing sent.
+    listener = Listener(HIGH)
+    try:
+        result, trace = traced(args, evidence, 'split-answered-syscalls', ['--split', HIGH, str(listener.port), '5000'],
+                               'socket,connect,poll,getsockopt,close,write,writev,sendto,sendmsg,sendmmsg')
+        check_line(result, 'split-answered-syscalls', 'answered', HIGH, listener.port)
+        sockets = [line for line in trace if line.startswith('socket(')]
+        assert len(sockets) == 1, trace
+        made = re.fullmatch(r'socket\(AF_INET, (\S+), IPPROTO_TCP\) = (\d+)', sockets[0])
+        assert made and set(made.group(1).split('|')) == {'SOCK_STREAM', 'SOCK_CLOEXEC', 'SOCK_NONBLOCK'}, sockets
+        fd = made.group(2)
+        after = trace[trace.index(sockets[0]):]
+        on_socket = [line for line in after if line.startswith(('socket(', f'connect({fd},', f'poll([{{fd={fd},',
+                                                                f'getsockopt({fd},', f'close({fd})'))]
+        names = [line.split('(')[0] for line in on_socket]
+        assert (names[:2] == ['socket', 'connect'] and names[-2:] == ['getsockopt', 'close']
+                and set(names[2:-2]) == {'poll'} and len(names) >= 5), ('not socket, connect, polls, getsockopt, '
+                                                                         'close', on_socket)
+        assert on_socket[1] == (f'connect({fd}, {{sa_family=AF_INET, sin_port=htons({listener.port}), '
+                                f'sin_addr=inet_addr("{HIGH}")}}, 16) = -1 EINPROGRESS (Operation now in progress)'), \
+            ('connect went elsewhere', on_socket[1])
+        assert all(re.match(rf'poll\(\[\{{fd={fd}, events=POLLOUT\}}\], 1, \d+\) += ', line)
+                   for line in on_socket[2:-2]), on_socket
+        assert re.fullmatch(rf'poll\(\[\{{fd={fd}, events=POLLOUT\}}\], 1, 0\) += 1 \(\[\{{fd={fd}, '
+                            rf'revents=POLLOUT\}}\]\)', on_socket[-3]), ('the answer was not found by a look', on_socket)
+        assert on_socket[-2] == f'getsockopt({fd}, SOL_SOCKET, SO_ERROR, [0], [4]) = 0', on_socket[-2]
+        sent = [line for line in after if re.match(rf'(write|writev|sendto|sendmsg|sendmmsg)\({fd},', line)]
+        assert sent == [], ('data sent on the socket', sent)
+        wait_for(lambda: listener.connections == 1, 'the traced split connection accepted')
+        assert listener.received == 0, ('the listener received bytes from the knock', listener.received)
+    finally:
+        listener.close()
+    passed('net-split-knock-system-calls', order=names, bytes_sent=0)
 
 
 def outcome_checks(args, evidence, passed):
+    outcomes(args, evidence, passed, [], 'net-')
+    outcomes(args, evidence, passed, ['--split'], 'net-split-')
+
+
+def outcomes(args, evidence, passed, mode, prefix):
+    """answered, refused and no answer, through net_knock (mode []) or net_start and net_check (['--split'])."""
     listeners = [Listener(address) for address in (LOOPBACK, SPREAD, HIGH)]
     closed = [ClosedPort(address) for address in (LOOPBACK, HIGH)]
     try:
         for listener, address in zip(listeners, (LOOPBACK, SPREAD, HIGH)):
-            own, wall = expect(args, [address, str(listener.port)], 'answered', address, listener.port)
+            own, wall = expect(args, mode + [address, str(listener.port)], 'answered', address, listener.port)
             wait_for(lambda: listener.connections == 1, f'one connection accepted at {address}')
             assert listener.received == 0 and not listener.errors, ('the listener received bytes from the knock',
                                                                     listener.received, listener.errors)
-        passed('net-answered', addresses=[LOOPBACK, SPREAD, HIGH], listener_connections=1, bytes_received=0)
+        passed(prefix + 'answered', addresses=[LOOPBACK, SPREAD, HIGH], listener_connections=1, bytes_received=0)
         for port, address in zip(closed, (LOOPBACK, HIGH)):
-            expect(args, [address, str(port.port)], 'refused', address, port.port)
-        passed('net-refused', addresses=[LOOPBACK, HIGH])
+            expect(args, mode + [address, str(port.port)], 'refused', address, port.port)
+        passed(prefix + 'refused', addresses=[LOOPBACK, HIGH])
         listener = listeners[0]
-        own, wall = expect(args, [LOOPBACK, str(listener.port), '10000'], 'answered', LOOPBACK, listener.port)
+        own, wall = expect(args, mode + [LOOPBACK, str(listener.port), '10000'], 'answered', LOOPBACK, listener.port)
         assert own < 1000 and wall < 1000, ('answered waited for the limit', own, wall)
-        own_r, wall_r = expect(args, [LOOPBACK, str(closed[0].port), '10000'], 'refused', LOOPBACK, closed[0].port)
+        own_r, wall_r = expect(args, mode + [LOOPBACK, str(closed[0].port), '10000'], 'refused', LOOPBACK,
+                               closed[0].port)
         assert own_r < 1000 and wall_r < 1000, ('refused waited for the limit', own_r, wall_r)
-        passed('net-answered-and-refused-do-not-wait-for-the-limit', limit=10000, answered_ms=own,
+        passed(prefix + 'answered-and-refused-do-not-wait-for-the-limit', limit=10000, answered_ms=own,
                answered_wall_ms=round(wall), refused_ms=own_r, refused_wall_ms=round(wall_r))
         wait_for(lambda: listener.connections == 2, 'two connections accepted')
         assert listener.received == 0, ('the listener received bytes from the knock', listener.received)
@@ -509,15 +718,15 @@ def outcome_checks(args, evidence, passed):
     try:
         timings = []
         for limit in (100, 700, 1500):
-            own, wall = expect(args, [LOOPBACK, str(hole.port), str(limit)], 'no answer', LOOPBACK, hole.port)
+            own, wall = expect(args, mode + [LOOPBACK, str(hole.port), str(limit)], 'no answer', LOOPBACK, hole.port)
             timings.append({'limit': limit, 'knock_ms': own, 'wall_ms': round(wall, 1)})
             assert limit <= own <= limit + 100, ('the knock did not keep to its time limit', timings)
             assert limit <= wall <= limit + 500, ('the program did not keep to its time limit', timings)
-        last = last_poll_checks(args, evidence, hole.port, 300)
+        last = last_poll_checks(args, evidence, hole.port, 300, mode)
         held, how = pending(hole.port, 100)
         assert held, ('the black hole stopped being one', how)
-        passed('net-no-answer-keeps-the-time-limit', black_hole='full accept queue on 127.0.0.1', timings=timings,
-               slack_knock_ms=100, slack_wall_ms=500, traced_limit_300=last)
+        passed(prefix + 'no-answer-keeps-the-time-limit', black_hole='full accept queue on 127.0.0.1',
+               timings=timings, slack_knock_ms=100, slack_wall_ms=500, traced_limit_300=last)
     finally:
         hole.close()
 
@@ -526,11 +735,11 @@ CLOCK = re.compile(r'clock_gettime\(CLOCK_MONOTONIC, \{tv_sec=(\d+), tv_nsec=(\d
 POLL = re.compile(r'poll\(\[\{fd=\d+, events=POLLOUT\}\], 1, (\d+)\) += (-?\d+)')
 
 
-def last_poll_checks(args, evidence, port, limit):
+def last_poll_checks(args, evidence, port, limit, mode=()):
     """A no-answer knock under strace, read from its own clock: its last look is a poll with no wait, at or after
     the limit from its first clock reading, that finds nothing; no poll waits past the limit."""
-    result, trace = traced(args, evidence, f'no-answer-{limit}-polls', [LOOPBACK, str(port), str(limit)],
-                           'clock_gettime,poll')
+    result, trace = traced(args, evidence, f'no-answer-{limit}-polls{"-split" if mode else ""}',
+                           [*mode, LOOPBACK, str(port), str(limit)], 'clock_gettime,poll')
     own = check_line(result, 'traced no answer', 'no answer', LOOPBACK, port)
     events = []
     for line in trace:
@@ -610,6 +819,80 @@ def injected_checks(args, evidence, passed):
             listener.close()
     passed('net-answered-then-reset-is-an-answer', econnreset='answered (then connection reset, errno 104)',
            epipe='answered (then broken pipe, errno 32)')
+    split_injected_checks(args, root, passed)
+
+
+def split_injected_checks(args, root, passed):
+    """The same edges through knock --split: between looks it waits on the socket (a poll with a wait), and each
+    look is a poll that waits for nothing."""
+    calls = 'connect,poll,getsockopt,close'
+    plain, closed = Listener(SPREAD), ClosedPort(SPREAD)
+    def polls(trace):
+        return [line for line in trace if line.startswith('poll(')]
+    try:
+        target = ['--split', SPREAD, str(plain.port)]
+        result, trace = traced(args, root, 'split-eintr-on-a-look', target + ['5000'], calls,
+                               ['poll:error=EINTR:when=2'])
+        check_line(result, 'split-eintr-on-a-look', 'answered', SPREAD, plain.port)
+        seen = polls(trace)
+        assert (len(seen) == 3 and 'INJECTED' in seen[1] and ', 1, 0) ' in seen[1] and ', 1, 0) ' in seen[2]
+                and 'revents=POLLOUT' in seen[2]), seen
+        result, trace = traced(args, root, 'split-eintr-on-the-wait', target + ['5000'], calls,
+                               ['poll:error=EINTR:when=1'])
+        check_line(result, 'split-eintr-on-the-wait', 'answered', SPREAD, plain.port)
+        seen_wait = polls(trace)
+        assert 'INJECTED' in seen_wait[0] and ', 1, 0) ' in seen_wait[-1] and 'revents=POLLOUT' in seen_wait[-1], \
+            seen_wait
+        passed('net-split-eintr-looks-again', eintr_on_a_look=seen, eintr_on_the_wait=seen_wait)
+
+        result, trace = traced(args, root, 'split-connect-after-the-limit', target + ['10'], calls,
+                               ['connect:delay_exit=60ms'])
+        check_line(result, 'split-connect-after-the-limit', 'answered', SPREAD, plain.port)
+        late = polls(trace)
+        assert late and all(', 1, 0) ' in line for line in late) and 'revents=POLLOUT' in late[-1], late
+        result, trace = traced(args, root, 'split-connect-after-the-limit-refused',
+                               ['--split', SPREAD, str(closed.port), '10'], calls, ['connect:delay_exit=60ms'])
+        check_line(result, 'split-connect-after-the-limit-refused', 'refused', SPREAD, closed.port)
+        late_refused = polls(trace)
+        assert late_refused and ', 1, 0) ' in late_refused[-1] and 'POLLERR' in late_refused[-1], late_refused
+        result, trace = traced(args, root, 'split-eintr-after-the-limit', target + ['20'], calls,
+                               ['poll:error=EINTR:delay_exit=60ms:when=1'])
+        check_line(result, 'split-eintr-after-the-limit', 'answered', SPREAD, plain.port)
+        late_eintr = polls(trace)
+        assert (len(late_eintr) == 2 and 'INJECTED' in late_eintr[0] and ', 1, 0) ' in late_eintr[1]
+                and 'revents=POLLOUT' in late_eintr[1]), late_eintr
+        passed('net-split-no-answer-only-after-a-last-look', connect_returning_after_the_limit=late,
+               refused_after_the_limit=late_refused, eintr_after_the_limit=late_eintr)
+
+        result, trace = traced(args, root, 'split-connect-returns-0', target + ['1000'], calls, ['connect:retval=0'])
+        check_line(result, 'split-connect-returns-0', 'answered', SPREAD, plain.port)
+        assert not polls(trace), ('a connect of 0 still polled', trace)
+        knocked = [line for line in trace if line.startswith('connect(')]
+        assert len(knocked) == 1, trace
+        assert [line.split('(')[0] for line in trace[trace.index(knocked[0]):]] == ['connect', 'close'], trace
+        result, trace = traced(args, root, 'split-never-connected', target + ['1000'], calls,
+                               ['connect:error=EINPROGRESS'])
+        check_line(result, 'split-never-connected', 'error', SPREAD, plain.port, 'not connected', 107)
+        assert 'revents=POLLOUT|POLLHUP' in polls(trace)[-1] and ', 1, 0) ' in polls(trace)[-1], polls(trace)
+        assert any('SO_ERROR, [0]' in line for line in trace), trace
+        passed('net-split-connect-results', connect_returning_0='answered, closed, no poll',
+               never_connected=polls(trace)[-1])
+    finally:
+        plain.close()
+        closed.close()
+    for mode, spec, reason, errno in (('reset', 'getsockopt:delay_enter=1000ms', 'connection reset', 104),
+                                      ('fin-reset', 'poll:delay_enter=1000ms', 'broken pipe', 32)):
+        listener = Listener(SPREAD, mode)
+        try:
+            result, trace = traced(args, root, f'split-answered-then-{mode}',
+                                   ['--split', SPREAD, str(listener.port), '5000'], calls, [spec])
+            check_line(result, f'split-answered-then-{mode}', 'answered', SPREAD, listener.port, reason, errno)
+            wait_for(lambda: listener.connections == 1, f'{mode} listener accepted')
+            assert not listener.errors, listener.errors
+        finally:
+            listener.close()
+    passed('net-split-answered-then-reset-is-an-answer', econnreset='answered (then connection reset, errno 104)',
+           epipe='answered (then broken pipe, errno 32)')
 
 
 def descriptors(pid):
@@ -628,10 +911,10 @@ def read_line(p, timeout):
     return data.decode()
 
 
-def rounds_check(args, evidence, label, targets, rounds, every, expected):
-    """knock --rounds over targets [(address, port, ms)]; expected[outcome] = that outcome's knocks per round.
-    Returns the samples."""
-    argv = [str(args.knock), '--rounds', str(rounds), str(every)]
+def rounds_check(args, evidence, label, targets, rounds, every, expected, mode='--rounds'):
+    """knock --rounds (or --split-rounds) over targets [(address, port, ms)]; expected[outcome] = that outcome's
+    knocks per round. Returns the samples."""
+    argv = [str(args.knock), mode, str(rounds), str(every)]
     for address, port, limit in targets:
         argv += [address, str(port), str(limit)]
     stderr = (evidence / (label + '.stderr')).open('wb')
@@ -673,12 +956,17 @@ def rounds_check(args, evidence, label, targets, rounds, every, expected):
 
 
 def leak_checks(args, evidence, passed):
+    loopback_leaks(args, evidence, passed, '--rounds', 'net-')
+    loopback_leaks(args, evidence, passed, '--split-rounds', 'net-split-')
+
+
+def loopback_leaks(args, evidence, passed, mode, prefix):
     listener, closed, hole = Listener(), ClosedPort(), BlackHole()
     try:
         targets = [(LOOPBACK, listener.port, 5000), (LOOPBACK, closed.port, 5000), (LOOPBACK, hole.port, 1)]
         rounds, every = args.rounds, args.rounds // 8
-        samples = rounds_check(args, evidence, 'leak-loopback', targets, rounds, every,
-                               {'answered': 1, 'refused': 1, 'no-answer': 1})
+        samples = rounds_check(args, evidence, prefix + 'leak-loopback', targets, rounds, every,
+                               {'answered': 1, 'refused': 1, 'no-answer': 1}, mode)
         wait_for(lambda: listener.connections == rounds, 'every answered knock accepted', 30)
         assert listener.received == 0 and not listener.errors, ('the listener received bytes from the knocks',
                                                                 listener.received, listener.errors[:5])
@@ -687,7 +975,7 @@ def leak_checks(args, evidence, passed):
         closed.close()
         hole.close()
     rss = [s['Rss'] for s in samples]
-    passed('net-no-leak-on-loopback', knocks=rounds * len(targets), measured_knocks=(rounds - every) * len(targets),
+    passed(prefix + 'no-leak-on-loopback', knocks=rounds * len(targets), measured_knocks=(rounds - every) * len(targets),
            descriptors=samples[0]['descriptors'], vm_size_kib=samples[0]['VmSize'], vm_size_must_not_change=True,
            rss_kib_first=rss[0], rss_kib_last=rss[-1], rss_kib_min=min(rss), rss_kib_max=max(rss),
            rss_tolerance_kib=64, listener_connections=rounds, bytes_received=0)
@@ -716,11 +1004,14 @@ def inside_namespace(args, evidence, passed, not_tested):
         icmp_ratemask = ratemask.read_text().strip()
     except OSError as error:
         icmp_ratemask = f'unchanged: {error}'
-    expect(args, [NO_ROUTE, '80', '1000'], 'unreachable', NO_ROUTE, 80, 'network is unreachable', 101)
-    expect(args, [UNREACHABLE, '22', '1000'], 'unreachable', UNREACHABLE, 22, 'no route to host', 113)
-    passed('net-unreachable-from-the-routes', no_route='ENETUNREACH', unreachable_route='EHOSTUNREACH')
-    expect(args, [PROHIBITED, '22', '1000'], 'error', PROHIBITED, 22, 'permission denied', 13)
-    passed('net-error-names-the-linux-error', prohibited_route='EACCES')
+    for mode in ([], ['--split']):
+        expect(args, mode + [NO_ROUTE, '80', '1000'], 'unreachable', NO_ROUTE, 80, 'network is unreachable', 101)
+        expect(args, mode + [UNREACHABLE, '22', '1000'], 'unreachable', UNREACHABLE, 22, 'no route to host', 113)
+    passed('net-unreachable-from-the-routes', no_route='ENETUNREACH', unreachable_route='EHOSTUNREACH',
+           knocks=['net_knock', 'net_start'])
+    for mode in ([], ['--split']):
+        expect(args, mode + [PROHIBITED, '22', '1000'], 'error', PROHIBITED, 22, 'permission denied', 13)
+    passed('net-error-names-the-linux-error', prohibited_route='EACCES', knocks=['net_knock', 'net_start'])
     listener, closed, hole = Listener(), ClosedPort(), BlackHole()
     reject = drop = None
     try:
@@ -733,13 +1024,17 @@ def inside_namespace(args, evidence, passed, not_tested):
                      f'  ip daddr {LOOPBACK} tcp dport {drop.port} drop\n }}\n}}\n')
             firewall = subprocess.run(['nft', '-f', '-'], input=rules.encode(), capture_output=True)
         if firewall is not None and firewall.returncode == 0:
-            expect(args, [LOOPBACK, str(reject.port), '1000'], 'unreachable', LOOPBACK, reject.port,
-                   'no route to host', 113)
+            for mode in ([], ['--split']):
+                expect(args, mode + [LOOPBACK, str(reject.port), '1000'], 'unreachable', LOOPBACK, reject.port,
+                       'no route to host', 113)
             passed('net-unreachable-reported-later-through-so-error', icmp='host-unreachable', errno=113,
-                   icmp_ratemask=icmp_ratemask)
-            own, wall = expect(args, [LOOPBACK, str(drop.port), '300'], 'no answer', LOOPBACK, drop.port)
-            assert 300 <= own <= 400 and 300 <= wall <= 800, (own, wall)
-            passed('net-no-answer-from-a-firewall-drop', limit=300, knock_ms=own, wall_ms=round(wall))
+                   icmp_ratemask=icmp_ratemask, knocks=['net_knock', 'net_start'])
+            drops = []
+            for mode in ([], ['--split']):
+                own, wall = expect(args, mode + [LOOPBACK, str(drop.port), '300'], 'no answer', LOOPBACK, drop.port)
+                assert 300 <= own <= 400 and 300 <= wall <= 800, (mode, own, wall)
+                drops.append({'knock_ms': own, 'wall_ms': round(wall)})
+            passed('net-no-answer-from-a-firewall-drop', limit=300, net_knock=drops[0], net_start=drops[1])
         else:
             reason = 'nft is not installed' if firewall is None else firewall.stderr.decode(errors='replace').strip()
             not_tested.append(f'unreachable reported later by ICMP, and no answer from a firewall drop: nft '
@@ -754,18 +1049,25 @@ def inside_namespace(args, evidence, passed, not_tested):
         rounds, every = args.rounds // 2, args.rounds // 16
         samples = rounds_check(args, evidence, 'leak-namespace', targets, rounds, every, expected)
         wait_for(lambda: listener.connections == rounds + 1, 'every answered knock accepted', 30)
+        # The split knock with every outcome too, a quarter as many rounds.
+        split_rounds, split_every = args.rounds // 4, args.rounds // 32
+        split = rounds_check(args, evidence, 'split-leak-namespace', targets, split_rounds, split_every, expected,
+                             '--split-rounds')
+        wait_for(lambda: listener.connections == rounds + 1 + split_rounds, 'every answered split knock accepted', 30)
         assert listener.received == 0 and not listener.errors, ('the listener received bytes from the knocks',
                                                                 listener.received, listener.errors[:5])
     finally:
         for fixture in (listener, closed, hole, reject, drop):
             if fixture is not None:
                 fixture.close()
-    rss = [s['Rss'] for s in samples]
-    passed('net-no-leak-with-every-outcome', knocks=rounds * len(targets),
-           measured_knocks=(rounds - every) * len(targets), per_round=expected,
-           descriptors=samples[0]['descriptors'], vm_size_kib=samples[0]['VmSize'], vm_size_must_not_change=True,
-           rss_kib_first=rss[0], rss_kib_last=rss[-1], rss_kib_min=min(rss), rss_kib_max=max(rss),
-           rss_tolerance_kib=64, icmp_ratemask=icmp_ratemask)
+    for label, rounds_run, every_run, runs in (('net-no-leak-with-every-outcome', rounds, every, samples),
+                                               ('net-split-no-leak-with-every-outcome', split_rounds, split_every,
+                                                split)):
+        rss = [s['Rss'] for s in runs]
+        passed(label, knocks=rounds_run * len(targets), measured_knocks=(rounds_run - every_run) * len(targets),
+               per_round=expected, descriptors=runs[0]['descriptors'], vm_size_kib=runs[0]['VmSize'],
+               vm_size_must_not_change=True, rss_kib_first=rss[0], rss_kib_last=rss[-1], rss_kib_min=min(rss),
+               rss_kib_max=max(rss), rss_tolerance_kib=64, icmp_ratemask=icmp_ratemask)
 
 
 NAMESPACE_CHECKS = ('unreachable (no route, unreachable route, ICMP later)', 'error (prohibited route)',
@@ -809,12 +1111,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--knock', type=Path, default=ROOT / 'build/knock')
     parser.add_argument('--library', type=Path, help='the net.herb the probe uses (default lib/net.herb)')
-    parser.add_argument('--rounds', type=int, default=8000, help='rounds of the loopback leak check (namespace: half)')
+    parser.add_argument('--rounds', type=int, default=8000,
+                        help='rounds of the loopback leak checks (namespace: half, and a quarter split)')
     parser.add_argument('--only', choices=['all', *SECTIONS], default='all')
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--inside-namespace', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
-    assert args.rounds >= 1600 and args.rounds % 16 == 0, 'rounds: a multiple of 16, at least 1600 (default 8000)'
+    assert args.rounds >= 1600 and args.rounds % 32 == 0, 'rounds: a multiple of 32, at least 1600 (default 8000)'
     evidence = (args.evidence or Path(tempfile.mkdtemp(prefix='herbert-hosted-apps-net-'))).resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     result = {'checks': [], 'not_tested': []}

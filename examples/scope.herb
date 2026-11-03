@@ -1,10 +1,13 @@
--- Scope: a window on this machine. It shows the machine's name, how busy its
--- processor is and how much of its memory is in use, read again once a second.
--- Linked after lib/linux.herb, lib/x11.herb and lib/pixel_text.herb by Make.
--- Every buffer and both state records are built once in main. A frame reads
--- each /proc file through one fixed 4096-byte chunk, a byte at a time, keeping
--- only the numbers it wants, and draws from fixed text buffers, so a run of
--- days allocates nothing after startup.
+-- Scope: a window on this machine and the owner's other computers. It shows
+-- the machine's name, how busy its processor is and how much of its memory is
+-- in use, read again once a second, and whether each other computer listed in
+-- ~/.config/herbert/computers.txt answers, knocked every 5 seconds without
+-- the window ever waiting for one. Linked after lib/linux.herb, lib/x11.herb,
+-- lib/pixel_text.herb and lib/net.herb by Make.
+-- Every buffer and record is built at startup. A frame reads each /proc file
+-- through one fixed 4096-byte chunk, a byte at a time, keeping only the numbers
+-- it wants, and draws from fixed text buffers; each computer has one Net for
+-- all its knocks. So a run of days allocates nothing after startup.
 
 -- One pass over one file. The scanner sees each byte once and keeps no line, so
 -- neither the chunk size, the number of processors nor the length of any line
@@ -67,11 +70,62 @@ ref record Scope:
     detail: buffer
     detail_count: int
     interval: int
+    list: ScopeList
+end
+
+-- One other computer: where to knock (address and port, as net_ipv4 and
+-- net_port read them), its own Net, made once, and what its row shows. shown
+-- is the outcome of its last finished knock (0 to 4, as in lib/net.herb), or 5
+-- until the first one ends ("checking"); error is that knock's Linux error.
+-- due is when its next knock starts, in ms on the window's clock; note holds
+-- "Linux error N" for an error that has no words in net_error_name.
+ref record ScopeComputer:
+    address: int
+    port: int
+    net: Net
+    shown: int
+    error: int
+    due: int
+    note: buffer
+end
+
+-- A row of the other computers' section. kind 0 is a computer (which is its
+-- index; main is its name and detail its address, which only scope
+-- --computers prints: the window shows the name alone), 1 a problem with the
+-- list (main in amber), 2 a note (main in grey). The texts are made at startup.
+ref record ScopeRow:
+    kind: int
+    which: int
+    main: buffer
+    main_count: int
+    detail: buffer
+    detail_count: int
+end
+
+-- The other computers, read once at startup: at most six, in the list's
+-- order, and the rows that show them, at most eight (the computers, then the
+-- problems, or one note). problems counts the lines that could not be used;
+-- lines and reasons hold the first eight of them. every and limit are the
+-- knocks' interval and time limit in ms; polls holds the pollfd entries the
+-- window waits on, its display and up to six knocks.
+ref record ScopeList:
+    computers: array(ScopeComputer)
+    rows: array(ScopeRow)
+    problems: int
+    lines: array(int)
+    reasons: array(int)
+    every: int
+    limit: int
+    polls: buffer
+end
+
+func scope_list_new(every, limit):
+    return ScopeList(new_array(ScopeComputer), new_array(ScopeRow), 0, new_array(int), new_array(int), every, limit, linux_buffer(56))
 end
 
 func scope_new(stat, meminfo, host, interval):
     let scan = ScopeScan(false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, false, 0, linux_buffer(64))
-    return Scope(linux_cstring(stat), linux_cstring(meminfo), linux_cstring(host), linux_buffer(4096), scan, linux_buffer(64), 0, false, false, 0, linux_buffer(64), 0, 0, 2, 0, 0, 0, linux_buffer(96), 0, linux_buffer(96), 0, linux_buffer(96), 0, interval)
+    return Scope(linux_cstring(stat), linux_cstring(meminfo), linux_cstring(host), linux_buffer(4096), scan, linux_buffer(64), 0, false, false, 0, linux_buffer(64), 0, 0, 2, 0, 0, 0, linux_buffer(96), 0, linux_buffer(96), 0, linux_buffer(96), 0, interval, scope_list_new(5000, 2000))
 end
 
 func scope_scan_reset(s):
@@ -514,6 +568,309 @@ func scope_sample(st):
     return scope_texts(st)
 end
 
+-- The list of other computers, read once at startup. It is opened without
+-- blocking (O_NONBLOCK), so a FIFO cannot hold startup, and read only if it
+-- is a regular file, and only up to 64 KiB: at most 65537 bytes are asked for,
+-- the last only to learn whether the file ends there. (status, data, size):
+-- status 0 read, 1 missing, 2 could not be read, 3 larger than 64 KiB.
+func scope_list_file(path):
+    let data = linux_buffer(65537)
+    let fd = linux_syscall6(2, buffer_address(path), 526336, 0, 0, 0, 0)
+    if fd == 0 - 2: return (1, data, 0) end
+    if linux_error(fd): return (2, data, 0) end
+    let stat = linux_buffer(144)
+    let status = 0
+    let got = linux_syscall6(5, fd, buffer_address(stat), 0, 0, 0, 0)
+    if linux_error(got) or (linux_u32(stat, 24) & 61440) != 32768: status = 2 end
+    let size = 0
+    let going = status == 0
+    while going:
+        let n = linux_syscall6(0, fd, buffer_address(data) + size, 65537 - size, 0, 0, 0)
+        if n != 0 - 4:
+            if linux_error(n) or n > 65537 - size:
+                status = 2
+                going = false
+            elif n == 0:
+                going = false
+            else:
+                size = size + n
+                going = size <= 65536
+            end
+        end
+    end
+    if status == 0 and size > 65536: status = 3 end
+    do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    return (status, data, size)
+end
+
+func scope_skip(data, at, stop):
+    while at < stop and scope_blank(buffer_get(data, at)): at = at + 1 end
+    return at
+end
+
+func scope_word_end(data, at, stop):
+    while at < stop and not scope_blank(buffer_get(data, at)): at = at + 1 end
+    return at
+end
+
+-- Bytes from to stop of data as text, for net_ipv4 and net_port (startup only).
+func scope_string(data, from, stop):
+    let b = new_buffer()
+    while from < stop:
+        do append(b, buffer_get(data, from))
+        from = from + 1
+    end
+    return freeze(b)
+end
+
+-- A name is 1 to 24 bytes of printable ASCII other than the space.
+func scope_name_ok(data, from, stop):
+    if stop - from > 24: return false end
+    while from < stop:
+        let b = buffer_get(data, from)
+        if b < 33 or b > 126: return false end
+        from = from + 1
+    end
+    return true
+end
+
+func scope_row_add(list, kind, which):
+    let row = ScopeRow(kind, which, linux_buffer(64), 0, linux_buffer(96), 0)
+    do add(list.rows, row)
+    return row
+end
+
+func scope_note(list, kind, main, detail):
+    let row = scope_row_add(list, kind, 0)
+    row.main_count = scope_put(row.main, 0, main)
+    row.detail_count = scope_put(row.detail, 0, detail)
+    return 0
+end
+
+func scope_put_address(b, at, address):
+    at = linux_decimal(b, at, address >> 24)
+    at = scope_put(b, at, ".")
+    at = linux_decimal(b, at, (address >> 16) & 255)
+    at = scope_put(b, at, ".")
+    at = linux_decimal(b, at, (address >> 8) & 255)
+    at = scope_put(b, at, ".")
+    return linux_decimal(b, at, address & 255)
+end
+
+-- A good line: its computer, with a Net of its own, and its row.
+func scope_computer(list, data, from, stop, address, port):
+    let row = scope_row_add(list, 0, count(list.computers))
+    do linux_copy(row.main, 0, data, from, stop - from)
+    row.main_count = stop - from
+    let at = scope_put(row.detail, scope_put_address(row.detail, 0, address), " port ")
+    row.detail_count = linux_decimal(row.detail, at, port)
+    do add(list.computers, ScopeComputer(address, port, net_new(), 5, 0, 0, linux_buffer(24)))
+    return 0
+end
+
+-- A line that cannot be used, and why: 1 not three words, 2 the name, 3 the
+-- address, 4 the port, 5 a computer past the sixth. The first eight are kept.
+func scope_problem(list, line, reason):
+    if list.problems < 8:
+        do add(list.lines, line)
+        do add(list.reasons, reason)
+    end
+    list.problems = list.problems + 1
+    return 0
+end
+
+-- One line, from to stop, without its newline (or a carriage return just
+-- before it): blank, a comment (its first word starts with #), a computer, or
+-- a problem. Words are separated by spaces and tabs.
+func scope_list_line(list, data, from, stop, line):
+    if stop > from and buffer_get(data, stop - 1) == 13: stop = stop - 1 end
+    let name = scope_skip(data, from, stop)
+    if name == stop: return 0 end
+    if buffer_get(data, name) == 35: return 0 end
+    let name_end = scope_word_end(data, name, stop)
+    let address = scope_skip(data, name_end, stop)
+    let address_end = scope_word_end(data, address, stop)
+    let port = scope_skip(data, address_end, stop)
+    let port_end = scope_word_end(data, port, stop)
+    if port == stop or scope_skip(data, port_end, stop) != stop: return scope_problem(list, line, 1) end
+    if not scope_name_ok(data, name, name_end): return scope_problem(list, line, 2) end
+    let ip = net_ipv4(scope_string(data, address, address_end))
+    if not ip.0: return scope_problem(list, line, 3) end
+    let number = net_port(scope_string(data, port, port_end))
+    if not number.0: return scope_problem(list, line, 4) end
+    if count(list.computers) == 6: return scope_problem(list, line, 5) end
+    return scope_computer(list, data, name, name_end, ip.1, number.1)
+end
+
+-- Lines end at a newline; a last line without one still counts.
+func scope_list_parse(list, data, size):
+    let line = 1
+    let from = 0
+    let at = 0
+    while at < size:
+        if buffer_get(data, at) == 10:
+            do scope_list_line(list, data, from, at, line)
+            line = line + 1
+            from = at + 1
+        end
+        at = at + 1
+    end
+    if from < size: do scope_list_line(list, data, from, size, line) end
+    return 0
+end
+
+func scope_reason(reason):
+    if reason == 1: return "write a name, an address and a port, with spaces between" end
+    if reason == 2: return "the name must be 1 to 24 characters, ASCII only, no spaces" end
+    if reason == 3: return "the address must be four numbers 0 to 255 joined by dots" end
+    if reason == 4: return "the port must be a number 1 to 65535" end
+    return "Scope shows at most 6 other computers"
+end
+
+func scope_problem_row(list, line, reason):
+    let row = scope_row_add(list, 1, 0)
+    let at = linux_decimal(row.main, scope_put(row.main, 0, "line "), line)
+    if reason == 5:
+        at = scope_put(row.main, at, ": more than 6 listed")
+    else:
+        at = scope_put(row.main, at, " not understood")
+    end
+    row.main_count = at
+    row.detail_count = scope_put(row.detail, 0, scope_reason(reason))
+    return 0
+end
+
+-- After the computers come the problems, in the list's order. There are at
+-- most eight rows: when the problems do not fit, the last row says how many
+-- more there are and the line of the first of them.
+func scope_list_rows(list, status):
+    let none = "list them in ~/.config/herbert/computers.txt, one per line: name address port"
+    if status == 1: return scope_note(list, 2, "none listed", none) end
+    if status == 2: return scope_note(list, 1, "could not read the list", "~/.config/herbert/computers.txt") end
+    if status == 3:
+        return scope_note(list, 1, "could not read the list", "~/.config/herbert/computers.txt is over 64 KiB")
+    end
+    let room = 8 - count(list.computers)
+    let shown = list.problems
+    if shown > room: shown = room - 1 end
+    let i = 0
+    while i < shown:
+        do scope_problem_row(list, get(list.lines, i), get(list.reasons, i))
+        i = i + 1
+    end
+    if list.problems > shown:
+        let row = scope_row_add(list, 1, 0)
+        let at = linux_decimal(row.main, scope_put(row.main, 0, "and "), list.problems - shown)
+        row.main_count = linux_decimal(row.main, scope_put(row.main, at, " more problems from line "), get(list.lines, shown))
+    end
+    if count(list.rows) == 0: return scope_note(list, 2, "none listed", none) end
+    return 0
+end
+
+-- The list at path (NUL-terminated); have is false when there is no path
+-- (HOME is not set), which shows as a list that could not be read.
+func scope_list_load(list, have, path):
+    if not have: return scope_list_rows(list, 2) end
+    let file = scope_list_file(path)
+    if file.0 == 0: do scope_list_parse(list, file.1, file.2) end
+    return scope_list_rows(list, file.0)
+end
+
+-- The owner's list, $HOME/.config/herbert/computers.txt.
+func scope_home_list(every, limit):
+    let list = scope_list_new(every, limit)
+    let home = linux_env(linux_environment(), "HOME")
+    if length(home) == 0:
+        do scope_list_load(list, false, linux_buffer(1))
+        return list
+    end
+    let tail = "/.config/herbert/computers.txt"
+    let path = linux_buffer(length(home) + length(tail) + 1)
+    do linux_text(path, 0, home)
+    do linux_text(path, length(home), tail)
+    do scope_list_load(list, true, path)
+    return list
+end
+
+func scope_file_list(path, every, limit):
+    let list = scope_list_new(every, limit)
+    do scope_list_load(list, true, linux_cstring(path))
+    return list
+end
+
+-- The window is 640 wide; its height fits the rows and never changes.
+func scope_height(list): return 428 + count(list.rows) * 34 end
+
+-- The knock's result into its computer's row; true if what the row shows changed.
+func scope_result(it):
+    let st = it.net.state
+    let changed = it.shown != st.outcome or it.error != st.error
+    it.shown = st.outcome
+    it.error = st.error
+    return changed
+end
+
+-- Looks at every knock under way, without waiting, and starts the knocks that
+-- are due: a computer is knocked again every list.every ms, start to start,
+-- and never while its last knock is still under way. A row keeps its last
+-- result until the next knock ends. True if any row changed.
+func scope_knocks(list, now):
+    let changed = false
+    let i = 0
+    while i < count(list.computers):
+        let it = get(list.computers, i)
+        let st = it.net.state
+        if st.pending:
+            if net_check(it.net) != 5:
+                if scope_result(it): changed = true end
+            end
+        end
+        if not st.pending and now >= it.due:
+            it.due = now + list.every
+            if net_start(it.net, it.address, it.port, list.limit) != 5:
+                if scope_result(it): changed = true end
+            end
+        end
+        i = i + 1
+    end
+    return changed
+end
+
+-- What the window waits on, and for how long: its display, and every knock
+-- under way, put into list.polls; at most wait ms (the time to the next
+-- reading), less if a knock is due sooner or a pending knock's time limit
+-- ends sooner (net_left, rounded up, so the look after the wait is at or past
+-- it). (wait, entries).
+func scope_wait(c, list, now, wait):
+    let entries = linux_poll_entry(list.polls, 0, c.state.fd, 1)
+    let i = 0
+    while i < count(list.computers):
+        let it = get(list.computers, i)
+        let st = it.net.state
+        if st.pending:
+            entries = linux_poll_entry(list.polls, entries, st.fd, 4)
+            let left = net_left(it.net)
+            if left < wait: wait = left end
+        elif it.due <= now:
+            wait = 0
+        elif it.due - now < wait:
+            wait = it.due - now
+        end
+        i = i + 1
+    end
+    return (wait, entries)
+end
+
+-- Gives up every knock still under way, before the window closes.
+func scope_stop(list):
+    let i = 0
+    while i < count(list.computers):
+        do net_stop(get(list.computers, i).net)
+        i = i + 1
+    end
+    return 0
+end
+
 -- A bar is 400 pixels long, four to a percent shown.
 func scope_bar_width(state, percent):
     if state == 1: return percent * 4 end
@@ -540,9 +897,64 @@ func scope_row(c, label, y, state, percent, text, count, fill):
     return pixel_text_buffer(c, text, 0, count, 464, y + 26, 2)
 end
 
+-- A computer's result, at (352, y): answers (answered or refused, in green),
+-- checking (grey) until its first knock ends, or no answer, unreachable or
+-- error in amber; under error, what Linux said.
+func scope_status(c, it, y):
+    let shown = it.shown
+    if shown == 0 or shown == 1:
+        do x11_color(c, 6867876)
+        return pixel_text(c, "answers", 352, y, 2)
+    end
+    if shown == 5:
+        do x11_color(c, 11255503)
+        return pixel_text(c, "checking", 352, y, 2)
+    end
+    do x11_color(c, 16173151)
+    if shown == 2: return pixel_text(c, "no answer", 352, y, 2) end
+    if shown == 3: return pixel_text(c, "unreachable", 352, y, 2) end
+    do pixel_text(c, "error", 352, y, 2)
+    let name = net_error_name(it.error)
+    if length(name) > 0: return pixel_text(c, name, 352, y + 19, 1) end
+    let at = scope_put(it.note, 0, "Linux error ")
+    return pixel_text_buffer(c, it.note, 0, linux_decimal(it.note, at, it.error), 352, y + 19, 1)
+end
+
+-- The other computers' section, its panel ending at bottom: a row every 34
+-- pixels, its main text at scale 2. A problem or a note has its detail 19
+-- pixels under that at scale 1, saying what to fix; a computer shows its name
+-- alone (the owner's choice), with its result to the right.
+func scope_others(c, list, bottom):
+    do x11_color(c, 8820395)
+    do pixel_text(c, "OTHER COMPUTERS", 28, 318, 1)
+    do x11_color(c, 2767956)
+    do x11_rect(c, 24, 334, 592, bottom - 334)
+    do x11_color(c, 1384240)
+    do x11_rect(c, 26, 336, 588, bottom - 338)
+    let i = 0
+    while i < count(list.rows):
+        let row = get(list.rows, i)
+        let y = 348 + i * 34
+        let ink = 15265527
+        if row.kind == 1: ink = 16173151 end
+        if row.kind == 2: ink = 11255503 end
+        do x11_color(c, ink)
+        do pixel_text_buffer(c, row.main, 0, row.main_count, 46, y, 2)
+        if row.kind == 0:
+            do scope_status(c, get(list.computers, row.which), y)
+        else:
+            do x11_color(c, 11255503)
+            do pixel_text_buffer(c, row.detail, 0, row.detail_count, 46, y + 19, 1)
+        end
+        i = i + 1
+    end
+    return 0
+end
+
 func scope_draw(c, st, pulse):
+    let bottom = 354 + count(st.list.rows) * 34
     do x11_color(c, 1054759)
-    do x11_rect(c, 0, 0, 640, 370)
+    do x11_rect(c, 0, 0, 640, bottom + 74)
     do x11_color(c, 15265527)
     do pixel_text(c, "HERBERT", 28, 27, 3)
     do x11_color(c, 8820395)
@@ -565,9 +977,11 @@ func scope_draw(c, st, pulse):
     do scope_row(c, "MEMORY", 212, st.mem_state, st.mem_percent, st.mem_text, st.mem_count, 7317724)
     do x11_color(c, 11255503)
     do pixel_text_buffer(c, st.detail, 0, st.detail_count, 46, 270, 1)
-    do pixel_text(c, "ESC OR Q TO CLOSE", 28, 318, 1)
+    do scope_others(c, st.list, bottom)
+    do x11_color(c, 11255503)
+    do pixel_text(c, "ESC OR Q TO CLOSE", 28, bottom + 22, 1)
     do x11_color(c, 5793911)
-    do pixel_text(c, "MADE IN HERBERT", 28, 340, 1)
+    do pixel_text(c, "MADE IN HERBERT", 28, bottom + 44, 1)
     -- The small light changes at every new sample, so a running window shows it.
     let light = 3832176
     if pulse == 1: light = 6867876 end
@@ -586,10 +1000,16 @@ func scope_quit(c, event):
     return quit
 end
 
+-- The window's loop. It waits on its display and on every knock under way
+-- together (scope_wait), so input, readings and knocks never wait for each
+-- other: the wait ends at a key or other display event, a knock that ends, a
+-- knock's time limit, a knock that is due, or the next reading.
 func scope_loop(c, st, event, last, pulse):
+    let list = st.list
     while true:
         do x11_events(c)
         if x11_closed(c) or scope_quit(c, event):
+            do scope_stop(list)
             let closed = x11_close(c)
             do x11_need(closed == 0, "scope: display close failed\n")
             do process_exit(0)
@@ -597,24 +1017,29 @@ func scope_loop(c, st, event, last, pulse):
         end
         let now = linux_clock_ms(c.clock)
         do x11_need(not linux_error(now), "scope: monotonic clock failed\n")
+        let changed = scope_knocks(list, now)
         if now - last >= st.interval:
             do scope_sample(st)
             pulse = 1 - pulse
             do scope_draw(c, st, pulse)
             last = now
+        elif changed:
+            do scope_draw(c, st, pulse)
         elif x11_exposed(c):
             do x11_present(c)
         end
         do x11_ack_expose(c)
-        let waited = linux_poll(c.state.fd, c.poll, 1, st.interval - (now - last))
+        let plan = scope_wait(c, list, now, st.interval - (now - last))
+        let waited = linux_poll_many(list.polls, plan.1, plan.0)
         do x11_need(not linux_error(waited) or waited == 0 - 4, "scope: input wait failed\n")
     end
     return 0
 end
 
-func scope_window(st):
+func scope_window(st, list):
+    st.list = list
     do scope_sample(st)
-    let c = x11_open(640, 370, "Herbert - Scope")
+    let c = x11_open(640, scope_height(list), "Herbert - Scope")
     do x11_enable_text(c)
     let event = linux_buffer(16)
     do scope_draw(c, st, 0)
@@ -696,6 +1121,37 @@ func scope_sample_mode(args, count):
     return 0
 end
 
+-- scope --computers [FILE]: what the list of other computers (FILE, or the
+-- owner's) means, one line a row, "kind<TAB>main<TAB>detail" (kind computer,
+-- problem or note), then the window's height. The window draws main and, for
+-- a problem or a note, detail; a computer's detail is the address and port it
+-- is knocked at, printed here only. No knock is made.
+func scope_list_mode(list):
+    let out = new_buffer()
+    let i = 0
+    while i < count(list.rows):
+        let row = get(list.rows, i)
+        if row.kind == 0:
+            do scope_out(out, "computer\t")
+        elif row.kind == 1:
+            do scope_out(out, "problem\t")
+        else:
+            do scope_out(out, "note\t")
+        end
+        do scope_out_span(out, row.main, row.main_count)
+        do scope_out(out, "\t")
+        do scope_out_span(out, row.detail, row.detail_count)
+        do scope_out(out, "\n")
+        i = i + 1
+    end
+    do scope_out(out, "height\t")
+    do scope_out_number(out, scope_height(list))
+    do scope_out(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+
 func scope_arguments(args):
     let count = 0
     let offset = 0
@@ -724,16 +1180,27 @@ func main():
     let args = linux_arguments()
     let count = scope_arguments(args)
     if count == 1:
-        return scope_window(scope_new("/proc/stat", "/proc/meminfo", "/proc/sys/kernel/hostname", 1000))
+        let st = scope_new("/proc/stat", "/proc/meminfo", "/proc/sys/kernel/hostname", 1000)
+        return scope_window(st, scope_home_list(5000, 2000))
     end
     let mode = linux_argument(args, 1)
     if count >= 6 and equal(mode, "--sample"): return scope_sample_mode(args, count) end
-    -- scope --test STAT MEMINFO HOSTNAME MILLISECONDS: the window, reading
-    -- those files at that interval. The tests use it; see examples/scope.md.
-    if count == 6 and equal(mode, "--test"):
+    if count == 2 and equal(mode, "--computers"): return scope_list_mode(scope_home_list(5000, 2000)) end
+    if count == 3 and equal(mode, "--computers"):
+        return scope_list_mode(scope_file_list(linux_argument(args, 2), 5000, 2000))
+    end
+    -- scope --test STAT MEMINFO HOSTNAME MILLISECONDS [COMPUTERS EVERY LIMIT]:
+    -- the window, reading those files at that interval, and knocking on the
+    -- computers in COMPUTERS every EVERY ms with a limit of LIMIT ms (without
+    -- them, the owner's list as usual). The tests use it; see examples/scope.md.
+    if (count == 6 or count == 9) and equal(mode, "--test"):
         let ms = scope_milliseconds(linux_argument(args, 5))
-        if ms != 0:
-            return scope_window(scope_new(linux_argument(args, 2), linux_argument(args, 3), linux_argument(args, 4), ms))
+        let st = scope_new(linux_argument(args, 2), linux_argument(args, 3), linux_argument(args, 4), ms)
+        if count == 6 and ms != 0: return scope_window(st, scope_home_list(5000, 2000)) end
+        let every = scope_milliseconds(linux_argument(args, 7))
+        let limit = scope_milliseconds(linux_argument(args, 8))
+        if count == 9 and ms != 0 and every != 0 and limit != 0:
+            return scope_window(st, scope_file_list(linux_argument(args, 6), every, limit))
         end
     end
     return linux_die("scope: usage: scope\n")
