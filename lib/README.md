@@ -11,13 +11,16 @@ back to original files and lines. Runtime bounds faults still refer to combined
 source; the retained source map identifies its original units.
 
 - `linux.herb`: fixed byte buffers and endian fields; bounded file/environment
-  reading; startup command-line arguments; unsigned decimal formatting; hostname; monotonic clock; polling; complete socket transfers with
+  reading; startup command-line arguments; unsigned decimal formatting; hostname; monotonic clock; polling one
+  descriptor or several at once; complete socket transfers with
   partial-transfer, EINTR, EOF, broken-peer and deadline handling.
 - `net.herb`: strict dotted IPv4, port and time-limit parsing, and a TCP knock:
   answered, refused, no answer, unreachable or a named error, within a time
   limit, never sending a byte, the socket closed on every path. A `Net` record
   (`net_new()`, once) holds the state and every buffer a knock uses, so a knock
-  allocates nothing. Addresses only, no names. Used by knock.
+  allocates nothing. Addresses only, no names. `net_knock` waits for the
+  answer; `net_start`, `net_check`, `net_left` and `net_stop` knock without
+  waiting, for a program that must keep going meanwhile. Used by knock and Scope.
 - `x11.herb`: local display/authentication, a fixed-size window, server pixmap,
   keyboard mapping and key/focus/close events, rectangle/ellipse requests and
   presentation. X11 itself remains an external desktop service. Its supported

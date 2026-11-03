@@ -7,9 +7,11 @@ checkable on demand.
 ## Next: programs people use
 
 - **A live window on the owner's computers**: whether each of them answers, and how busy this one is, running for
-  days without growing. The first piece exists: [Scope](examples/scope.md) shows this computer's name, processor
-  and memory use, read from `/proc` once a second, with nothing allocated after it starts. Next it shows the owner's
-  other computers and whether each answers, using [knock](examples/knock.md) (`lib/net.herb`).
+  days without growing. Two pieces exist: [Scope](examples/scope.md) shows this computer's name, processor and
+  memory use, read from `/proc` once a second, and the owner's other computers, listed in a file on his machine,
+  each knocked every 5 seconds with [knock](examples/knock.md)'s library (`lib/net.herb`) to show whether it answers,
+  without the window ever waiting; nothing is allocated after it starts. Next it shows how busy each of the other
+  computers is.
 - Notes, Maze, First steps, Scope and the word counter keep working, and change when using them shows a need.
 
 ## Memory
