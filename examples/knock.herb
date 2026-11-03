@@ -97,10 +97,27 @@ func knock_arguments(args):
     return argc
 end
 
-func knock_once(target):
+-- One knock through net_start and net_check, as a program that must not wait
+-- makes it: between looks it waits on the socket, for at most what is left of
+-- the time limit (net_left), as Scope's window does with its own input.
+func knock_split(n, address, port, limit):
+    let outcome = net_start(n, address, port, limit)
+    while outcome == 5:
+        do linux_poll(n.state.fd, n.poll, 4, net_left(n))
+        outcome = net_check(n)
+    end
+    return outcome
+end
+
+func knock_one(n, split, address, port, limit):
+    if split: return knock_split(n, address, port, limit) end
+    return net_knock(n, address, port, limit)
+end
+
+func knock_once(target, split):
     let n = net_new()
     let line = linux_buffer(256)
-    let outcome = net_knock(n, target.0, target.1, target.2)
+    let outcome = knock_one(n, split, target.0, target.1, target.2)
     do knock_write(1, line, knock_line(line, target.0, target.1, n.state))
     do process_exit(knock_status(outcome))
     return 0
@@ -162,11 +179,12 @@ end
 -- EVERY rounds and after the last it prints the counts so far (knock_report)
 -- and waits for a byte on standard input before going on; then it exits 0.
 -- Everything is made before the first knock; nothing is allocated after.
-func knock_rounds(args, argc):
+-- --split-rounds is the same with the knocks of --split.
+func knock_rounds(args, argc, split, usage):
     let rounds = knock_count(linux_argument(args, 2))
     let every = knock_count(linux_argument(args, 3))
     if not rounds.0 or not every.0:
-        return knock_refuse("knock: usage: knock --rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]\n")
+        return knock_refuse(usage)
     end
     let addresses = new_array(int)
     let ports = new_array(int)
@@ -187,7 +205,7 @@ func knock_rounds(args, argc):
     while round <= rounds.1:
         let i = 0
         while i < count(addresses):
-            let outcome = net_knock(n, get(addresses, i), get(ports, i), get(limits, i))
+            let outcome = knock_one(n, split, get(addresses, i), get(ports, i), get(limits, i))
             do linux_put64(counts, outcome * 8, linux_u64(counts, outcome * 8) + 1)
             i = i + 1
         end
@@ -206,8 +224,22 @@ func main():
     let argc = knock_arguments(args)
     let mode = linux_argument(args, 1)
     if equal(mode, "--rounds"):
-        if argc >= 7 and (argc - 4) % 3 == 0: return knock_rounds(args, argc) end
-        return knock_refuse("knock: usage: knock --rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]\n")
+        let usage = "knock: usage: knock --rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]\n"
+        if argc >= 7 and (argc - 4) % 3 == 0: return knock_rounds(args, argc, false, usage) end
+        return knock_refuse(usage)
+    end
+    if equal(mode, "--split-rounds"):
+        let usage = "knock: usage: knock --split-rounds ROUNDS EVERY ADDRESS PORT MS [ADDRESS PORT MS ...]\n"
+        if argc >= 7 and (argc - 4) % 3 == 0: return knock_rounds(args, argc, true, usage) end
+        return knock_refuse(usage)
+    end
+    -- knock --split ADDRESS PORT [MILLISECONDS]: one knock, as above, through
+    -- net_start and net_check (knock_split). For the tests.
+    if equal(mode, "--split"):
+        if argc != 4 and argc != 5: return knock_refuse("knock: usage: knock --split ADDRESS PORT [MILLISECONDS]\n") end
+        let limit = "1000"
+        if argc == 5: limit = linux_argument(args, 4) end
+        return knock_once(knock_target(linux_argument(args, 2), linux_argument(args, 3), limit), true)
     end
     if equal(mode, "--parse"):
         if argc != 4 and argc != 5: return knock_refuse("knock: usage: knock --parse ADDRESS PORT [MILLISECONDS]\n") end
@@ -218,7 +250,7 @@ func main():
     if argc == 3 or argc == 4:
         let limit = "1000"
         if argc == 4: limit = linux_argument(args, 3) end
-        return knock_once(knock_target(linux_argument(args, 1), linux_argument(args, 2), limit))
+        return knock_once(knock_target(linux_argument(args, 1), linux_argument(args, 2), limit), false)
     end
     return knock_refuse("knock: usage: knock ADDRESS PORT [MILLISECONDS]\n")
 end

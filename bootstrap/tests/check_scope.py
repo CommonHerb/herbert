@@ -8,17 +8,30 @@ of the arithmetic (0 %, 100 %, half a percent and 99.5 % exactly, also past 2^56
 figure, counters that did not move or went back one by one or all together, numbers at and past 2^64, tenths that
 carry).
 
-Part two opens the window on a private Xvfb display and drives it with XTest. With the real /proc it must draw this
-machine's name, a processor figure, and memory figures that agree with /proc/meminfo read just before and just after
-a frame that shows a new reading; it quits on Escape, q, Shift+Q and the window manager's close. With `--test` it
-reads files this check writes: the redraw light must change at every reading while nothing else does, and the exact
-text, inks and bar lengths are checked for known figures, a zero-length interval, MiB, names of 48 and 60 bytes, and
-files that vanish ("unavailable") and come back. Last, for --seconds (default 120) it reads every 10 ms through links
-this check turns between the real /proc, files without a final newline (MiB, a 60-byte name), missing files and
-malformed files, and must stay the same size in memory.
+Then `scope --computers [FILE]` reads lists of other computers this check writes (86 of them, from good lines,
+comments, tabs and CRLF to every malformed address and port check_net knows, 7 computers, more problems than rows and
+the 64 KiB bound), files that are not lists (a FIFO, /dev/zero, a directory) and the list in HOME; every line it
+prints is compared with an answer written by hand, and strace makes socket() fail so nothing could be knocked.
 
-Python, Xvfb, libX11 and libXtst are test tools only; Scope links none of them. Evidence (frames, input history,
-outputs, memory samples) is kept in /tmp/herbert-hosted-apps-scope-*.
+Part two opens the window on a private Xvfb display and drives it with XTest. Every run has a HOME of this check's
+own (or none), so no run can read the owner's list of computers, and every knock goes to 127.x, to listeners and
+ports this check opens (check_net's Listener, ClosedPort and BlackHole). With the real /proc it must draw this
+machine's name, a processor figure, and memory figures that agree with /proc/meminfo read just before and just after
+a frame that shows a new reading, and the computers in its HOME's list answering; it quits on Escape, q, Shift+Q and
+the window manager's close. With `--test` it reads files this check writes: the redraw light must change at every
+reading while nothing else does, and the exact text, inks and bar lengths are checked for known figures, a
+zero-length interval, MiB, names of 48 and 60 bytes, and files that vanish ("unavailable") and come back. The other
+computers' rows are read back from pixels too: checking, answers (a listener, and a closed port's refusal), no answer
+(a full accept queue), kept while the next knock is under way, problems, a seventh computer never knocked, and
+unreachable and error made by strace failing the knocks' connects. A knock that never answers must hold nothing up:
+the light changes on time and Escape closes the window within 300 ms. Under strace, the knocks' interval and time
+limit are read from their own clock. Last, for --seconds (default 120) it reads every 10 ms through links this check
+turns between the real /proc, files without a final newline (MiB, a 60-byte name), missing files and malformed
+files, while knocking every 20 ms on three computers, and must stay the same size in memory with no socket outliving
+its knock.
+
+Python, strace, Xvfb, libX11 and libXtst are test tools only; Scope links none of them. Evidence (frames, input
+history, outputs, traces, memory samples) is kept in /tmp/herbert-hosted-apps-scope-*.
 """
 
 if not __debug__:
@@ -31,6 +44,9 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
+import socket
+import stat as stat_module
 import subprocess
 import tempfile
 import time
@@ -38,18 +54,41 @@ import time
 from check_desktop import private_display, XConnection
 from check_desktop import memory as process_memory
 from check_hosted_apps import App, glyphs, stable_memory, static_elf, wait_for
+from check_net import (BlackHole, ClosedPort, HIGH, Listener, LOOPBACK, MALFORMED_ADDRESSES, MALFORMED_PORTS, SPREAD,
+                       pending)
 
 ROOT = Path(__file__).resolve().parents[2]
-TITLE, SIZE = b'Herbert - Scope', (640, 370)
+TITLE = b'Herbert - Scope'
 
-# Colours and places from examples/scope.herb (scope_draw, scope_row).
+# Colours and places from examples/scope.herb (scope_draw, scope_row, scope_others, scope_status).
 BACKGROUND, PANEL, TRACK = 1054759, 1384240, 2767956
 WHITE, AMBER, GREY = 15265527, 16173151, 11255503
 CPU_FILL, MEMORY_FILL = 6867876, 7317724
+GREEN, HEADING, DIM = 6867876, 8820395, 5793911
 HOST_AT = (28, 96)
 CPU_ROW, MEMORY_ROW = 146, 212          # a row's label; its bar is 22 below, its figure 26 below at x=464
 BAR_X, BAR_LENGTH = 46, 400
 DETAIL_AT = (46, 270)
+# The other computers' section: its heading, then a panel from y=334 with a row every 34 pixels from y=348: the main
+# text at x=46, scale 2, the detail 19 below at scale 1, and a computer's result at x=352 (scale 2, and under it what
+# Linux said, scale 1). The panel ends at 354 + 34 * rows; the footer lines are 22 and 44 below it, and the window is
+# 74 taller than that: 428 + 34 * rows in all, one row at least (a note) and eight at most.
+OTHERS_AT = (28, 318)
+ROW_TOP, ROW_STEP, DETAIL_DY, STATUS_X = 348, 34, 19, 352
+
+
+def height(rows):
+    return 428 + ROW_STEP * rows
+
+
+def bottom(rows):
+    return 354 + ROW_STEP * rows
+
+
+def rows_of(frame):
+    rows, rest = divmod(frame['height'] - 428, ROW_STEP)
+    assert frame['width'] == 640 and rest == 0 and 1 <= rows <= 8, ('window size', frame['width'], frame['height'])
+    return rows
 
 
 def stat_line(*fields):
@@ -283,7 +322,7 @@ ORDER = ('meminfo', 'host', 'processor', 'processor-bar', 'memory', 'memory-bar'
 def sample_checks(args, evidence, passed):
     root = evidence / 'sample'
     root.mkdir()
-    env = dict(os.environ)
+    env = dict(os.environ, HOME=str(empty_home(evidence, 'sample')))
     env.pop('DISPLAY', None)
     names = set()
     for name, files, changes in CASES:
@@ -316,6 +355,13 @@ def sample_checks(args, evidence, passed):
             ('test-interval-zero', ['--test', 'a', 'b', 'c', '0'], b'scope: usage: scope\n'),
             ('test-interval-over-a-minute', ['--test', 'a', 'b', 'c', '60001'], b'scope: usage: scope\n'),
             ('test-interval-not-a-number', ['--test', 'a', 'b', 'c', '1x'], b'scope: usage: scope\n'),
+            ('test-knock-interval-zero', ['--test', 'a', 'b', 'c', '100', 'list', '0', '100'], b'scope: usage: scope\n'),
+            ('test-knock-limit-over-a-minute', ['--test', 'a', 'b', 'c', '100', 'list', '100', '60001'],
+             b'scope: usage: scope\n'),
+            ('test-knock-limit-missing', ['--test', 'a', 'b', 'c', '100', 'list', '100'], b'scope: usage: scope\n'),
+            ('test-interval-zero-with-a-list', ['--test', 'a', 'b', 'c', '0', 'list', '100', '100'],
+             b'scope: usage: scope\n'),
+            ('computers-two-files', ['--computers', 'a', 'b'], b'scope: usage: scope\n'),
             ('no-display', [], None)):
         result = subprocess.run([str(args.scope.resolve()), *extra], cwd=root, env=env, capture_output=True,
                                 timeout=30)
@@ -328,25 +374,202 @@ def sample_checks(args, evidence, passed):
         passed('scope-refuses-' + label)
 
 
-class Scope(App):
-    """check_hosted_apps.App (input, frames, shutdown), started with Scope's own arguments, not a document path."""
+def empty_home(evidence, label):
+    """A home directory of this check's own, with no list of other computers in it."""
+    home = evidence / 'homes' / label
+    home.mkdir(parents=True)
+    return home
 
-    def __init__(self, image, arguments, x, display, evidence, label):
-        self.x, self.evidence, self.label = x, evidence, label
+
+# What scope --computers prints for a list: one line a row, (kind, main, detail), as the window draws it. Written by
+# hand from the rules in examples/scope.md. Every address in these lists is a documentation address (RFC 5737) or
+# 127.x; scope --computers knocks on nothing, and runs here with socket() made to fail so that no build could.
+R_WORDS = 'write a name, an address and a port, with spaces between'
+R_NAME = 'the name must be 1 to 24 characters, ASCII only, no spaces'
+R_ADDRESS = 'the address must be four numbers 0 to 255 joined by dots'
+R_PORT = 'the port must be a number 1 to 65535'
+R_SEVENTH = 'Scope shows at most 6 other computers'
+NONE_LISTED = ('note', 'none listed', 'list them in ~/.config/herbert/computers.txt, one per line: name address port')
+UNREADABLE = ('problem', 'could not read the list', '~/.config/herbert/computers.txt')
+TOO_LARGE = ('problem', 'could not read the list', '~/.config/herbert/computers.txt is over 64 KiB')
+NOGGIN = ('computer', 'noggin', '192.0.2.5 port 9')
+BOX = ('computer', 'box', '198.51.100.7 port 22')
+SIX = b''.join(b'c%d 192.0.2.%d %d\n' % (n, n, 100 + n) for n in range(1, 7))
+SIX_ROWS = [('computer', 'c1', '192.0.2.1 port 101'), ('computer', 'c2', '192.0.2.2 port 102'),
+            ('computer', 'c3', '192.0.2.3 port 103'), ('computer', 'c4', '192.0.2.4 port 104'),
+            ('computer', 'c5', '192.0.2.5 port 105'), ('computer', 'c6', '192.0.2.6 port 106')]
+EXACTLY_64_KIB = b'noggin 192.0.2.5 9\n#' + b'x' * 65515 + b'\n'
+assert len(EXACTLY_64_KIB) == 65536
+ROWS_FULL = (b'c1 192.0.2.1 101\nx\nc2 192.0.2.2 102\nc3 192.0.2.3 103\np 192.0.2.9 0\nc4 192.0.2.4 104\n'
+             b'c5 192.0.2.5 105\nc6 192.0.2.6 106\nc7 192.0.2.7 107\n')
+
+LIST_CASES = [
+    ('one-computer', b'noggin 192.0.2.5 9\n', [NOGGIN]),
+    ('comments-and-blank-lines', b'# my computers\n\n   \n\t\n  \t# indented\nnoggin 192.0.2.5 9\n#\n# box 1.2.3.4 5\n',
+     [NOGGIN]),
+    ('tabs-and-spaces', b'\t noggin \t 192.0.2.5\t\t9 \t\n', [NOGGIN]),
+    ('crlf', b'# list\r\nnoggin 192.0.2.5 9\r\n\r\nbox 198.51.100.7 22\r\n', [NOGGIN, BOX]),
+    ('no-final-newline', b'noggin 192.0.2.5 9\nbox 198.51.100.7 22', [NOGGIN, BOX]),
+    ('crlf-without-final-newline', b'noggin 192.0.2.5 9\r', [NOGGIN]),
+    ('carriage-return-inside-the-name', b'nog\rgin 192.0.2.5 9\n', [('problem', 'line 1 not understood', R_NAME)]),
+    ('carriage-return-between-words', b'noggin 192.0.2.5\r9\n', [('problem', 'line 1 not understood', R_WORDS)]),
+    ('two-carriage-returns', b'noggin 192.0.2.5 9\r\r\n', [('problem', 'line 1 not understood', R_PORT)]),
+    ('name-of-1-byte', b'a 203.0.113.1 1\n', [('computer', 'a', '203.0.113.1 port 1')]),
+    ('name-of-24-bytes', b'abcdefghijklmnopqrstuvwx 203.0.113.1 65535\n',
+     [('computer', 'abcdefghijklmnopqrstuvwx', '203.0.113.1 port 65535')]),
+    ('name-of-25-bytes', b'abcdefghijklmnopqrstuvwxy 203.0.113.1 22\n', [('problem', 'line 1 not understood', R_NAME)]),
+    ('names-of-marks', b'a#b!"$%&\'()*+,-./:;<=>?@ 192.0.2.5 9\n[\\]^_`{|}~ 192.0.2.6 10\n',
+     [('computer', 'a#b!"$%&\'()*+,-./:;<=>?@', '192.0.2.5 port 9'), ('computer', '[\\]^_`{|}~', '192.0.2.6 port 10')]),
+    ('a-hash-first-is-a-comment', b'#box 192.0.2.5 9\n', [NONE_LISTED]),
+    ('non-ascii-name', 'nöggin 192.0.2.5 9\n'.encode(), [('problem', 'line 1 not understood', R_NAME)]),
+    ('control-byte-in-the-name', b'nog\x01gin 192.0.2.5 9\n', [('problem', 'line 1 not understood', R_NAME)]),
+    ('delete-byte-in-the-name', b'nog\x7fgin 192.0.2.5 9\n', [('problem', 'line 1 not understood', R_NAME)]),
+    ('nul-byte-in-the-name', b'nog\x00gin 192.0.2.5 9\n', [('problem', 'line 1 not understood', R_NAME)]),
+    ('one-word', b'noggin\n', [('problem', 'line 1 not understood', R_WORDS)]),
+    ('two-words', b'noggin 192.0.2.5\n', [('problem', 'line 1 not understood', R_WORDS)]),
+    ('four-words', b'noggin 192.0.2.5 9 22\n', [('problem', 'line 1 not understood', R_WORDS)]),
+    ('comment-after-a-computer', b'noggin 192.0.2.5 9 # home\n', [('problem', 'line 1 not understood', R_WORDS)]),
+    ('words-before-the-name', 'nöggin 192.0.2.5\n'.encode(), [('problem', 'line 1 not understood', R_WORDS)]),
+    ('name-before-the-address', 'nöggin 192.0.2 9\n'.encode(), [('problem', 'line 1 not understood', R_NAME)]),
+    ('address-before-the-port', b'noggin 192.0.2 0\n', [('problem', 'line 1 not understood', R_ADDRESS)]),
+    ('address-and-port-edges', b'zero 0.0.0.0 1\nall 255.255.255.255 65535\nmixed 1.20.199.250 65534\nten 10.0.0.1 80\n',
+     [('computer', 'zero', '0.0.0.0 port 1'), ('computer', 'all', '255.255.255.255 port 65535'),
+      ('computer', 'mixed', '1.20.199.250 port 65534'), ('computer', 'ten', '10.0.0.1 port 80')]),
+    ('the-same-name-twice', b'box 192.0.2.1 22\nbox 192.0.2.2 22\n',
+     [('computer', 'box', '192.0.2.1 port 22'), ('computer', 'box', '192.0.2.2 port 22')]),
+    ('six-computers', SIX, SIX_ROWS),
+    ('seven-computers', SIX + b'c7 192.0.2.7 107\n', SIX_ROWS + [('problem', 'line 7: more than 6 listed', R_SEVENTH)]),
+    ('eight-computers', SIX + b'c7 192.0.2.7 107\nc8 192.0.2.8 108\n',
+     SIX_ROWS + [('problem', 'line 7: more than 6 listed', R_SEVENTH),
+                 ('problem', 'line 8: more than 6 listed', R_SEVENTH)]),
+    ('a-bad-seventh-line', SIX + b'c7 192.0.2 107\n', SIX_ROWS + [('problem', 'line 7 not understood', R_ADDRESS)]),
+    ('more-problems-than-rows-left', ROWS_FULL,
+     SIX_ROWS + [('problem', 'line 2 not understood', R_WORDS), ('problem', 'and 2 more problems from line 5', '')]),
+    ('only-problems', b'x\n' * 10, [('problem', f'line {n} not understood', R_WORDS) for n in range(1, 8)]
+     + [('problem', 'and 3 more problems from line 8', '')]),
+    ('lines-count-comments-and-blanks', b'# a\n\n  \nnoggin 192.0.2.5 9\n# b\nbad\n',
+     [NOGGIN, ('problem', 'line 6 not understood', R_WORDS)]),
+    ('line-40000', b'\n' * 39999 + b'bad\n', [('problem', 'line 40000 not understood', R_WORDS)]),
+    ('empty-file', b'', [NONE_LISTED]),
+    ('only-comments-and-blanks', b'# one\n\n# two\r\n \t \n', [NONE_LISTED]),
+    ('exactly-64-KiB', EXACTLY_64_KIB, [NOGGIN]),
+    ('one-byte-over-64-KiB', EXACTLY_64_KIB[:-1] + b'x\n', [TOO_LARGE]),
+    ('1-MiB', b'#' + b'x' * 1048574 + b'\n', [TOO_LARGE]),
+]
+# Malformed addresses and ports from check_net, each on a line of its own; those with a space or tab in them are
+# other words on a line here, and the empty one is no word at all.
+LIST_CASES += [(f'bad-address-{n}', b'box %s 9\n' % a.encode(), [('problem', 'line 1 not understood', R_ADDRESS)])
+               for n, a in enumerate(MALFORMED_ADDRESSES) if a and not set(a) & set(' \t')]
+LIST_CASES += [(f'bad-port-{n}', b'box 192.0.2.5 %s\n' % q.encode(), [('problem', 'line 1 not understood', R_PORT)])
+               for n, q in enumerate(MALFORMED_PORTS) if q and not set(q) & set(' \t')]
+
+
+def list_run(args, directory, label, extra, home, timeout=10):
+    """scope --computers [FILE] under strace with socket() made to fail: (lines, seconds). Nothing may be asked of
+    the network, and the program must finish within timeout."""
+    env = {k: v for k, v in os.environ.items() if k not in ('DISPLAY', 'HOME')}
+    if home is not None:
+        env['HOME'] = home
+    trace = directory / (label + '.strace')
+    started = time.monotonic()
+    result = subprocess.run(['strace', '-f', '-qq', '-o', str(trace), '-e', 'trace=socket,connect', '-e',
+                             'inject=socket:error=EPERM', str(args.scope.resolve()), '--computers', *extra],
+                            env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
+    seconds = time.monotonic() - started
+    (directory / (label + '.stdout')).write_bytes(result.stdout)
+    assert (result.returncode, result.stderr) == (0, b''), (label, result.returncode, result.stderr)
+    assert trace.read_text() == '', ('scope --computers asked for a socket', label, trace.read_text())
+    return result.stdout.decode().splitlines(), seconds
+
+
+def list_expected(rows):
+    return ['\t'.join(row) for row in rows] + [f'height\t{height(len(rows))}']
+
+
+def list_checks(args, evidence, passed):
+    """scope --computers on lists this check writes, every printed line against an answer written by hand."""
+    assert shutil.which('strace'), 'strace is required (a test tool; CI installs it)'
+    root = evidence / 'lists'
+    root.mkdir()
+    names = set()
+    for name, data, rows in LIST_CASES:
+        assert name not in names, name
+        names.add(name)
+        path = root / (name + '.txt')
+        path.write_bytes(data)
+        lines, _ = list_run(args, root, name, [str(path)], str(root))
+        assert lines == list_expected(rows), (name, lines, list_expected(rows))
+    passed('scope-list-read-as-written', lists=len(LIST_CASES))
+    # Files that are not lists: missing, a dangling link, a directory, a FIFO (no writer: a plain open would wait for
+    # one for ever), a link to /dev/zero (endless), a link to a good list, and one this user may not read.
+    odd = root / 'odd'
+    odd.mkdir()
+    good = odd / 'good.txt'
+    good.write_bytes(b'noggin 192.0.2.5 9\n')
+    os.symlink(odd / 'nothing-here', odd / 'dangling')
+    (odd / 'directory').mkdir()
+    os.mkfifo(odd / 'fifo')
+    os.symlink('/dev/zero', odd / 'zero')
+    os.symlink(good, odd / 'link')
+    locked = odd / 'locked'
+    locked.write_bytes(b'noggin 192.0.2.5 9\n')
+    locked.chmod(0)
+    cases = [('missing', odd / 'missing', [NONE_LISTED]), ('dangling-link', odd / 'dangling', [NONE_LISTED]),
+             ('directory', odd / 'directory', [UNREADABLE]), ('fifo', odd / 'fifo', [UNREADABLE]),
+             ('link-to-dev-zero', odd / 'zero', [UNREADABLE]), ('link-to-a-list', odd / 'link', [NOGGIN])]
+    not_run = []
+    if os.geteuid() != 0:
+        cases.append(('no-permission', locked, [UNREADABLE]))
+    else:
+        not_run.append('no-permission: this check runs as root, who may read any file')
+    timings = {}
+    try:
+        for name, path, rows in cases:
+            lines, seconds = list_run(args, root, name, [str(path)], str(root))
+            assert lines == list_expected(rows), (name, lines, list_expected(rows))
+            timings[name] = round(seconds, 3)
+    finally:
+        # Readable again, pass or fail: CI packs the evidence folder with tar, which stops at a file it cannot read.
+        locked.chmod(0o600)
+    assert max(timings['fifo'], timings['link-to-dev-zero']) < 2, ('reading the list stalled', timings)
+    passed('scope-list-files-that-are-not-lists', cases=[c[0] for c in cases], seconds=timings, not_run=not_run)
+    # Without FILE, the owner's list: $HOME/.config/herbert/computers.txt.
+    home = root / 'home'
+    (home / '.config/herbert').mkdir(parents=True)
+    (home / '.config/herbert/computers.txt').write_bytes(b'box 198.51.100.7 22\n')
+    for name, value, rows in (('home-list', str(home), [BOX]), ('home-without-a-list', str(odd), [NONE_LISTED]),
+                              ('home-unset', None, [UNREADABLE]), ('home-empty', '', [UNREADABLE])):
+        lines, _ = list_run(args, root, name, [], value)
+        assert lines == list_expected(rows), (name, lines, list_expected(rows))
+    passed('scope-list-is-read-from-home', home=['list', 'no list', 'unset', 'empty'])
+
+
+class Scope(App):
+    """check_hosted_apps.App (input, frames, shutdown), started with Scope's own arguments, not a document path.
+    HOME is always a directory of this check's own (home), or unset when home is None, so no run can read the owner's
+    list of computers and knock on them; rows is the number of rows the section must have, which sets the window's
+    height. prefix runs Scope under another program (strace), whose exit status is Scope's."""
+
+    def __init__(self, image, arguments, x, display, evidence, label, home, rows=1, prefix=()):
+        self.x, self.evidence, self.label, self.prefix = x, evidence, label, prefix
         self.window = None
         self.inputs = []
         self.started = time.monotonic()
         before = x.windows()
         env = dict(os.environ, DISPLAY=display)
         env.pop('XAUTHORITY', None)
+        env.pop('HOME', None)
+        if home is not None:
+            env['HOME'] = str(home)
         self.out = (evidence / (label + '.stdout')).open('wb')
         self.err = (evidence / (label + '.stderr')).open('wb')
-        self.p = subprocess.Popen([str(image.resolve()), *arguments], env=env, stdin=subprocess.DEVNULL,
+        self.p = subprocess.Popen([*prefix, str(image.resolve()), *arguments], env=env, stdin=subprocess.DEVNULL,
                                   stdout=self.out, stderr=self.err)
+        size = (640, height(rows))
         try:
             def created():
                 assert self.p.poll() is None, f'{label} exited: {self.p.returncode}'
-                candidates = [w for w in x.windows() - before if x.name(w) == TITLE and x.geometry(w) == SIZE]
+                candidates = [w for w in x.windows() - before if x.name(w) == TITLE and x.geometry(w) == size]
                 assert len(candidates) <= 1, 'ambiguous test window'
                 if candidates:
                     self.window = candidates[0]
@@ -364,6 +587,14 @@ class Scope(App):
         except BaseException:
             self.close()
             raise
+
+    def pid(self):
+        """Scope's own process: the one started, or, under a prefix, that program's one child."""
+        if not self.prefix:
+            return self.p.pid
+        children = Path(f'/proc/{self.p.pid}/task/{self.p.pid}/children').read_text().split()
+        assert len(children) == 1, ('the prefix program has not exactly one child', children)
+        return int(children[0])
 
 
 def colour(frame, px, py):
@@ -408,6 +639,7 @@ def shown(frame):
     host = read_text(frame, *HOST_AT, 48, BACKGROUND, 2)
     if '\0' in host[0]:
         host = read_text(frame, *HOST_AT, 64, BACKGROUND, 1)
+    footer = bottom(rows_of(frame))
     return {'host': host,
             'processor': read_text(frame, 464, CPU_ROW + 26, 11, PANEL, 2),
             'processor-bar': bar(frame, CPU_ROW, CPU_FILL),
@@ -415,7 +647,39 @@ def shown(frame):
             'memory-bar': bar(frame, MEMORY_ROW, MEMORY_FILL),
             'detail': read_text(frame, *DETAIL_AT, 64, PANEL),
             'labels': (read_text(frame, BAR_X, CPU_ROW, 9, PANEL, 2), read_text(frame, BAR_X, MEMORY_ROW, 6, PANEL, 2),
-                       read_text(frame, 28, 318, 17, BACKGROUND))}
+                       read_text(frame, 28, footer + 22, 17, BACKGROUND)),
+            'others': section(frame),
+            'furniture': (read_text(frame, *OTHERS_AT, 15, BACKGROUND), read_text(frame, 28, footer + 44, 15, BACKGROUND))}
+
+
+FURNITURE = (('OTHER COMPUTERS', {HEADING}), ('MADE IN HERBERT', {DIM}))
+
+
+def section(frame):
+    """The other computers' rows, read back. A row whose first cells are white is a computer's: ('computer', name,
+    address line, result, what Linux said under it); any other is ('text', main, detail). Each part is (text, inks)."""
+    rows = []
+    for i in range(rows_of(frame)):
+        y = ROW_TOP + ROW_STEP * i
+        first = read_text(frame, 46, y, 24, PANEL, 2)
+        if first[1] == {WHITE}:
+            rows.append(('computer', first, read_text(frame, 46, y + DETAIL_DY, 51, PANEL),
+                         read_text(frame, STATUS_X, y, 21, PANEL, 2), read_text(frame, STATUS_X, y + DETAIL_DY, 43, PANEL)))
+        else:
+            rows.append(('text', read_text(frame, 46, y, 47, PANEL, 2), read_text(frame, 46, y + DETAIL_DY, 94, PANEL)))
+    return rows
+
+
+def computer_row(name, where, result, said=''):
+    """A computer's row as section() reads it: the name in white, the address line in grey, the result in green
+    (answers), grey (checking) or amber, and what Linux said under an error in amber."""
+    ink = GREEN if result == 'answers' else GREY if result == 'checking' else AMBER
+    return ('computer', (name, {WHITE}), (where, {GREY}), (result, {ink}), (said, {AMBER} if said else set()))
+
+
+def text_row(kind, main, detail):
+    """A problem (amber) or a note (grey) row, from the line scope --computers prints for it."""
+    return ('text', (main, {AMBER if kind == 'problem' else GREY}), (detail, {GREY} if detail else set()))
 
 
 def show_until(app, wanted, description, timeout=5):
@@ -519,13 +783,27 @@ def memory_at_a_reading(app, evidence, attempts=6):
     raise AssertionError(('memory figures never matched /proc/meminfo at a reading', tries))
 
 
+def write_list(home, text):
+    """A list of other computers at home/.config/herbert/computers.txt."""
+    (home / '.config/herbert').mkdir(parents=True)
+    (home / '.config/herbert/computers.txt').write_text(text)
+
+
 def real_checks(args, x, display, evidence, passed):
     # The real /proc: the name, the labels, a processor figure with its bar, and the memory figures exactly as
-    # /proc/meminfo gave them when Scope read it; then Escape.
-    app = Scope(args.scope, [], x, display, evidence, 'scope-real')
+    # /proc/meminfo gave them when Scope read it; then Escape. With no arguments Scope reads the list in its HOME, a
+    # directory of this check's own, which names a listener and a closed port on this computer: both answer.
+    home = empty_home(evidence, 'real')
+    listener, closed = Listener(), ClosedPort(HIGH)
+    write_list(home, f'# made by check_scope.py\nhere 127.0.0.1 {listener.port}\nshut {HIGH} {closed.port}\n')
+    app = Scope(args.scope, [], x, display, evidence, 'scope-real', home, rows=2)
     try:
         name = real_name()
-        show_until(app, {'host': (name, {WHITE}), 'labels': LABELS}, 'name and labels', 10)
+        others = [computer_row('here', f'127.0.0.1 port {listener.port}', 'answers'),
+                  computer_row('shut', f'{HIGH} port {closed.port}', 'answers')]
+        show_until(app, {'host': (name, {WHITE}), 'labels': LABELS, 'furniture': FURNITURE, 'others': others},
+                   'name, labels and the other computers', 10)
+        assert listener.connections >= 1 and listener.received == 0, (listener.connections, listener.received)
         reading = {}
         def figure():
             reading.update(shown(app.frame()))
@@ -541,19 +819,30 @@ def real_checks(args, x, display, evidence, passed):
         app.tap('Escape')
         app.finish()
         passed('scope-escape-quits')
+        passed('scope-reads-the-list-in-home', rows=['here answers', 'shut answers (refused)'])
     finally:
         app.close()
+        listener.close()
+        closed.close()
 
 
 def quit_checks(args, x, display, evidence, passed):
-    for label, how in (('q', lambda app: app.tap('q')), ('shift-q', lambda app: app.tap('q', 'Shift_L')),
-                       ('window-close', lambda app: x.delete(app.window))):
-        app = Scope(args.scope, [], x, display, evidence, 'scope-' + label)
+    # Each quits a window whose list is missing (one grey note), unreadable (a directory where the list should be)
+    # or unknown (HOME not set): the section is one row, saying so.
+    unreadable = empty_home(evidence, 'quit-unreadable')
+    (unreadable / '.config/herbert/computers.txt').mkdir(parents=True)
+    for label, how, home, note in (
+            ('q', lambda app: app.tap('q'), empty_home(evidence, 'quit-q'), NONE_LISTED),
+            ('shift-q', lambda app: app.tap('q', 'Shift_L'), unreadable, UNREADABLE),
+            ('window-close', lambda app: x.delete(app.window), None, UNREADABLE)):
+        app = Scope(args.scope, [], x, display, evidence, 'scope-' + label, home)
         try:
-            show_until(app, {'host': (real_name(), {WHITE})}, label + ' window drawn', 10)
+            show_until(app, {'host': (real_name(), {WHITE}), 'labels': LABELS, 'others': [text_row(*note)]},
+                       label + ' window drawn', 10)
             how(app)
             app.finish()
-            passed('scope-' + label + '-quits')
+            passed('scope-' + label + '-quits', list={'q': 'missing', 'shift-q': 'a directory',
+                                                      'window-close': 'HOME not set'}[label], note=note[1])
         finally:
             app.close()
 
@@ -567,7 +856,7 @@ def light_checks(args, x, display, evidence, passed):
     stat, mem, host = files / 'stat', files / 'meminfo', files / 'hostname'
     put(stat, STAT_ONE_1); put(mem, MEM_TYPICAL); put(host, b'test-host\n')
     app = Scope(args.scope, ['--test', str(stat), str(mem), str(host), '200'], x, display, evidence,
-                  'scope-light')
+                'scope-light', empty_home(evidence, 'light'))
     try:
         time.sleep(1)
         show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), 'processor-bar': 0,
@@ -599,10 +888,11 @@ def files_checks(args, x, display, evidence, passed):
     stat, mem, host = files / 'stat', files / 'meminfo', files / 'hostname'
     put(stat, STAT_ONE_1); put(mem, MEM_TYPICAL); put(host, b'test-host\n')
     app = Scope(args.scope, ['--test', str(stat), str(mem), str(host), '100'], x, display, evidence,
-                  'scope-files')
+                'scope-files', empty_home(evidence, 'files'))
     try:
         show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), 'processor-bar': 0,
-                         'labels': LABELS, **TYPICAL_SHOWN}, 'first sample only: a dash')
+                         'labels': LABELS, 'furniture': FURNITURE, 'others': [text_row(*NONE_LISTED)],
+                         **TYPICAL_SHOWN}, 'first sample only: a dash')
         app.frame('dash')
         steps = [(STAT_ONE_2, '40%', 160),
                  (stat_line(2300, 0, 600, 8550, 550, 0, 0, 0, 0, 0), '100%', 400),
@@ -664,11 +954,321 @@ def files_checks(args, x, display, evidence, passed):
         app.close()
 
 
+def fixed_files(evidence, label):
+    """Steady /proc stand-ins for a window whose figures do not matter: (stat, meminfo, hostname) paths."""
+    files = evidence / label
+    files.mkdir()
+    stat, mem, host = files / 'stat', files / 'meminfo', files / 'hostname'
+    put(stat, STAT_ONE_1); put(mem, MEM_TYPICAL); put(host, b'test-host\n')
+    return str(stat), str(mem), str(host)
+
+
+def sockets(pid):
+    """The process's open sockets, {descriptor: inode}."""
+    held = {}
+    for fd in os.listdir(f'/proc/{pid}/fd'):
+        try:
+            link = os.readlink(f'/proc/{pid}/fd/{fd}')
+        except FileNotFoundError:
+            continue
+        if link.startswith('socket:['):
+            held[int(fd)] = int(link[8:-1])
+    return held
+
+
+def knocks_open(pid):
+    """Scope's sockets but the display's: its knocks under way. The display's is the lowest-numbered socket, since
+    Scope opens it before its first knock and keeps it."""
+    held = sockets(pid)
+    return {fd: inode for fd, inode in held.items() if fd != min(held)}
+
+
+def knock_ports(pid):
+    """The ports Scope's knocks under way are knocking on, from the kernel's table of TCP sockets."""
+    inodes = set(knocks_open(pid).values())
+    ports = []
+    for line in Path(f'/proc/{pid}/net/tcp').read_text().splitlines()[1:]:
+        fields = line.split()
+        if int(fields[9]) in inodes:
+            ports.append(int(fields[2].split(':')[1], 16))
+    return sorted(ports)
+
+
+def pending_checks(args, x, display, evidence, passed):
+    # A computer that never answers (check_net's black hole), knocked with a 10-second limit, beside two that answer
+    # at once. While that knock is under way its row says checking, in grey, the other rows show their answers, the
+    # light changes at every reading (every 200 ms) and Escape closes the window within 300 ms. A window that waited
+    # on the knock would show nothing new and not close for up to 10 seconds; 300 ms is far below that and leaves
+    # room for a busy machine (the window normally closes within a few ms of the key).
+    stat, mem, host = fixed_files(evidence, 'pending-files')
+    hole, listener, closed = BlackHole(), Listener(SPREAD), ClosedPort(HIGH)
+    computers = evidence / 'pending-files' / 'computers.txt'
+    computers.write_text(f'far 127.0.0.1 {hole.port}\nnear {SPREAD} {listener.port}\nshut {HIGH} {closed.port}\n')
+    app = Scope(args.scope, ['--test', stat, mem, host, '200', str(computers), '20000', '10000'], x, display, evidence,
+                'scope-pending', empty_home(evidence, 'pending'), rows=3)
+    try:
+        rows = [computer_row('far', f'127.0.0.1 port {hole.port}', 'checking'),
+                computer_row('near', f'{SPREAD} port {listener.port}', 'answers'),
+                computer_row('shut', f'{HIGH} port {closed.port}', 'answers')]
+        show_until(app, {'others': rows, 'furniture': FURNITURE}, 'far checking, near and shut answering')
+        app.frame('checking')
+        knock = knocks_open(app.pid())
+        assert len(knock) == 1 and knock_ports(app.pid()) == [hole.port], ('not one knock under way, to far', knock,
+                                                                           knock_ports(app.pid()))
+        changes, frames = [], 0
+        started = time.monotonic()
+        last = light(app.frame())
+        while time.monotonic() - started < 2.5:
+            frame = app.frame()
+            frames += 1
+            assert section(frame) == rows, ('a row changed while far was being knocked', section(frame))
+            if light(frame) != last:
+                changes.append(time.monotonic())
+                last = light(frame)
+            time.sleep(.02)
+        gaps = [round(b - a, 3) for a, b in zip([started] + changes, changes)]
+        assert len(changes) >= 8 and max(gaps) <= .6, ('the light stopped changing while a knock was under way',
+                                                        len(changes), gaps)
+        assert knocks_open(app.pid()) == knock, ('the knock to far ended or changed', knock, knocks_open(app.pid()))
+        held, how = pending(hole.port, 100)
+        assert held, ('the black hole stopped being one', how)
+        since = time.monotonic() - app.started
+        assert since < 8, ('too slow to press Escape while the 10-second knock is under way', since)
+        before = time.monotonic()
+        app.key('Escape', True)
+        app.key('Escape', False)
+        status = app.p.wait(timeout=11)
+        took = time.monotonic() - before
+        assert status == 0 and took <= .3, ('Escape did not close the window at once', status, round(took, 3))
+        app.finish()
+        passed('scope-checking-until-the-first-knock-ends', row='far checking (grey)', others='answers')
+        passed('scope-knocks-never-hold-the-window', limit_ms=10000, light_changes=len(changes), frames=frames,
+               largest_gap_s=max(gaps), escape_closed_in_s=round(took, 3), escape_bound_s=.3,
+               seconds_into_the_knock=round(since, 2))
+    finally:
+        app.close()
+        for fixture in (hole, listener, closed):
+            fixture.close()
+
+
+def results_checks(args, x, display, evidence, passed):
+    # Every row the list can make, on the window: answers (a listener), answers again for a refusal (a port held
+    # closed), checking then no answer (the black hole), a 24-byte name, a line not understood, and a seventh computer,
+    # never knocked. A row keeps its last result while its next knock is under way.
+    stat, mem, host = fixed_files(evidence, 'results-files')
+    hole, near, shut, here, there, never = (BlackHole(), Listener(SPREAD), ClosedPort(HIGH), Listener(), ClosedPort(),
+                                            Listener())
+    name24 = 'abcdefghijklmnopqrstuvwx'
+    computers = evidence / 'results-files' / 'computers.txt'
+    computers.write_text(f'far 127.0.0.1 {hole.port}\nnear {SPREAD} {near.port}\nshut {HIGH} {shut.port}\n'
+                         f'# a comment\nbad line\nhere 127.0.0.1 {here.port}\nthere 127.0.0.1 {there.port}\n'
+                         f'{name24} {SPREAD} {near.port}\nseventh 127.0.0.1 {never.port}\n')
+    app = Scope(args.scope, ['--test', stat, mem, host, '300', str(computers), '3000', '2000'], x, display, evidence,
+                'scope-results', empty_home(evidence, 'results'), rows=8)
+    try:
+        def rows(far):
+            return [computer_row('far', f'127.0.0.1 port {hole.port}', far),
+                    computer_row('near', f'{SPREAD} port {near.port}', 'answers'),
+                    computer_row('shut', f'{HIGH} port {shut.port}', 'answers'),
+                    computer_row('here', f'127.0.0.1 port {here.port}', 'answers'),
+                    computer_row('there', f'127.0.0.1 port {there.port}', 'answers'),
+                    computer_row(name24, f'{SPREAD} port {near.port}', 'answers'),
+                    text_row('problem', 'line 5 not understood', R_WORDS),
+                    text_row('problem', 'line 9: more than 6 listed', R_SEVENTH)]
+        show_until(app, {'others': rows('checking'), 'labels': LABELS, 'furniture': FURNITURE},
+                   'eight rows, far checking')
+        first = knocks_open(app.pid())
+        assert len(first) == 1 and knock_ports(app.pid()) == [hole.port], ('not one knock under way, to far', first)
+        app.frame('checking')
+        show_until(app, {'others': rows('no answer')}, 'far: no answer', 5)
+        app.frame('no-answer')
+        # The next knock to far starts 3 s after the first and is under way for 2 s: the row must say no answer all
+        # the while, and some frame must be read while that knock (a socket other than the first's) is open.
+        kept, frames = None, 0
+        started = time.monotonic()
+        while time.monotonic() - started < 3.5:
+            frame = app.frame()
+            frames += 1
+            assert section(frame) == rows('no answer'), ('a row changed', section(frame))
+            open_now = knocks_open(app.pid())
+            if set(open_now.values()) - set(first.values()) and hole.port in knock_ports(app.pid()):
+                kept = round(time.monotonic() - app.started, 2)
+            time.sleep(.03)
+        assert kept is not None, 'no frame was read while the second knock to far was under way'
+        assert never.connections == 0, ('the seventh computer was knocked', never.connections)
+        assert near.connections >= 2 and here.connections >= 1, (near.connections, here.connections)
+        assert near.received == here.received == 0, ('a knock sent bytes', near.received, here.received)
+        app.tap('Escape')
+        app.finish()
+        passed('scope-draws-every-kind-of-row', rows=8, answers=['near', 'here', name24], refused_shows='answers',
+               no_answer='far', problems=['line 5 not understood', 'line 9: more than 6 listed'],
+               seventh_knocked=never.connections)
+        passed('scope-row-keeps-its-result-while-the-next-knock-is-under-way', frames=frames,
+               second_knock_seen_at_s=kept)
+    finally:
+        app.close()
+        for fixture in (hole, near, shut, here, there, never):
+            fixture.close()
+
+
+def strace_lines(trace):
+    return [re.sub(r'^\d+ +', '', line) for line in trace.read_text().splitlines()]
+
+
+def injected_checks(args, x, display, evidence, passed):
+    # unreachable and error cannot be made on loopback without privileges, so strace makes each knock's connect fail
+    # with that error instead (the first connect, the display's, is left alone): the knock never reaches the
+    # listener, and the row shows the result, and under error what Linux said, or its number when it has no words.
+    stat, mem, host = fixed_files(evidence, 'injected-files')
+    listener = Listener()
+    computers = evidence / 'injected-files' / 'computers.txt'
+    computers.write_text(f'lost 127.0.0.1 {listener.port}\n')
+    seen = {}
+    try:
+        for errno, result, said in (('EHOSTUNREACH', 'unreachable', ''), ('EACCES', 'error', 'permission denied'),
+                                    ('EBADMSG', 'error', 'Linux error 74')):
+            trace = evidence / f'scope-{errno}.strace'
+            prefix = ['strace', '-f', '-qq', '-o', str(trace), '-e', 'trace=connect', '-e',
+                      f'inject=connect:error={errno}:when=2+']
+            app = Scope(args.scope, ['--test', stat, mem, host, '1000', str(computers), '20000', '2000'], x, display,
+                        evidence, 'scope-' + errno, empty_home(evidence, errno), prefix=prefix)
+            try:
+                row = computer_row('lost', f'127.0.0.1 port {listener.port}', result, said)
+                show_until(app, {'others': [row]}, f'{errno}: {result} {said}')
+                app.frame('row')
+                app.tap('Escape')
+                app.finish()
+            finally:
+                app.close()
+            lines = strace_lines(trace)
+            assert len(lines) >= 2 and lines[0].startswith('connect(') and 'AF_UNIX' in lines[0], lines
+            assert 'INJECTED' not in lines[0], lines[0]
+            knock = (f'connect(4, {{sa_family=AF_INET, sin_port=htons({listener.port}), '
+                     f'sin_addr=inet_addr("127.0.0.1")}}, 16) = -1 {errno} ')
+            assert all(line.startswith(knock) and line.endswith('(INJECTED)') for line in lines[1:]), lines
+            seen[errno] = [result, said]
+        assert listener.connections == 0, ('an injected knock reached the listener', listener.connections)
+    finally:
+        listener.close()
+    passed('scope-draws-unreachable-and-errors', rows=seen, how='strace makes connect fail')
+
+
+CLOCK = re.compile(r'clock_gettime\(CLOCK_MONOTONIC, \{tv_sec=(\d+), tv_nsec=(\d+)\}\) = 0')
+KNOCK_SOCKET = re.compile(r'socket\(AF_INET, (\S+), IPPROTO_TCP\) = (\d+)')
+KNOCK_CONNECT = re.compile(r'connect\((\d+), \{sa_family=AF_INET, sin_port=htons\((\d+)\), '
+                           r'sin_addr=inet_addr\("([\d.]+)"\)\}, 16\) = (.*)')
+LOOK = re.compile(r'poll\(\[\{fd=(\d+), events=POLLOUT\}\], 1, 0\) = (\d+)')
+WAIT = re.compile(r'poll\(\[\{fd=\d+, events=POLLIN\}(.*?)\], (\d+), (\d+)\) = ')    # the window's: display first
+CLOSE = re.compile(r'close\((\d+)\) += ')
+SENT = re.compile(r'(write|writev|sendto|sendmsg)\((\d+),')
+
+
+def knocks_traced(lines):
+    """Each knock in a trace of Scope: its socket's flags, descriptor and port, its start (the clock reading just
+    before its socket, ns), its looks (zero-wait polls on it alone: the clock just before, what it found), whether
+    every wait of the window's loop while it was under way included it, its close (the clock just after, ns) and
+    whether that came at the window's end (after the Escape: the knock given up)."""
+    knocks, live, clock = [], {}, None
+    for line in lines:
+        if (m := CLOCK.fullmatch(line)):
+            clock = int(m.group(1)) * 10**9 + int(m.group(2))
+            for knock in knocks:
+                if knock.get('closing'):
+                    knock['end'], knock['closing'] = clock, False
+        elif (m := KNOCK_SOCKET.fullmatch(line)):
+            knock = {'flags': set(m.group(1).split('|')), 'fd': int(m.group(2)), 'start': clock, 'looks': [],
+                     'waits': 0, 'waits_without': 0, 'sent': []}
+            knocks.append(knock)
+            live[knock['fd']] = knock
+        elif (m := KNOCK_CONNECT.fullmatch(line)) and int(m.group(1)) in live:
+            live[int(m.group(1))].update(port=int(m.group(2)), address=m.group(3), connect=m.group(4))
+        elif (m := LOOK.match(line)) and int(m.group(1)) in live:
+            live[int(m.group(1))]['looks'].append((clock, int(m.group(2))))
+        elif (m := WAIT.match(line)):
+            listed = {int(fd) for fd in re.findall(r'fd=(\d+), events=POLLOUT', m.group(1))}
+            for fd, knock in live.items():
+                knock['waits'] += 1
+                knock['waits_without'] += fd not in listed
+        elif (m := CLOSE.match(line)) and int(m.group(1)) in live:
+            knock = live.pop(int(m.group(1)))
+            knock['closing'] = True
+        elif (m := SENT.match(line)) and int(m.group(2)) in live:
+            live[int(m.group(2))]['sent'].append(line)
+        elif line.startswith('exit_group('):
+            break
+    return knocks, live
+
+
+def timing_checks(args, x, display, evidence, passed):
+    # Under strace, with knocks every 700 ms and a limit of 300 ms, and readings only every minute, so that nothing
+    # but the knocks and the display wakes the window: the knocks to each computer start 700 ms apart; one to the
+    # black hole says no answer only after a look with no wait, at or past 300 ms from its start (its own clock), and
+    # ends within 100 ms of the limit; one that is answered or refused ends within 50 ms (the window wakes for its
+    # socket); every wait of the window includes each knock under way; nothing is ever sent on a knock's socket; and
+    # the knock still under way at Escape is closed before Scope exits.
+    every, limit = 700, 300
+    stat, mem, host = fixed_files(evidence, 'timing-files')
+    hole, near, shut = BlackHole(), Listener(SPREAD), ClosedPort(HIGH)
+    computers = evidence / 'timing-files' / 'computers.txt'
+    computers.write_text(f'far 127.0.0.1 {hole.port}\nnear {SPREAD} {near.port}\nshut {HIGH} {shut.port}\n')
+    trace = evidence / 'scope-timing.strace'
+    prefix = ['strace', '-f', '-qq', '--seccomp-bpf', '-o', str(trace), '-e',
+              'trace=clock_gettime,socket,connect,poll,getsockopt,close,write,writev,sendto,sendmsg,exit_group']
+    app = Scope(args.scope, ['--test', stat, mem, host, '60000', str(computers), str(every), str(limit)], x, display,
+                evidence, 'scope-timing', empty_home(evidence, 'timing'), rows=3, prefix=prefix)
+    try:
+        show_until(app, {'others': [computer_row('far', f'127.0.0.1 port {hole.port}', 'no answer'),
+                                    computer_row('near', f'{SPREAD} port {near.port}', 'answers'),
+                                    computer_row('shut', f'{HIGH} port {shut.port}', 'answers')]}, 'the knocks shown')
+        time.sleep(max(0, 4.5 - (time.monotonic() - app.started)))
+        wait_for(lambda: knock_ports(app.pid()) == [hole.port], 'a knock to far under way', 3)
+        app.tap('Escape')
+        app.finish()
+    finally:
+        app.close()
+        for fixture in (hole, near, shut):
+            fixture.close()
+    knocks, left = knocks_traced(strace_lines(trace))
+    assert not left, ('sockets still open when Scope exited', left)
+    ports = {hole.port: 'far', near.port: 'near', shut.port: 'shut'}
+    report = {}
+    for port, name in ports.items():
+        mine = [k for k in knocks if k.get('port') == port]
+        starts = [k['start'] for k in mine]
+        gaps = [round((b - a) / 10**6, 3) for a, b in zip(starts, starts[1:])]
+        assert len(mine) >= 5, (name, 'too few knocks', len(mine))
+        # Start to start on the window's millisecond clock; a knock's own clock, read just after, may be up to a
+        # few ms later than the window's reading for the one before, so the gap may read that much short.
+        assert all(every - 5 <= gap <= every + 100 for gap in gaps), (name, 'knocks not 700 ms apart', gaps)
+        report[name] = {'knocks': len(mine), 'gaps_ms': gaps}
+        for k in mine:
+            assert k['flags'] == {'SOCK_STREAM', 'SOCK_CLOEXEC', 'SOCK_NONBLOCK'}, k['flags']
+            assert k['sent'] == [], (name, 'bytes sent on a knock', k['sent'])
+            assert k['waits_without'] == 0, (name, 'the window waited without a knock under way', k)
+            took = (k['end'] - k['start']) / 10**6
+            if name == 'far' and k is not mine[-1]:
+                assert k['waits'] >= 1, (name, 'the window never waited while this knock was under way', k)
+                assert k['looks'] and all(found == 0 for _, found in k['looks']), (name, 'a look found something', k)
+                assert (k['looks'][-1][0] - k['start']) / 10**6 >= limit, (name, 'no answer before the limit', k)
+                assert limit <= took <= limit + 100, (name, 'no answer not within 100 ms of the limit', took)
+            elif name != 'far':
+                assert took <= 50, (name, 'an answer was not seen at once', took)
+        report[name]['ms'] = [round((k['end'] - k['start']) / 10**6, 1) for k in mine]
+    last = [k for k in knocks if k.get('port') == hole.port][-1]
+    assert (last['end'] - last['start']) / 10**6 < limit, ('the last knock to far was not under way at Escape', last)
+    passed('scope-knocks-keep-their-interval-and-limit', every_ms=every, limit_ms=limit, knocks=report,
+           given_up_at_escape='closed before exit')
+
+
 def window_checks(args, x, display, evidence, passed):
     real_checks(args, x, display, evidence, passed)
     quit_checks(args, x, display, evidence, passed)
     light_checks(args, x, display, evidence, passed)
     files_checks(args, x, display, evidence, passed)
+    pending_checks(args, x, display, evidence, passed)
+    results_checks(args, x, display, evidence, passed)
+    injected_checks(args, x, display, evidence, passed)
+    timing_checks(args, x, display, evidence, passed)
 
 
 def io_counts(pid):
@@ -682,6 +1282,12 @@ def memory_checks(args, x, display, evidence, passed):
     # five states: the real /proc; files without a final newline (memory under 1 GiB, a 60-byte name); the next such
     # processor file (a figure from files); all three missing; all three malformed (unavailable). Each state's picture
     # is read back once per turn; every state must have been seen as it should look.
+    # All the while it knocks on three computers every 20 ms, 250 times its own rate, with a 10 ms limit: a listener
+    # (answers), a port held closed (refused) and the black hole (no answer); their rows must look so in every state
+    # seen. At every sample its descriptors must be the same, but for knocks under way: at most three sockets besides
+    # the display's, none of them one seen at the sample before (a knock lasts 10 ms; samples are 2 s apart), so no
+    # knock leaves its socket open. At the end the closed port becomes a black hole and the black hole a listener,
+    # and both rows must follow, so those two were still being knocked.
     fixtures, links = evidence / 'memory-fixtures', evidence / 'memory-links'
     fixtures.mkdir()
     links.mkdir()
@@ -726,13 +1332,23 @@ def memory_checks(args, x, display, evidence, passed):
                 os.symlink(target, spare)
                 os.replace(spare, link)
     point(proc)
-    interval = 10
+    interval, every, limit = 10, 20, 10
+    here, shut, far = Listener(), ClosedPort(), BlackHole()
+    computers = fixtures / 'computers.txt'
+    computers.write_text(f'here 127.0.0.1 {here.port}\nshut 127.0.0.1 {shut.port}\nfar 127.0.0.1 {far.port}\n')
+    def others(here_shows, shut_shows, far_shows):
+        return [computer_row('here', f'127.0.0.1 port {here.port}', here_shows),
+                computer_row('shut', f'127.0.0.1 port {shut.port}', shut_shows),
+                computer_row('far', f'127.0.0.1 port {far.port}', far_shows)]
+    knocking = others('answers', 'answers', 'no answer')
     app = Scope(args.scope, ['--test', str(links / 'stat'), str(links / 'meminfo'), str(links / 'hostname'),
-                                 str(interval)], x, display, evidence, 'scope-memory')
+                             str(interval), str(computers), str(every), str(limit)], x, display, evidence,
+                'scope-memory', empty_home(evidence, 'memory'), rows=3)
+    fixtures_open = [here, shut, far]
     try:
-        show_until(app, {'host': (real_name(), {WHITE})}, 'memory run drawn', 10)
+        show_until(app, {'host': (real_name(), {WHITE}), 'others': knocking}, 'memory run drawn', 10)
         seen = {name: [0, 0] for name, _, _ in states}
-        samples, turns, started = [], 0, None
+        samples, turns, started, steady, before = [], 0, None, None, set()
         while True:
             name, targets, check = states[turns % len(states)]
             point(targets)
@@ -741,7 +1357,7 @@ def memory_checks(args, x, display, evidence, passed):
             frame = app.frame()
             reading = dict(shown(frame), frame=frame)
             seen[name][1] += 1
-            if check(reading):
+            if check(reading) and reading['others'] == knocking:
                 seen[name][0] += 1
             elif seen[name][1] <= 2 * len(states):
                 app.frame(f'state-{name}-not-yet')
@@ -755,6 +1371,23 @@ def memory_checks(args, x, display, evidence, passed):
                 sample = process_memory(app.p.pid)
                 sample['seconds'] = round(last_sample - started, 3)
                 sample['syscr'], sample['rchar'] = io_counts(app.p.pid)
+                # One listing of the descriptors, so a knock that opens or closes meanwhile is seen once, as it is.
+                fds = {}
+                for fd in os.listdir(f'/proc/{app.p.pid}/fd'):
+                    try:
+                        fds[int(fd)] = os.readlink(f'/proc/{app.p.pid}/fd/{fd}')
+                    except FileNotFoundError:
+                        pass
+                held = {fd: int(link[8:-1]) for fd, link in fds.items() if link.startswith('socket:[')}
+                knocks = {inode for fd, inode in held.items() if fd != min(held)}
+                sample['descriptors'] = sorted((fd, link) for fd, link in fds.items()
+                                               if fd not in held or fd == min(held))
+                sample['knock_sockets'] = sorted(knocks)
+                sample['listener_connections'] = here.connections
+                steady = steady or sample['descriptors']
+                assert sample['descriptors'] == steady, ('descriptors changed', steady, sample['descriptors'])
+                assert len(knocks) <= 3 and not knocks & before, ('a knock kept its socket', knocks, before)
+                before = knocks
                 samples.append(sample)
                 (evidence / 'scope-memory.json').write_text(json.dumps(samples, indent=2) + '\n')
                 if last_sample - started >= args.seconds:
@@ -772,15 +1405,30 @@ def memory_checks(args, x, display, evidence, passed):
         assert frames_at_least >= seconds * 1000 / interval / 10, ('too few frames to judge memory', reads, seconds)
         stable_memory(samples, 'scope redrawing every 10 ms through the real /proc, odd, missing and bad files')
         rss = [s['Rss'] for s in samples]
+        answered = samples[-1]['listener_connections'] - samples[0]['listener_connections']
+        assert answered >= seconds * 1000 / every / 4, ('too few knocks answered to judge memory', answered, seconds)
+        assert here.received == 0 and not here.errors, ('a knock sent bytes', here.received, here.errors[:3])
         point(proc)
+        shut_port, far_port = shut.port, far.port
+        shut.close()
+        far.close()
+        fixtures_open = [here, BlackHole(port=shut_port), Listener(port=far_port)]
+        show_until(app, {'others': others('answers', 'no answer', 'answers')},
+                   'the closed port now a black hole, the black hole a listener', 5)
         x.delete(app.window)
         app.finish()
         passed('scope-memory-flat', seconds=seconds, samples=len(samples), read_calls=reads,
                frames_at_least=frames_at_least, states_seen_as_they_should_look=seen,
                rss_kib_start=rss[0], rss_kib_end=rss[-1], rss_kib_min=min(rss), rss_kib_max=max(rss),
                rss_tolerance_kib=64, vm_size_kib=samples[0]['VmSize'], vm_size_must_not_change=True)
+        passed('scope-memory-flat-while-knocking', every_ms=every, limit_ms=limit,
+               knocks_answered_while_measured=answered, rows=['answers', 'answers (refused)', 'no answer'],
+               descriptors=steady, knock_sockets_at_samples=[s['knock_sockets'] for s in samples],
+               still_knocked_at_the_end={'shut': 'no answer', 'far': 'answers'})
     finally:
         app.close()
+        for fixture in fixtures_open:
+            fixture.close()
 
 
 def main():
@@ -808,6 +1456,7 @@ def main():
     try:
         if args.only in ('all', 'sample'):
             sample_checks(args, evidence, passed)
+            list_checks(args, evidence, passed)
         if args.only in ('all', 'window', 'memory'):
             with private_display(evidence, size='1280x900') as display:
                 x = XConnection(display)

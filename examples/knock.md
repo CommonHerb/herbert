@@ -1,8 +1,8 @@
 # Herbert knock
 
 Asks one computer whether it answers at an address and a port, once, and says what happened. It is the first piece of
-networking in Herbert, and the start of the second piece of the window on the owner's computers, which will show
-whether each of them answers.
+networking in Herbert. Its library, `lib/net.herb`, is also what [Scope](scope.md) uses to show whether each of the
+owner's other computers answers.
 
 ```sh
 make knock
@@ -51,9 +51,22 @@ answer that came just in time is never missed, and never before the limit.
 - The library, `lib/net.herb`, makes everything a knock needs once, so knocking every few seconds for weeks does not
   grow. Herbert never gives memory back, so this rests on a knock allocating nothing; the check below holds it to that.
 
+## Knocking without waiting
+
+knock waits for its one knock (`net_knock`). A program that must keep going meanwhile, such as Scope's window, uses
+the library's other way, with the same rules: `net_start` begins a knock and returns at once, with the outcome when
+the knock ended there (this computer can accept or refuse in the call, and a missing route fails in it), or with
+"under way". Then `net_check` looks at the knock without waiting, as often as the program likes, and gives the
+outcome once there is one, closing the connection. While a knock is under way the program may wait on its socket,
+along with anything else it waits for (Scope waits on its display too, with `linux_poll_many` from `lib/linux.herb`),
+and `net_left` says how long it may wait at most before looking again, rounded up so that the look after the wait
+comes at or after the time limit. `no answer` still comes only from a look that began at or after the limit and found
+nothing. `net_stop` gives up a knock under way and closes its connection; Scope does that when its window closes.
+One knock at a time per `Net`: starting another first gives up the one under way.
+
 ## Test modes
 
-These are for the tests. Either one given the wrong number of arguments prints its own usage and exits 2.
+These are for the tests. Each one given the wrong number of arguments prints its own usage and exits 2.
 
 `knock --parse ADDRESS PORT [MILLISECONDS]` prints what the command line means, `address 127.0.0.1 port 22 limit 1000`,
 and knocks on nothing.
@@ -62,6 +75,10 @@ and knocks on nothing.
 set of buffers. After every EVERY rounds, and after the last, it prints the counts so far
 (`round 1000 answered 1000 refused 1000 no-answer 1000 unreachable 0 error 0`) and waits for a byte on standard input
 before going on, so the check can look at it while it stands still.
+
+`knock --split ADDRESS PORT [MILLISECONDS]` knocks once as `knock` does, but through `net_start` and `net_check`: between
+looks it waits on the connection for at most what `net_left` gives, as Scope's window does. It prints the same line
+and exits with the same status. `knock --split-rounds ...` is `--rounds` with these knocks.
 
 ## How it is built
 
@@ -82,6 +99,12 @@ order; listeners the check opens must see a connection and not one byte; a port 
 listener whose queue the check fills (so Linux drops every new connection silently) must give no answer, at the time
 limit and no more than 100 ms after it; strace makes the rare cases happen on purpose (an interrupted wait, a connect
 that returns only after the limit, a computer that answers and then resets); and 24,000 knocks in one process must
-leave its open files, its size and its memory as they were. Where the machine lets an unprivileged user make a private network namespace, the check also
-makes `unreachable` and `error` happen there (with routes, and with firewall rules when `nft` is present) and runs the
-memory check with all five outcomes; where it does not, the check says so plainly.
+leave its open files, its size and its memory as they were. All of this runs twice, once through `net_knock` and once
+through `net_start` and `net_check` (`--split`, `--split-rounds`), whose system calls must also be socket, connect,
+then polls only, the answer found by a look that waits for nothing, then SO_ERROR and close; the small program also
+checks that `net_start` keeps `net_knock`'s range guard and leaves no knock under way when it fails, and a second one
+that starting a knock while another is under way on the same `Net` first closes that one, and that `net_stop` closes a
+knock under way. Where the machine lets an unprivileged user make a private network namespace, the check also makes
+`unreachable` and `error` happen there (with routes, and with firewall rules when `nft` is present), both ways, and
+runs the memory check with all five outcomes, a quarter as many rounds for the split knock; where it does not, the
+check says so plainly.
