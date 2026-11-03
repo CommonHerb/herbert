@@ -2,7 +2,8 @@
 
 A window to leave open on this computer. It shows the computer's name, how busy its processor is and how much of
 its memory is in use, read again once a second, and the owner's other computers, each with whether it answers,
-checked every 5 seconds.
+checked every 5 seconds, and, for a computer that runs [Scope's helper](scope_helper.md), how busy its processor is
+and how much of its memory is in use.
 
 ```sh
 make scope
@@ -29,7 +30,11 @@ with **Escape**, **Q** or the window's close button. It is 428 pixels tall plus 
   Linux can drop are not in use.
 - **Other computers**: one row for each computer in the owner's list (below), in the list's order: its name alone,
   and to the right what the last check found:
-  - **answers**, in green: the computer took the connection, or refused it;
+  - **its figures**, in green, for example `CPU 12%  MEM 41%`: the computer took the connection and its
+    [helper](scope_helper.md) sent its processor and memory figures. The processor is worked out from two answers
+    5 seconds apart, as this computer's is from two readings, so it shows a dash (`CPU -`) after the first; memory
+    comes from one answer. A figure the helper could not read shows `n/a`;
+  - **answers**, in green: the computer took the connection, or refused it, and sent no figures;
   - **no answer**, in amber: nothing came back within 2 seconds (it is off, asleep, too far, or a firewall keeps
     quiet);
   - **unreachable**, in amber: the network says there is no way there;
@@ -37,7 +42,9 @@ with **Escape**, **Q** or the window's close button. It is 428 pixels tall plus 
     it);
   - **checking**, in grey, until the first check ends.
 
-  A row keeps showing its last result while the next check is under way.
+  A row keeps showing its last result while the next check is under way. A row whose next check finds anything other
+  than the helper's figures (a refusal, silence, a helper that has stopped) shows that instead, and its processor
+  starts again from a dash when the figures come back.
 - A small light at the top right changes at every reading of the processor, so you can see that the window is
   still working.
 
@@ -63,7 +70,8 @@ attic     198.51.100.20 22
 - The **name** is what the row shows: 1 to 24 characters, ASCII only, with no spaces.
 - The **address** is an IPv4 address, four numbers 0 to 255 joined by dots, as [knock](knock.md) reads it. Names
   such as `noggin.local` are not looked up.
-- The **port** is a number 1 to 65535. A port nothing listens on is fine, and often best: see below.
+- The **port** is a number 1 to 65535: the port its [helper](scope_helper.md) listens at, for its figures, or any
+  other. A port nothing listens on is fine, and often best for a computer without a helper: see below.
 - A line whose first word starts with `#` is a comment, and blank lines do not count. A comment cannot follow a
   computer on its line. Lines may end in a carriage return and a newline (as Windows writes them), and the last line
   needs no newline.
@@ -80,25 +88,34 @@ cannot be read (it is not an ordinary file, Scope may not read it, or it is larg
 
 ## How a check works, and why a refusal counts as an answer
 
-Every 5 seconds, start to start, Scope knocks on each computer as [knock](knock.md) does: it starts a TCP connection
-to the address and port, and closes it again when the computer has said something or 2 seconds have passed, whichever
-comes first. It never sends a byte. A computer that is up answers a knock at once, either by taking the connection,
-when a program listens on that port, or by refusing it: the refusal comes from the computer's own network system,
-so it proves the computer is there and running just as well. That is why a refusal shows **answers**, and why a port
-nothing listens on is a good port to list: no program on that computer sees the knock or writes it down. Only
-silence (**no answer**) or the network saying there is no way there (**unreachable**) means it could not be found.
-One exception: a firewall on the way, on this computer or between the two, can refuse on the other's behalf (a
-"reject" rule), and that refusal shows **answers** too, even while the other computer is off. Scope cannot tell the
-two refusals apart, so list a computer this way only when no such rule stands in the path.
+Every 5 seconds, start to start, Scope knocks on each computer as [knock](knock.md) does: it starts a TCP connection to
+the address and port, and closes it again when the computer has said something or 2 seconds have passed, whichever comes
+first. It never sends a byte. When the computer takes the connection, Scope keeps it open and reads what the computer
+sends, without waiting, until the computer closes it, 256 bytes have come or the 2 seconds are up; only a helper's one
+line, followed by the close, gives figures ([the line](scope_helper.md#the-line-it-writes)), and Scope reads it
+strictly: anything else shows `answers`. So a computer that takes connections on its port without a helper (an SSH
+server, say) shows `answers` once its 2 seconds are up, and is held open that long. A computer that is up answers a
+knock at once, either by taking the connection, when a program listens on that port, or by refusing it: the refusal
+comes from the computer's own network system, so it proves the computer is there and running just as well. That is why a
+refusal shows **answers**, and why a port nothing listens on is a good port to list: no program on that computer sees
+the knock or writes it down. Only silence (**no answer**) or the network saying there is no way there (**unreachable**)
+means it could not be found. One exception: a firewall on the way, on this computer or between the two, can refuse on
+the other's behalf (a "reject" rule), and that refusal shows **answers** too, even while the other computer is off.
+Scope cannot tell the two refusals apart, so list a computer this way only when no such rule stands in the path.
 
 The window never waits for a knock. A knock is started and then looked at without waiting; while it is under way,
-the window waits on its display and on every knock under way at once, so it wakes for a key, for a knock that ends,
-for a knock's 2 seconds running out, for the next knock due, or for the next reading, whichever comes first. A
-computer that never answers holds nothing up: the readings, the light and Escape go on as before.
+the window waits on its display and on every knock under way at once, so it wakes for a key, for a knock whose
+connection is taken or refused, for bytes or the end of the connection from a computer that took it, for a knock's 2
+seconds running out, for the next knock due, or for the next reading, whichever comes first. A computer that never
+answers, or a helper that sends its line a byte at a time, holds nothing up: the readings, the light and Escape go on
+as before.
 
 ## Limits
 
-- For the other computers, only whether each answers: how busy each of them is comes next (below).
+- For the other computers, whether each answers, and the processor and memory figures of those that run the helper.
+  The helper sends two totals for the processor (all its time, and the busy part), not each counter, so a counter
+  that goes backwards there cannot be left out as it is here: Scope works the percent out from those two, with the
+  same steps as its own.
 - At most 6 other computers, IPv4 addresses only, read once at startup. A knock can tell that a computer is there,
   not whether the program you care about on it works.
 - The whole processor only: no figure per processor, and nothing on swap, disks or the network.
@@ -119,10 +136,6 @@ computer that never answers holds nothing up: the readings, the light and Escape
 - Everything Scope uses is made once when it starts and reused for every frame and every knock, so it does not grow
   while it runs; the check below holds it to that at a hundred times its normal rate of readings and 250 times its
   rate of knocks. Herbert still never gives memory back, so this rests on Scope allocating nothing after it starts.
-
-## What comes next
-
-The next piece shows how busy each of the other computers is, as this one's processor and memory are shown now.
 
 ## Test modes
 
@@ -154,6 +167,17 @@ LIMIT` also reads the list of other computers from COMPUTERS instead of `~/.conf
 on each every EVERY ms with a time limit of LIMIT ms (each 1 to 60000) instead of every 5 seconds with 2. A knock still
 under way when the next is due delays it until it ends.
 
+`scope --replies FILE [FILE ...]` puts each file's bytes, in order, through the steps one computer's knock puts a
+helper's reply through (as much as a knock reads, 256 bytes, counted as the whole reply only when the file ends
+before its 256th byte), and prints what that computer's row then shows, one line each, then exits. It knocks on
+nothing:
+
+```text
+row=CPU -  MEM 75%
+row=CPU 40%  MEM 75%
+row=answers
+```
+
 `scope --computers [FILE]` reads the list (FILE, or `~/.config/herbert/computers.txt`) as the window would, prints
 each row the window would show before any check ends, one line each, then the window's height, and exits. It knocks
 on nothing. A line is the row's kind (`computer`, `problem` in amber, or `note` in grey), its main text and its
@@ -171,9 +195,10 @@ Any other arguments print `scope: usage: scope` and exit with status 1, before a
 
 ## How it is built
 
-The build joins `lib/linux.herb`, `lib/x11.herb`, `lib/pixel_text.herb`, `lib/net.herb` and `examples/scope.herb` and
-compiles them with the committed Herbert compiler, as for First steps. Scope reads `/proc` with Linux system calls,
-knocks with `lib/net.herb` and draws through its own X11 client; no foreign runtime or graphics library is linked in.
+The build joins `lib/linux.herb`, `lib/x11.herb`, `lib/pixel_text.herb`, `lib/net.herb`, `lib/figures.herb` and
+`examples/scope.herb` and compiles them with the committed Herbert compiler, as for First steps. Scope reads `/proc`
+with `lib/figures.herb` (the helper reads it with the same code), knocks with `lib/net.herb` and draws through its own
+X11 client; no foreign runtime or graphics library is linked in.
 
 ## Verification
 
@@ -181,40 +206,53 @@ knocks with `lib/net.herb` and draws through its own X11 client; no foreign runt
 make check-scope
 ```
 
-`make check-hosted-apps` runs the same checks (`bootstrap/tests/check_scope.py`), and so do `make verify-local`
-and CI. Every run of Scope in them has a home directory of the check's own, so none can read the owner's list, and
-every knock goes to an address in 127.x on this computer, to listeners and ports the check opens. First `--sample`
-runs on fixed files and every printed line must match an answer written by hand: one and
-64 processors, an 18 KB line, a cpu line across two reads or after a 20 KB line, tabs, old kernels' four counters,
-guest, irq, softirq, steal and iowait each in its place, `meminfo` fields missing, reordered, repeated, look-alike
-or malformed, files at the 1 MiB bound, and the edges: 0 %, 100 %, half a percent and 99.5 % exactly, also with
-counts past 2^56, a zero-length interval after a figure, counters that did not move, a counter that went back,
-totals that went back, numbers at and past 2^64, tenths that carry, and missing or empty files. Then `--computers`,
-with the network closed to it (strace makes every request for a socket fail), on 86 lists, each line it prints
-against an answer written by hand: comments, blank lines, tabs, CRLF, no final newline, names of 1, 24 and 25 bytes
-and of every printable mark, bytes that are not printable ASCII, lines of one, two and four words, every malformed
-address and port knock refuses, the edges of each, 6, 7 and 8 computers, more problems than rows, line 40,000, empty
-lists, a list of exactly 64 KiB and one byte more; then a missing list, a dangling link, a directory, a FIFO and a
-link to `/dev/zero` (each within 2 seconds), a list it may not read, and the list in HOME, missing, and with HOME
-unset or empty. Then, on a private Xvfb display with XTest input: with the real `/proc` the window must draw this
-computer's name, a processor figure, and memory figures that match `/proc/meminfo` read just before and after the
-frame that shows a new reading, and the two computers listed in its HOME answering (a listener and a closed port);
-it must quit on Escape, q, Shift+Q and the close button, with no list, a directory for a list and no HOME. Under
-a computer's name nothing may be drawn: every pixel from the panel's edge to the result's column, down to the next
-row, must be the panel's. With
-`--test`, the light must change at every reading while nothing else changes, and the exact text, inks and bars are
-read back from its pixels for known figures, a zero-length interval, MiB and GiB, names of 48 and 60 bytes, files
-that vanish (unavailable, in amber) and files that come back. The other computers, read back the same way: a
-computer that never answers (a listener whose queue the check fills, so Linux drops every knock in silence) shows
-checking while its 10-second knock is under way, while the light still changes at every reading (200 ms) and Escape
-closes the window within 300 ms; eight rows of every kind, a row keeping no answer while its next knock is under way,
-and the seventh computer never knocked; unreachable, error with Linux's words, and error with a number, made by
-strace failing the knocks' connects. Under strace, with knocks every 700 ms and a limit of 300 ms: each computer's
-knocks start 700 ms apart, no answer comes only after a look at or past the limit and within 100 ms of it, answers and
-refusals are seen within 50 ms, every wait of the window includes the knocks under way, nothing is sent, and a knock
-under way at Escape is closed before Scope exits. Last, for 120 seconds it reads every 10 ms through links the check
-turns between the real `/proc`, files without a final newline (memory under 1 GiB, a 60-byte name), missing files and
-malformed files, while it knocks every 20 ms on a listener, a closed port and the silent listener: its memory may not
-grow (the same virtual size throughout, resident memory within 64 KiB), its descriptors stay the same but for knocks
-under way (no socket outlives its knock), and at the end the closed port is made silent and the silent listener
-starts answering, and both rows must follow.
+`make check-hosted-apps` runs the same checks (`bootstrap/tests/check_scope.py`), and so do `make verify-local` and CI.
+Every run of Scope in them has a home directory of the check's own, so none can read the owner's list, and every knock
+goes to an address in 127.x on this computer, to listeners and ports the check opens. First `--sample` runs on fixed
+files and every printed line must match an answer written by hand: one and 64 processors, an 18 KB line, a cpu line
+across two reads or after a 20 KB line, tabs, old kernels' four counters, guest, irq, softirq, steal and iowait each in
+its place, `meminfo` fields missing, reordered, repeated, look-alike or malformed, files at the 1 MiB bound, and the
+edges: 0 %, 100 %, half a percent and 99.5 % exactly, also with counts past 2^56, a zero-length interval after a figure,
+counters that did not move, a counter that went back, totals that went back, numbers at and past 2^64, tenths that
+carry, and missing or empty files. Then `--computers`, with the network closed to it (strace makes every request for a
+socket fail), on 86 lists, each line it prints against an answer written by hand: comments, blank lines, tabs, CRLF, no
+final newline, names of 1, 24 and 25 bytes and of every printable mark, bytes that are not printable ASCII, lines of
+one, two and four words, every malformed address and port knock refuses, the edges of each, 6, 7 and 8 computers, more
+problems than rows, line 40,000, empty lists, a list of exactly 64 KiB and one byte more; then a missing list, a
+dangling link, a directory, a FIFO and a link to `/dev/zero` (each within 2 seconds), a list it may not read, and the
+list in HOME, missing, and with HOME unset or empty. Then `--replies`, with the network closed to it, each row against
+an answer written by hand: 12 runs of well-formed replies (the dash, then the figure; an interval of no time, totals and
+busy counts that went back, 100 %, unavailable halves, the largest numbers, the longest line) and 45 malformed ones,
+each between good ones so the row must drop its figures and its processor start again (no newline, bytes or a second
+newline after it, CRLF, two lines, other prefixes and versions, missing, doubled and trailing spaces, a tab, three and
+five numbers, leading zeros, signs, hexadecimal, letters, numbers at 2^64 and of 21 digits, a busy count above the
+total, a memory total of zero, a misspelt `unavailable`, a NUL byte, an SSH banner, an HTTP answer, 255, 256 and 257
+bytes, and a good line followed by 300 bytes). Then, on a private Xvfb display with XTest input: with the real `/proc`
+the window must draw this computer's name, a processor figure, and memory figures that match `/proc/meminfo` read just
+before and after the frame that shows a new reading, and the two computers listed in its HOME answering (a listener and
+a closed port); it must quit on Escape, q, Shift+Q and the close button, with no list, a directory for a list and no
+HOME. Under a computer's name nothing may be drawn: every pixel from the panel's edge to the result's column, down to
+the next row, must be the panel's. With `--test`, the light must change at every reading while nothing else changes, and
+the exact text, inks and bars are read back from its pixels for known figures, a zero-length interval, MiB and GiB,
+names of 48 and 60 bytes, files that vanish (unavailable, in amber) and files that come back. The other computers, read
+back the same way: a computer that never answers (a listener whose queue the check fills, so Linux drops every knock in
+silence) and a helper that sends its line one byte every 300 ms show checking while their 10-second knocks are under
+way, while the light still changes at every reading (200 ms), Scope uses under a quarter of the processor's time and
+Escape closes the window within 300 ms; eight rows of every kind, a row keeping no answer while its next knock is under
+way, and the seventh computer never knocked; unreachable, error with Linux's words, and error with a number, made by
+strace failing the knocks' connects. Fake helpers the check runs on 127.x, which count every byte Scope sends them
+(none): a dash after the first reply and 40 % after the second, beside a wrong prefix, version 2, an extra space, no
+newline, a byte after it, a number at 2^64, 257 bytes, a drip that misses the time limit, a helper that never sends and
+an SSH banner, each showing answers knock after knock; and a helper that goes away (its port refused), comes back, goes
+silent and comes back, its row dropping its figures each time and its processor showing a dash first again. Under
+strace, with knocks every 700 ms and a limit of 300 ms: each computer's knocks start 700 ms apart, no answer comes only
+after a look at or past the limit and within 100 ms of it, refusals and a helper's figures are seen within 50 ms, a
+listener that sends nothing is read from only without waiting and given up only after a read at or past the limit,
+within 100 ms of it, every wait of the window includes the knocks under way (for POLLOUT while connecting, POLLIN while
+reading), nothing is sent, and a knock under way at Escape is closed before Scope exits. Last, for 120 seconds it reads
+every 10 ms through links the check turns between the real `/proc`, files without a final newline (memory under 1 GiB, a
+60-byte name), missing files and malformed files, while it knocks every 20 ms on a listener, a closed port, the silent
+listener and a helper replying to every knock: its memory may not grow (the same virtual size throughout, resident
+memory within 64 KiB), its descriptors stay the same but for knocks under way (no socket outlives its knock), and at the
+end the closed port is made silent and the silent listener starts answering, and both rows must follow. `make
+check-scope-helper` then shows the real helper's figures in the window (see [Scope's helper](scope_helper.md)).

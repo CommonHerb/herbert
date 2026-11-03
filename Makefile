@@ -166,23 +166,26 @@ DESKTOP_LIBS := lib/linux.herb lib/x11.herb lib/pixel_text.herb
 first-steps_SOURCES := $(DESKTOP_LIBS) examples/first_steps.herb
 maze_SOURCES := $(DESKTOP_LIBS) lib/grid_map.herb examples/maze.herb
 notes_SOURCES := $(DESKTOP_LIBS) lib/x11_clipboard.herb lib/utf8.herb lib/unicode_tables.herb lib/unicode_grapheme.herb lib/unicode_display.herb lib/file_io.herb lib/text_buffer.herb lib/session_recovery.herb examples/notes.herb
-scope_SOURCES := $(DESKTOP_LIBS) lib/net.herb examples/scope.herb
+scope_SOURCES := $(DESKTOP_LIBS) lib/net.herb lib/figures.herb examples/scope.herb
+scope-helper_SOURCES := lib/linux.herb lib/net.herb lib/figures.herb examples/scope_helper.herb
 knock_SOURCES := lib/linux.herb lib/net.herb examples/knock.herb
-.PHONY: first-steps maze notes scope knock hosted-apps hosted-memory-io check-desktop check-hosted-apps check-scope check-net
+.PHONY: first-steps maze notes scope scope-helper knock hosted-apps hosted-memory-io check-desktop check-hosted-apps check-scope check-scope-helper check-net
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze
 notes: $(BUILD)/notes
 scope: $(BUILD)/scope
+scope-helper: $(BUILD)/scope-helper
 knock: $(BUILD)/knock
-hosted-apps: first-steps maze notes scope knock
+hosted-apps: first-steps maze notes scope scope-helper knock
 
 $(BUILD)/first-steps: $(first-steps_SOURCES)
 $(BUILD)/maze: $(maze_SOURCES)
 $(BUILD)/notes: $(notes_SOURCES)
 $(BUILD)/scope: $(scope_SOURCES)
+$(BUILD)/scope-helper: $(scope-helper_SOURCES)
 $(BUILD)/knock: $(knock_SOURCES)
 $(SCANNER): $(scan_SOURCES)
-$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/knock $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/scope-helper $(BUILD)/knock $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
 	@set -eu; \
 	  mkdir -p $@-work; \
@@ -215,14 +218,20 @@ check-app-support: maze
 	@python3 bootstrap/tests/check_utf8_text.py
 	@python3 bootstrap/tests/check_x11_text.py
 
-check-hosted-apps: maze notes scope knock
+check-hosted-apps: maze notes scope scope-helper knock
 	@python3 bootstrap/tests/check_hosted_apps.py --maze $(BUILD)/maze --notes $(BUILD)/notes
 	@python3 bootstrap/tests/check_scope.py --scope $(BUILD)/scope
+	@python3 bootstrap/tests/check_scope_helper.py --helper $(BUILD)/scope-helper --scope $(BUILD)/scope
 	@python3 bootstrap/tests/check_net.py --knock $(BUILD)/knock
 
 # Scope's checks alone, for diagnosis; check-hosted-apps runs them too.
 check-scope: scope
 	@python3 bootstrap/tests/check_scope.py --scope $(BUILD)/scope
+
+# Scope's helper's checks alone (on 127.x only), and Scope showing the real
+# helper's figures; check-hosted-apps runs them too.
+check-scope-helper: scope-helper scope
+	@python3 bootstrap/tests/check_scope_helper.py --helper $(BUILD)/scope-helper --scope $(BUILD)/scope
 
 # The knock library's checks alone (lib/net.herb through examples/knock.herb, on
 # 127.0.0.1 and in a private network namespace only); check-hosted-apps runs them too.

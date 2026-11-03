@@ -64,6 +64,19 @@ comes at or after the time limit. `no answer` still comes only from a look that 
 nothing. `net_stop` gives up a knock under way and closes its connection; Scope does that when its window closes.
 One knock at a time per `Net`: starting another first gives up the one under way.
 
+## Reading what the computer sends
+
+`net_start_reading` begins a knock exactly as `net_start` does, and it too never sends a byte. The difference comes
+once the computer takes the connection: instead of closing it, the knock keeps it open and reads what the computer
+sends into the `Net`'s fixed 256-byte reply buffer, without ever waiting (each look is a `recvfrom` that asks for no
+wait, repeated until nothing more is there), until the computer closes the connection, 256 bytes have come, the
+connection fails or the knock's time limit passes, whichever comes first; the time limit covers the whole knock,
+connecting and reading. The knock is then over, `answered` whatever was read, with how many bytes came (`got`) and
+whether the computer closed the connection after them (`closed`): only then are those bytes all it sent. While it
+reads, a program waiting on its socket must wait for bytes (POLLIN), not for room to write (POLLOUT), which a
+connected socket always has; the state's `events` says which, and `net_left` how long at most. Scope uses this to read
+its helper's one line ([Scope's helper](scope_helper.md)); knock itself does not read.
+
 ## Test modes
 
 These are for the tests. Each one given the wrong number of arguments prints its own usage and exits 2.
@@ -92,19 +105,24 @@ make check-net
 ```
 
 `make check-hosted-apps` runs the same checks (`bootstrap/tests/check_net.py`), and so do `make verify-local` and CI.
-They knock only on this computer: addresses in 127.x, and addresses inside a private network namespace the check
-makes. Malformed command lines must be refused before a socket is asked for (strace watches); a small program built
-from the library checks its own refusals and its sorting of Linux's errors; one knock's system calls are checked, in
-order; listeners the check opens must see a connection and not one byte; a port held closed must be refused; a
-listener whose queue the check fills (so Linux drops every new connection silently) must give no answer, at the time
-limit and no more than 100 ms after it; strace makes the rare cases happen on purpose (an interrupted wait, a connect
-that returns only after the limit, a computer that answers and then resets); and 24,000 knocks in one process must
-leave its open files, its size and its memory as they were. All of this runs twice, once through `net_knock` and once
-through `net_start` and `net_check` (`--split`, `--split-rounds`), whose system calls must also be socket, connect,
-then polls only, the answer found by a look that waits for nothing, then SO_ERROR and close; the small program also
-checks that `net_start` keeps `net_knock`'s range guard and leaves no knock under way when it fails, and a second one
-that starting a knock while another is under way on the same `Net` first closes that one, and that `net_stop` closes a
-knock under way. Where the machine lets an unprivileged user make a private network namespace, the check also makes
-`unreachable` and `error` happen there (with routes, and with firewall rules when `nft` is present), both ways, and
-runs the memory check with all five outcomes, a quarter as many rounds for the split knock; where it does not, the
-check says so plainly.
+They knock only on this computer: addresses in 127.x, and addresses inside a private network namespace the check makes.
+Malformed command lines must be refused before a socket is asked for (strace watches); a small program built from the
+library checks its own refusals and its sorting of Linux's errors; one knock's system calls are checked, in order;
+listeners the check opens must see a connection and not one byte; a port held closed must be refused; a listener whose
+queue the check fills (so Linux drops every new connection silently) must give no answer, at the time limit and no more
+than 100 ms after it; strace makes the rare cases happen on purpose (an interrupted wait, a connect that returns only
+after the limit, a computer that answers and then resets); and 24,000 knocks in one process must leave its open files,
+its size and its memory as they were. All of this runs twice, once through `net_knock` and once through `net_start` and
+`net_check` (`--split`, `--split-rounds`), whose system calls must also be socket, connect, then polls only, the answer
+found by a look that waits for nothing, then SO_ERROR and close; the small program also checks that `net_start` keeps
+`net_knock`'s range guard and leaves no knock under way when it fails, and a second one that starting a knock while
+another is under way on the same `Net` first closes that one, and that `net_stop` closes a knock under way. A third
+small program checks `net_start_reading` against listeners the check opens, each playing a part: a line and then the end
+of the connection (read whole), the end alone, 300 bytes held open (stopped at 256 at once), nothing (given up at the
+time limit, within 100 ms of it), two bytes and a reset (answered, with the reset named), a refusal, and a plain
+`net_start` knock after them (nothing read); under strace, each knock's socket sees only socket, connect, polls,
+SO_ERROR, `recvfrom` with no wait and close, the waits between looks ask for POLLIN once the connection is taken, and
+nothing is sent. Where the machine lets an unprivileged user make a private network namespace, the check also makes
+`unreachable` and `error` happen there (with routes, and with firewall rules when `nft` is present), both ways, and runs
+the memory check with all five outcomes, a quarter as many rounds for the split knock; where it does not, the check says
+so plainly.

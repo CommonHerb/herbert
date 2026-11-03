@@ -118,26 +118,44 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   computers (comments, blanks, tabs, CRLF, names at 24 and 25 bytes, every malformed address and port, 6 and 7
   computers, more problems than rows, 64 KiB and one byte more), of files that are not lists (a FIFO and
   `/dev/zero` within 2 s) and of the list in HOME, each line against a hand-written answer, with socket() made to
-  fail; its window's name, figures, inks and bars read back from its pixels, from the real `/proc` (memory against
+  fail; its `--replies` reading of 12 runs of well-formed helper replies and 45 malformed ones (no newline, bytes
+  after it, CRLF, other prefixes and versions, stray spaces, leading zeros, 2^64, a busy count above the total, a zero
+  memory total, an SSH banner, 256 and 257 bytes), each between good ones, every row against a hand-written answer;
+  its window's name, figures, inks and bars read back from its pixels, from the real `/proc` (memory against
   `/proc/meminfo` read around the frame of a new reading) and from files the check writes, removes (amber
   `unavailable`) and restores; the redraw light changing at every reading; quitting on Escape, q, Shift+Q and the
   close button; the other computers' rows (names alone, nothing drawn under them; answers from a listener and from a
   closed port, checking, no answer from a full accept queue, kept while the next knock is under way, problems, a
   seventh computer never knocked, and unreachable and errors made by strace), with every knock on 127.x and every
-  run in a home of the check's own; a
-  knock that never answers holding nothing up (the light on time, Escape within 300 ms); under strace, knocks
-  700 ms apart, no answer only after a look at its 300 ms limit, answers seen within 50 ms and the knock under way
-  closed at exit; and 120 seconds redrawing every 10 ms through the real `/proc`, missing, malformed and unusual
-  files, knocking every 20 ms on a listener, a closed port and a full accept queue, with the same virtual size
+  run in a home of the check's own; fake helpers on 127.x, which count every byte Scope sends (none): figures (a
+  dash, then 40 %) beside ten malformed replies showing answers knock after knock, and a row dropping its figures
+  when its helper is refused or silent and starting its processor again when it comes back; a
+  knock that never answers and a helper that drips holding nothing up (the light on time, little processor time,
+  Escape within 300 ms); under strace, knocks 700 ms apart, no answer only after a look at its 300 ms limit,
+  refusals and a helper's figures seen within 50 ms, a silent listener read only without waiting until its limit,
+  waits for POLLOUT while connecting and POLLIN while reading, and the knock under way closed at exit; and 120 seconds
+  redrawing every 10 ms through the real `/proc`, missing, malformed and unusual files, knocking every 20 ms on a
+  listener, a closed port, a full accept queue and a helper replying to every knock, with the same virtual size
   throughout, resident memory within 64 KiB and no socket outliving its knock. `make check-scope` runs those checks
-  alone. Last, `check_net.py` checks knock (`lib/net.herb`), knocking
+  alone. Then `check_scope_helper.py` checks Scope's helper, on 127.x only: malformed command lines refused before any
+  socket (under strace) and a socket or port it cannot have ending it with status 1; its reply for every `/proc` file
+  of the `--sample` cases carrying exactly their hand-written figures, in all four shapes, and the real `/proc`
+  agreeing; the line only for allowed addresses and a close with no byte for others; under strace, one non-waiting
+  send and close per allowed connection, never a read; exactly its own address listened at; a restart at once while
+  TIME_WAIT lingers on its port; 64 clients that never read holding nothing up; 20,000 connections with the same
+  virtual size, resident memory within 64 KiB and the same descriptors; at most 15 accepts a second while strace
+  fails them, and next to no processor time at a real EMFILE; and Scope's window showing its exact figures, then
+  `answers` once it stops, and real figures from the real `/proc`. `make check-scope-helper` runs those checks alone.
+  Last, `check_net.py` checks knock (`lib/net.herb`), knocking
   only on 127.x and inside a private network namespace it makes: malformed command lines refused before any socket
   (under strace), the library's own range guard and error classes through a probe it compiles, one knock's system
   calls in order, answered at three loopback addresses (a listener that must receive no byte), refused, no answer at
   a full accept queue within its time limit plus 100 ms and only after a last poll at the limit, strace-injected
   EINTR, late connects, connect results and resets after accept, and 24,000 knocks in one process with the same descriptors,
   virtual size and resident memory within 64 KiB, all of it both through `net_knock` and through the knock that does
-  not wait (`net_start`, `net_check`); where an unprivileged network namespace can be made, also
+  not wait (`net_start`, `net_check`); the reading knock (`net_start_reading`) through a probe against listeners
+  that send a line and close, close at once, send 300 bytes, send nothing and reset, with its system calls; where an
+  unprivileged network namespace can be made, also
   unreachable and error from its routes and firewall and the memory check with all five outcomes, and otherwise a
   plain "NOT TESTED here" line. `make check-net` runs those checks alone.
 
@@ -148,7 +166,8 @@ Verifiers that rely on Python `assert` must run with assertions enabled.
 Standalone targets re-run one `make test` gate for diagnosis: `evaluator-native`, `vm-native`, `parser-native`,
 `lexer-native`, `klondike-native`, `emitter-native` (each a fragment gate and its mutation proof),
 `closed-loop-memory-diet`, `compiler-conformance`, `stdin-contract`, `wordcount`, `hosted-memory-io` and
-`stack-headroom`. `verify-local` does not call them. `check-scope` and `check-net` re-run Scope's and knock's parts of `check-hosted-apps`.
+`stack-headroom`. `verify-local` does not call them. `check-scope`, `check-scope-helper` and `check-net` re-run Scope's,
+Scope's helper's and knock's parts of `check-hosted-apps`.
 
 ## Bite proofs
 
