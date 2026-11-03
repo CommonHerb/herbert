@@ -4,8 +4,8 @@ These are Herbert source units, with no `main`. The Makefile concatenates the
 selected units before their application, then the Herbert seed compiles the
 result. This is explicit source composition, not a new import/module system or
 another language. Names use prefixes because the current function namespace is
-flat. The fixed `make first-steps`, `make maze`, `make notes`, `make scope` and `make knock`
-targets report locations in the combined source kept in their build directories.
+flat. The fixed `make first-steps`, `make maze`, `make notes`, `make scope`, `make scope-helper`
+and `make knock` targets report locations in the combined source kept in their build directories.
 The developer [`make program` workflow](../docs/BUILDING.md) maps checked compiler rejections
 back to original files and lines. Runtime bounds faults still refer to combined
 source; the retained source map identifies its original units.
@@ -20,7 +20,21 @@ source; the retained source map identifies its original units.
   (`net_new()`, once) holds the state and every buffer a knock uses, so a knock
   allocates nothing. Addresses only, no names. `net_knock` waits for the
   answer; `net_start`, `net_check`, `net_left` and `net_stop` knock without
-  waiting, for a program that must keep going meanwhile. Used by knock and Scope.
+  waiting, for a program that must keep going meanwhile. `net_start_reading`
+  knocks without waiting too and, once the connection is taken, reads what the
+  computer sends into the Net's fixed 256-byte reply buffer, never waiting,
+  until it closes the connection, 256 bytes have come or the time limit
+  passes. `net_sockaddr` fills a sockaddr_in. Used by knock, Scope and Scope's
+  helper.
+- `figures.herb`: a computer's processor and memory counts from `/proc/stat`
+  and `/proc/meminfo`, and the first line of a name file, read a byte at a time
+  through one fixed 4096-byte chunk, only the first 1 MiB of a file looked at,
+  with a `FiguresScan` record (`figures_scan_new()`, once) so reading again
+  allocates nothing; and the one line Scope's helper sends them in
+  (`herbert-scope 1 TOTAL BUSY MEMTOTAL MEMAVAILABLE`, a half `unavailable`
+  when it cannot be read): `figures_reply_put` writes it, `figures_reply_read`
+  reads it strictly. Used by Scope and Scope's helper, so the two work out the
+  figures with the same code.
 - `x11.herb`: local display/authentication, a fixed-size window, server pixmap,
   keyboard mapping and key/focus/close events, rectangle/ellipse requests and
   presentation. X11 itself remains an external desktop service. Its supported

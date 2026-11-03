@@ -8,10 +8,17 @@
 -- answer; net_start begins a knock and net_check looks at it without waiting,
 -- for a program that must keep going meanwhile, such as a window (net_left
 -- says how long it may wait before looking again, net_stop gives a knock up).
+-- net_start_reading begins a knock that does not wait either and, once the
+-- computer takes the connection, keeps it open and reads what the computer
+-- sends, without waiting, into the Net's 256-byte reply buffer, until the
+-- computer closes it, 256 bytes have come, or the time limit passes: how
+-- Scope hears from its helper. It still never sends a byte.
 -- Layouts and numbers: Linux x86-64 UAPI. sockaddr_in is 16 bytes (family 2,
 -- then port and address in network byte order, then 8 zero bytes); pollfd 8;
--- timespec 16. socket 41, connect 42, getsockopt 55, close 3.
+-- timespec 16. socket 41, connect 42, recvfrom 45, getsockopt 55, close 3;
+-- MSG_DONTWAIT 64; POLLIN 1, POLLOUT 4.
 -- https://man7.org/linux/man-pages/man2/connect.2.html (EINPROGRESS, SO_ERROR)
+-- https://man7.org/linux/man-pages/man2/recv.2.html (MSG_DONTWAIT, EAGAIN)
 -- https://man7.org/linux/man-pages/man7/tcp.7.html
 -- https://man7.org/linux/man-pages/man7/ip.7.html (the errors)
 
@@ -32,10 +39,20 @@
 -- error is the Linux error number that decided the outcome, 0 when none did
 -- (a plain answer, and the time limit reached); elapsed is the knock's length
 -- in whole milliseconds on the monotonic clock.
--- While a knock begun by net_start is under way, pending is true, fd is its
--- socket (a caller may wait on it for POLLOUT along with its own descriptors),
--- started is when it began, in microseconds on the monotonic clock, and limit
--- its time limit in ms; outcome says error, with error 0, until it ends.
+-- While a knock begun by net_start or net_start_reading is under way, pending
+-- is true, fd is its socket (a caller may wait on it, for events, along with
+-- its own descriptors), started is when it began, in microseconds on the
+-- monotonic clock, and limit its time limit in ms; outcome says error, with
+-- error 0, until it ends. events is what to wait for: POLLOUT (4) while the
+-- connection is being made, POLLIN (1) once a reading knock is reading (a
+-- connected socket is always ready for POLLOUT, so waiting for that then
+-- would never wait).
+-- reading is true for a knock begun by net_start_reading. got is how many
+-- bytes it has read into the Net's reply buffer, and closed is true when the
+-- computer then closed the connection (end of file): only then are those got
+-- bytes all it sent. A reading knock that is answered keeps outcome 0
+-- (answered), whatever it reads or does not; error 0 unless the connection
+-- failed while it read (ECONNRESET, for one).
 ref record NetState:
     outcome: int
     error: int
@@ -44,20 +61,27 @@ ref record NetState:
     fd: int
     started: int
     limit: int
+    reading: bool
+    events: int
+    got: int
+    closed: bool
 end
 
--- The state, then the sockaddr_in, pollfd and timespec buffers, and SO_ERROR's
--- value and length (two 32-bit fields).
+-- The state, then the sockaddr_in, pollfd and timespec buffers, SO_ERROR's
+-- value and length (two 32-bit fields), and the reply buffer of a reading
+-- knock (256 bytes).
 record Net:
     state: NetState
     address: buffer
     poll: buffer
     clock: buffer
     option: buffer
+    reply: buffer
 end
 
 func net_new():
-    return Net(NetState(4, 0, 0, false, 0, 0, 0), linux_buffer(16), linux_buffer(8), linux_buffer(16), linux_buffer(8))
+    let st = NetState(4, 0, 0, false, 0, 0, 0, false, 4, 0, false)
+    return Net(st, linux_buffer(16), linux_buffer(8), linux_buffer(16), linux_buffer(8), linux_buffer(256))
 end
 
 func net_digit(b): return b >= 48 and b <= 57 end
@@ -191,20 +215,38 @@ func net_range(address, port, limit):
     return address <= 4294967295 and port != 0 and port <= 65535 and limit != 0 and limit <= 60000
 end
 
+-- The 16-byte sockaddr_in for a 32-bit address and a port, into b.
+func net_sockaddr(b, address, port):
+    do buffer_set(b, 0, 2)
+    do buffer_set(b, 1, 0)
+    do buffer_set(b, 2, port >> 8)
+    do buffer_set(b, 3, port & 255)
+    do buffer_set(b, 4, address >> 24)
+    do buffer_set(b, 5, (address >> 16) & 255)
+    do buffer_set(b, 6, (address >> 8) & 255)
+    do buffer_set(b, 7, address & 255)
+    do linux_put64(b, 8, 0)
+    return 0
+end
+
 -- Fills n.address with the sockaddr_in for address and port, then makes the
 -- knock's socket, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC: its descriptor, or
 -- raw -errno.
 func net_socket(n, address, port):
-    do buffer_set(n.address, 0, 2)
-    do buffer_set(n.address, 1, 0)
-    do buffer_set(n.address, 2, port >> 8)
-    do buffer_set(n.address, 3, port & 255)
-    do buffer_set(n.address, 4, address >> 24)
-    do buffer_set(n.address, 5, (address >> 16) & 255)
-    do buffer_set(n.address, 6, (address >> 8) & 255)
-    do buffer_set(n.address, 7, address & 255)
-    do linux_put64(n.address, 8, 0)
+    do net_sockaddr(n.address, address, port)
     return linux_syscall6(41, 2, 526337, 6, 0, 0, 0)
+end
+
+-- A knock begins: nothing found yet, nothing read.
+func net_reset(st, reading):
+    st.outcome = 4
+    st.error = 0
+    st.elapsed = 0
+    st.reading = reading
+    st.events = 4
+    st.got = 0
+    st.closed = false
+    return 0
 end
 
 -- Knock once on address (a 32-bit IPv4 address, as net_ipv4 gives it) at TCP
@@ -218,9 +260,7 @@ end
 func net_knock(n, address, port, limit):
     do net_stop(n)
     let st = n.state
-    st.outcome = 4
-    st.error = 0
-    st.elapsed = 0
+    do net_reset(st, false)
     let started = net_clock(n)
     if linux_error(started):
         st.error = 0 - started
@@ -270,14 +310,28 @@ end
 -- refuse on this computer, a missing route fails in it, and a range or socket
 -- error comes before it), or 5 while it is under way (n.state.pending). Then
 -- call net_check now and then, until it gives an outcome: at the latest
--- net_left(n) ms later, and sooner when n.state.fd polls ready for POLLOUT. A
--- knock still under way on n is given up first (net_stop).
+-- net_left(n) ms later, and sooner when n.state.fd polls ready for
+-- n.state.events. A knock still under way on n is given up first (net_stop).
 func net_start(n, address, port, limit):
+    return net_begin(n, address, port, limit, false)
+end
+
+-- Begins a knock as net_start does, and once the computer takes the connection
+-- (outcome answered, no error) keeps it open and reads what the computer sends
+-- into n.reply, without waiting, until the computer closes the connection,
+-- 256 bytes have come, the connection fails, or the time limit passes,
+-- whichever comes first: the knock ends there, answered, with n.state.got
+-- bytes in n.reply and n.state.closed true only if the computer closed it.
+-- It never sends a byte. The time limit covers the whole knock, connecting
+-- and reading. Look at it with net_check as at any knock begun by net_start.
+func net_start_reading(n, address, port, limit):
+    return net_begin(n, address, port, limit, true)
+end
+
+func net_begin(n, address, port, limit, reading):
     do net_stop(n)
     let st = n.state
-    st.outcome = 4
-    st.error = 0
-    st.elapsed = 0
+    do net_reset(st, reading)
     let started = net_clock(n)
     if linux_error(started):
         st.error = 0 - started
@@ -298,8 +352,51 @@ func net_start(n, address, port, limit):
     st.started = started
     st.limit = limit
     let connected = linux_syscall6(42, fd, buffer_address(n.address), 16, 0, 0, 0)
-    if connected == 0: return net_finish(n, 0, 0) end
+    if connected == 0: return net_connected(n, 0, 0) end
     if connected != 0 - 115: return net_finish(n, net_classify(0 - connected), 0 - connected) end
+    return 5
+end
+
+-- The connection attempt of the knock under way on n has ended with outcome
+-- and error. A reading knock that was answered with no error goes on to read
+-- (one look now, since the reply may be there already); any other knock ends.
+func net_connected(n, outcome, error):
+    let st = n.state
+    if st.reading and outcome == 0 and error == 0:
+        st.events = 1
+        return net_read(n)
+    end
+    return net_finish(n, outcome, error)
+end
+
+-- One look at what has come on the reading knock's connection, waiting for
+-- nothing: recvfrom with MSG_DONTWAIT into the rest of n.reply, again until
+-- nothing more is there. The knock ends, answered, when the computer has
+-- closed the connection (closed), when n.reply is full, when the connection
+-- has failed (error says how), or when nothing more is there and the clock,
+-- read just before the recvfrom that found nothing, is at or past the time
+-- limit; otherwise it returns 5, still under way. EINTR looks again.
+func net_read(n):
+    let st = n.state
+    let deadline = st.started + st.limit * 1000
+    while true:
+        let now = net_clock(n)
+        if linux_error(now): return net_finish(n, 0, 0 - now) end
+        let want = buffer_length(n.reply) - st.got
+        if want == 0: return net_finish(n, 0, 0) end
+        let r = linux_syscall6(45, st.fd, buffer_address(n.reply) + st.got, want, 64, 0, 0)
+        if r == 0:
+            st.closed = true
+            return net_finish(n, 0, 0)
+        elif r == 0 - 11:
+            if now >= deadline: return net_finish(n, 0, 0) end
+            return 5
+        elif r != 0 - 4:
+            if linux_error(r): return net_finish(n, 0, 0 - r) end
+            if r > want: return net_finish(n, 0, 0) end
+            st.got = st.got + r
+        end
+    end
     return 5
 end
 
@@ -325,16 +422,17 @@ func net_look(n, fd, deadline):
     return (true, 4, 0)
 end
 
--- Looks at the knock begun by net_start without waiting: its outcome once it
--- has ended (the socket then closed, and outcome, error and elapsed in
--- n.state), or 5 while it is still under way. With no knock under way it
--- returns the last outcome.
+-- Looks at the knock begun by net_start or net_start_reading without waiting:
+-- its outcome once it has ended (the socket then closed, and outcome, error
+-- and elapsed in n.state, and for a reading knock got and closed), or 5 while
+-- it is still under way. With no knock under way it returns the last outcome.
 func net_check(n):
     let st = n.state
     if not st.pending: return st.outcome end
+    if st.events == 1: return net_read(n) end
     let look = net_look(n, st.fd, st.started + st.limit * 1000)
     if not look.0: return 5 end
-    return net_finish(n, look.1, look.2)
+    return net_connected(n, look.1, look.2)
 end
 
 -- Whole milliseconds, rounded up, until the time limit of the knock under way

@@ -1,0 +1,439 @@
+-- A computer's figures: its processor and memory counts read from Linux's
+-- /proc files, its name, and the one line that carries the figures from
+-- Scope's helper (examples/scope_helper.herb) to Scope (examples/scope.herb).
+-- Both programs link this file, so the figures a helper sends are worked out
+-- exactly as Scope works out its own. Requires lib/linux.herb; no main.
+-- A FiguresScan (figures_scan_new, once) holds everything a reading needs: one
+-- fixed 4096-byte chunk, a byte at a time, keeping only the numbers wanted, so
+-- reading again and again allocates nothing.
+-- https://man7.org/linux/man-pages/man5/proc_stat.5.html
+-- https://man7.org/linux/man-pages/man5/proc_meminfo.5.html
+
+-- One pass over one file. The scanner sees each byte once and keeps no line, so
+-- neither the chunk size, the number of processors nor the length of any line
+-- matters. phase, label, which and pos say where in the current line it is;
+-- value and digits hold the number being read. done stops the reading early.
+-- /proc/stat fills found, total, idle, iowait and counts, its first eight
+-- counters as eight 64-bit fields (zero past the last one given); /proc/meminfo
+-- has_total, mem_total, has_available and available; a name file name, with
+-- pos as its length.
+ref record FiguresScan:
+    chunk: buffer
+    done: bool
+    found: bool
+    bad: bool
+    phase: int
+    label: int
+    which: int
+    pos: int
+    value: int
+    digits: int
+    fields: int
+    total: int
+    idle: int
+    iowait: int
+    has_total: bool
+    mem_total: int
+    has_available: bool
+    available: int
+    counts: buffer
+    name: buffer
+end
+
+func figures_scan_new():
+    return FiguresScan(linux_buffer(4096), false, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, false, 0, linux_buffer(64), linux_buffer(64))
+end
+
+func figures_scan_reset(s):
+    s.done = false
+    s.found = false
+    s.bad = false
+    s.phase = 0
+    s.label = 0
+    s.which = 0
+    s.pos = 0
+    s.value = 0
+    s.digits = 0
+    s.fields = 0
+    s.total = 0
+    s.idle = 0
+    s.iowait = 0
+    s.has_total = false
+    s.mem_total = 0
+    s.has_available = false
+    s.available = 0
+    let i = 0
+    while i < 64:
+        do buffer_set(s.counts, i, 0)
+        i = i + 1
+    end
+    return 0
+end
+
+func figures_digit(b): return b >= 48 and b <= 57 end
+func figures_blank(b): return b == 32 or b == 9 end
+
+-- Whether value * 10 + d is still below 2^64: the one rule for the size of a
+-- number, in the files and in a reply.
+func figures_fits(value, d):
+    return value < 1844674407370955161 or (value == 1844674407370955161 and d <= 5)
+end
+
+-- value * 10 + the digit b; false, leaving value alone, past 2^64 - 1.
+func figures_accumulate(s, b):
+    let d = b - 48
+    if not figures_fits(s.value, d): return false end
+    s.value = s.value * 10 + d
+    s.digits = s.digits + 1
+    return true
+end
+
+-- /proc/stat (proc_stat(5)). The line whose first word is exactly "cpu" counts
+-- the whole machine's time, in order user nice system idle iowait irq softirq
+-- steal guest guest_nice; older kernels give fewer, at least four. Linux counts
+-- guest time inside user and nice already, so the total is the first eight.
+-- phase 0 reads a line's first word (label: bytes of "cpu" matched, 4 once it
+-- cannot be "cpu"), 1 the numbers of the cpu line, 2 skips any other line.
+func figures_stat_field(s):
+    s.fields = s.fields + 1
+    if s.fields <= 8:
+        if s.total + s.value < s.total: s.bad = true end
+        s.total = s.total + s.value
+        do linux_put64(s.counts, (s.fields - 1) * 8, s.value)
+    end
+    if s.fields == 4: s.idle = s.value end
+    if s.fields == 5: s.iowait = s.value end
+    s.value = 0
+    s.digits = 0
+    return 0
+end
+
+func figures_stat_end(s):
+    if s.digits > 0: do figures_stat_field(s) end
+    s.done = true
+    s.found = not s.bad and s.fields >= 4
+    return 0
+end
+
+func figures_stat_byte(s, b):
+    if s.phase == 0:
+        if b == 10:
+            if s.label == 3: return figures_stat_end(s) end
+            s.label = 0
+        elif figures_blank(b):
+            s.phase = 2
+            if s.label == 3: s.phase = 1 end
+        elif s.label < 3 and b == index("cpu", s.label):
+            s.label = s.label + 1
+        else:
+            s.label = 4
+        end
+    elif s.phase == 1:
+        if figures_digit(b):
+            if not figures_accumulate(s, b): s.bad = true end
+        elif b == 10:
+            return figures_stat_end(s)
+        elif figures_blank(b):
+            if s.digits > 0: do figures_stat_field(s) end
+        else:
+            s.bad = true
+        end
+    elif b == 10:
+        s.phase = 0
+        s.label = 0
+    end
+    return 0
+end
+
+-- A cpu line the file ends inside, with no newline, still counts.
+func figures_stat_eof(s):
+    if s.done: return 0 end
+    if s.phase == 1 or (s.phase == 0 and s.label == 3): return figures_stat_end(s) end
+    return 0
+end
+
+-- /proc/meminfo (proc_meminfo(5)): one "Name:   value kB" line per figure, in
+-- any order. Only MemTotal and MemAvailable are kept, each the first time it
+-- comes on a well-formed line; values are in KiB. phase 0 reads the name (pos
+-- bytes so far; label bit 1 while it can still be MemTotal, bit 2 while it can
+-- be MemAvailable), 1 the blanks before the value, 2 its digits, 3 the blanks
+-- before the unit, 4 the unit's B, 5 the rest of the line, 6 skips the line.
+func figures_mem_reset(s):
+    s.phase = 0
+    s.label = 3
+    s.pos = 0
+    s.which = 0
+    s.value = 0
+    s.digits = 0
+    return 0
+end
+
+func figures_mem_name(s, b):
+    let keep = 0
+    if (s.label & 1) != 0 and s.pos < 8 and b == index("MemTotal", s.pos): keep = 1 end
+    if (s.label & 2) != 0 and s.pos < 12 and b == index("MemAvailable", s.pos): keep = keep + 2 end
+    s.label = keep
+    s.pos = s.pos + 1
+    return 0
+end
+
+func figures_mem_line(s):
+    if s.which == 1 and not s.has_total:
+        s.has_total = true
+        s.mem_total = s.value
+    elif s.which == 2 and not s.has_available:
+        s.has_available = true
+        s.available = s.value
+    end
+    s.done = s.has_total and s.has_available
+    return figures_mem_reset(s)
+end
+
+func figures_mem_digit(s, b):
+    if not figures_accumulate(s, b): s.phase = 6 end
+    return 0
+end
+
+func figures_mem_byte(s, b):
+    if b == 10:
+        if s.phase == 5: return figures_mem_line(s) end
+        return figures_mem_reset(s)
+    end
+    if s.phase == 0:
+        if b == 58:
+            s.phase = 6
+            if s.label == 1 and s.pos == 8:
+                s.which = 1
+                s.phase = 1
+            elif s.label == 2 and s.pos == 12:
+                s.which = 2
+                s.phase = 1
+            end
+        else:
+            do figures_mem_name(s, b)
+        end
+    elif s.phase == 1:
+        if figures_digit(b):
+            s.phase = 2
+            do figures_mem_digit(s, b)
+        elif not figures_blank(b):
+            s.phase = 6
+        end
+    elif s.phase == 2:
+        if figures_digit(b):
+            do figures_mem_digit(s, b)
+        elif figures_blank(b):
+            s.phase = 3
+        else:
+            s.phase = 6
+        end
+    elif s.phase == 3:
+        if b == 107:
+            s.phase = 4
+        elif not figures_blank(b):
+            s.phase = 6
+        end
+    elif s.phase == 4:
+        s.phase = 6
+        if b == 66: s.phase = 5 end
+    elif s.phase == 5:
+        if not figures_blank(b): s.phase = 6 end
+    end
+    return 0
+end
+
+func figures_mem_eof(s):
+    if s.phase == 5: return figures_mem_line(s) end
+    return 0
+end
+
+-- A name file: its first line, cut at 64 bytes (the longest name Linux
+-- allows), into s.name; reading stops there.
+func figures_name_byte(s, b):
+    if b == 10:
+        s.done = true
+    else:
+        do buffer_set(s.name, s.pos, b)
+        s.pos = s.pos + 1
+        s.done = s.pos == 64
+    end
+    return 0
+end
+
+func figures_feed(s, kind, n):
+    let i = 0
+    while i < n and not s.done:
+        let b = buffer_get(s.chunk, i)
+        if kind == 0:
+            do figures_stat_byte(s, b)
+        elif kind == 1:
+            do figures_mem_byte(s, b)
+        else:
+            do figures_name_byte(s, b)
+        end
+        i = i + 1
+    end
+    return 0
+end
+
+-- Reads the file at path (NUL-terminated; kind 0 /proc/stat, 1 /proc/meminfo,
+-- 2 a name) into the scanner until the scanner has what it wants or the file
+-- ends. Only the first 1 MiB is ever looked at, so no file can keep a reading
+-- going for ever: each read asks for no more than is left of it, and once it
+-- is all seen one more byte is asked for only to learn whether the file ends
+-- there. False if the file cannot be opened or read, or goes on past 1 MiB
+-- without the scanner having finished.
+func figures_read(s, path, kind):
+    let fd = linux_syscall6(2, buffer_address(path), 524288, 0, 0, 0, 0)
+    if linux_error(fd): return false end
+    let seen = 0
+    let ok = true
+    let going = true
+    while going:
+        let want = buffer_length(s.chunk)
+        if 1048576 - seen < want: want = 1048576 - seen end
+        if want == 0: want = 1 end
+        let n = linux_syscall6(0, fd, buffer_address(s.chunk), want, 0, 0, 0)
+        if n != 0 - 4:
+            if linux_error(n) or n > want:
+                ok = false
+                going = false
+            elif n == 0:
+                going = false
+            elif seen == 1048576:
+                ok = false
+                going = false
+            else:
+                do figures_feed(s, kind, n)
+                seen = seen + n
+                if s.done: going = false end
+            end
+        end
+    end
+    do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    return ok
+end
+
+-- (readable, total, busy) from a /proc/stat file at path: busy is the total
+-- less idle and iowait time. The eight counters stay in s.counts until the
+-- next reading.
+func figures_read_stat(s, path):
+    do figures_scan_reset(s)
+    let ok = figures_read(s, path, 0)
+    if ok: do figures_stat_eof(s) end
+    if ok and s.found: return (true, s.total, s.total - s.idle - s.iowait) end
+    return (false, 0, 0)
+end
+
+-- (usable, MemTotal, MemAvailable), both in KiB, from a /proc/meminfo file at
+-- path. A total of zero cannot be shown, so it is unusable too.
+func figures_read_meminfo(s, path):
+    do figures_scan_reset(s)
+    do figures_mem_reset(s)
+    let ok = figures_read(s, path, 1)
+    if ok: do figures_mem_eof(s) end
+    if ok and s.has_total and s.has_available and s.mem_total > 0: return (true, s.mem_total, s.available) end
+    return (false, 0, 0)
+end
+
+-- The name in the file at path, into s.name: its length, 0 when the file
+-- cannot be read or its first line is empty.
+func figures_read_name(s, path):
+    do figures_scan_reset(s)
+    let ok = figures_read(s, path, 2)
+    if ok: return s.pos end
+    return 0
+end
+
+-- The reply. Scope's helper answers each connection with one line and closes:
+--   herbert-scope 1 TOTAL BUSY MEMTOTAL MEMAVAILABLE\n
+-- "herbert-scope", a space, the version 1, a space, the processor half, a
+-- space, the memory half and a newline; nothing else. The processor half is
+-- TOTAL and BUSY as figures_read_stat gives them, the memory half MEMTOTAL and
+-- MEMAVAILABLE in KiB as figures_read_meminfo gives them, each two decimal
+-- numbers with one space between; a half whose file could not be read or used
+-- is the word "unavailable" instead. So there are four shapes:
+--   herbert-scope 1 10000 1500 16384000 4096000\n
+--   herbert-scope 1 unavailable 16384000 4096000\n
+--   herbert-scope 1 10000 1500 unavailable\n
+--   herbert-scope 1 unavailable unavailable\n
+-- The longest is 100 bytes.
+
+func figures_put(b, at, text):
+    do linux_text(b, at, text)
+    return at + length(text)
+end
+
+func figures_put_half(b, at, reading):
+    if not reading.0: return figures_put(b, at, "unavailable") end
+    at = linux_decimal(b, at, reading.1)
+    at = figures_put(b, at, " ")
+    return linux_decimal(b, at, reading.2)
+end
+
+-- The reply for a processor reading and a memory reading (each as
+-- figures_read_stat and figures_read_meminfo return them), into b from 0
+-- (at least 100 bytes): its length.
+func figures_reply_put(b, cpu, memory):
+    let at = figures_put(b, 0, "herbert-scope 1 ")
+    at = figures_put_half(b, at, cpu)
+    at = figures_put(b, at, " ")
+    at = figures_put_half(b, at, memory)
+    return figures_put(b, at, "\n")
+end
+
+-- A decimal number at at, before stop: 1 to 20 digits, no zero in front of
+-- another digit, below 2^64. (ok, value, next).
+func figures_reply_number(b, at, stop):
+    let start = at
+    let value = 0
+    while at < stop and figures_digit(buffer_get(b, at)):
+        let d = buffer_get(b, at) - 48
+        if not figures_fits(value, d): return (false, 0, at) end
+        value = value * 10 + d
+        at = at + 1
+    end
+    if at == start: return (false, 0, at) end
+    if at - start > 1 and buffer_get(b, start) == 48: return (false, 0, at) end
+    return (true, value, at)
+end
+
+-- Whether the bytes of text come at at, before stop.
+func figures_reply_word(b, at, stop, text):
+    if stop - at < length(text): return false end
+    let i = 0
+    while i < length(text):
+        if buffer_get(b, at + i) != index(text, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- One half at at: (well-formed, given, first, second, next). "unavailable"
+-- is well-formed and not given; otherwise two numbers and one space between.
+func figures_reply_half(b, at, stop):
+    if figures_reply_word(b, at, stop, "unavailable"): return (true, false, 0, 0, at + 11) end
+    let first = figures_reply_number(b, at, stop)
+    if not first.0 or first.2 >= stop: return (false, false, 0, 0, at) end
+    if buffer_get(b, first.2) != 32: return (false, false, 0, 0, at) end
+    let second = figures_reply_number(b, first.2 + 1, stop)
+    if not second.0: return (false, false, 0, 0, at) end
+    return (true, true, first.1, second.1, second.2)
+end
+
+-- The first n bytes of b as a reply, read strictly: exactly the line above
+-- and nothing more, BUSY not above TOTAL and MEMTOTAL not zero (a helper never
+-- sends those). MEMAVAILABLE above MEMTOTAL is allowed: Linux can say so, and
+-- it counts as nothing in use. (usable, processor given, TOTAL, BUSY, memory
+-- given, MEMTOTAL, MEMAVAILABLE); anything else is (false, ...).
+func figures_reply_read(b, n):
+    let none = (false, false, 0, 0, false, 0, 0)
+    if n > buffer_length(b) or not figures_reply_word(b, 0, n, "herbert-scope 1 "): return none end
+    let cpu = figures_reply_half(b, 16, n)
+    if not cpu.0 or cpu.4 >= n or buffer_get(b, cpu.4) != 32: return none end
+    let memory = figures_reply_half(b, cpu.4 + 1, n)
+    if not memory.0 or memory.4 != n - 1 or buffer_get(b, n - 1) != 10: return none end
+    if cpu.1 and cpu.3 > cpu.2: return none end
+    if memory.1 and memory.2 == 0: return none end
+    return (true, cpu.1, cpu.2, cpu.3, memory.1, memory.2, memory.3)
+end

@@ -1,0 +1,189 @@
+-- scope-helper: answers Scope with this computer's processor and memory
+-- figures. No window. Linked after lib/linux.herb, lib/net.herb and
+-- lib/figures.herb by Make. See examples/scope_helper.md.
+--   scope-helper LISTEN_ADDRESS PORT ALLOWED_ADDRESS [ALLOWED_ADDRESS ...]
+-- listens for TCP connections at exactly LISTEN_ADDRESS and PORT (IPv4; 1 to 4
+-- allowed addresses) and runs until it is stopped. For each connection: when
+-- it comes from an allowed address, it reads /proc/stat and /proc/meminfo
+-- afresh, writes one line (figures_reply_put in lib/figures.herb) and closes;
+-- from any other address it closes at once and writes nothing. It never reads
+-- from a connection, so nothing that comes over the network is ever looked at.
+--   scope-helper --test STAT MEMINFO LISTEN_ADDRESS PORT ALLOWED_ADDRESS [...]
+-- does the same, reading STAT and MEMINFO instead of the files in /proc. For
+-- the tests.
+-- A command line it cannot read prints why on stderr and exits 2 before any
+-- socket is made; a listening socket it cannot set up prints why and exits 1.
+-- It writes nothing else, anywhere. Everything is made at startup; nothing is
+-- allocated after.
+-- Linux x86-64: socket 41, setsockopt 54, bind 49, listen 50, accept4 288,
+-- sendto 44, nanosleep 35, close 3; SOCK_STREAM|SOCK_CLOEXEC 524289;
+-- SOCK_NONBLOCK|SOCK_CLOEXEC 526336; MSG_DONTWAIT|MSG_NOSIGNAL 16448;
+-- SOL_SOCKET 1, SO_REUSEADDR 2.
+-- https://man7.org/linux/man-pages/man2/accept.2.html
+-- https://man7.org/linux/man-pages/man7/socket.7.html (SO_REUSEADDR)
+
+-- What the helper keeps: the two files' paths (NUL-terminated), the scanner,
+-- the reply, the allowed addresses (32-bit, as net_ipv4 gives them), a
+-- connection's sockaddr_in and its length, the value 1 for setsockopt, and the
+-- 100 ms timespec it pauses for after a failed accept.
+ref record Helper:
+    stat_path: buffer
+    meminfo_path: buffer
+    scan: FiguresScan
+    reply: buffer
+    allowed: array(int)
+    peer: buffer
+    peer_size: buffer
+    one: buffer
+    pause: buffer
+end
+
+func helper_refuse(message):
+    do stderr_write(message)
+    do process_exit(2)
+    return 0
+end
+
+func helper_usage():
+    return helper_refuse("scope-helper: usage: scope-helper LISTEN_ADDRESS PORT ALLOWED_ADDRESS [ALLOWED_ADDRESS ...] (1 to 4 allowed addresses)\n")
+end
+
+func helper_address(text):
+    let address = net_ipv4(text)
+    if not address.0:
+        return helper_refuse("scope-helper: not an IPv4 address; write four numbers 0 to 255 joined by dots, like 127.0.0.1\n")
+    end
+    return address.1
+end
+
+func helper_arguments(args):
+    let count = 0
+    let offset = 0
+    while offset < args.1:
+        offset = linux_nul_end(args.0, offset, args.1) + 1
+        count = count + 1
+    end
+    return count
+end
+
+-- A setup step that failed: why, with Linux's error number, on stderr; exit 1.
+func helper_fail(what, result):
+    let b = new_buffer()
+    let text = "scope-helper: cannot "
+    let i = 0
+    while i < length(text):
+        do append(b, index(text, i))
+        i = i + 1
+    end
+    i = 0
+    while i < length(what):
+        do append(b, index(what, i))
+        i = i + 1
+    end
+    let tail = " (Linux error "
+    i = 0
+    while i < length(tail):
+        do append(b, index(tail, i))
+        i = i + 1
+    end
+    let digits = linux_buffer(20)
+    let stop = linux_decimal(digits, 0, 0 - result)
+    i = 0
+    while i < stop:
+        do append(b, buffer_get(digits, i))
+        i = i + 1
+    end
+    do append(b, 41)
+    do append(b, 10)
+    return linux_die(freeze(b))
+end
+
+-- The listening socket at address and port: blocking (the helper does nothing
+-- but wait for connections), SO_REUSEADDR so that it can start again at once
+-- after a stop while the last connections linger in TIME_WAIT, and a queue of
+-- 16. Its descriptor; any failure ends the helper.
+func helper_listen(h, address, port):
+    let fd = linux_syscall6(41, 2, 524289, 6, 0, 0, 0)
+    if linux_error(fd): return helper_fail("make a socket", fd) end
+    do linux_put32(h.one, 0, 1)
+    let set = linux_syscall6(54, fd, 1, 2, buffer_address(h.one), 4, 0)
+    if linux_error(set): return helper_fail("set SO_REUSEADDR", set) end
+    do net_sockaddr(h.peer, address, port)
+    let bound = linux_syscall6(49, fd, buffer_address(h.peer), 16, 0, 0, 0)
+    if linux_error(bound): return helper_fail("listen at that address and port", bound) end
+    let listening = linux_syscall6(50, fd, 16, 0, 0, 0, 0)
+    if linux_error(listening): return helper_fail("listen", listening) end
+    return fd
+end
+
+-- Whether the connection just accepted, whose sockaddr_in is in h.peer, comes
+-- from an allowed address.
+func helper_allowed(h):
+    if linux_u32(h.peer_size, 0) != 16 or linux_u16(h.peer, 0) != 2: return false end
+    let address = (buffer_get(h.peer, 4) << 24) | (buffer_get(h.peer, 5) << 16) | (buffer_get(h.peer, 6) << 8) | buffer_get(h.peer, 7)
+    let i = 0
+    while i < count(h.allowed):
+        if get(h.allowed, i) == address: return true end
+        i = i + 1
+    end
+    return false
+end
+
+-- The reply, read afresh, as one send that waits for nothing and raises no
+-- SIGPIPE. Whatever send says, the connection is closed next: a reply that
+-- does not go out whole is not tried again.
+func helper_answer(h, fd):
+    let cpu = figures_read_stat(h.scan, h.stat_path)
+    let memory = figures_read_meminfo(h.scan, h.meminfo_path)
+    let n = figures_reply_put(h.reply, cpu, memory)
+    do linux_syscall6(44, fd, buffer_address(h.reply), n, 16448, 0, 0)
+    return 0
+end
+
+-- Takes connections until the helper is stopped. Accepted sockets are
+-- non-blocking and close-on-exec. A failed accept (too many open files, no
+-- memory, a connection given up before it was taken, a signal) is followed by
+-- a 100 ms pause before the next: some of those errors come back at once for
+-- as long as their cause lasts, and the helper must never spin on them.
+func helper_serve(h, listener):
+    while true:
+        do linux_put32(h.peer_size, 0, 16)
+        let fd = linux_syscall6(288, listener, buffer_address(h.peer), buffer_address(h.peer_size), 526336, 0, 0)
+        if linux_error(fd):
+            do linux_syscall6(35, buffer_address(h.pause), 0, 0, 0, 0, 0)
+        else:
+            if helper_allowed(h): do helper_answer(h, fd) end
+            do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+        end
+    end
+    return 0
+end
+
+-- first is the argument index of LISTEN_ADDRESS; the rest follow it. Every
+-- argument is read, and refused if need be, before the socket is made.
+func helper_run(args, count, first, stat, meminfo):
+    let allowed = count - first - 2
+    if allowed < 1 or allowed > 4: return helper_usage() end
+    let address = helper_address(linux_argument(args, first))
+    let port = net_port(linux_argument(args, first + 1))
+    if not port.0: return helper_refuse("scope-helper: not a port; write a number 1 to 65535\n") end
+    let h = Helper(linux_cstring(stat), linux_cstring(meminfo), figures_scan_new(), linux_buffer(128), new_array(int), linux_buffer(16), linux_buffer(8), linux_buffer(8), linux_buffer(16))
+    let k = first + 2
+    while k < count:
+        do add(h.allowed, helper_address(linux_argument(args, k)))
+        k = k + 1
+    end
+    do linux_put64(h.pause, 0, 0)
+    do linux_put64(h.pause, 8, 100000000)
+    return helper_serve(h, helper_listen(h, address, port.1))
+end
+
+func main():
+    let args = linux_arguments()
+    let count = helper_arguments(args)
+    if count >= 2 and equal(linux_argument(args, 1), "--test"):
+        if count < 7: return helper_usage() end
+        return helper_run(args, count, 4, linux_argument(args, 2), linux_argument(args, 3))
+    end
+    return helper_run(args, count, 1, "/proc/stat", "/proc/meminfo")
+end

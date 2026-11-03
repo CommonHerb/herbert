@@ -51,6 +51,14 @@ close, nothing sent), answered, refused, no answer within the limit and only aft
 edges (EINTR on a look and on the wait, late connects, connect results, resets after accept) and 24,000 knocks in one
 process.
 
+The reading knock (net_start_reading, as Scope reads its helper's reply) through a third probe, on listeners this
+check opens on 127.0.0.1 that each play a part: a line and the end of the connection (read whole, closed), the end
+alone (closed, nothing read), 300 bytes held open (stopped at 256 at once), nothing held open (given up at the time
+limit and within 100 ms of it), two bytes and a reset (answered, error 104), a refusal (no reading) and a knock begun
+by net_start on the same Net after them (nothing read, the reading state cleared). Under strace: on each knock's
+socket only socket, connect, polls, SO_ERROR, recvfrom with MSG_DONTWAIT and close; the probe's waits ask for
+POLLOUT until the connection is taken and POLLIN after; nothing is ever sent.
+
 In a private network namespace (`unshare -rn`), when this machine allows an unprivileged user to make one:
 - unreachable: an address with no route (ENETUNREACH), one whose route says unreachable (EHOSTUNREACH), and, with
   nft, a port whose firewall rule answers with ICMP host-unreachable, which arrives after connect has begun, through
@@ -345,6 +353,154 @@ RESTART_ANSWER = re.compile('first 5 4 pending no-error\nsecond [05] [04](?: pen
                             'stopped-again 4 4 no-error\n')
 
 
+# A third probe: knocks begun with net_start_reading on one Net, then one begun with net_start. Its arguments are
+# pairs of a port on 127.0.0.1 and a time limit; a port prefixed with + is knocked with net_start. Between looks it
+# waits on the socket, for what n.state.events says, for at most net_left, as Scope's window does. For each knock it
+# prints the outcome, error, bytes read and whether the computer closed, and the bytes in hex.
+READING = r"""
+func probe_put(out, text):
+    let i = 0
+    while i < length(text):
+        do append(out, index(text, i))
+        i = i + 1
+    end
+    return 0
+end
+
+func probe_number(out, n):
+    let digits = linux_buffer(20)
+    let stop = linux_decimal(digits, 0, n)
+    let i = 0
+    while i < stop:
+        do append(out, buffer_get(digits, i))
+        i = i + 1
+    end
+    return 0
+end
+
+func probe_knock(out, n, text, limit):
+    let plain = index(text, 0) == 43
+    let port = 0
+    if plain:
+        let b = new_buffer()
+        let i = 1
+        while i < length(text):
+            do append(b, index(text, i))
+            i = i + 1
+        end
+        port = net_port(freeze(b)).1
+    else:
+        port = net_port(text).1
+    end
+    let outcome = 0
+    if plain:
+        outcome = net_start(n, 2130706433, port, limit)
+    else:
+        outcome = net_start_reading(n, 2130706433, port, limit)
+    end
+    while outcome == 5:
+        do linux_poll(n.state.fd, n.poll, n.state.events, net_left(n))
+        outcome = net_check(n)
+    end
+    let st = n.state
+    do probe_put(out, "outcome ")
+    do probe_number(out, outcome)
+    do probe_put(out, " error ")
+    do probe_number(out, st.error)
+    do probe_put(out, " got ")
+    do probe_number(out, st.got)
+    if st.closed: do probe_put(out, " closed") end
+    if st.pending: do probe_put(out, " pending") end
+    do probe_put(out, " ms ")
+    do probe_number(out, st.elapsed)
+    do probe_put(out, " data ")
+    let i = 0
+    while i < st.got:
+        let b = buffer_get(n.reply, i)
+        do append(out, index("0123456789abcdef", b >> 4))
+        do append(out, index("0123456789abcdef", b & 15))
+        i = i + 1
+    end
+    return probe_put(out, "\n")
+end
+
+func main():
+    let args = linux_arguments()
+    let n = net_new()
+    let out = new_buffer()
+    let k = 1
+    let more = true
+    while more:
+        let text = linux_argument(args, k)
+        if length(text) == 0:
+            more = false
+        else:
+            do probe_knock(out, n, text, net_limit(linux_argument(args, k + 1)).1)
+            k = k + 2
+        end
+    end
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+"""
+
+
+class Talker:
+    """A listener on a free port at address that plays part on every connection: 'line' (sends b'hello\\n', then ends
+    its side), 'end' (ends its side at once), 'big' (300 bytes, then holds the connection open), 'silent' (holds it
+    open), 'reset' (two bytes, then a reset). It reads every connection until the knock closes it, counting every
+    byte it receives."""
+
+    def __init__(self, part, address=LOOPBACK):
+        self.part = part
+        self.sock = bound(address, 0)
+        self.sock.listen(16)
+        self.port = self.sock.getsockname()[1]
+        self.connections, self.received, self.errors = 0, 0, []
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def serve(self):
+        while True:
+            try:
+                connection, _ = self.sock.accept()
+            except OSError:
+                return
+            self.connections += 1
+            with connection:
+                try:
+                    connection.settimeout(10)
+                    if self.part == 'reset':
+                        connection.sendall(b'ab')
+                        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                        continue
+                    if self.part == 'line':
+                        connection.sendall(b'hello\n')
+                    elif self.part == 'big':
+                        connection.sendall(b'x' * 300)
+                    if self.part in ('line', 'end'):
+                        connection.shutdown(socket.SHUT_WR)
+                    while True:
+                        try:
+                            data = connection.recv(4096)
+                        except ConnectionResetError:
+                            break                   # closed with bytes it never read (it stops at 256)
+                        if not data:
+                            break
+                        self.received += len(data)
+                except OSError as error:
+                    self.errors.append(repr(error))
+
+    def close(self):
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.sock.close()
+        self.thread.join(15)
+
+
 class Listener:
     """A free port (or the one given) at address, accepting at once. plain: reads each connection to its end,
     counting every byte sent; reset: closes each at once with a reset; fin-reset: sends its own end first, then
@@ -613,6 +769,81 @@ def library_checks(args, evidence, passed):
     assert sent == [], ('bytes sent on a knock', sent)
     passed('net-start-gives-up-a-knock-under-way', calls=[line.split('(')[0] for line in knocks],
            ports=['black hole', 'listener', 'black hole'], closed_before_the_next_socket=True, stopped='closed')
+    reading_checks(args, evidence, passed)
+
+
+def reading_checks(args, evidence, passed):
+    """net_start_reading, through the third probe, on Talkers and a closed port, under strace."""
+    root = evidence / 'probe-reading'
+    image, _ = compile_probe(args, root, READING)
+    talkers = {part: Talker(part) for part in ('line', 'end', 'big', 'silent', 'reset')}
+    closed = ClosedPort()
+    knocks = [('line', 5000), ('end', 5000), ('big', 5000), ('silent', 300), ('reset', 5000), ('refused', 5000),
+              ('plain', 5000)]
+    argv = []
+    for part, limit in knocks:
+        port = closed.port if part == 'refused' else talkers['line'].port if part == 'plain' else talkers[part].port
+        argv += [('+' if part == 'plain' else '') + str(port), str(limit)]
+    try:
+        result, trace = traced(None, root, 'reading', [str(image), *argv],
+                               'socket,connect,poll,getsockopt,recvfrom,recvmsg,read,readv,write,writev,sendto,'
+                               'sendmsg,close')
+        (root / 'reading.stdout').write_bytes(result.stdout)
+        assert (result.returncode, result.stderr) == (0, b''), ('the probe failed', result.returncode, result.stderr)
+        for talker in talkers.values():
+            wait_for(lambda: not talker.errors and talker.received == 0, 'talker settled', 2)
+        assert talkers['line'].connections == 2, talkers['line'].connections
+    finally:
+        for talker in talkers.values():
+            talker.close()
+        closed.close()
+    lines = result.stdout.decode().splitlines()
+    assert len(lines) == len(knocks), lines
+    got = dict(zip([part for part, _ in knocks], lines))
+    line = re.compile(r'outcome (\d) error (\d+) got (\d+)( closed)? ms (\d+) data ([0-9a-f]*)')
+    fields = {part: line.fullmatch(text) for part, text in got.items()}
+    assert all(fields.values()), got
+    def row(part):
+        m = fields[part]
+        return int(m.group(1)), int(m.group(2)), int(m.group(3)), bool(m.group(4)), int(m.group(5)), m.group(6)
+    assert row('line')[:4] + row('line')[5:] == (0, 0, 6, True, b'hello\n'.hex()), got['line']
+    assert row('end')[:4] == (0, 0, 0, True), got['end']
+    assert row('big')[:4] == (0, 0, 256, False) and row('big')[5] == 'x'.encode().hex() * 256, got['big']
+    assert row('big')[4] < 1000, ('stopping at 256 bytes waited', got['big'])
+    assert row('silent')[:4] == (0, 0, 0, False) and 300 <= row('silent')[4] <= 400, got['silent']
+    assert row('reset')[0] == 0 and row('reset')[1] == 104 and not row('reset')[3], got['reset']
+    assert row('refused')[:4] == (1, 111, 0, False), got['refused']
+    assert row('plain')[:4] == (0, 0, 0, False), got['plain']
+    # Each knock's socket, in order: socket, connect, polls, getsockopt, then for the reading knocks recvfrom with
+    # MSG_DONTWAIT (the probe's own waits between them asking for POLLIN), and close. Nothing sent, nothing read
+    # another way.
+    report = []
+    made = [(i, re.search(r'= (\d+)$', text).group(1)) for i, text in enumerate(trace)
+            if text.startswith('socket(AF_INET')]
+    assert len(made) == len(knocks), made
+    for (start, fd), (part, _) in zip(made, knocks):
+        end = next(i for i in range(start, len(trace)) if trace[i].startswith(f'close({fd})'))
+        mine = [text for text in trace[start:end + 1] if text.startswith(('socket(', f'connect({fd},', f'poll([{{fd={fd},',
+                                                                          f'getsockopt({fd},', f'close({fd})'))
+                or re.match(rf'\w+\({fd},', text)]
+        names = [text.split('(')[0] for text in mine]
+        assert names[:2] == ['socket', 'connect'] and names[-1] == 'close', (part, mine)
+        assert not [text for text in mine if re.match(r'(write|writev|sendto|sendmsg|read|readv|recvmsg)\(', text)], (
+            part, 'sent, or read other than by recvfrom', mine)
+        reads = [text for text in mine if text.startswith('recvfrom(')]
+        assert all(', MSG_DONTWAIT, NULL, NULL) = ' in text for text in reads), (part, reads)
+        if part in ('refused', 'plain'):
+            assert reads == [], (part, 'read on a knock that does not read', mine)
+        else:
+            assert reads or part == 'reset', (part, 'no recvfrom', mine)
+            if reads:
+                taken = names.index('recvfrom')
+                waits = [text for text in mine[taken:] if text.startswith('poll(')]
+                early = [text for text in mine[2:taken] if text.startswith('poll(')]
+                assert all('events=POLLIN}' in text for text in waits), (part, 'waited for POLLOUT while reading', waits)
+                assert all('events=POLLOUT}' in text for text in early), (part, early)
+        report.append(names)
+    passed('net-reading-knock', parts=got, calls=dict(zip([part for part, _ in knocks], report)), bytes_sent=0)
 
 
 def syscall_checks(args, evidence, passed):
