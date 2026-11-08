@@ -22,14 +22,15 @@ prelude = '\n'.join(((root / x).read_text() for x in libs)) + '\n'
 checks = []
 print(f'notes support evidence: {work}', flush=True)
 
-def compile(name, source):
+def compile(name, source, units=None):
+    """A probe compiled after the libraries in units (the prelude's when None)."""
     d = work / name
     d.mkdir()
     (d / 'compiler').write_bytes(seed)
     (d / 'compiler').chmod(0o700)
-    source = source.replace('\\t', '\t')
-    (d / 'source.herb').write_text(prelude + source)
-    r = subprocess.run(['./compiler'], cwd=d, input=(prelude + source).encode(), capture_output=True, timeout=30)
+    source = (prelude if units is None else '\n'.join((root / x).read_text() for x in units) + '\n') + source.replace('\\t', '\t')
+    (d / 'source.herb').write_text(source)
+    r = subprocess.run(['./compiler'], cwd=d, input=source.encode(), capture_output=True, timeout=30)
     (d / 'compile.stdout').write_bytes(r.stdout)
     (d / 'compile.stderr').write_bytes(r.stderr)
     assert r.returncode == 0 and r.stdout == b'0\n' and (not r.stderr), (name, r.stdout, r.stderr)
@@ -1393,6 +1394,440 @@ snapshot=next(d.glob('.herbert-notes-*/recovery.txt'))
 assert proc.returncode==0 and not err and out==b'0\n' and snapshot.read_bytes()==b'A'*65534+b'\r\n' and target.read_bytes()==b'A'*65534+b'\r\n'
 rss=[s['rss_kib'] for s in samples];vm=[s['vmsize_kib'] for s in samples]
 result('session-2000-full-capacity-crlf-checkpoints-undo-redo-search-bounded-memory',len(samples)>=20 and max(rss)-min(rss)<=64 and max(vm)==min(vm),seconds=round(time.monotonic()-started,3),samples=len(samples),rss_min_kib=min(rss),rss_max_kib=max(rss),vmsize_kib=vm[0],ready_seconds=ready_seconds,cpu_seconds=cpu_seconds,loadavg_ready=loadavg_ready,loadavg_end=loadavg_end,ready_limit_seconds=SESSION_READY_WALL,loop_limit_seconds=SESSION_LOOP_WALL)
+
+# Screen rows (word wrap; lib/text_buffer.herb's text_wrap_ functions) against notes_wrap_model.py, which lays the
+# same documents out again from the rule. Documents are built from clusters whose boundaries are known (each a whole
+# grapheme cluster that joins neither neighbour), and the probe's own boundaries are compared with them first.
+import bisect
+from notes_wrap_model import Layout, ascii_row_starts
+wrap_units = ['lib/linux.herb', 'lib/text.herb', 'lib/file_io.herb', 'lib/utf8.herb', 'lib/unicode_tables.herb',
+              'lib/unicode_grapheme.herb', 'lib/text_buffer.herb']
+wrap_probe = compile('wrap-probe', r"""-- Commands, space-separated tokens read from the file named by argument 2; one
+-- answer line each on stdout (S two). W width every: text_wrap. R: every row's
+-- start, end and whether it is a line's last, then ".". N: every cluster's end.
+-- S p: the row holding p, its line and index, then its line's start and the
+-- file column at the row. F p: the file's line and column. L r: the row's last
+-- place. P r c: the place at column c. B r n, A r n: n rows back, ahead (and
+-- how many). V down n: Up/Down, then the cursor and goal. C p: seek. i scalar,
+-- d, b, u, r, x start stop count scalars...: edits. O: the document loaded
+-- again. K: rows walked so far.
+func probe_flush(out, at):
+    do linux_write(1, out, 0, at)
+    return 0
+end
+
+func probe_value(b, at, stop):
+    let f = text_field(b, at, stop)
+    let n = text_whole(b, f.0, f.1)
+    return (n.1, f.1)
+end
+
+func probe_line(out, at, a, b, c):
+    at = text_put_whole(out, at, a)
+    at = text_put(out, at, " ")
+    at = text_put_whole(out, at, b)
+    at = text_put(out, at, " ")
+    at = text_put_whole(out, at, c)
+    return text_put(out, at, "\n")
+end
+
+func probe_rows(t, out, at):
+    let r = 0
+    while true:
+        let row = text_wrap_end(t, r, 0)
+        let last = 0
+        if row.1: last = 1 end
+        at = probe_line(out, at, r, row.0, last)
+        if at > 60000:
+            do probe_flush(out, at)
+            at = 0
+        end
+        if row.1:
+            if row.0 >= text_length(t): return at end
+            r = row.0 + 1
+        else:
+            r = row.0
+        end
+    end
+    return at
+end
+
+func probe_marks(t, out, at):
+    let p = 0
+    while p < text_length(t):
+        p = text_next(t, p)
+        at = text_put_whole(out, at, p)
+        at = text_put(out, at, " ")
+        if at > 60000:
+            do probe_flush(out, at)
+            at = 0
+        end
+    end
+    return text_put(out, at, "\n")
+end
+
+func probe_run(t, cmds, at, stop, out, o, scratch, document):
+    while true:
+        let f = text_field(cmds, at, stop)
+        if f.0 == stop: return probe_flush(out, o) end
+        at = f.1
+        let w = t.state.wrap
+        if text_is(cmds, f.0, f.1, "W"):
+            let a = probe_value(cmds, at, stop)
+            let b = probe_value(cmds, a.1, stop)
+            at = b.1
+            do text_wrap(t, a.0, b.0)
+            o = probe_line(out, o, 0, 0, 0)
+        elif text_is(cmds, f.0, f.1, "R"):
+            o = probe_rows(t, out, o)
+            o = text_put(out, o, ".\n")
+        elif text_is(cmds, f.0, f.1, "N"):
+            o = probe_marks(t, out, o)
+        elif text_is(cmds, f.0, f.1, "S"):
+            let a = probe_value(cmds, at, stop)
+            at = a.1
+            let r = text_wrap_start(t, a.0)
+            o = probe_line(out, o, r, w.found_line, w.found_index)
+            o = probe_line(out, o, w.found_start, w.found_column, 0)
+        elif text_is(cmds, f.0, f.1, "F"):
+            let a = probe_value(cmds, at, stop)
+            at = a.1
+            let place = text_wrap_file(t, a.0)
+            o = probe_line(out, o, place.0, place.1, 0)
+        elif text_is(cmds, f.0, f.1, "L"):
+            let a = probe_value(cmds, at, stop)
+            at = a.1
+            o = probe_line(out, o, text_wrap_last(t, a.0), 0, 0)
+        elif text_is(cmds, f.0, f.1, "P"):
+            let a = probe_value(cmds, at, stop)
+            let b = probe_value(cmds, a.1, stop)
+            at = b.1
+            o = probe_line(out, o, text_wrap_position(t, a.0, b.0), 0, 0)
+        elif text_is(cmds, f.0, f.1, "B"):
+            let a = probe_value(cmds, at, stop)
+            let b = probe_value(cmds, a.1, stop)
+            at = b.1
+            o = probe_line(out, o, text_wrap_back(t, a.0, b.0), 0, 0)
+        elif text_is(cmds, f.0, f.1, "A"):
+            let a = probe_value(cmds, at, stop)
+            let b = probe_value(cmds, a.1, stop)
+            at = b.1
+            let ahead = text_wrap_ahead(t, a.0, b.0)
+            o = probe_line(out, o, ahead.0, ahead.1, 0)
+        elif text_is(cmds, f.0, f.1, "V"):
+            let a = probe_value(cmds, at, stop)
+            let b = probe_value(cmds, a.1, stop)
+            at = b.1
+            do text_wrap_vertical(t, a.0 == 1, b.0)
+            o = probe_line(out, o, text_cursor(t), t.state.goal, 0)
+        elif text_is(cmds, f.0, f.1, "C"):
+            let a = probe_value(cmds, at, stop)
+            at = a.1
+            do text_seek(t, a.0)
+            o = probe_line(out, o, text_cursor(t), 0, 0)
+        elif text_is(cmds, f.0, f.1, "i"):
+            let a = probe_value(cmds, at, stop)
+            at = a.1
+            o = probe_line(out, o, text_insert(t, a.0), text_cursor(t), 0)
+        elif text_is(cmds, f.0, f.1, "d"):
+            o = probe_line(out, o, text_delete(t), text_cursor(t), 0)
+        elif text_is(cmds, f.0, f.1, "b"):
+            o = probe_line(out, o, text_backspace(t), text_cursor(t), 0)
+        elif text_is(cmds, f.0, f.1, "u"):
+            o = probe_line(out, o, text_undo(t), text_cursor(t), 0)
+        elif text_is(cmds, f.0, f.1, "r"):
+            o = probe_line(out, o, text_redo(t), text_cursor(t), 0)
+        elif text_is(cmds, f.0, f.1, "x"):
+            -- x start stop count scalar...: replace [start, stop) with the scalars
+            let a = probe_value(cmds, at, stop)
+            let b = probe_value(cmds, a.1, stop)
+            let n = probe_value(cmds, b.1, stop)
+            at = n.1
+            let k = 0
+            let size = 0
+            while k != n.0:
+                let v = probe_value(cmds, at, stop)
+                at = v.1
+                size = utf8_store(scratch, size, v.0)
+                k = k + 1
+            end
+            o = probe_line(out, o, text_replace(t, a.0, b.0, scratch, 0, size), text_cursor(t), 0)
+        elif text_is(cmds, f.0, f.1, "O"):
+            o = probe_line(out, o, text_load(t, document.bytes, file_count(document)), text_cursor(t), 0)
+        elif text_is(cmds, f.0, f.1, "K"):
+            o = probe_line(out, o, text_wrap_walked(t), 0, 0)
+        else:
+            do linux_die("probe: unknown command\n")
+        end
+        if o > 60000:
+            do probe_flush(out, o)
+            o = 0
+        end
+    end
+    return 0
+end
+
+func main():
+    let args = linux_arguments()
+    let f = file_open(linux_argument(args, 1), 4194304)
+    if file_status(f) != 0: return linux_die("probe: cannot open the document\n") end
+    let t = text_buffer_history(4194304, 8388608)
+    let loaded = text_load(t, f.bytes, file_count(f))
+    if loaded != 0: return linux_die("probe: cannot load the document\n") end
+    let cmds = linux_read_file(linux_argument(args, 2), 67108864)
+    if cmds.0 != 0: return linux_die("probe: cannot read the commands\n") end
+    do probe_run(t, cmds.1, 0, cmds.2, linux_buffer(65536), 0, linux_buffer(65536), f)
+    do process_exit(0)
+    return 0
+end
+""", wrap_units)
+
+def wrap_run(label, clusters, commands, crlf=False, timeout=60):
+    d = work / ('wrap-' + label); d.mkdir()
+    document = b''.join(clusters)
+    (d / 'document').write_bytes(document.replace(b'\n', b'\r\n') if crlf else document)
+    (d / 'commands').write_text(' '.join(commands))
+    started = time.monotonic()
+    r = subprocess.run([str(wrap_probe), str(d / 'document'), str(d / 'commands')], capture_output=True, timeout=timeout)
+    (d / 'stdout').write_bytes(r.stdout)
+    assert r.returncode == 0 and not r.stderr, (label, r.returncode, r.stderr)
+    return r.stdout.decode(), d, round(time.monotonic() - started, 3)
+
+def wrap_line(*values):
+    values = list(values) + [0] * (3 - len(values))
+    return ' '.join(str(v % (1 << 64)) for v in values) + '\n'
+
+def wrap_compare(label, d, actual, expected, quiet=False, **extra):
+    (d / 'expected').write_text(expected)
+    if actual != expected:
+        a, e = actual.splitlines(), expected.splitlines()
+        first = next((i for i in range(min(len(a), len(e))) if a[i] != e[i]), min(len(a), len(e)))
+        raise AssertionError((label, 'first difference at answer line', first, a[first:first + 3], e[first:first + 3]))
+    if not quiet: result(label, True, **extra)
+
+# Clusters: letters and digits, a space and a tab (the blanks), and others that are one column each and never blanks:
+# precomposed and combining accents, CJK, an emoji ZWJ sequence, a flag, an Indic conjunct, and a space carrying an
+# accent (one cluster beginning with a space byte, so not a blank).
+WRAP_LETTERS = [c.encode() for c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?-']
+WRAP_WIDE = [x.encode() for x in ('é', 'é', '漢', '字', '👩‍💻', '🇺🇸', 'क्ष', ' ́')]
+
+def wrap_word(rng, n):
+    return [rng.choice(WRAP_LETTERS) if rng.random() < .8 else rng.choice(WRAP_WIDE) for _ in range(n)]
+
+def wrap_document(rng, width, lines, longest):
+    out = []
+    for k in range(lines):
+        if k: out.append(b'\n')
+        size = rng.randrange(0, longest)
+        line = []
+        while len(line) < size:
+            line += wrap_word(rng, rng.choice([1, 2, 3, 5, width - 1, width, width + 1, 2 * width + 3]))
+            line += [rng.choice([b' ', b' ', b'\t'])] * rng.choice([1, 1, 1, 2, 3])
+        out += line[:size]
+    return out
+
+def wrap_layout_commands(L, rng, every):
+    commands, expected = [f'W {L.width} {every}', 'N', 'R'], [wrap_line(0, 0, 0)]
+    ends = [L.offset(i + 1) for i in range(len(L.clusters))]
+    expected.append(''.join(f'{e} ' for e in ends) + '\n')
+    expected.append(''.join(wrap_line(r, e, int(last)) for r, e, last in L.rows) + '.\n')
+    for p in range(L.size + 2):
+        r, line, k, line_start, column = L.found(p)
+        commands += [f'S {p}', f'F {p}']
+        expected += [wrap_line(r, line, k), wrap_line(line_start, column), wrap_line(*L.file(p))]
+    for r, _, _ in L.rows:
+        commands += [f'L {r}', f'A {r} 1', f'A {r} 3', f'B {r} 1', f'B {r} 2', f'B {r} 5']
+        expected += [wrap_line(L.last(r)), wrap_line(*L.ahead(r, 1)), wrap_line(*L.ahead(r, 3)),
+                     wrap_line(L.back(r, 1)), wrap_line(L.back(r, 2)), wrap_line(L.back(r, 5))]
+        for column in range(min(L.width, 72) + 3):
+            commands.append(f'P {r} {column}'); expected.append(wrap_line(L.position(r, column)))
+    for _ in range(12):
+        cursor = L.floor(rng.randrange(L.size + 1)); goal = None
+        commands.append(f'C {cursor}'); expected.append(wrap_line(cursor))
+        for down, n in [(1, 1), (1, 1), (0, 1), (1, 3), (0, 2), (1, 20), (0, 20)]:
+            r = L.start(cursor)
+            if goal is None: goal = L.columns(r, cursor, 0)
+            target = L.ahead(r, n)[0] if down else L.back(r, n)
+            if target != r: cursor = L.position(target, goal)
+            commands.append(f'V {down} {n}'); expected.append(wrap_line(cursor, goal))
+    return commands, ''.join(expected)
+
+def wrap_text(text):
+    return [ch.encode() for ch in text]
+
+wrap_fixed = [
+    ('word-of-width', wrap_text('a' * 70 + ' b')),
+    ('word-past-width', wrap_text('a' * 71 + ' b')),
+    ('blank-at-edge', wrap_text('a' * 69 + ' ' + 'b' * 5)),
+    ('blank-hangs', wrap_text('a' * 70 + ' ' + 'b' * 5)),
+    ('blank-hangs-at-line-end', wrap_text('a' * 70 + ' \nnext')),
+    ('two-blanks-at-edge', wrap_text('a' * 69 + '  ' + 'b' * 5)),
+    ('tabs-to-the-edge', wrap_text('\t' * 20 + 'tail\n' + 'x' * 66 + '\t' + 'y' + '\n' + 'x' * 67 + '\ty\n' + 'x' * 68 + '\ty\n' + 'x' * 69 + '\ty')),
+    ('blank-run-wraps', wrap_text('word' + ' ' * 150 + 'end')),
+    ('long-words', wrap_text('x ' + 'y' * 200 + ' z')),
+    ('accented-space-not-blank', wrap_text('a' * 60) + [' ́'.encode()] + wrap_text('b' * 20)),
+    ('wide-clusters', [x.encode() for x in ['👩‍💻'] * 75 + [' '] + ['é'] * 80 + ['\n'] + ['漢'] * 140]),
+    ('empty-lines', wrap_text('\n\n' + 'q' * 75 + '\n\n')),
+    ('empty', []),
+]
+wrap_rng = random.Random(20261108)
+wrap_cases = [(name, clusters, 70) for name, clusters in wrap_fixed]
+for width in (1, 3, 4, 7, 10, 70):
+    for k in range(3):
+        wrap_cases.append((f'random-{width}-{k}', wrap_document(wrap_rng, width, 6, 4 * width + 12), width))
+for name, clusters, width in wrap_cases:
+    L, answers = Layout(clusters, width), 0
+    # Every row remembered, every second (from a CRLF file), and every 32nd as Notes does.
+    for every, crlf in [(1, False), (2, True), (32, False)]:
+        commands, expected = wrap_layout_commands(L, wrap_rng, every)
+        label = f'{name}-width-{width}-every-{every}' + ('-crlf' if crlf else '')
+        actual, d, seconds = wrap_run(label, clusters, commands, crlf)
+        wrap_compare(label, d, actual, expected, quiet=True)
+        answers += len(commands)
+    result(f'wrap-layout-{name}-width-{width}', True, rows=len(L.rows), answers=answers)
+
+# Edits, undo and redo between lookups: the remembered rows of up to four lines must answer as a fresh layout does.
+# Rows are remembered every 1 to 3 rows here, so most lookups start from a remembered row an edit may have moved, and
+# documents of eight lines with lookups all over them make the four slots change hands.
+WRAP_TYPED = [c.encode() for c in 'abcxyz09 \t\n'] + ['é'.encode(), '漢'.encode()]
+
+def wrap_queries(L, rng, cursor, commands, expected):
+    for p in [cursor] + [rng.randrange(L.size + 1) for _ in range(3)]:
+        r, line, k, line_start, column = L.found(p)
+        commands += [f'S {p}', f'F {p}']
+        expected += [wrap_line(r, line, k), wrap_line(line_start, column), wrap_line(*L.file(p))]
+    r = L.start(rng.randrange(L.size + 1))
+    n = rng.choice([1, 2, 5, 40])
+    commands += [f'A {r} {n}', f'B {r} {n}', f'L {r}', f'P {r} {rng.randrange(L.width + 2)}']
+    expected += [wrap_line(*L.ahead(r, n)), wrap_line(L.back(r, n)), wrap_line(L.last(r)),
+                 wrap_line(L.position(r, int(commands[-1].split()[2])))]
+
+for case in range(12):
+    rng = random.Random(1000 + case)
+    width, every = rng.choice([5, 7, 10, 13]), rng.choice([1, 2, 3])
+    units = wrap_document(rng, width, 8, 12 * width)
+    initial = list(units)
+    cursor, history, applied = 0, [], 0
+    offset = lambda i: sum(len(u) for u in units[:i])
+    L = Layout(units, width)
+    commands, expected = [f'W {width} {every}'], [wrap_line(0, 0, 0)]
+    wrap_queries(L, rng, 0, commands, expected)
+    for step in range(90):
+        op = rng.choice('iiiddbbxxuurCCO')
+        before = (list(units), cursor)
+        if op == 'i':
+            unit = rng.choice(WRAP_TYPED)
+            units.insert(cursor, unit); cursor += 1
+            commands.append(f'i {ord(unit.decode())}'); changed = 1
+        elif op == 'd':
+            changed = int(cursor < len(units))
+            if changed: del units[cursor]
+            commands.append('d')
+        elif op == 'b':
+            changed = int(cursor > 0)
+            if changed: cursor -= 1; del units[cursor]
+            commands.append('b')
+        elif op == 'x':
+            i = rng.randrange(len(units) + 1); j = min(len(units), i + rng.choice([0, 1, 3, 2 * width]))
+            new = wrap_word(rng, rng.choice([0, 1, 4, width + 2])) + rng.choice([[], [b'\n'], [b' ']])
+            if i == j and not new: new = [b'Q']
+            scalars = [ord(ch) for u in new for ch in u.decode()]
+            commands.append(f'x {offset(i)} {offset(j)} {len(scalars)} ' + ' '.join(map(str, scalars)))
+            units[i:j] = new; cursor = i + len(new); changed = 1
+        elif op == 'u':
+            changed = int(applied > 0)
+            if changed: applied -= 1; units, cursor = list(history[applied][0][0]), history[applied][0][1]
+            commands.append('u')
+        elif op == 'r':
+            changed = int(applied < len(history))
+            if changed: units, cursor = list(history[applied][1][0]), history[applied][1][1]; applied += 1
+            commands.append('r')
+        elif op == 'O':
+            # The document loaded again: the rows remembered for the edited text must all go.
+            units, cursor, history, applied = list(initial), 0, [], 0
+            commands.append('O'); expected.append(wrap_line(0, 0)); changed = None
+        else:
+            cursor = rng.randrange(len(units) + 1)
+            commands.append(f'C {offset(cursor)}'); expected.append(wrap_line(offset(cursor)))
+            changed = None
+        if changed is not None:
+            expected.append(wrap_line(changed, offset(cursor)))
+            if changed and op in 'idbx':
+                history = history[:applied] + [(before, (list(units), cursor))]; applied = len(history)
+        L = Layout(units, width)
+        wrap_queries(L, rng, offset(cursor), commands, expected)
+    actual, d, seconds = wrap_run(f'edits-{case}', initial, commands)
+    wrap_compare(f'wrap-edits-undo-redo-{case}-width-{width}-every-{every}', d, actual, ''.join(expected),
+                 answers=len(commands), final_rows=len(L.rows))
+
+
+# One line wider than the remembered rows can hold every 32nd row of: with every row remembered and 15,000 rows,
+# the rows past the last one remembered are walked to from it.
+L = Layout(wrap_text('w' * 15000 + '\nend'), 1)
+commands, expected = ['W 1 1'], [wrap_line(0, 0, 0)]
+for p in [0, 7, 14560, 14566, 14999, 15000, 15001, 15003, 9000, 14999]:
+    r, line, k, line_start, column = L.found(p)
+    commands += [f'S {p}', f'F {p}', f'B {p} 3']
+    expected += [wrap_line(r, line, k), wrap_line(line_start, column), wrap_line(*L.file(p)), wrap_line(L.back(p, 3))]
+actual, d, seconds = wrap_run('remembered-rows-full', L.clusters, commands)
+wrap_compare('wrap-line-past-the-remembered-rows', d, actual, ''.join(expected), rows=len(L.rows))
+
+# The work, counted in rows walked (a count, not a time): a lookup walks from the nearest remembered row, an edit
+# keeps the rows before it, and no key or lookup walks a 4 MiB line or document again.
+def wrap_answers(out):
+    return [list(map(int, line.split())) for line in out.splitlines()]
+
+words = ['lorem', 'ipsum', 'dolor', 'sit', 'amet', 'consectetur', 'adipiscing', 'elit', 'sed', 'do', 'eiusmod']
+rng = random.Random(4)
+pieces, size = [], 0
+while size < 4194304 - 100:
+    w = rng.choice(words) + ' '; pieces.append(w); size += len(w)
+one_line = ''.join(pieces)
+rows = len(ascii_row_starts(one_line, 70))
+end, middle = len(one_line), len(one_line) // 2
+commands = ['W 70 32', 'K', f'S {end}', 'K']
+for k in range(50):
+    commands += [f'C {end + k}', 'i 120', f'S {end + k + 1}', 'V 0 1', 'V 0 20', 'V 1 1', 'K']
+commands += [f'C {middle}', 'i 120', 'K', f'S {end + 51}', 'K', 'S 0', 'K', f'F {end + 51}']
+actual, d, seconds = wrap_run('work-one-line', [one_line.encode()], commands, timeout=120)
+a = wrap_answers(actual)
+walked = [line[0] for i, line in enumerate(a) if i in (1, 4) or (i > 4 and (i - 4) % 8 == 0 and i <= 4 + 8 * 50)]
+first = walked[1] - walked[0]
+steps = [walked[i + 1] - walked[i] for i in range(1, len(walked) - 1)]
+tail = a[4 + 8 * 50 + 1:]
+final = one_line[:middle] + 'x' + one_line[middle:] + 'x' * 50
+starts = ascii_row_starts(final, 70)
+row = starts[bisect.bisect_right(starts, len(final)) - 1]
+middle_walk, start_walk = tail[5][0] - tail[2][0], tail[8][0] - tail[5][0]
+assert tail[0] == [middle, 0, 0] and tail[3] == [row, 0, len(starts) - 1] and tail[6] == [0, 0, 0], tail
+assert tail[9][:2] == [0, len(final)], tail[9]
+result('wrap-work-4-MiB-line', rows - 1 <= first <= rows + 2 and max(steps) <= 300
+       and len(starts) // 2 - 100 <= middle_walk <= len(starts) // 2 + 100 and start_walk <= 2,
+       rows=rows, first_lookup_at_end=first, most_per_edit_and_moves=max(steps), lookup_after_edit_in_middle=middle_walk,
+       seconds=seconds)
+
+# 4 MiB of short lines: a lookup walks only its own line, also after an edit at the very start.
+rng = random.Random(5)
+lines, size = [], 0
+while size < 4194304 - 200:
+    line = ' '.join(rng.choice(words) for _ in range(rng.randrange(1, 9)))
+    lines.append(line); size += len(line) + 1
+short = '\n'.join(lines)
+end = len(short)
+commands = ['W 70 32', 'K', f'S {end}', 'K', 'C 0', 'i 120', f'S {end + 1}', 'K', f'B {end + 1} 1000', 'K',
+            'A 0 1000', 'K', f'F {end + 1}']
+actual, d, seconds = wrap_run('work-short-lines', [short.encode()], commands, timeout=120)
+a = wrap_answers(actual)
+final = 'x' + short
+starts = ascii_row_starts(final, 70)
+last_line = final.rfind('\n') + 1
+assert a[2][:2] == [end - len(lines[-1]), len(lines) - 1] and a[7][:2] == [last_line, len(lines) - 1], (a[2], a[7])
+assert a[10] == [starts[-1001], 0, 0] and a[12] == [starts[1000], 1000, 0], (a[10], a[12])
+assert a[14][:2] == [len(lines) - 1, len(lines[-1])], a[14]
+result('wrap-work-4-MiB-of-short-lines', a[4][0] - a[1][0] <= 2 and a[9][0] - a[4][0] <= 2
+       and a[11][0] - a[9][0] <= 2 * 1000 + 4 and a[13][0] - a[11][0] == 1000,
+       lines=len(lines), lookup_at_end=a[4][0] - a[1][0], after_edit_at_start=a[9][0] - a[4][0],
+       thousand_rows_back=a[11][0] - a[9][0], seconds=seconds)
 
 # Sample steady-state memory after warmup across 4,000 real save transactions.
 reuse = compile('reuse', r"""func cycle(f, t, poll, left, sampling):

@@ -9,8 +9,10 @@
 -- after its CRLF newlines become LF. time is the server time of the key being
 -- handled, which the clipboard protocol asks for. dragging is true from a left
 -- press in the text to its release, or until a prompt opens; drag_x/drag_y hold
--- the pointer's last place and scrolled_at the last time a drag held past an
--- edge scrolled the view.
+-- the pointer's last place and scrolled_at the last time a drag held above or
+-- below the text scrolled the view.
+-- Lines wrap onto further screen rows (lib/text_buffer.herb's screen rows, 70
+-- columns); top is the start of the top screen row, and nothing scrolls sideways.
 -- detached is true while the wheel has moved the view away from the cursor;
 -- the next key (other than a bare modifier), click or drag re-attaches it, and
 -- the view follows the cursor every frame as before. going is the Go to line
@@ -24,7 +26,6 @@ ref record NotesState:
     doc: File
     spare: File
     top: int
-    left: int
     dirty: bool
     confirming: bool
     message_id: int
@@ -585,7 +586,6 @@ func notes_open(t, s, recovery):
     do file_close(old)
     do recovery_reset(recovery)
     s.top = 0
-    s.left = 0
     s.detached = false
     s.confirming = false
     s.save_result = 0
@@ -708,21 +708,23 @@ func notes_key(c, t, s, recovery, query, key, mods):
     elif key == 65363:
         do text_seek(t, text_next(t, cursor))
     elif key == 65362:
-        do text_vertical(t, false, 1)
+        do text_wrap_vertical(t, false, 1)
     elif key == 65364:
-        do text_vertical(t, true, 1)
+        do text_wrap_vertical(t, true, 1)
     elif key == 65360:
-        let target = text_line_start(t, cursor)
-        if control: target = 0 end
+        -- Home and End keep to the screen row: its start, and its last place
+        -- (where the line wraps belongs to the row below).
+        let target = 0
+        if not control: target = text_wrap_start(t, cursor) end
         do text_seek(t, target)
     elif key == 65367:
-        let target = text_line_end(t, cursor)
-        if control: target = text_length(t) end
+        let target = text_length(t)
+        if not control: target = text_wrap_last(t, text_wrap_start(t, cursor)) end
         do text_seek(t, target)
     elif key == 65365:
-        do text_vertical(t, false, 20)
+        do text_wrap_vertical(t, false, 20)
     elif key == 65366:
-        do text_vertical(t, true, 20)
+        do text_wrap_vertical(t, true, 20)
     elif control:
         return 0
     elif key == 65288:
@@ -742,26 +744,29 @@ end
 
 func notes_in_text(x, y): return x >= 26 and x < 874 and y >= 98 and y < 522 end
 
--- The character boundary nearest a point in the text. Above, below or beside
--- the text it is one row or column past the view, so a held drag scrolls.
+-- The character boundary nearest a point in the text, on the screen row it is
+-- in. Above or below the text it is on the row past the view, so a held drag
+-- scrolls; below the last row it is the text's end. Beside the text it is the
+-- row's start or its last place, and nothing scrolls sideways.
 func notes_point(t, s, x, y):
-    let row = s.top
+    let top = text_wrap_start(t, s.top)
+    let row = top
     if y < 100:
-        if row > 0: row = row - 1 end
-    elif y >= 520:
-        row = s.top + 21
+        row = text_wrap_back(t, top, 1)
     else:
-        row = s.top + (y - 100) / 20
+        let want = 21
+        if y < 520: want = (y - 100) / 20 end
+        let ahead = text_wrap_ahead(t, top, want)
+        if ahead.1 != want: return text_length(t) end
+        row = ahead.0
     end
-    let col = s.left
-    if x < 28:
-        if col > 0: col = col - 1 end
-    elif x >= 868:
-        col = s.left + 70
-    else:
-        col = s.left + (x - 28 + 6) / 12
+    let col = 0
+    if x >= 868:
+        col = 70
+    elif x >= 28:
+        col = (x - 28 + 6) / 12
     end
-    return text_column_position(t, text_row_offset(t, row), col, 0)
+    return text_wrap_position(t, row, col)
 end
 
 -- A left press in the text places the cursor (with Shift, extends the
@@ -800,12 +805,11 @@ func notes_pointer(t, s, symbol, state, code):
     return notes_redraw(s)
 end
 
--- A wheel tick moves the view three rows and leaves the cursor and selection
--- where they are; the view stays there until the cursor next moves (notes_view).
--- Downward it stops where Ctrl+End would, the last row at the bottom: the row
--- that would be at the bottom is looked for from the remembered line, so a
--- notch costs the distance between the cursor's line and the view, never a
--- count of the whole text.
+-- A wheel tick moves the view three screen rows and leaves the cursor and
+-- selection where they are; the view stays there until the cursor next moves
+-- (notes_view). Downward it stops where Ctrl+End would, the last row at the
+-- bottom (notes_bottom); a notch walks only the rows it passes and 20 more,
+-- never the whole text.
 func notes_wheel(t, s, upward, ticks):
     -- A key handled earlier in this drain may have moved the cursor or shrunk
     -- the text with the view not yet redrawn: start from the view it would show.
@@ -813,20 +817,24 @@ func notes_wheel(t, s, upward, ticks):
     let rows = 3 * ticks
     let top = s.top
     if upward:
-        if rows > top: rows = top end
-        top = top - rows
+        top = text_wrap_back(t, top, rows)
     else:
-        let want = top + rows
-        let reached = text_row_clamp(t, want + 20)
-        let limit = 0
-        if reached > 20: limit = reached - 20 end
-        if want > limit: want = limit end
-        if want > top: top = want end
+        let ahead = text_wrap_ahead(t, top, rows)
+        top = notes_bottom(t, ahead.0)
     end
     if top == s.top: return 0 end
     s.top = top
     s.detached = true
     return notes_redraw(s)
+end
+
+-- A top never past where Ctrl+End stops, the last row at the bottom: a
+-- document that lost its rows below the cursor would otherwise show only its
+-- last row.
+func notes_bottom(t, top):
+    let below = text_wrap_ahead(t, top, 20)
+    if below.1 != 20: return text_wrap_back(t, top, 20 - below.1) end
+    return top
 end
 
 -- A view the wheel moved away comes back at the next key that is not a bare
@@ -862,39 +870,37 @@ func notes_keys(c, t, s, recovery, query, event):
 end
 
 -- The view follows the cursor every frame, except while the wheel has moved it
--- away; the next key, click or drag re-attaches it (notes_attach).
+-- away; the next key, click or drag re-attaches it (notes_attach). The top is
+-- first found again as the start of its screen row, since an edit may have
+-- moved where rows begin. A cursor above the view puts its row at the top; one
+-- below it, at the bottom.
 func notes_view(t, s):
-    if s.detached: return 0 end
-    let cursor = text_cursor(t)
-    let row = text_row(t, cursor)
-    let col = text_column(t, cursor)
-    let top = s.top
-    let left = s.left
-    if row < top: top = row end
-    if row >= top + 21: top = row - 20 end
-    if col < left: left = col end
-    if col >= left + 70: left = col - 69 end
-    -- Never past where Ctrl+End stops (the last row at the bottom): a document
-    -- that lost its rows below the cursor would otherwise show only its last row.
-    let reached = text_row_clamp(t, top + 20)
-    let limit = 0
-    if reached > 20: limit = reached - 20 end
-    if top > limit: top = limit end
-    s.top = top
-    s.left = left
+    let top = text_wrap_start(t, s.top)
+    if not s.detached:
+        let cursor = text_wrap_start(t, text_cursor(t))
+        if cursor < top:
+            top = cursor
+        else:
+            let reach = text_wrap_ahead(t, top, 20)
+            if reach.0 < cursor: top = text_wrap_back(t, cursor, 20) end
+        end
+    end
+    s.top = notes_bottom(t, top)
     return 0
 end
 
-func notes_draw_line(c, t, s, p, col, left, y):
-    while p < text_length(t) and col < left + 70:
+-- One screen row, p to stop. Only a blank can lie past column 70 (hanging past
+-- the edge), and a blank draws no ink.
+func notes_draw_line(c, t, s, p, stop, y):
+    let col = 0
+    while p < stop:
         let ch = buffer_get(t.bytes, p)
-        if ch == 10: return 0 end
         let next = text_next(t, p)
-        if col >= left and ch != 9:
+        if ch != 9:
             if not unicode_display_supported(t.bytes, p, next):
                 s.missing_glyphs = true
             end
-            do pixel_unicode_cluster(c, t.bytes, p, next, 28 + (col - left) * 12, y, 2)
+            do pixel_unicode_cluster(c, t.bytes, p, next, 28 + col * 12, y, 2)
         end
         col = text_next_column(col, ch)
         p = next
@@ -902,12 +908,35 @@ func notes_draw_line(c, t, s, p, col, left, y):
     return 0
 end
 
-func notes_draw_rows(c, t, s, p, left, row):
-    while row != 21:
-        do notes_draw_line(c, t, s, p, 0, left, 102 + row * 20)
-        let e = text_line_end(t, p)
-        if e >= text_length(t): return 0 end
-        p = e + 1
+-- The start of the screen row after the one text_wrap_end gave bound for, or
+-- the text's length past its last row.
+func notes_row_after(t, bound):
+    if not bound.1: return bound.0 end
+    if bound.0 >= text_length(t): return text_length(t) + 1 end
+    return bound.0 + 1
+end
+
+func notes_draw_rows(c, t, s, p, row):
+    while row != 21 and p <= text_length(t):
+        let bound = text_wrap_end(t, p, 0)
+        do notes_draw_line(c, t, s, p, bound.0, 102 + row * 20)
+        p = notes_row_after(t, bound)
+        row = row + 1
+    end
+    return 0
+end
+
+-- The caret, when the cursor is on one of the 21 rows from p (the wheel can
+-- scroll it out of view).
+func notes_caret(c, t, p, cursor, row):
+    if cursor < p: return 0 end
+    while row != 21 and p <= text_length(t):
+        let bound = text_wrap_end(t, p, 0)
+        if cursor < bound.0 or (bound.1 and cursor == bound.0):
+            do x11_color(c, 16173151)
+            return x11_rect(c, 28 + text_column_loop(t, p, cursor, 0) * 12, 100 + row * 20, 2, 18)
+        end
+        p = notes_row_after(t, bound)
         row = row + 1
     end
     return 0
@@ -980,10 +1009,12 @@ end
 func notes_refusal(message): return message == 4 or message == 9 or (message >= 45 and message <= 49) end
 
 -- Highlight [a, b) behind the visible rows: the selection, or Find's match. A
--- selected newline shows as a half-cell stub at the end of its line.
-func notes_draw_marks(c, t, p, left, row, a, b):
-    while row != 21 and p <= b:
-        let e = text_line_end(t, p)
+-- selected newline shows as a half-cell stub at the end of its line; nothing
+-- is highlighted past the row's 70 columns.
+func notes_draw_marks(c, t, p, row, a, b):
+    while row != 21 and p <= b and p <= text_length(t):
+        let bound = text_wrap_end(t, p, 0)
+        let e = bound.0
         if b > p and a <= e:
             let from = a
             if from < p: from = p end
@@ -991,15 +1022,14 @@ func notes_draw_marks(c, t, p, left, row, a, b):
             if to > e: to = e end
             let c0 = text_column_loop(t, p, from, 0)
             let c1 = text_column_loop(t, from, to, c0)
-            if c0 < left: c0 = left end
-            if c1 > left + 70: c1 = left + 70 end
+            if c0 > 70: c0 = 70 end
+            if c1 > 70: c1 = 70 end
             let width = 0
             if c1 > c0: width = (c1 - c0) * 12 end
-            if b > e and e < text_length(t) and c1 >= c0 and c1 < left + 70: width = width + 6 end
-            if width > 0: let mark = x11_rect(c, 28 + (c0 - left) * 12, 100 + row * 20, width, 20) end
+            if bound.1 and b > e and e < text_length(t): width = width + 6 end
+            if width > 0: let mark = x11_rect(c, 28 + c0 * 12, 100 + row * 20, width, 20) end
         end
-        if e >= text_length(t): return 0 end
-        p = e + 1
+        p = notes_row_after(t, bound)
         row = row + 1
     end
     return 0
@@ -1007,10 +1037,13 @@ end
 
 func notes_status(c, f, t, s, query):
     do x11_color(c, 11255503)
+    -- The file's line and column (a column counts tabs from the line's start,
+    -- so on a wrapped row it can differ from where the caret sits).
+    let place = text_wrap_file(t, text_cursor(t))
     do pixel_text(c, "Line", 28, 542, 1)
-    do pixel_number(c, text_row(t, text_cursor(t)) + 1, 62, 542, 1)
+    do pixel_number(c, place.0 + 1, 62, 542, 1)
     do pixel_text(c, "Column", 124, 542, 1)
-    do pixel_number(c, text_column(t, text_cursor(t)) + 1, 170, 542, 1)
+    do pixel_number(c, place.1 + 1, 170, 542, 1)
     do pixel_text(c, "Bytes", 248, 542, 1)
     let bytes = pixel_number(c, text_file_length(t), 288, 542, 1)
     do pixel_text(c, "/", 336, 542, 1)
@@ -1240,17 +1273,17 @@ func notes_draw(c, f, t, s, recovery, query, blink):
     do x11_rect(c, 24, 96, 852, 428)
     do x11_color(c, 1384240)
     do x11_rect(c, 26, 98, 848, 424)
-    let first = text_row_offset(t, s.top)
+    let first = s.top
     if notes_selected(t, s):
         do x11_color(c, 3033707)
-        do notes_draw_marks(c, t, first, s.left, 0, notes_from(t, s), notes_to(t, s))
+        do notes_draw_marks(c, t, first, 0, notes_from(t, s), notes_to(t, s))
     elif s.finding and s.query_matched and not s.unicode_input and not s.confirming:
         do x11_color(c, 6969880)
-        do notes_draw_marks(c, t, first, s.left, 0, text_cursor(t), text_cursor(t) + s.query_count)
+        do notes_draw_marks(c, t, first, 0, text_cursor(t), text_cursor(t) + s.query_count)
     end
     do x11_color(c, 15265527)
     s.missing_glyphs = false
-    do notes_draw_rows(c, t, s, first, s.left, 0)
+    do notes_draw_rows(c, t, s, first, 0)
     if s.finding and not s.unicode_input and not s.confirming:
         if notes_query_missing(query, s.query_count, 0):
             s.missing_glyphs = true
@@ -1261,15 +1294,7 @@ func notes_draw(c, f, t, s, recovery, query, blink):
             s.missing_glyphs = true
         end
     end
-    if blink:
-        -- The caret, when the cursor is in view (the wheel can scroll it out).
-        let col = text_column(t, text_cursor(t))
-        let row = text_row(t, text_cursor(t))
-        if row >= s.top and row < s.top + 21 and col >= s.left and col < s.left + 70:
-            do x11_color(c, 16173151)
-            do x11_rect(c, 28 + (col - s.left) * 12, 100 + (row - s.top) * 20, 2, 18)
-        end
-    end
+    if blink: do notes_caret(c, t, first, text_cursor(t), 0) end
     do notes_status(c, f, t, s, query)
     s.needs_draw = false
     return x11_present(c)
@@ -1286,8 +1311,9 @@ func notes_loop(c, t, s, recovery, query, event, lastblink):
         if x11_closed(c): let requested = notes_request_close(c, s.doc, t, s, recovery) end
         let now = linux_clock_ms(c.clock)
         do x11_need(not linux_error(now), "notes: monotonic clock failed\n")
-        -- A drag held past the text's edge scrolls one row or column per 50 ms.
-        let held = s.dragging and not notes_in_text(s.drag_x, s.drag_y)
+        -- A drag held above or below the text scrolls one screen row per 50 ms;
+        -- beside it, it scrolls nothing (notes_point).
+        let held = s.dragging and (s.drag_y < 98 or s.drag_y >= 522)
         if held and now - s.scrolled_at >= 50:
             s.scrolled_at = now
             do text_seek(t, notes_point(t, s, s.drag_x, s.drag_y))
@@ -1327,13 +1353,15 @@ func main():
         return linux_die("notes: cannot open a regular, singly linked file owned by you (or its parent). No file changed.\n")
     end
     let t = text_buffer_history(notes_capacity(), 2 * notes_capacity())
+    -- Screen rows of the window's 70 columns, every 32nd remembered.
+    do text_wrap(t, 70, 32)
     let loaded = text_load(t, opened.bytes, file_count(opened))
     if loaded != 0:
         do file_close(opened)
         return linux_die("notes: expected valid UTF-8 text, TAB and uniform LF or CRLF. Invalid encoding, controls and mixed endings are refused unchanged.\n")
     end
     let f = opened
-    let s = NotesState(f, file_new(notes_capacity()), 0, 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0, false, false, 0, 0, file_scan_new(), 0, false)
+    let s = NotesState(f, file_new(notes_capacity()), 0, false, false, 0, 0, false, false, 0, false, false, 0, false, false, false, 0, 0, false, linux_buffer(4096), 0, 0, 0 - 1, linux_buffer(65536), 0, false, 0, 0, 0, false, false, 0, 0, file_scan_new(), 0, false)
     do notes_recovery_scan(s)
     let recovery = recovery_new(notes_capacity())
     let query = linux_buffer(64)

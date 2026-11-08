@@ -14,6 +14,7 @@
 -- Loading marks every grapheme boundary once; an edit shifts the marks with
 -- the text and re-marks only the lines it touched. Rows are counted from one
 -- remembered line, so neither editing nor drawing scans the whole document.
+-- Screen rows (word wrap) are at the end of this file.
 
 -- goal is the column Up and Down aim for, -1 when none is remembered. The
 -- history records form a ring of 256 slots: oldest is the first retained
@@ -21,7 +22,7 @@
 -- effect (the rest are redo). The payload ring holds payload_bytes bytes from
 -- oldest_payload. disk_length counts the bytes the text takes on disk, where a
 -- CRLF file stores two per newline. row_pos is the start of a remembered line
--- and row its row number (the newlines before it).
+-- and row its row number (the newlines before it). wrap holds the screen rows.
 ref record TextState:
     length: int
     cursor: int
@@ -35,6 +36,7 @@ ref record TextState:
     payload_bytes: int
     row_pos: int
     row: int
+    wrap: TextWrap
 end
 
 -- bytes is the logical text; history the 256 records; serialized the file
@@ -54,7 +56,12 @@ func text_buffer(capacity): return text_buffer_history(capacity, capacity) end
 
 -- A history budget of twice the capacity holds any one replace of the whole text.
 func text_buffer_history(capacity, history):
-    let t = Text(TextState(0, 0, 0 - 1, 0, 0, 0, false, 0, 0, 0, 0, 0), linux_buffer(capacity), linux_buffer(14336), linux_buffer(capacity), linux_buffer(capacity + 1), linux_buffer(history), linux_buffer(4))
+    -- Screen rows (text_wrap): two rows hold over 70 columns between them and
+    -- a byte is at most 4 columns, so a row holds 9 bytes or more on average and
+    -- every 32nd row of a line the size of the capacity fits in limit entries.
+    let limit = capacity / 288 + 2
+    let wrap = TextWrap(0 - 1, 32, 0 - 1, 0, 0, limit, linux_buffer(4 * (48 + 16 * limit)), 0, 0, 0, 0, 0)
+    let t = Text(TextState(0, 0, 0 - 1, 0, 0, 0, false, 0, 0, 0, 0, 0, wrap), linux_buffer(capacity), linux_buffer(14336), linux_buffer(capacity), linux_buffer(capacity + 1), linux_buffer(history), linux_buffer(4))
     do buffer_set(t.marks, 0, 1)
     return t
 end
@@ -150,6 +157,8 @@ func text_load(t, bytes, count):
     st.payload_bytes = 0
     st.row_pos = 0
     st.row = 0
+    let w = st.wrap
+    w.touched = 0
     return text_refresh(t)
 end
 
@@ -306,6 +315,8 @@ func text_history_apply(t, at, inserting):
     let width = linux_u64(t.history, at + 48)
     let size = text_length(t)
     let st = t.state
+    let w = st.wrap
+    if pos < w.touched: w.touched = pos end
     do text_row_before(t, pos)
     if inserting:
         do text_shift_right(t.bytes, size, pos, count)
@@ -611,4 +622,340 @@ func text_find(t, query, count, start, backward):
         if backward: start = candidates - 1 end
     end
     return text_find_loop(t, query, count, start, backward, candidates, candidates)
+end
+
+-- Screen rows. A line wider than the width (text_wrap; until then no line is)
+-- goes on over further rows: after the last space or tab that fits, the blank
+-- staying at the row's end, or, in a row with no such blank, before the first
+-- grapheme that does not fit. A grapheme is one column and a tab runs to the
+-- next four-column stop counted from the row's start; a blank is a grapheme of
+-- that one byte (a space with an accent is not one). A blank may start at the
+-- width itself and hang past it; it then ends the row, at a line's end too, so
+-- the line gets an empty last row and every place a caret can stand on a row
+-- lies at or before the width. An offset where a line wraps belongs to the
+-- lower row, and a line's end (its newline, or the text's end) to its last row.
+-- A row's break depends only on its own text and the next row's, so an edit
+-- leaves every row before the edited row's predecessor where it was.
+--
+-- Rows found are remembered for up to four lines, in rows (one slot each, the
+-- least recently used replaced): at a slot's base the line's start, its number,
+-- its end (2^64 - 1 until seen), how many rows are remembered (0 for an empty
+-- slot) and when the slot was last used; from base + 48, 16 bytes a row, the
+-- start and the file column of rows 0, every, 2 * every, ... of the line, found
+-- as lookups go further, at most limit of them (later rows are walked to from
+-- the last one). touched is the lowest offset edited since the slots were last
+-- brought up to date (2^64 - 1 for none); walked counts rows walked, so checks
+-- can bound the work. A lookup leaves its row's line number, index in the line,
+-- the line's start and the file column at the row's start in the found fields.
+ref record TextWrap:
+    width: int
+    every: int
+    touched: int
+    walked: int
+    clock: int
+    limit: int
+    rows: buffer
+    found_base: int
+    found_index: int
+    found_line: int
+    found_start: int
+    found_column: int
+end
+
+-- Rows of width columns, a row remembered every every rows (both at least 1).
+-- Forgets every remembered row; nothing is allocated.
+func text_wrap(t, width, every):
+    let w = t.state.wrap
+    w.width = width
+    w.every = every
+    w.touched = 0 - 1
+    let slot = 0
+    while slot != 4:
+        do linux_put64(w.rows, text_wrap_base(w, slot) + 24, 0)
+        slot = slot + 1
+    end
+    return 0
+end
+
+func text_wrap_walked(t): return t.state.wrap.walked end
+func text_wrap_base(w, slot): return slot * (48 + 16 * w.limit) end
+func text_wrap_entry(base, i): return base + 48 + 16 * i end
+
+-- The row starting at r, whose file column is column: (next, last, column at
+-- next). next is the following row's start, or, when last is true, the end of
+-- r's line (its newline, or the text's end).
+func text_wrap_end(t, r, column):
+    let w = t.state.wrap
+    w.walked = w.walked + 1
+    return text_wrap_walk(t.bytes, t.marks, text_length(t), w.width, r, 0, column, 0 - 1, 0)
+end
+
+-- col counts the row's columns and file the line's; cut is the place after the
+-- last blank that fitted (2^64 - 1 for none) and cutfile the file column there.
+func text_wrap_walk(bytes, marks, size, width, x, col, file, cut, cutfile):
+    while true:
+        if x >= size: return (x, true, file) end
+        let ch = buffer_get(bytes, x)
+        if ch == 10: return (x, true, file) end
+        let next = x + 1
+        while buffer_get(marks, next) == 0:
+            next = next + 1
+        end
+        if (ch == 32 or ch == 9) and next == x + 1:
+            let e = col + 1
+            let fe = file + 1
+            if ch == 9:
+                e = ((col / 4) + 1) * 4
+                fe = ((file / 4) + 1) * 4
+            end
+            if e > width: return (next, false, fe) end
+            cut = next
+            cutfile = fe
+            col = e
+            file = fe
+        else:
+            if col >= width:
+                if cut != 0 - 1: return (cut, false, cutfile) end
+                return (x, false, file)
+            end
+            col = col + 1
+            file = file + 1
+        end
+        x = next
+    end
+    return (x, true, file)
+end
+
+-- The index of the last remembered row at or before p (row 0 always is).
+func text_wrap_search(w, base, known, p):
+    let low = 0
+    let high = known
+    while high - low > 1:
+        let middle = (low + high) / 2
+        if linux_u64(w.rows, text_wrap_entry(base, middle)) <= p: low = middle else: high = middle end
+    end
+    return low
+end
+
+-- Bring the slots up to date with the edits since the last lookup: a slot whose
+-- line starts after the lowest offset edited is forgotten; otherwise its rows
+-- before the last remembered one at or before that offset are kept (its start
+-- always), and its end is unknown again, unless the edits all lay past it.
+func text_wrap_settle(t):
+    let w = t.state.wrap
+    let m = w.touched
+    if m == 0 - 1: return 0 end
+    w.touched = 0 - 1
+    let slot = 0
+    while slot != 4:
+        let base = text_wrap_base(w, slot)
+        let known = linux_u64(w.rows, base + 24)
+        if known != 0:
+            if m < linux_u64(w.rows, base):
+                do linux_put64(w.rows, base + 24, 0)
+            elif m <= linux_u64(w.rows, base + 16):
+                let keep = text_wrap_search(w, base, known, m)
+                if keep == 0: keep = 1 end
+                do linux_put64(w.rows, base + 24, keep)
+                do linux_put64(w.rows, base + 16, 0 - 1)
+            end
+        end
+        slot = slot + 1
+    end
+    return 0
+end
+
+-- Whether the slot at base holds p's line. With its end not yet seen, the bytes
+-- from its last remembered row up to p are looked at for a newline, once.
+func text_wrap_holds(t, w, base, p):
+    let known = linux_u64(w.rows, base + 24)
+    if known == 0 or p < linux_u64(w.rows, base): return false end
+    let finish = linux_u64(w.rows, base + 16)
+    if finish != 0 - 1: return p <= finish end
+    let x = linux_u64(w.rows, text_wrap_entry(base, known - 1))
+    while x < p:
+        if buffer_get(t.bytes, x) == 10:
+            do linux_put64(w.rows, base + 16, x)
+            return false
+        end
+        x = x + 1
+    end
+    return true
+end
+
+-- The base of the slot holding p's line, taking the least recently used one
+-- (an empty one first) when none does.
+func text_wrap_slot(t, w, p):
+    let slot = 0
+    let best = 0
+    let oldest = 0 - 1
+    while slot != 4:
+        let base = text_wrap_base(w, slot)
+        if text_wrap_holds(t, w, base, p): return base end
+        let used = 0
+        if linux_u64(w.rows, base + 24) != 0: used = linux_u64(w.rows, base + 32) + 1 end
+        if used < oldest:
+            oldest = used
+            best = slot
+        end
+        slot = slot + 1
+    end
+    let base = text_wrap_base(w, best)
+    let start = text_line_start(t, p)
+    do linux_put64(w.rows, base, start)
+    do linux_put64(w.rows, base + 8, text_row(t, start))
+    do linux_put64(w.rows, base + 16, 0 - 1)
+    do linux_put64(w.rows, base + 24, 1)
+    do linux_put64(w.rows, text_wrap_entry(base, 0), start)
+    do linux_put64(w.rows, text_wrap_entry(base, 0) + 8, 0)
+    return base
+end
+
+-- The start of the screen row holding p (see above), its details left in the
+-- found fields.
+func text_wrap_start(t, p):
+    if p > text_length(t): p = text_length(t) end
+    p = text_floor(t, p)
+    do text_wrap_settle(t)
+    let w = t.state.wrap
+    let base = text_wrap_slot(t, w, p)
+    w.clock = w.clock + 1
+    do linux_put64(w.rows, base + 32, w.clock)
+    let i = text_wrap_search(w, base, linux_u64(w.rows, base + 24), p)
+    let at = text_wrap_entry(base, i)
+    w.found_base = base
+    w.found_line = linux_u64(w.rows, base + 8)
+    w.found_start = linux_u64(w.rows, base)
+    return text_wrap_find(t, w, base, p, linux_u64(w.rows, at), linux_u64(w.rows, at + 8), i * w.every)
+end
+
+-- Walk on from the row starting at r (file column column, index index in its
+-- line) to the row holding p, remembering every every-th row passed for the
+-- first time while there is room.
+func text_wrap_find(t, w, base, p, r, column, index):
+    while true:
+        let row = text_wrap_end(t, r, column)
+        if p < row.0 or row.1:
+            if row.1: do linux_put64(w.rows, base + 16, row.0) end
+            w.found_index = index
+            w.found_column = column
+            return r
+        end
+        r = row.0
+        column = row.2
+        index = index + 1
+        let known = linux_u64(w.rows, base + 24)
+        if index % w.every == 0 and index / w.every == known and known < w.limit:
+            let at = text_wrap_entry(base, known)
+            do linux_put64(w.rows, at, r)
+            do linux_put64(w.rows, at + 8, column)
+            do linux_put64(w.rows, base + 24, known + 1)
+        end
+    end
+    return r
+end
+
+-- The start of row index of the line the last lookup found.
+func text_wrap_index(t, w, index):
+    let base = w.found_base
+    let k = index / w.every
+    let known = linux_u64(w.rows, base + 24)
+    if k >= known: k = known - 1 end
+    let at = text_wrap_entry(base, k)
+    let r = linux_u64(w.rows, at)
+    let column = linux_u64(w.rows, at + 8)
+    let i = k * w.every
+    while i != index:
+        let row = text_wrap_end(t, r, column)
+        r = row.0
+        column = row.2
+        i = i + 1
+    end
+    w.found_index = index
+    w.found_column = column
+    return r
+end
+
+-- The start of the row n rows above the one holding r, or of the first row
+-- when fewer lie above.
+func text_wrap_back(t, r, n):
+    let w = t.state.wrap
+    r = text_wrap_start(t, r)
+    while n != 0:
+        let index = w.found_index
+        if n <= index: return text_wrap_index(t, w, index - n) end
+        if w.found_start == 0: return 0 end
+        n = n - index - 1
+        r = text_wrap_start(t, w.found_start - 1)
+    end
+    return r
+end
+
+-- From the row starting at r, n rows down, stopping at the text's last row:
+-- (that row's start, how many rows it moved).
+func text_wrap_ahead(t, r, n):
+    let moved = 0
+    while moved != n:
+        let row = text_wrap_end(t, r, 0)
+        if row.1:
+            if row.0 >= text_length(t): return (r, moved) end
+            r = row.0 + 1
+        else:
+            r = row.0
+        end
+        moved = moved + 1
+    end
+    return (r, moved)
+end
+
+-- The last place a caret can stand on the row starting at r: its line's end on
+-- a line's last row, otherwise just before the row's last grapheme (where the
+-- line wraps belongs to the next row).
+func text_wrap_last(t, r):
+    let row = text_wrap_end(t, r, 0)
+    if row.1: return row.0 end
+    return text_previous(t, row.0)
+end
+
+-- The place on the row starting at r at the given screen column, as Up and
+-- Down aim (the grapheme reaching past it is not crossed), never past the
+-- row's last place.
+func text_wrap_position(t, r, column):
+    let last = text_wrap_last(t, r)
+    let p = text_column_position(t, r, column, 0)
+    if p > last: return last end
+    return p
+end
+
+-- Move the cursor steps screen rows up or down, at the screen column it had
+-- when this run of vertical moves began (the goal; any other move forgets it).
+-- At the first or the last row it stays where it is.
+func text_wrap_vertical(t, downward, steps):
+    let st = t.state
+    let p = st.cursor
+    let r = text_wrap_start(t, p)
+    let goal = st.goal
+    if goal == 0 - 1:
+        goal = text_column_loop(t, r, p, 0)
+        st.goal = goal
+    end
+    let target = r
+    if downward:
+        let ahead = text_wrap_ahead(t, r, steps)
+        target = ahead.0
+    else:
+        target = text_wrap_back(t, r, steps)
+    end
+    if target != r: st.cursor = text_wrap_position(t, target, goal) end
+    return 0
+end
+
+-- The file's line and column of p (numbered from 0; columns counted from the
+-- line's start, tabs to its four-column stops), from the remembered rows.
+func text_wrap_file(t, p):
+    if p > text_length(t): p = text_length(t) end
+    p = text_floor(t, p)
+    let r = text_wrap_start(t, p)
+    let w = t.state.wrap
+    return (w.found_line, text_column_loop(t, r, p, w.found_column))
 end

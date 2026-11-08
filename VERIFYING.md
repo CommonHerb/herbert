@@ -105,13 +105,24 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
 - `make check-app-support`: the map parser, text-buffer models, UTF-8 decoding against the pinned Unicode 18
   grapheme oracle, font geometry, key mapping, LF/CRLF-preserving edits, bounded history, atomic saving, external
   conflicts, rescue and recovery, with syscall fault injection (needs strace). Its Notes endurance case has wall-time
-  limits (60 s to ready, 300 s for 2,000 sampled iterations) that are hang guards, not performance bounds. Then
+  limits (60 s to ready, 300 s for 2,000 sampled iterations) that are hang guards, not performance bounds. Notes' word
+  wrap (the screen rows of `lib/text_buffer.herb`) is checked against `notes_wrap_model.py`, which lays the same text
+  out again from the rule: 31 documents of clusters with known boundaries (blanks and tabs at the edge, words of 70 and
+  71 columns, CJK, accents, emoji, flags, an Indic conjunct, an accented space, empty lines, CRLF) at widths 1 to 70,
+  each with rows remembered every 1, 2 and 32 rows: every row, the row, line and column of every offset, each row's
+  last place, positions at each column, rows back and ahead, and Up/Down runs; then twelve runs of 90 random edits,
+  undos and redos between lookups; a line of 15,000 rows, past what the remembered rows hold; and the work as a count
+  of rows walked, not a time: a lookup at the end of a 4 MiB line walks its 61,945 rows once, then an edit there with
+  its lookup, Up, Page Up and Down walks under 300 rows, and on 4 MiB of short lines a lookup walks one row. Then
   `check_text.py` checks `lib/text.herb` through a probe it compiles: its readers and writers against Python's own
   answers (the 2^64 edge, zeros in front, fields, tenths rounded half up), a write past a buffer's end stopping,
   `linux_argument_count`, `and` and `or` stopping early, and no allocation over 300,000 rounds.
 - `make check-hosted-apps`: Maze and Notes on private XTest windows: movement, collection, completion and restart;
   typing, navigation, Unicode entry, search, save, reopen, rescue, recovery and editing copies of the project's own
-  documents; with strace, the visible warning after a failed sync and its retry; plus 120-second memory checks of
+  documents; word wrap, every drawn cell of a wrapped document against the model, and clicks, Home, End, Up, Down,
+  Page Down, Shift+Down, a drag beside the text, the wheel and the footer, each by the bytes saved after a marker, also
+  near the end of a 4 MiB single line; with strace, the visible warning after a failed sync and its retry; plus
+  120-second memory checks of
   Maze play and of Notes editing LF and CRLF files. Evidence includes
   screenshots, input history, saved bytes and memory samples. Then `check_scope.py` checks Scope:
   its `--sample` output on 72 sets of fixed `/proc/stat`, `/proc/meminfo` and name files against hand-written answers

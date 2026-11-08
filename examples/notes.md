@@ -37,16 +37,17 @@ for an em dash). Backspace removes a hex digit; Escape cancels without editing.
 This also works while searching. Compose/IME and full XKB layouts are not
 implemented.
 
-Type to insert text. Left/Right move across whole grapheme clusters; Home/End move within a line;
+Type to insert text. Left/Right move across whole grapheme clusters; Up/Down move one screen row
+(see Word wrap below); Home/End move within a screen row;
 Ctrl+Home/End move to the beginning/end of the document. Page Up/Down move
-20 lines. **Ctrl+G goes to a line:** type its number, then Enter (0 means the
+20 screen rows. **Ctrl+G goes to a line:** type its number, then Enter (0 means the
 first line; a number past the last line goes to the end of the text; Escape
-cancels). The view scrolls vertically and horizontally to follow the cursor,
-never past where Ctrl+End stops (the last line at the bottom).
-**The scroll wheel** moves the view three lines a notch without moving the
+cancels). The view scrolls up and down to follow the cursor,
+never past where Ctrl+End stops (the last row at the bottom).
+**The scroll wheel** moves the view three screen rows a notch without moving the
 cursor, down as far as Ctrl+End would show; the next key, or the next click in
 the text, brings the view back to the cursor before it is handled (the click
-lands on the line it was seen on).
+lands on the row it was seen on). Shift+wheel does the same; nothing scrolls sideways.
 Tabs advance to the next four-column stop. Backspace/Delete remove a whole grapheme cluster, so accents and joined emoji
 are not split into broken fragments.
 **Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes.** History retains up to 256 edits and 8,388,608 bytes of inserted/deleted text in
@@ -55,6 +56,27 @@ a replace is kept or evicted whole. Navigation is not an edit. A new edit after
 undo drops the redo branch; the oldest edits fall off the bounded history.
 History remains available after saving. Undo/redo conservatively marks the
 document unsaved, even when it returns to the saved bytes.
+
+**Word wrap.** It is always on. A line wider than the window's 70 columns goes on
+over further screen rows: it breaks after the last space or tab that fits, the
+blank staying at the end of the row, and a word wider than the window breaks
+after the last character that fits, never inside a character's accents or a
+joined emoji. One space or tab may hang just past the right edge, drawn as
+nothing, and the row then ends: typing a space after a word that fills a row
+moves the cursor on to the next row instead of pulling the word down, and a line
+that ends with such a blank gets an empty last row for the cursor. Wrapping is
+only how the text is shown: the file's bytes, saving, undo, recovery copies and
+line numbers are unchanged. Where a line wraps, the cursor shows at the start of
+the lower row. Up and Down move one screen row and keep the column the cursor
+had when they began; Home goes to the start of the screen row, and End to its
+last place: the end of the line on a line's last row, otherwise just before the
+row's last character (its trailing blank, or the last letter of a word broken at
+the edge), so typing after End adds to the row's last word. A tab on a wrapped
+row's later rows runs to the next four-column stop counted from that row's start.
+The footer's Line and Column are the file's. Column counts from the start of the
+line, tabs to the line's own four-column stops, so on a wrapped line's later rows
+it is not the cursor's place on the screen, and a tab there can sit at another
+stop on the screen than its Column says.
 
 **Selecting.** Shift with a movement key (arrows, Home/End, Page Up/Down,
 Ctrl+Home/End) selects from where the selection started, and Ctrl+A selects
@@ -65,11 +87,13 @@ selection; Backspace and Delete remove it. **Ctrl+X cuts, Ctrl+C copies and Ctrl
 pastes**; a cut, a paste or a typed replacement is one undo step.
 
 **The mouse.** A left click in the text places the cursor at the nearest
-character boundary, dragging selects, and Shift+click extends the selection to
-the click; a click that does not drag, or a drag that ends where it began,
-selects nothing. Dragging above, below or
-beside the text scrolls the view one row or column every 50 ms while the button
-is held, so a selection can run past one screen. Opening the Open, Find or Go to
+character boundary on the screen row clicked, dragging selects, and Shift+click
+extends the selection to the click; a click that does not drag, or a drag that
+ends where it began, selects nothing. A click below the last row goes to the end
+of the text. Dragging above or below the text scrolls the view one screen row
+every 50 ms while the button is held, so a selection can run past one screen;
+beside the text, it reaches the start or the last place of the row and scrolls
+nothing. Opening the Open, Find or Go to
 line field, Unicode entry or the close prompt (from Ctrl+Q, Escape or the
 window's close button) ends a drag still held, so the cursor and view stay put
 under it and after it. Clicks outside the text, and while the Open, Find or Go to line field,
@@ -258,7 +282,7 @@ race the final conflict check and rename. A crash can leave an owned
 
 Current limits: fixed-size 900x600 window, limited font and keyboard coverage,
 no compose/IME, primary selection (middle-click paste), double- or triple-click
-selection, scroll bar, horizontal or Shift+wheel scrolling, drag-and-drop,
+selection, scroll bar, drag-and-drop,
 general save-as dialog, file browser or multi-file tabs. Ctrl+O replaces the open document; to edit two files at
 once, launch another instance with the other path. Two windows on one file do not
 know of each other, and nothing locks the file. When one saves, the other's next
@@ -269,10 +293,13 @@ after 130 bytes and the Open field shows a path's last 130 characters; the full
 path is used for file operations. Each edit still moves
 the text after the cursor, in one block since the block copy, and writes the
 whole recovery copy; on the development machine an insertion in the middle of
-a 4 MiB document costs under a millisecond and its checkpoint a few. A line
-many thousands of characters long is slower to draw. Lines are not wrapped: a
-line wider than the window runs past its right edge, and the view scrolls
-sideways to follow the cursor. The bitmap letters have no descenders, so g, p, q
+a 4 MiB document costs under a millisecond and its checkpoint a few. A very long
+line is slower to edit: each edit re-marks the character boundaries of its whole
+line, so in a single line of 4 MiB a key takes about 70 ms on the development
+machine. The first move to the far end of such a line walks its screen rows once
+(about 60 ms); later moves and drawing start from rows Notes remembers. A search
+that finds nothing in 4 MiB takes about 0.2 s, each character typed in Find
+included. The bitmap letters have no descenders, so g, p, q
 and y sit on the baseline. There is no desktop launcher or install step; start
 Notes from a terminal.
 

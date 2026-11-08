@@ -44,6 +44,7 @@ bootstrap/tests/check_net.py
 bootstrap/tests/check_scope_helper.py
 bootstrap/tests/check_grid_map.py
 bootstrap/tests/check_notes_support.py
+bootstrap/tests/notes_wrap_model.py
 bootstrap/tests/check_x11_text.py
 bootstrap/tests/check_text.py
 bootstrap/tests/check_link44_attempts.py

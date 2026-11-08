@@ -6,6 +6,7 @@ receive input. No test hooks, foreign runtime, or graphics library in the apps.
 Evidence (including failed frames, input history and memory samples) is retained.
 """
 import argparse
+import bisect
 import contextlib
 import ctypes as C
 import ctypes.util
@@ -13,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import re
 import signal
 import shutil
@@ -24,6 +26,7 @@ import time
 
 from check_grid_map import DEFAULT_MAP
 from check_desktop import XConnection, XKeyEvent, center, memory, private_display, save_png
+from notes_wrap_model import Layout, ascii_row_starts
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -3893,6 +3896,185 @@ def notes_prompt_drag_checks(args, x, display, evidence, passed):
     passed('notes-a-prompt-ends-a-held-drag-f3-find-go-to-line-unicode-open-close-prompt-window-close')
 
 
+TEXT_BACKGROUND, TEXT_INK = 1384240, 15265527     # behind the text, and its glyphs (notes_draw)
+
+
+def cell(frame, row, col):
+    """One character cell of the text: 12 x 20 pixels at screen row `row`, column `col` (notes_draw_line)."""
+    return region(frame, 28 + col * 12, 100 + row * 20, 12, 20)
+
+
+def wrap_cells(L, first):
+    """What the model draws in each cell of the 21 screen rows from row `first`: a character, or None for a blank."""
+    cells = {}
+    for row in range(21):
+        if first + row >= len(L.rows):
+            break
+        r, end, last = L.rows[first + row]
+        col, p, drawn = 0, r, {}
+        while p < end:
+            ch = L.text[p:p+1]
+            if ch not in (b'\t', b' ') and col < 70:
+                drawn[col] = ch
+            col = (col // 4 + 1) * 4 if ch == b'\t' else col + 1
+            p += 1
+        for col in range(70):
+            cells[row, col] = drawn.get(col)
+    return cells
+
+
+def wrap_drawn(frame, cells, shown, skip=()):
+    """Every cell holds what the model puts there: the glyph `shown` learned for its character, or no ink. Learns
+    glyphs not yet seen; nothing is drawn past column 70."""
+    ink = TEXT_INK.to_bytes(3,'big')
+    for place, ch in cells.items():
+        if place in skip:
+            continue
+        pixels = cell(frame, *place)
+        if ch is None:
+            assert ink not in pixels, ('ink in a blank cell', place)
+        else:
+            assert shown.setdefault(ch, pixels) == pixels, ('a cell differs from its character', place, ch)
+    assert len(set(shown.values())) == len(shown), 'two characters drawn alike'
+    assert ink not in region(frame, 868, 100, 6, 420), 'ink past the 70 columns'
+
+
+def notes_wrap_checks(args, x, display, evidence, passed):
+    """Word wrap on screen, against notes_wrap_model.py's layout of the same text (examples/notes.md)."""
+    d = evidence/'wrap'; d.mkdir()
+    lines = [('the quick brown fox jumps over the lazy dog ' * 4).rstrip(), 'W' * 150, 'x' * 69 + '  tail',
+             'y' * 70 + ' ', '\t' * 20 + 'tab', 'end'] + ['line %02d' % i for i in range(20)]
+    text = '\n'.join(lines) + '\n'
+    doc = d/'wrap.txt'; doc.write_bytes(text.encode())
+    L = Layout([ch.encode() for ch in text], 70)
+    starts = [r for r, _, _ in L.rows]
+    line_row = [starts.index(sum(len(l) + 1 for l in lines[:k])) for k in range(len(lines))]
+    def at(row, col):
+        return 28 + col * 12 + 3, 100 + row * 20 + 10
+    current = [text]
+    def marked(offset, what, marker='#'):
+        # A marker typed at the cursor, saved, compared with the model's offset, then undone.
+        app.type(marker); app.tap('s','Control_L')
+        wanted = (current[0][:offset] + marker + current[0][offset:]).encode()
+        wait_for(lambda: doc.read_bytes() == wanted, what)
+        app.tap('z','Control_L')
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'wrap') as app:
+        app.move(450, 30)
+        start = app.frame('start')
+        # Every cell of the 21 rows holds what the model puts there: cells showing one character are identical,
+        # different characters differ, and blank cells and the strip past column 70 have no ink. Cell (0, 0) is
+        # left out: the caret blinks there.
+        shown = {}
+        wrap_drawn(start, wrap_cells(L, 0), shown, skip={(0, 0)})
+        # A click on the second row of the first line lands on that row: where the line wraps.
+        app.click(*at(1, 0)); marked(starts[1], 'a click on a continuation row lands at its start')
+        # End stops before the row's trailing blank (the place where it wraps belongs to the next row);
+        # Home goes back to the row's start.
+        app.tap('End'); marked(L.last(starts[1]), 'End on a wrapped row stops before its trailing blank')
+        app.tap('Home'); marked(starts[1], 'Home on a continuation row goes to its start')
+        # Up and Down move by screen row at the column the cursor had.
+        app.click(*at(1, 5)); app.tap('Down')
+        down = L.position(starts[2], L.columns(starts[1], L.position(starts[1], 5), 0))
+        marked(down, 'Down to the next screen row')
+        app.tap('Up'); app.tap('Up'); marked(L.position(starts[0], L.columns(starts[2], down, 0)), 'Up two screen rows keeps the column')
+        # A word wider than the window breaks at column 70; End stops before its 70th letter; Down keeps column 69
+        # on the next row and stops at the line's end on its short last row.
+        w = line_row[1]
+        app.click(*at(w, 0)); app.tap('End'); marked(starts[w] + 69, 'End on a hard-broken row')
+        app.tap('Down'); marked(starts[w + 1] + 69, 'Down keeps column 69')
+        app.tap('Down'); marked(L.position(starts[w + 2], 69), 'Down onto a short last row')
+        # Right of the text is the row's last place: before the blank that hangs past the edge. The line's end,
+        # after that blank, is on a row of its own.
+        h = line_row[3]
+        app.click(870, 100 + h * 20 + 10); marked(starts[h] + 70, 'a click right of the text: the row\'s last place')
+        app.tap('Down'); marked(starts[h] + 71, 'the line\'s end after a hanging blank is on the next row')
+        # Tabs: the row after 18 tabs starts with the 19th; the footer gives the file's line and column (19 tabs
+        # reach column 72 counted from the line's start), not the column on the screen.
+        b = line_row[4]
+        app.click(*at(b + 1, 0))
+        drawn_frame(app, lambda frame: footer_numbers(frame)[:2] == ('5', '73'), 'the file\'s line and column on a continuation row')
+        marked(starts[b + 1], 'a click on a row of tabs')
+        # Shift+Down selects one screen row; typing replaces it.
+        app.click(*at(0, 3)); app.key('Shift_L', True); app.tap('Down'); app.key('Shift_L', False)
+        a1, b1 = L.position(starts[0], 3), L.position(starts[1], 3)
+        app.type('Z'); app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes() == (text[:a1] + 'Z' + text[b1:]).encode(), 'Shift+Down selects one screen row')
+        app.tap('z','Control_L')
+        # Page Down moves 20 screen rows.
+        app.tap('Home','Control_L'); app.tap('Next'); marked(starts[20], 'Page Down moves 20 screen rows')
+        # A drag held beside the text puts the cursor at that row's last place and scrolls nothing.
+        app.tap('Home','Control_L')
+        wait_for(lambda: cell(app.frame(), 1, 0) == cell(start, 1, 0), 'back at the top')
+        app.move(*at(0, 0)); app.button(True); app.move(895, 100 + 1 * 20 + 10); time.sleep(.6); app.button(False)
+        held = app.frame('dragged-beside')
+        assert all(cell(held, row, col) == cell(start, row, col) for row in (2, 5, 9) for col in (0, 10, 69)), 'the view moved sideways'
+        app.type('D'); app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes() == ('D' + text[L.last(starts[1]):]).encode(), 'a drag beside the text selects to the row\'s last place')
+        app.tap('z','Control_L'); app.tap('Home','Control_L')
+        # A wheel notch moves the view three screen rows.
+        wait_for(lambda: cell(app.frame(), 1, 0) == cell(start, 1, 0), 'back at the top again')
+        app.wheel(down=True)
+        wait_for(lambda: all(cell(app.frame(), row, col) == cell(start, row + 3, col) for row in (0, 4, 10) for col in (0, 5, 69)),
+                 'one notch shows the fourth screen row first')
+        # Typing past the right edge wraps and never scrolls sideways: the view follows the cursor down to the row
+        # it wrapped onto, every cell as the model lays the longer line out, and the footer gives the file's column.
+        app.tap('End','Control_L'); app.tap('Up'); app.tap('End'); app.type('k' * 80)
+        current[0] = text[:-1] + 'k' * 80 + '\n'
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes() == current[0].encode(), 'a long line typed at the end')
+        typed = drawn_frame(app, lambda frame: footer_numbers(frame)[:2] == (str(len(lines)), '88'), 'the footer after typing')
+        T = Layout([ch.encode() for ch in current[0]], 70)
+        row = T.row_starts.index(T.start(len(current[0]) - 1))
+        caret = T.columns(T.rows[row][0], len(current[0]) - 1, 0)
+        wrap_drawn(app.frame('typed-past-the-edge'), {k: v for k, v in wrap_cells(T, row - 20).items() if v is None or v in shown},
+                   shown, skip={(20, caret)})
+        app.tap('Escape'); app.finish()
+    passed('notes-wrap-cells-click-home-end-up-down-hard-break-hanging-blank-tabs-footer-shift-down-page-down-'
+           'drag-beside-wheel-no-sideways-scroll')
+
+
+def notes_long_line_checks(args, x, display, evidence, passed):
+    """A 4 MiB single line: the moves near its end land where the model says (speed is proven by the row-walk count
+    in check_notes_support.py; the CPU time here is evidence only)."""
+    d = evidence/'long-line'; d.mkdir()
+    rng = random.Random(4)
+    words = ['lorem', 'ipsum', 'dolor', 'sit', 'amet', 'consectetur', 'adipiscing', 'elit', 'sed', 'do', 'eiusmod']
+    pieces, size = [], 0
+    while size < 4194304 - 100:
+        w = rng.choice(words) + ' '; pieces.append(w); size += len(w)
+    text = ''.join(pieces)
+    doc = d/'line.txt'; doc.write_bytes(text.encode())
+    def saved(wanted, what):
+        app.tap('s','Control_L')
+        wait_for(lambda: doc.read_bytes() == wanted.encode(), what, timeout=20)
+    with application(args.notes, doc, b'Herbert - Notes', (900,600), x, display, d, 'long-line') as app:
+        cpu = cpu_seconds(app.p.pid)
+        def typed(marker, at, what):
+            app.type(marker); text[0] = text[0][:at] + marker + text[0][at:]
+            saved(text[0], what)
+            return at + 1, ascii_row_starts(text[0], 70)
+        text = [text]
+        app.tap('End','Control_L')
+        cursor, starts = typed('Q', len(text[0]), 'typing at the end of a 4 MiB line')
+        # Up three screen rows at the column the cursor had on the last row.
+        goal, k = cursor - starts[-1], len(starts) - 4
+        app.tap('Up'); app.tap('Up'); app.tap('Up')
+        cursor, starts = typed('U', min(starts[k] + goal, starts[k + 1] - 1), 'Up three screen rows near the end')
+        app.tap('Home')
+        cursor, starts = typed('H', starts[bisect.bisect_right(starts, cursor) - 1], 'Home on a row near the end')
+        # The wheel moves the view away; Page Up brings it back and moves 20 screen rows; End goes to that row's
+        # last place, before the blank where it wraps.
+        app.wheel(down=False, ticks=4); app.tap('Prior'); app.tap('End')
+        k = bisect.bisect_right(starts, cursor) - 1 - 20
+        cursor, starts = typed('E', starts[k + 1] - 1, 'Page Up then End')
+        app.tap('Home','Control_L'); app.tap('Down')
+        cursor, starts = typed('D', starts[1], 'Down from the start')
+        cpu = round(cpu_seconds(app.p.pid) - cpu, 3)
+        app.frame('long-line')
+        app.tap('Escape'); app.finish()
+    passed('notes-4-MiB-single-line-end-up-home-wheel-page-up-end-down-markers', cpu_seconds=cpu)
+
+
 # Session folders from earlier sessions beside a document, said at open (at launch and after Ctrl+O) on the line at
 # y=85, each asserted by its decoded text and ink (recovery_line).
 def session_folder(folder, name, text, age):
@@ -4220,6 +4402,7 @@ def main():
     shutil.copyfile(__file__, evidence/'check_hosted_apps.py')
     shutil.copyfile(Path(__file__).with_name('check_desktop.py'), evidence/'check_desktop.py')
     shutil.copyfile(Path(__file__).with_name('check_grid_map.py'), evidence/'check_grid_map.py')
+    shutil.copyfile(Path(__file__).with_name('notes_wrap_model.py'), evidence/'notes_wrap_model.py')
     for name, image in [('maze',args.maze),('notes',args.notes)]:
         shutil.copyfile(image, evidence/(name+'.elf'))
         combined = image.parent/(image.name+'-work')/'source.herb'
@@ -4276,6 +4459,8 @@ def main():
                     x11_clipboard_window_checks(args,x,display,evidence,passed)
                     notes_mouse_checks(args,x,display,evidence,passed)
                     notes_navigation_checks(args,x,display,evidence,passed)
+                    notes_wrap_checks(args,x,display,evidence,passed)
+                    notes_long_line_checks(args,x,display,evidence,passed)
                     notes_big_checks(args,x,display,evidence,passed)
                     notes_read_only_checks(args,x,display,evidence,passed)
                     notes_permission_change_checks(args,x,display,evidence,passed)
