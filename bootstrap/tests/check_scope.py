@@ -20,6 +20,14 @@ dozens of malformed ones (no newline, bytes after it, CRLF, two lines, other pre
 spaces, tabs, leading zeros, 2^64, a busy count above the total, a memory total of zero, 256 and 257 bytes, an SSH
 banner), each between good replies, so the row must drop its figures and its processor start again.
 
+`scope --readings HWMON STATFS` then finds and reads temperatures in stand-in hwmon directories this check writes (the
+drive at a high number and past the last, gaps, k10temp before coretemp, look-alike names, limits missing, zero,
+absurd or malformed, the colour at each edge, rounding at a half degree, readings that are not plain decimal), every
+line against an answer written by hand, and this computer's own /sys/class/hwmon against a search worked out here.
+`scope --disk-figures BLOCKS BFREE BAVAIL FRSIZE` puts statfs's numbers through the disk row's arithmetic, against
+answers written by hand up to and past 64 bits in KiB, and `--readings` asks about real paths, its figures checked
+against os.statvfs of the same path read just before and just after.
+
 Part two opens the window on a private Xvfb display and drives it with XTest. Every run has a HOME of this check's
 own (or none), so no run can read the owner's list of computers, and every knock goes to 127.x, to listeners and
 ports this check opens (check_net's Listener, ClosedPort and BlackHole, and fake helpers, FakeHelper below, which
@@ -28,7 +36,10 @@ machine's name, a processor figure, and memory figures that agree with /proc/mem
 a frame that shows a new reading, and the computers in its HOME's list answering; it quits on Escape, q, Shift+Q and
 the window manager's close. With `--test` it reads files this check writes: the redraw light must change at every
 reading while nothing else does, and the exact text, inks and bar lengths are checked for known figures, a
-zero-length interval, MiB, names of 48 and 60 bytes, and files that vanish ("unavailable") and come back. The other
+zero-length interval, MiB, names of 48 and 60 bytes, and files that vanish ("unavailable") and come back. The disk
+row is read back against os.statvfs('/') at a reading, and the temperature line from a stand-in hwmon directory this
+check changes while the window runs: the drive's colour at each edge of its bands, n/a, and its sensors and limits
+found at startup only. The other
 computers' rows are read back from pixels too, each computer's name with nothing drawn under it (the owner's choice
 after his trial; problems and notes keep their detail): checking, answers (a listener, and a closed port's refusal),
 no answer (a full accept queue), kept while the next knock is under way, problems, a seventh computer never knocked,
@@ -41,8 +52,9 @@ helper that drips, must hold nothing up: the light changes on time, Scope uses l
 closes the window within 300 ms. Under strace, the knocks' interval and time limit are read from their own clock,
 and a reading knock reads only without waiting and is waited on for POLLIN. Last, for --seconds (default 120) it reads
 every 10 ms through links this check turns between the real /proc, files without a final newline (MiB, a 60-byte
-name), missing files and malformed files, while knocking every 20 ms on four computers, one a helper replying to
-every knock, and must stay the same size in memory with no socket outliving its knock.
+name), missing files and malformed files, the temperatures and the disk turned with them, while knocking every 20 ms on
+four computers, one a helper replying to every knock, and must stay the same size in memory with no socket outliving
+its knock.
 
 Python, strace, Xvfb, libX11 and libXtst are test tools only; Scope links none of them. Evidence (frames, input
 history, outputs, traces, memory samples) is kept in /tmp/herbert-hosted-apps-scope-*.
@@ -76,33 +88,34 @@ from check_net import (BlackHole, ClosedPort, HIGH, Listener, LOOPBACK, MALFORME
 ROOT = Path(__file__).resolve().parents[2]
 TITLE = b'Herbert - Scope'
 
-# Colours and places from examples/scope.herb (scope_draw, scope_row, scope_others, scope_status).
+# Colours and places from examples/scope.herb (scope_draw, scope_row, scope_others, scope_status, scope_heat_draw).
 BACKGROUND, PANEL, TRACK = 1054759, 1384240, 2767956
 WHITE, AMBER, GREY = 15265527, 16173151, 11255503
-CPU_FILL, MEMORY_FILL = 6867876, 7317724
-GREEN, HEADING, DIM = 6867876, 8820395, 5793911
+CPU_FILL, MEMORY_FILL, DISK_FILL = 6867876, 7317724, 11833005
+GREEN, HEADING, DIM, RED = 6867876, 8820395, 5793911, 15680580
 HOST_AT = (28, 96)
-CPU_ROW, MEMORY_ROW = 146, 212          # a row's label; its bar is 22 below, its figure 26 below at x=464
+CPU_ROW, MEMORY_ROW, DISK_ROW = 146, 212, 300    # a row's label; its bar is 22 below, its figure 26 below at x=464
 BAR_X, BAR_LENGTH = 46, 400
-DETAIL_AT = (46, 270)
-# The other computers' section: its heading, then a panel from y=334 with a row every 34 pixels from y=348: the main
+DETAIL_AT, DISK_DETAIL_AT = (46, 270), (46, 358)
+HEAT_AT, HEAT_CELLS = (46, 388), 47              # the temperature line, scale 2, as far as the panel's edge
+# The other computers' section: its heading, then a panel from y=458 with a row every 34 pixels from y=472: the main
 # text at x=46, scale 2, the detail 19 below at scale 1, and a computer's result at x=352 (scale 2, and under it what
-# Linux said, scale 1). The panel ends at 354 + 34 * rows; the footer lines are 22 and 44 below it, and the window is
-# 74 taller than that: 428 + 34 * rows in all, one row at least (a note) and eight at most.
-OTHERS_AT = (28, 318)
-ROW_TOP, ROW_STEP, DETAIL_DY, STATUS_X = 348, 34, 19, 352
+# Linux said, scale 1). The panel ends at 478 + 34 * rows; the footer lines are 22 and 44 below it, and the window is
+# 74 taller than that: 552 + 34 * rows in all, one row at least (a note) and eight at most.
+OTHERS_AT = (28, 442)
+ROW_TOP, ROW_STEP, DETAIL_DY, STATUS_X = 472, 34, 19, 352
 
 
 def height(rows):
-    return 428 + ROW_STEP * rows
+    return 552 + ROW_STEP * rows
 
 
 def bottom(rows):
-    return 354 + ROW_STEP * rows
+    return 478 + ROW_STEP * rows
 
 
 def rows_of(frame):
-    rows, rest = divmod(frame['height'] - 428, ROW_STEP)
+    rows, rest = divmod(frame['height'] - 552, ROW_STEP)
     assert frame['width'] == 640 and rest == 0 and 1 <= rows <= 8, ('window size', frame['width'], frame['height'])
     return rows
 
@@ -378,6 +391,25 @@ def sample_checks(args, evidence, passed):
             ('test-interval-zero-with-a-list', ['--test', 'a', 'b', 'c', '0', 'list', '100', '100'],
              b'scope: usage: scope\n'),
             ('computers-two-files', ['--computers', 'a', 'b'], b'scope: usage: scope\n'),
+            ('readings-one-path', ['--readings', 'a'], b'scope: usage: scope\n'),
+            ('readings-three-paths', ['--readings', 'a', 'b', 'c'], b'scope: usage: scope\n'),
+            ('disk-figures-three-numbers', ['--disk-figures', '1', '2', '3'], b'scope: usage: scope\n'),
+            ('disk-figures-five-numbers', ['--disk-figures', '1', '2', '3', '4', '5'], b'scope: usage: scope\n'),
+            ('disk-figures-not-a-number', ['--disk-figures', '1', '2', 'x', '4'], b'scope: usage: scope\n'),
+            ('disk-figures-empty-number', ['--disk-figures', '1', '', '3', '4'], b'scope: usage: scope\n'),
+            ('disk-figures-signed', ['--disk-figures', '+1', '2', '3', '4'], b'scope: usage: scope\n'),
+            ('disk-figures-at-2^64', ['--disk-figures', '18446744073709551616', '2', '3', '4'],
+             b'scope: usage: scope\n'),
+            ('disk-figures-21-digits', ['--disk-figures', '1', '2', '3', '000000000000000000004'],
+             b'scope: usage: scope\n'),
+            ('test-hwmon-without-statfs', ['--test', 'a', 'b', 'c', '100', 'list', '100', '100', 'hwmon'],
+             b'scope: usage: scope\n'),
+            ('test-hwmon-interval-zero', ['--test', 'a', 'b', 'c', '0', 'list', '100', '100', 'hwmon', 'disk'],
+             b'scope: usage: scope\n'),
+            ('test-hwmon-knock-limit-zero', ['--test', 'a', 'b', 'c', '100', 'list', '100', '0', 'hwmon', 'disk'],
+             b'scope: usage: scope\n'),
+            ('test-hwmon-and-one-more', ['--test', 'a', 'b', 'c', '100', 'list', '100', '100', 'hwmon', 'disk', 'x'],
+             b'scope: usage: scope\n'),
             ('no-display', [], None)):
         result = subprocess.run([str(args.scope.resolve()), *extra], cwd=root, env=env, capture_output=True,
                                 timeout=30)
@@ -678,6 +710,381 @@ def reply_checks(args, evidence, passed):
            each_malformed_between='R1 before, R2 and R3 after: figures, answers, a dash, the figure')
 
 
+# Stand-ins for Linux's hwmon directory (/sys/class/hwmon): each device hwmonN a directory of files. A file's value
+# is its bytes; DIRECTORY makes a directory there, FIFO a FIFO with no writer, MISSING no file at all. A device given
+# as ('link', files) is a link to a directory elsewhere holding those files, as sysfs links hwmonN to its device.
+DIRECTORY, FIFO, MISSING = 'directory', 'fifo', 'missing'
+NVME = {'name': b'nvme\n', 'temp1_input': b'35000\n', 'temp1_max': b'83850\n', 'temp1_crit': b'87850\n'}
+K10 = {'name': b'k10temp\n', 'temp1_input': b'39000\n'}
+CORE = {'name': b'coretemp\n', 'temp1_input': b'41000\n'}
+
+
+def device(name, milli=50000):
+    return {'name': name + b'\n', 'temp1_input': b'%d\n' % milli}
+
+
+def drive(reading, **files):
+    """The nvme drive with temp1_input reading, and files (its limits, say) replaced."""
+    return dict(NVME, temp1_input=reading, **files)
+
+
+def hwmon_tree(root, devices):
+    root.mkdir(parents=True)
+    for n, files in devices.items():
+        directory = root / f'hwmon{n}'
+        if isinstance(files, tuple):
+            directory = root.parent / (root.name + '-devices') / f'device{n}'
+            directory.mkdir(parents=True)
+            os.symlink(directory, root / f'hwmon{n}')
+            files = files[1]
+        else:
+            directory.mkdir()
+        for name, data in files.items():
+            if data == DIRECTORY:
+                (directory / name).mkdir()
+            elif data == FIFO:
+                os.mkfifo(directory / name)
+            elif data != MISSING:
+                (directory / name).write_bytes(data)
+    return root
+
+
+THIS_MACHINE = {0: device(b'acpitz', 27800), 1: drive(b'33850\n', temp2_input=b'31850\n', temp2_max=b'65261850\n'),
+                2: dict(K10, temp1_input=b'37375\n'), 3: device(b'mt7921_phy0', 45000), 4: device(b'amdgpu', 40000)}
+# Every case's answer starts from this one (the files of THIS_MACHINE's numbers aside) and changes what it names.
+# Each was worked out by hand from the rules in examples/scope.md: hwmon0 to hwmon63 are looked at, a number without
+# a readable name skipped; the drive is the first nvme, the processor the first k10temp, else the first coretemp; a
+# limit missing, not plain decimal, 0 or above 200000 is none; a reading is plain decimal (one newline after it at
+# most) or n/a, shown in whole degrees, a half rounding up; the drive is green, amber from 10 degrees under its
+# warning limit (temp1_max), red from that limit, grey for n/a. No disk is asked about here (the path is missing).
+HEAT_ANSWER = {'drive-sensor': 'hwmon1 83850 87850', 'processor-sensor': 'hwmon2 k10temp',
+               'temperatures': 'DRIVE 34 C  PROCESSOR 37 C', 'drive-colour': 'green'}
+NO_DRIVE = {'drive-sensor': 'none', 'drive-colour': 'none'}
+NO_PROCESSOR = {'processor-sensor': 'none'}
+NOTHING = {**NO_DRIVE, **NO_PROCESSOR, 'temperatures': ''}
+ACPI = device(b'acpitz', 27800)
+HEAT_CASES = [
+    ('this-machine', THIS_MACHINE, {}),
+    ('nvme-at-hwmon63', {0: ACPI, 63: NVME},
+     {'drive-sensor': 'hwmon63 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 35 C'}),
+    ('nvme-at-hwmon64-is-past-the-last', {64: NVME, 0: K10},
+     {**NO_DRIVE, 'processor-sensor': 'hwmon0 k10temp', 'temperatures': 'PROCESSOR 39 C'}),
+    ('gaps-in-the-numbering', {0: ACPI, 3: K10, 7: NVME},
+     {'drive-sensor': 'hwmon7 83850 87850', 'processor-sensor': 'hwmon3 k10temp',
+      'temperatures': 'DRIVE 35 C  PROCESSOR 39 C'}),
+    ('no-hwmon0', {2: NVME}, {'drive-sensor': 'hwmon2 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 35 C'}),
+    ('k10temp-after-a-coretemp', {1: CORE, 4: K10},
+     {**NO_DRIVE, 'processor-sensor': 'hwmon4 k10temp', 'temperatures': 'PROCESSOR 39 C'}),
+    ('coretemp-without-k10temp', {0: ACPI, 2: CORE},
+     {**NO_DRIVE, 'processor-sensor': 'hwmon2 coretemp', 'temperatures': 'PROCESSOR 41 C'}),
+    ('first-of-two-drives', {1: drive(b'40000\n'), 2: drive(b'50000\n', temp1_max=b'45000\n')},
+     {'drive-sensor': 'hwmon1 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 40 C'}),
+    ('first-of-two-coretemps', {1: CORE, 5: dict(CORE, temp1_input=b'42000\n')},
+     {**NO_DRIVE, 'processor-sensor': 'hwmon1 coretemp', 'temperatures': 'PROCESSOR 41 C'}),
+    ('first-of-two-k10temps', {3: K10, 4: dict(K10, temp1_input=b'60000\n'), 1: CORE},
+     {**NO_DRIVE, 'processor-sensor': 'hwmon3 k10temp', 'temperatures': 'PROCESSOR 39 C'}),
+    ('neither-present', {0: ACPI, 1: device(b'amdgpu')}, NOTHING),
+    ('no-devices', {}, NOTHING),
+    ('names-without-newline', {0: dict(NVME, name=b'nvme'), 1: dict(K10, name=b'k10temp')},
+     {'drive-sensor': 'hwmon0 83850 87850', 'processor-sensor': 'hwmon1 k10temp',
+      'temperatures': 'DRIVE 35 C  PROCESSOR 39 C'}),
+    ('look-alike-names', {0: dict(NVME, name=b'nvme0\n'), 1: dict(NVME, name=b'NVME\n'), 2: dict(NVME, name=b' nvme\n'),
+                          3: dict(NVME, name=b'nvme \n'), 4: dict(NVME, name=b'nvme\n\n'), 5: dict(NVME, name=b'nvm\n'),
+                          6: dict(NVME, name=b'nvme\r\n'), 7: dict(K10, name=b'k10temp2\n'),
+                          8: dict(CORE, name=b'Coretemp\n'), 9: dict(CORE, name=b'core\0temp\n')}, NOTHING),
+    ('a-name-of-32-bytes', {0: dict(NVME, name=b'nvme' + b'\n' * 28), 1: dict(K10, name=b'k10temp' + b' ' * 25)},
+     NOTHING),
+    ('no-name-file-or-a-directory', {0: {'temp1_input': b'35000\n'}, 1: dict(NVME, name=DIRECTORY), 2: K10},
+     {**NO_DRIVE, 'processor-sensor': 'hwmon2 k10temp', 'temperatures': 'PROCESSOR 39 C'}),
+    ('devices-behind-links', {0: ('link', NVME), 1: ('link', K10)},
+     {'drive-sensor': 'hwmon0 83850 87850', 'processor-sensor': 'hwmon1 k10temp',
+      'temperatures': 'DRIVE 35 C  PROCESSOR 39 C'}),
+    ('a-name-that-is-a-fifo', {0: dict(NVME, name=FIFO), 1: NVME},
+     {'drive-sensor': 'hwmon1 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 35 C'}),
+    # The limits, read once: the colour of a drive at 90 C shows whether there is a warning limit.
+    ('limits-missing', {0: drive(b'90000\n', temp1_max=MISSING, temp1_crit=MISSING)},
+     {'drive-sensor': 'hwmon0 none none', **NO_PROCESSOR, 'temperatures': 'DRIVE 90 C'}),
+    ('limits-zero', {0: drive(b'90000\n', temp1_max=b'0\n', temp1_crit=b'0\n')},
+     {'drive-sensor': 'hwmon0 none none', **NO_PROCESSOR, 'temperatures': 'DRIVE 90 C'}),
+    ('limits-absurd', {0: drive(b'90000\n', temp1_max=b'65261850\n', temp1_crit=b'200001\n')},
+     {'drive-sensor': 'hwmon0 none none', **NO_PROCESSOR, 'temperatures': 'DRIVE 90 C'}),
+    ('limits-at-200-degrees', {0: drive(b'190000\n', temp1_max=b'200000\n', temp1_crit=b'200000\n')},
+     {'drive-sensor': 'hwmon0 200000 200000', **NO_PROCESSOR, 'temperatures': 'DRIVE 190 C', 'drive-colour': 'amber'}),
+    ('limits-malformed', {0: drive(b'90000\n', temp1_max=b'-5000\n', temp1_crit=b'87850 \n')},
+     {'drive-sensor': 'hwmon0 none none', **NO_PROCESSOR, 'temperatures': 'DRIVE 90 C'}),
+    ('limits-a-directory-and-a-fifo', {0: drive(b'90000\n', temp1_max=DIRECTORY, temp1_crit=FIFO)},
+     {'drive-sensor': 'hwmon0 none none', **NO_PROCESSOR, 'temperatures': 'DRIVE 90 C'}),
+    ('limits-without-newline', {0: drive(b'90000\n', temp1_max=b'83850', temp1_crit=b'87850')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 90 C', 'drive-colour': 'red'}),
+    ('warning-only', {0: drive(b'90000\n', temp1_crit=MISSING)},
+     {'drive-sensor': 'hwmon0 83850 none', **NO_PROCESSOR, 'temperatures': 'DRIVE 90 C', 'drive-colour': 'red'}),
+    ('critical-only', {0: drive(b'90000\n', temp1_max=MISSING)},
+     {'drive-sensor': 'hwmon0 none 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 90 C'}),
+    ('warning-of-5-degrees', {0: drive(b'0\n', temp1_max=b'5000\n')},
+     {'drive-sensor': 'hwmon0 5000 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 0 C', 'drive-colour': 'amber'}),
+    ('warning-of-10-degrees', {0: drive(b'0\n', temp1_max=b'10000\n')},
+     {'drive-sensor': 'hwmon0 10000 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 0 C', 'drive-colour': 'amber'}),
+    ('warning-just-over-10-degrees', {0: drive(b'0\n', temp1_max=b'10001\n')},
+     {'drive-sensor': 'hwmon0 10001 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 0 C'}),
+    ('warning-just-over-10-degrees-at-1', {0: drive(b'1\n', temp1_max=b'10001\n')},
+     {'drive-sensor': 'hwmon0 10001 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 0 C', 'drive-colour': 'amber'}),
+    # The colour's edges, with this drive's warning limit of 83850.
+    ('just-under-the-amber-band', {0: drive(b'73849\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 74 C'}),
+    ('the-amber-band-starts', {0: drive(b'73850\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 74 C', 'drive-colour': 'amber'}),
+    ('just-under-the-warning', {0: drive(b'83849\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 84 C', 'drive-colour': 'amber'}),
+    ('at-the-warning', {0: drive(b'83850\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 84 C', 'drive-colour': 'red'}),
+    ('past-the-critical-limit', {0: drive(b'95000\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 95 C', 'drive-colour': 'red'}),
+    # Rounding to whole degrees, and readings that are not plain decimal.
+    ('34499-is-34', {0: drive(b'34499\n'), 1: dict(K10, temp1_input=b'41499\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', 'processor-sensor': 'hwmon1 k10temp',
+      'temperatures': 'DRIVE 34 C  PROCESSOR 41 C'}),
+    ('34500-is-35', {0: drive(b'34500\n'), 1: dict(K10, temp1_input=b'41500\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', 'processor-sensor': 'hwmon1 k10temp',
+      'temperatures': 'DRIVE 35 C  PROCESSOR 42 C'}),
+    ('499-is-0-and-500-is-1', {0: drive(b'499\n'), 1: dict(K10, temp1_input=b'500\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', 'processor-sensor': 'hwmon1 k10temp',
+      'temperatures': 'DRIVE 0 C  PROCESSOR 1 C'}),
+    ('reading-without-newline', {0: drive(b'35000'), 1: dict(K10, temp1_input=b'39000')},
+     {'drive-sensor': 'hwmon0 83850 87850', 'processor-sensor': 'hwmon1 k10temp',
+      'temperatures': 'DRIVE 35 C  PROCESSOR 39 C'}),
+    ('reading-of-31-bytes', {0: drive(b'0' * 25 + b'35000\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 35 C'}),
+    ('reading-of-32-bytes', {0: drive(b'0' * 26 + b'35000\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE n/a', 'drive-colour': 'grey'}),
+    ('largest-reading', {0: drive(b'18446744073709551615\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE 18446744073709552 C',
+      'drive-colour': 'red'}),
+    ('processor-n/a', {0: NVME, 1: dict(K10, temp1_input=b'abc\n')},
+     {'drive-sensor': 'hwmon0 83850 87850', 'processor-sensor': 'hwmon1 k10temp',
+      'temperatures': 'DRIVE 35 C  PROCESSOR n/a'}),
+    ('both-missing', {0: drive(MISSING), 1: {'name': b'coretemp\n'}},
+     {'drive-sensor': 'hwmon0 83850 87850', 'processor-sensor': 'hwmon1 coretemp',
+      'temperatures': 'DRIVE n/a  PROCESSOR n/a', 'drive-colour': 'grey'}),
+]
+# A drive whose reading is not plain decimal (or not there) shows n/a, in grey: one case each.
+NOT_PLAIN = [('negative', b'-5000\n'), ('minus-zero', b'-0\n'), ('plus-sign', b'+35000\n'), ('a-letter', b'35000x\n'),
+             ('decimal-point', b'35.5\n'), ('hexadecimal', b'0x10\n'), ('empty', b''), ('newline-alone', b'\n'),
+             ('space-before', b' 35000\n'), ('space-after', b'35000 \n'), ('two-newlines', b'35000\n\n'),
+             ('crlf', b'35000\r\n'), ('nul-byte', b'35000\0\n'), ('at-2^64', b'18446744073709551616\n'),
+             ('21-digits', b'100000000000000000000\n'), ('a-directory', DIRECTORY), ('a-fifo', FIFO)]
+HEAT_CASES += [(f'reading-{name}', {0: drive(data)},
+                {'drive-sensor': 'hwmon0 83850 87850', **NO_PROCESSOR, 'temperatures': 'DRIVE n/a',
+                 'drive-colour': 'grey'}) for name, data in NOT_PLAIN]
+HEAT_ORDER = ('drive-sensor', 'processor-sensor', 'statfs', 'disk', 'disk-bar', 'disk-detail', 'temperatures',
+              'drive-colour')
+NO_DISK = {'statfs': 'unavailable', 'disk': 'unavailable', 'disk-bar': '0', 'disk-detail': ''}
+
+
+def readings_run(args, directory, label, hwmon, path, env):
+    """scope --readings HWMON PATH: ({name: value}, the lines in order, seconds)."""
+    started = time.monotonic()
+    result = subprocess.run([str(args.scope.resolve()), '--readings', str(hwmon), str(path)], cwd=directory, env=env,
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+    seconds = time.monotonic() - started
+    (directory / (label + '.stdout')).write_bytes(result.stdout)
+    assert (result.returncode, result.stderr) == (0, b''), (label, result.returncode, result.stderr)
+    lines = result.stdout.decode().splitlines()
+    assert [line.split('=', 1)[0] for line in lines] == list(HEAT_ORDER), (label, lines)
+    return dict(line.split('=', 1) for line in lines), lines, seconds
+
+
+def heat_checks(args, evidence, passed):
+    """scope --readings on hwmon trees this check writes, every line against an answer written by hand."""
+    root = evidence / 'heat'
+    root.mkdir()
+    env = {k: v for k, v in os.environ.items() if k not in ('DISPLAY', 'HOME')}
+    env['HOME'] = str(empty_home(evidence, 'heat'))
+    names, slowest = set(), (0, '')
+    for name, devices, changes in HEAT_CASES:
+        assert name not in names, name
+        names.add(name)
+        directory = root / name.replace('/', '-')
+        directory.mkdir()
+        tree = hwmon_tree(directory / 'hwmon', devices)
+        _, lines, seconds = readings_run(args, directory, 'readings', tree, directory / 'no-disk-here', env)
+        answer = dict(HEAT_ANSWER, **NO_DISK, **changes)
+        assert lines == [f'{key}={answer[key]}' for key in HEAT_ORDER], (name, lines, answer)
+        slowest = max(slowest, (round(seconds, 3), name))
+    # The FIFOs have no writer: opened as a plain open would, they would hold Scope for ever.
+    assert slowest[0] < 2, ('reading the sensors stalled', slowest)
+    _, lines, _ = readings_run(args, root, 'missing-root', root / 'no-hwmon-here', root / 'no-disk-here', env)
+    answer = dict(HEAT_ANSWER, **NO_DISK, **NOTHING)
+    assert lines == [f'{key}={answer[key]}' for key in HEAT_ORDER], lines
+    passed('scope-finds-and-reads-temperatures', trees=len(HEAT_CASES) + 1, slowest_s=slowest[0],
+           not_plain=[name for name, _ in NOT_PLAIN])
+    # This computer's own /sys/class/hwmon, against the search worked out here: the numbers and the limits must agree
+    # exactly; the readings move, so only their form is checked. A computer without these sensors (a CI machine, say)
+    # must find none.
+    real = Path('/sys/class/hwmon')
+    found_drive, found_processor = hwmon_search(real)
+    got, _, _ = readings_run(args, root, 'this-computer', real, root / 'no-disk-here', env)
+    want = {'drive-sensor': 'none', 'processor-sensor': 'none'}
+    form = []
+    if found_drive:
+        want['drive-sensor'] = (f'hwmon{found_drive[0]} {real_limit(real, found_drive[0], "temp1_max")} '
+                                f'{real_limit(real, found_drive[0], "temp1_crit")}')
+        form.append(r'DRIVE (\d+ C|n/a)')
+    if found_processor:
+        want['processor-sensor'] = f'hwmon{found_processor[0]} {found_processor[1]}'
+        form.append(r'PROCESSOR (\d+ C|n/a)')
+    assert {key: got[key] for key in want} == want, (got, want)
+    assert re.fullmatch('  '.join(form), got['temperatures']), (got['temperatures'], form)
+    if not found_drive:
+        colours = {'none'}
+    elif got['temperatures'].startswith('DRIVE n/a'):
+        colours = {'grey'}
+    else:
+        colours = {'green', 'amber', 'red'}
+    assert got['drive-colour'] in colours, (got['drive-colour'], colours)
+    passed('scope-finds-this-computers-temperatures', drive=got['drive-sensor'], processor=got['processor-sensor'],
+           temperatures=got['temperatures'], colour=got['drive-colour'])
+
+
+def hwmon_search(root):
+    """The drive's and the processor's hwmon numbers and kinds under root, as examples/scope.md says Scope finds them
+    (worked out here, not by Scope): (drive, processor), each (n, kind) or None."""
+    found = {}
+    for n in range(64):
+        try:
+            name = (Path(root) / f'hwmon{n}' / 'name').read_bytes()
+        except OSError:
+            continue
+        if len(name) >= 32:
+            continue
+        name = name[:-1] if name.endswith(b'\n') else name
+        for kind in (b'nvme', b'k10temp', b'coretemp'):
+            if name == kind:
+                found.setdefault(kind, n)
+    processor = (found[b'k10temp'], 'k10temp') if b'k10temp' in found else (
+        (found[b'coretemp'], 'coretemp') if b'coretemp' in found else None)
+    return ((found[b'nvme'], 'nvme') if b'nvme' in found else None), processor
+
+
+def real_limit(root, n, name):
+    """A limit file under the real hwmon directory as Scope reads it: its value, or 'none'."""
+    try:
+        data = (Path(root) / f'hwmon{n}' / name).read_bytes()
+    except OSError:
+        return 'none'
+    data = data[:-1] if data.endswith(b'\n') else data
+    if not data or len(data) > 20 or not data.isdigit() or not 0 < int(data) <= 200000:
+        return 'none'
+    return str(int(data))
+
+
+def disk_expected(blocks, bfree, bavail, frsize):
+    """What the disk row shows for statfs's figures, worked out here with Python's own unbounded numbers as
+    examples/scope.md says: (text, bar length, the line under it)."""
+    unavailable = ('unavailable', 0, '')
+    if blocks == 0 or frsize == 0:
+        return unavailable
+    used = blocks - bfree if bfree < blocks else 0
+    size, free = blocks * frsize // 1024, bavail * frsize // 1024
+    if used + bavail >= 2**64 or size >= 2**64 or free >= 2**64:
+        return unavailable
+    if used + bavail == 0:
+        percent = 100
+    else:
+        quotient, rest = divmod(100 * used, used + bavail)
+        percent = quotient + (2 * rest >= used + bavail)
+    unit, name = (1048576, 'GiB') if size >= 1048576 else (1024, 'MiB')
+    def amount(kib):
+        whole, part = divmod(kib, unit)
+        tenths = whole * 10 + (part * 10 + unit // 2) // unit
+        return f'{tenths // 10}.{tenths % 10} {name}'
+    return f'{percent}%', 4 * percent, f'{amount(free)} free of {amount(size)}'
+
+
+# scope --disk-figures BLOCKS BFREE BAVAIL FRSIZE: (name, the four numbers, the row's three lines), each answer worked
+# out by hand. In use is BLOCKS less BFREE (none if more is free), free is BAVAIL, the percent in use over in use and
+# free, a half rounding up, 100 % with neither; amounts in KiB, rounded down, then to the nearest tenth of a GiB (of a
+# MiB under 1 GiB); no blocks, blocks of no bytes, or figures past 64 bits in KiB are unavailable.
+DISK_CASES = [
+    ('this-machine', (245573239, 120819101, 108326237, 4096), ('54%', 216, '413.2 GiB free of 936.8 GiB')),
+    ('empty', (1000000, 1000000, 1000000, 4096), ('0%', 0, '3.8 GiB free of 3.8 GiB')),
+    ('full', (1000, 0, 0, 4096), ('100%', 400, '0.0 MiB free of 3.9 MiB')),
+    ('all-kept-back-is-full', (1000, 1000, 0, 4096), ('100%', 400, '0.0 MiB free of 3.9 MiB')),
+    ('kept-back-counts-as-neither', (1000, 300, 250, 4096), ('74%', 296, '1.0 MiB free of 3.9 MiB')),
+    ('more-free-than-blocks', (1000, 2000, 500, 4096), ('0%', 0, '2.0 MiB free of 3.9 MiB')),
+    ('half-a-percent-rounds-up', (200, 199, 199, 1024), ('1%', 4, '0.2 MiB free of 0.2 MiB')),
+    ('just-under-half-a-percent', (201, 200, 200, 1024), ('0%', 0, '0.2 MiB free of 0.2 MiB')),
+    ('exactly-1-GiB', (262144, 131072, 131072, 4096), ('50%', 200, '0.5 GiB free of 1.0 GiB')),
+    ('1-KiB-under-1-GiB', (1048575, 0, 0, 1024), ('100%', 400, '0.0 MiB free of 1024.0 MiB')),
+    ('tenths-carry', (10433332, 1, 1, 1024), ('100%', 400, '0.0 GiB free of 10.0 GiB')),
+    ('blocks-of-512-bytes', (4194304, 2097152, 2097152, 512), ('50%', 200, '1.0 GiB free of 2.0 GiB')),
+    ('blocks-of-1536-bytes', (1048576, 524288, 524288, 1536), ('50%', 200, '0.8 GiB free of 1.5 GiB')),
+    ('blocks-of-1000-bytes', (1048576, 524288, 524288, 1000), ('50%', 200, '500.0 MiB free of 1000.0 MiB')),
+    ('one-byte-blocks', (1073741824, 0, 536870912, 1), ('67%', 268, '0.5 GiB free of 1.0 GiB')),
+    ('largest-size', (TOP, 0, 0, 1024), ('100%', 400, '0.0 GiB free of 17592186044416.0 GiB')),
+    ('largest-size-in-2048-byte-blocks', (2**63 - 1, 2**63 - 1, 0, 2048),
+     ('100%', 400, '0.0 GiB free of 17592186044416.0 GiB')),
+    ('size-past-2^64-KiB', (2**63, 2**63, 0, 2048), ('unavailable', 0, '')),
+    ('size-past-2^64-KiB-in-the-odd-bytes', (TOP, 0, 0, 1536), ('unavailable', 0, '')),
+    ('free-past-2^64-KiB', (1, 1, TOP, 2048), ('unavailable', 0, '')),
+    ('in-use-and-free-past-2^64', (TOP, 0, 1, 1), ('unavailable', 0, '')),
+    ('no-blocks', (0, 0, 0, 4096), ('unavailable', 0, '')),
+    ('blocks-of-no-bytes', (1000, 500, 500, 0), ('unavailable', 0, '')),
+]
+for _name, _numbers, _answer in DISK_CASES:
+    assert disk_expected(*_numbers) == _answer, ('the model disagrees with a hand-written answer', _name)
+
+
+def disk_lines(answer):
+    return [f'disk={answer[0]}', f'disk-bar={answer[1]}', f'disk-detail={answer[2]}']
+
+
+def disk_checks(args, evidence, passed):
+    """scope --disk-figures against hand-written answers; then scope --readings on real paths against os.statvfs of
+    the same path read just before and just after."""
+    root = evidence / 'disk'
+    root.mkdir()
+    env = {k: v for k, v in os.environ.items() if k not in ('DISPLAY', 'HOME')}
+    env['HOME'] = str(empty_home(evidence, 'disk'))
+    for name, numbers, answer in DISK_CASES:
+        result = subprocess.run([str(args.scope.resolve()), '--disk-figures', *map(str, numbers)], cwd=root, env=env,
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+        (root / (name + '.stdout')).write_bytes(result.stdout)
+        assert (result.returncode, result.stderr) == (0, b''), (name, result.returncode, result.stderr)
+        assert result.stdout.decode().splitlines() == disk_lines(answer), (name, result.stdout, answer)
+    passed('scope-disk-arithmetic', cases=len(DISK_CASES))
+    # Real paths: this computer's root, the evidence folder, a file in it, a link to /, /proc and /sys (statfs answers
+    # with no blocks: unavailable), a path that is not there and one too long for Linux (statfs refuses: unavailable).
+    hwmon = root / 'no-hwmon'
+    os.symlink('/', root / 'link-to-root')
+    (root / 'a-file').write_bytes(b'x')
+    paths = {'root': '/', 'evidence': str(root), 'a-file': str(root / 'a-file'),
+             'link-to-root': str(root / 'link-to-root'), 'proc': '/proc', 'sys': '/sys',
+             'missing': str(root / 'not-here'), 'too-long': '/' + 'x/' * 3000}
+    seen = {}
+    for name, path in paths.items():
+        before = os.statvfs(path) if name not in ('missing', 'too-long') else None
+        got, _, _ = readings_run(args, root, 'readings-' + name, hwmon, path, env)
+        after = os.statvfs(path) if before else None
+        if before is None:
+            assert {k: got[k] for k in NO_DISK} == NO_DISK, (name, got)
+            seen[name] = got['statfs']
+            continue
+        figures = [int(n) for n in got['statfs'].split(' ')]
+        assert len(figures) == 4, (name, got['statfs'])
+        blocks, bfree, bavail, frsize = figures
+        assert blocks == before.f_blocks == after.f_blocks and frsize == before.f_frsize == after.f_frsize, (
+            name, figures, before, after)
+        for got_free, field in ((bfree, 'f_bfree'), (bavail, 'f_bavail')):
+            around = (getattr(before, field), getattr(after, field))
+            assert min(around) <= got_free <= max(around), (name, field, figures, before, after)
+        expected = disk_expected(*figures)
+        assert [f'disk={got["disk"]}', f'disk-bar={got["disk-bar"]}',
+                f'disk-detail={got["disk-detail"]}'] == disk_lines(expected), (name, got, expected)
+        seen[name] = f'{got["disk"]} {got["disk-detail"]}'.strip()
+    assert seen['proc'] == seen['sys'] == 'unavailable', seen
+    passed('scope-disk-matches-statvfs', paths=seen)
+
+
 class FakeHelper:
     """A stand-in for scope-helper, made by this check on 127.x: it takes every connection and plays part(n) for the
     n-th (from 0). bytes: it sends them, then ends its side of the connection, as the helper does; ('hold', bytes): it
@@ -852,6 +1259,18 @@ def bar(frame, row, fill):
     return filled
 
 
+def heat_line(frame):
+    """The temperature line read back: each part, the drive's and then the processor's, as (text, inks). The whole
+    line is read first; each part (they are two spaces apart) is then read again on its own cells, so each part's ink
+    is its own. No part at all reads as ()."""
+    text, _ = read_text(frame, *HEAT_AT, HEAT_CELLS, PANEL, 2)
+    parts, at = [], 0
+    for part in text.split('  ') if text else []:
+        parts.append(read_text(frame, HEAT_AT[0] + at * 12, HEAT_AT[1], len(part), PANEL, 2))
+        at += len(part) + 2
+    return tuple(parts)
+
+
 def shown(frame):
     """Everything Scope writes, read back from one frame."""
     host = read_text(frame, *HOST_AT, 48, BACKGROUND, 2)
@@ -864,7 +1283,12 @@ def shown(frame):
             'memory': read_text(frame, 464, MEMORY_ROW + 26, 11, PANEL, 2),
             'memory-bar': bar(frame, MEMORY_ROW, MEMORY_FILL),
             'detail': read_text(frame, *DETAIL_AT, 64, PANEL),
+            'disk': read_text(frame, 464, DISK_ROW + 26, 11, PANEL, 2),
+            'disk-bar': bar(frame, DISK_ROW, DISK_FILL),
+            'disk-detail': read_text(frame, *DISK_DETAIL_AT, 64, PANEL),
+            'heat': heat_line(frame),
             'labels': (read_text(frame, BAR_X, CPU_ROW, 9, PANEL, 2), read_text(frame, BAR_X, MEMORY_ROW, 6, PANEL, 2),
+                       read_text(frame, BAR_X, DISK_ROW, 4, PANEL, 2),
                        read_text(frame, 28, footer + 22, 17, BACKGROUND)),
             'others': section(frame),
             'furniture': (read_text(frame, *OTHERS_AT, 15, BACKGROUND), read_text(frame, 28, footer + 44, 15, BACKGROUND))}
@@ -951,8 +1375,10 @@ def memory_expected(total, available):
 
 LIGHT_AT, LIGHT_BOX = (604, 44), (596, 36, 16, 16)    # the light's middle, and a box round it (scope_draw)
 LIGHT_DIM, LIGHT_BRIGHT = 3832176, 6867876
-LABELS = (('PROCESSOR', {WHITE}), ('MEMORY', {WHITE}), ('ESC OR Q TO CLOSE', {GREY}))
+LABELS = (('PROCESSOR', {WHITE}), ('MEMORY', {WHITE}), ('DISK', {WHITE}), ('ESC OR Q TO CLOSE', {GREY}))
 TYPICAL_SHOWN = {'memory': ('75%', {WHITE}), 'memory-bar': 300, 'detail': ('11.7 GiB of 15.6 GiB in use', {GREY})}
+# A --test window that names no disk and no hwmon directory: a disk statfs refuses, and no temperatures.
+NO_DISK_SHOWN = {'disk': ('unavailable', {AMBER}), 'disk-bar': 0, 'disk-detail': ('', set()), 'heat': ()}
 
 
 def light(frame):
@@ -1015,6 +1441,28 @@ def memory_at_a_reading(app, evidence, attempts=6):
     raise AssertionError(('memory figures never matched /proc/meminfo at a reading', tries))
 
 
+def disk_at_a_reading(app, path, interval, attempts=8):
+    """The disk row against os.statvfs(path) when Scope asked statfs: statvfs is read, then, after three of the
+    window's intervals (interval seconds), a frame is taken, then statvfs again. When the two agree, the frame's
+    reading was taken between them, so the row must show exactly what they give (the free space moving and moving
+    back between them aside); otherwise, or if the frame is late, it is tried again, up to attempts times."""
+    tries = []
+    for _ in range(attempts):
+        before = os.statvfs(path)
+        time.sleep(3 * interval)
+        reading = shown(app.frame())
+        after = os.statvfs(path)
+        figures = (before.f_blocks, before.f_bfree, before.f_bavail, before.f_frsize)
+        text, width, detail = disk_expected(*figures)
+        want = ((text, {WHITE}), width, (detail, {GREY}))
+        got = (reading['disk'], reading['disk-bar'], reading['disk-detail'])
+        tries.append({'statvfs': [figures, (after.f_blocks, after.f_bfree, after.f_bavail, after.f_frsize)],
+                      'shown': got, 'expected': want})
+        if figures == (after.f_blocks, after.f_bfree, after.f_bavail, after.f_frsize) and got == want:
+            return reading, len(tries)
+    raise AssertionError(('the disk row never matched os.statvfs at a reading', path, tries))
+
+
 def write_list(home, text):
     """A list of other computers at home/.config/herbert/computers.txt."""
     (home / '.config/herbert').mkdir(parents=True)
@@ -1051,6 +1499,18 @@ def real_checks(args, x, display, evidence, passed):
         app.frame('figures')
         passed('scope-shows-this-machine', name_matches_proc=True, processor=cpu, memory=memory['memory'][0],
                detail=memory['detail'][0], readings_tried=tries)
+        # The disk Scope runs from (/) and this computer's own temperatures: the parts the search worked out here
+        # finds, each a reading or n/a, the drive in one of its shades and the processor in white or grey.
+        disk, disk_tries = disk_at_a_reading(app, '/', 1)
+        found_drive, found_processor = hwmon_search('/sys/class/hwmon')
+        heat = shown(app.frame())['heat']
+        expected = ([(r'DRIVE (\d+ C|n/a)', {GREEN}, {AMBER}, {RED}, {GREY})] if found_drive else []) + (
+            [(r'PROCESSOR (\d+ C|n/a)', {WHITE}, {GREY})] if found_processor else [])
+        assert len(heat) == len(expected) and all(
+            re.fullmatch(form, text) and inks in shades for (text, inks), (form, *shades) in zip(heat, expected)), (
+            heat, expected)
+        passed('scope-shows-this-machines-disk-and-temperatures', disk=disk['disk'][0], detail=disk['disk-detail'][0],
+               readings_tried=disk_tries, temperatures=[text for text, _ in heat])
         app.tap('Escape')
         app.finish()
         passed('scope-escape-quits')
@@ -1127,7 +1587,7 @@ def files_checks(args, x, display, evidence, passed):
     try:
         show_until(app, {'host': ('test-host', {WHITE}), 'processor': ('-', {GREY}), 'processor-bar': 0,
                          'labels': LABELS, 'furniture': FURNITURE, 'others': [text_row(*NONE_LISTED)],
-                         **TYPICAL_SHOWN}, 'first sample only: a dash')
+                         **TYPICAL_SHOWN, **NO_DISK_SHOWN}, 'first sample only: a dash')
         app.frame('dash')
         steps = [(STAT_ONE_2, '40%', 160),
                  (stat_line(2300, 0, 600, 8550, 550, 0, 0, 0, 0, 0), '100%', 400),
@@ -1671,11 +2131,107 @@ def helper_checks(args, x, display, evidence, passed):
            processor_starts_again=['after a refusal', 'after a knock with no reply'])
 
 
+def heat_window_checks(args, x, display, evidence, passed):
+    # The disk row and the temperature line, read back from the window's pixels. The temperatures come from a
+    # stand-in hwmon directory this check writes and changes while the window runs; the disk is the one holding a
+    # link this check turns between /, nothing and /proc.
+    stat, mem, host = fixed_files(evidence, 'heat-files')
+    tree = hwmon_tree(evidence / 'heat-hwmon', {0: ACPI, 2: dict(NVME), 5: dict(K10)})
+    reading, processor = tree / 'hwmon2' / 'temp1_input', tree / 'hwmon5' / 'temp1_input'
+    disk = evidence / 'heat-disk'
+    os.symlink('/', disk)
+    computers = evidence / 'heat-files' / 'computers.txt'
+    computers.write_text('')
+    app = Scope(args.scope, ['--test', stat, mem, host, '100', str(computers), '5000', '2000', str(tree), str(disk)],
+                x, display, evidence, 'scope-heat', empty_home(evidence, 'heat-window'))
+    cpu39 = ('PROCESSOR 39 C', {WHITE})
+    try:
+        show_until(app, {'host': ('test-host', {WHITE}), 'heat': (('DRIVE 35 C', {GREEN}), cpu39), 'labels': LABELS,
+                         'furniture': FURNITURE, 'others': [text_row(*NONE_LISTED)], **TYPICAL_SHOWN},
+                   'drive and processor temperatures')
+        app.frame('heat')
+        shown_disk, tries = disk_at_a_reading(app, '/', .1)
+        passed('scope-draws-the-disk-row', disk=shown_disk['disk'][0], detail=shown_disk['disk-detail'][0],
+               bar=shown_disk['disk-bar'], readings_tried=tries)
+        # The drive's colour at each edge of its bands, with its warning limit of 83850 (83.85 C).
+        steps = [(73849, 'DRIVE 74 C', 'green'), (73850, 'DRIVE 74 C', 'amber'), (83849, 'DRIVE 84 C', 'amber'),
+                 (83850, 'DRIVE 84 C', 'red'), (90000, 'DRIVE 90 C', 'red'), (35000, 'DRIVE 35 C', 'green')]
+        for milli, text, shade in steps:
+            put(reading, b'%d\n' % milli)
+            show_until(app, {'heat': ((text, {{'green': GREEN, 'amber': AMBER, 'red': RED}[shade]}), cpu39)},
+                       f'drive at {milli}')
+            app.frame(f'drive-{milli}')
+        passed('scope-colours-the-drive-by-its-warning-limit', steps=[f'{m}: {t} {n}' for m, t, n in steps])
+        # The search and the limits are read at startup only: a lower warning limit, and names that are no longer
+        # nvme and k10temp, change nothing while the window runs.
+        put(tree / 'hwmon2' / 'temp1_max', b'40000\n')
+        put(tree / 'hwmon2' / 'name', b'acpitz\n')
+        put(tree / 'hwmon5' / 'name', b'coretemp\n')
+        put(reading, b'50000\n')
+        show_until(app, {'heat': (('DRIVE 50 C', {GREEN}), cpu39)}, 'drive at 50000, its limit as at startup')
+        time.sleep(.5)
+        assert shown(app.frame())['heat'] == (('DRIVE 50 C', {GREEN}), cpu39), shown(app.frame())['heat']
+        put(processor, b'41500\n')
+        show_until(app, {'heat': (('DRIVE 50 C', {GREEN}), ('PROCESSOR 42 C', {WHITE}))}, 'processor at 41500')
+        passed('scope-finds-its-sensors-at-startup-only', changed_while_running=['temp1_max 40000', 'names'])
+        # n/a, in grey, for a negative reading, one that is not a number and one that is not there, each straight
+        # after readings shown, so a figure kept from before cannot pass for n/a; then back.
+        put(reading, b'-5000\n')
+        put(processor, b'abc\n')
+        show_until(app, {'heat': (('DRIVE n/a', {GREY}), ('PROCESSOR n/a', {GREY}))}, 'negative and malformed: n/a')
+        app.frame('n-a')
+        put(reading, b'35000\n')
+        put(processor, b'39000\n')
+        show_until(app, {'heat': (('DRIVE 35 C', {GREEN}), cpu39)}, 'readings back before missing')
+        reading.unlink()
+        processor.unlink()
+        show_until(app, {'heat': (('DRIVE n/a', {GREY}), ('PROCESSOR n/a', {GREY}))}, 'missing: n/a')
+        put(reading, b'35000\n')
+        put(processor, b'39000\n')
+        show_until(app, {'heat': (('DRIVE 35 C', {GREEN}), cpu39)}, 'readings back')
+        passed('scope-shows-n/a-for-a-reading-it-cannot-use', cases=['negative', 'abc', 'missing'])
+        # The disk: /proc (statfs answers, with no blocks), then nothing there (statfs refuses), each straight after
+        # the disk of / shown, so figures kept from before cannot pass for unavailable; then / again.
+        unavailable = {'disk': ('unavailable', {AMBER}), 'disk-bar': 0, 'disk-detail': ('', set())}
+        def turn_disk(target):
+            spare = evidence / 'heat-disk-spare'
+            os.symlink(target, spare)
+            os.replace(spare, disk)
+        turn_disk('/proc')
+        show_until(app, unavailable, 'disk /proc: unavailable')
+        app.frame('disk-unavailable')
+        turn_disk('/')
+        disk_at_a_reading(app, '/', .1)
+        disk.unlink()
+        show_until(app, unavailable, 'disk link gone: unavailable')
+        turn_disk('/')
+        disk_at_a_reading(app, '/', .1)
+        passed('scope-shows-the-disk-unavailable-and-back', unavailable=['/proc, no blocks', 'nothing there'])
+        app.tap('Escape')
+        app.finish()
+    finally:
+        app.close()
+    # A processor alone: its part is drawn where the line starts, with no room kept for the drive. No disk.
+    tree = hwmon_tree(evidence / 'heat-hwmon-processor', {1: dict(K10)})
+    app = Scope(args.scope, ['--test', stat, mem, host, '100', str(computers), '5000', '2000', str(tree),
+                             str(evidence / 'no-disk-here')], x, display, evidence, 'scope-heat-processor',
+                empty_home(evidence, 'heat-window-processor'))
+    try:
+        show_until(app, {**NO_DISK_SHOWN, 'heat': (cpu39,)}, 'the processor alone')
+        app.frame('processor-alone')
+        app.tap('Escape')
+        app.finish()
+    finally:
+        app.close()
+    passed('scope-leaves-out-a-part-not-found', processor_alone=cpu39[0])
+
+
 def window_checks(args, x, display, evidence, passed):
     real_checks(args, x, display, evidence, passed)
     quit_checks(args, x, display, evidence, passed)
     light_checks(args, x, display, evidence, passed)
     files_checks(args, x, display, evidence, passed)
+    heat_window_checks(args, x, display, evidence, passed)
     pending_checks(args, x, display, evidence, passed)
     results_checks(args, x, display, evidence, passed)
     injected_checks(args, x, display, evidence, passed)
@@ -1701,6 +2257,10 @@ def memory_checks(args, x, display, evidence, passed):
     # four sockets besides the display's, none of them one seen at the sample before (a knock lasts 10 ms; samples
     # are 2 s apart), so no knock leaves its socket open. At the end the closed port becomes a black hole and the
     # black hole a listener, and both rows must follow, so those two were still being knocked.
+    # The disk and the temperatures are read at every frame too: the disk is a link turned with the others (statfs
+    # follows it) to /, to the evidence folder, to nothing and to /proc (no blocks); the stand-in hwmon directory's
+    # drive and processor temp1_input are links to two more, turned to this computer's own sensors when it has them,
+    # to readings in files (green, red), to nothing and to readings that are not numbers (n/a).
     fixtures, links = evidence / 'memory-fixtures', evidence / 'memory-links'
     fixtures.mkdir()
     links.mkdir()
@@ -1710,30 +2270,58 @@ def memory_checks(args, x, display, evidence, passed):
                        ('stat-bad', b'cpu  1 2 x 4\n'),
                        ('meminfo-small', b'MemTotal:  524288 kB\nMemAvailable:  104858 kB'),
                        ('meminfo-bad', b'MemTotal:  524288 kB\n'), ('name-long', long_name.encode()),
-                       ('name-empty', b'')):
+                       ('name-empty', b''), ('drive-35', b'35000'), ('drive-hot', b'83850\n'),
+                       ('drive-bad', b'-5000\n'), ('processor-42', b'41500'), ('processor-39', b'39000\n'),
+                       ('processor-bad', b'abc\n')):
         (fixtures / name).write_bytes(data)
+    hwmon = hwmon_tree(fixtures / 'hwmon', {0: ACPI, 1: {'name': b'nvme\n', 'temp1_max': b'83850\n',
+                                                         'temp1_crit': b'87850\n'}, 3: {'name': b'k10temp\n'}})
+    os.symlink(links / 'drive', hwmon / 'hwmon1' / 'temp1_input')
+    os.symlink(links / 'processor', hwmon / 'hwmon3' / 'temp1_input')
+    real_drive, real_processor = hwmon_search('/sys/class/hwmon')
+    def sensor(found, fallback):
+        return Path(f'/sys/class/hwmon/hwmon{found[0]}/temp1_input') if found else fixtures / fallback
+    disk_unavailable = {'disk': ('unavailable', {AMBER}), 'disk-bar': 0, 'disk-detail': ('', set())}
+    def disk_shown(reading):
+        return (re.fullmatch(r'\d{1,3}%', reading['disk'][0]) is not None and reading['disk'][1] == {WHITE}
+                and re.fullmatch(r'\d+\.\d [GM]iB free of \d+\.\d [GM]iB', reading['disk-detail'][0]) is not None
+                and reading['disk-bar'] == 4 * int(reading['disk'][0][:-1]))
     def missing(reading):
         return (reading['host'] == ('unavailable', {AMBER}) and reading['processor'] == ('unavailable', {AMBER})
-                and reading['memory'] == ('unavailable', {AMBER}) and reading['detail'] == ('', set()))
+                and reading['memory'] == ('unavailable', {AMBER}) and reading['detail'] == ('', set())
+                and all(reading[key] == value for key, value in disk_unavailable.items())
+                and reading['heat'] == (('DRIVE n/a', {GREY}), ('PROCESSOR n/a', {GREY})))
     def live(reading):
+        heat = reading['heat']
         return (reading['host'] == (real_name(), {WHITE}) and re.fullmatch(r'\d{1,3}%|-', reading['processor'][0])
-                and re.fullmatch(r'\d{1,3}%', reading['memory'][0]) is not None)
-    def files_shown(processor, width):
+                and re.fullmatch(r'\d{1,3}%', reading['memory'][0]) is not None and disk_shown(reading)
+                and len(heat) == 2 and re.fullmatch(r'DRIVE \d+ C', heat[0][0]) is not None
+                and heat[0][1] in ({GREEN}, {AMBER}, {RED}) and re.fullmatch(r'PROCESSOR \d+ C', heat[1][0]) is not None
+                and heat[1][1] == {WHITE})
+    def files_shown(processor, width, heat):
         def check(reading):
             return (read_text(reading['frame'], *HOST_AT, 64, BACKGROUND, 1) == (long_name, {WHITE})
                     and reading['processor'][0] == processor and reading['processor-bar'] == width
                     and reading['memory'] == ('80%', {WHITE})
-                    and reading['detail'] == ('409.6 MiB of 512.0 MiB in use', {GREY}))
+                    and reading['detail'] == ('409.6 MiB of 512.0 MiB in use', {GREY})
+                    and disk_shown(reading) and reading['heat'] == heat)
         return check
-    proc = {'stat': '/proc/stat', 'meminfo': '/proc/meminfo', 'hostname': '/proc/sys/kernel/hostname'}
+    proc = {'stat': '/proc/stat', 'meminfo': '/proc/meminfo', 'hostname': '/proc/sys/kernel/hostname',
+            'drive': sensor(real_drive, 'drive-35'), 'processor': sensor(real_processor, 'processor-42'), 'disk': '/'}
     states = [('live', proc, live),
               ('files', {'stat': fixtures / 'stat-a', 'meminfo': fixtures / 'meminfo-small',
-                         'hostname': fixtures / 'name-long'}, files_shown('-', 0)),
+                         'hostname': fixtures / 'name-long', 'drive': fixtures / 'drive-35',
+                         'processor': fixtures / 'processor-42', 'disk': fixtures},
+               files_shown('-', 0, (('DRIVE 35 C', {GREEN}), ('PROCESSOR 42 C', {WHITE})))),
               ('files-moving', {'stat': fixtures / 'stat-b', 'meminfo': fixtures / 'meminfo-small',
-                                'hostname': fixtures / 'name-long'}, files_shown('71%', 284)),
-              ('missing', {'stat': None, 'meminfo': None, 'hostname': None}, missing),
+                                'hostname': fixtures / 'name-long', 'drive': fixtures / 'drive-hot',
+                                'processor': fixtures / 'processor-39', 'disk': '/'},
+               files_shown('71%', 284, (('DRIVE 84 C', {RED}), ('PROCESSOR 39 C', {WHITE})))),
+              ('missing', {'stat': None, 'meminfo': None, 'hostname': None, 'drive': None, 'processor': None,
+                           'disk': None}, missing),
               ('malformed', {'stat': fixtures / 'stat-bad', 'meminfo': fixtures / 'meminfo-bad',
-                             'hostname': fixtures / 'name-empty'}, missing)]
+                             'hostname': fixtures / 'name-empty', 'drive': fixtures / 'drive-bad',
+                             'processor': fixtures / 'processor-bad', 'disk': '/proc'}, missing)]
     def point(targets):
         for key, target in targets.items():
             link = links / key
@@ -1745,6 +2333,8 @@ def memory_checks(args, x, display, evidence, passed):
                 os.symlink(target, spare)
                 os.replace(spare, link)
     point(proc)
+    read_each_frame = {os.path.realpath(target) for _, targets, _ in states for key, target in targets.items()
+                       if target is not None and key != 'disk'}
     interval, every, limit = 10, 20, 10
     here, shut, far, aide = Listener(), ClosedPort(), BlackHole(), FakeHelper(rising)
     computers = fixtures / 'computers.txt'
@@ -1757,8 +2347,8 @@ def memory_checks(args, x, display, evidence, passed):
                 computer_row('aide', FORTY)]
     knocking = others('answers', 'answers', 'no answer')
     app = Scope(args.scope, ['--test', str(links / 'stat'), str(links / 'meminfo'), str(links / 'hostname'),
-                             str(interval), str(computers), str(every), str(limit)], x, display, evidence,
-                'scope-memory', empty_home(evidence, 'memory'), rows=4)
+                             str(interval), str(computers), str(every), str(limit), str(hwmon), str(links / 'disk')],
+                x, display, evidence, 'scope-memory', empty_home(evidence, 'memory'), rows=4)
     fixtures_open = [here, shut, far, aide]
     try:
         show_until(app, {'host': (real_name(), {WHITE}), 'others': knocking}, 'memory run drawn', 10)
@@ -1795,11 +2385,22 @@ def memory_checks(args, x, display, evidence, passed):
                         pass
                 held = {fd: int(link[8:-1]) for fd, link in fds.items() if link.startswith('socket:[')}
                 knocks = {inode for fd, inode in held.items() if fd != min(held)}
+                # A file Scope reads at every frame may be open at the moment of the listing: a drive's temperature
+                # takes Linux a few ms to ask the drive for. At most one may be, as Scope reads one file at a time;
+                # one it failed to close would stay, and the next would join it.
+                reading = {fd: link for fd, link in fds.items() if fd not in held and link in read_each_frame}
+                assert len(reading) <= 1, ('more than one file Scope reads is open', reading)
                 sample['descriptors'] = sorted((fd, link) for fd, link in fds.items()
-                                               if fd not in held or fd == min(held))
+                                               if (fd not in held or fd == min(held)) and fd not in reading)
+                sample['reading'] = sorted(reading.values())
                 sample['knock_sockets'] = sorted(knocks)
                 sample['listener_connections'] = here.connections
                 sample['helper_replies'] = aide.connections
+                if steady is None:
+                    # Besides its standard input, output and error, only the display's socket: a file opened at
+                    # startup (a hwmon name or limit, the list of computers) and left open would be here.
+                    assert all(fd <= 2 or link.startswith('socket:[') for fd, link in sample['descriptors']), \
+                        ('a file opened at startup stayed open', sample['descriptors'])
                 steady = steady or sample['descriptors']
                 assert sample['descriptors'] == steady, ('descriptors changed', steady, sample['descriptors'])
                 assert len(knocks) <= 4 and not knocks & before, ('a knock kept its socket', knocks, before)
@@ -1810,14 +2411,19 @@ def memory_checks(args, x, display, evidence, passed):
                     break
             time.sleep(max(0, .4 - (time.monotonic() - turned)))
         seconds = samples[-1]['seconds']
+        # A file Scope failed to close would be open at every listing from then on, and every path ran in the two
+        # whole turns before the first listing; so at least one listing must find no file Scope reads open.
+        assert any(not s['reading'] for s in samples), ('a file Scope reads stayed open',
+                                                        [s['reading'] for s in samples])
         (evidence / 'scope-memory-states.json').write_text(json.dumps(seen, indent=2) + '\n')
         assert all(matched for matched, _ in seen.values()), ('a state never looked as it should', seen)
         # Every file in this run gives its figure, or shows its end, by its second read call: the live /proc files
         # finish within their first read (their figures come first, and a read takes up to 4096 bytes), the files
-        # written here are shorter than one read, so a second read finds their end, and a missing file is not read.
-        # The display socket's receives are not read calls. So a sixth of the read calls is a lower bound on frames.
+        # written here and the sensors' are shorter than one read, so a second read finds their end, and a missing
+        # file is not read. A frame reads five files (three from /proc, two temperatures); statfs reads none, and the
+        # display socket's receives are not read calls. So a tenth of the read calls is a lower bound on frames.
         reads = samples[-1]['syscr'] - samples[0]['syscr']
-        frames_at_least = reads // 6
+        frames_at_least = reads // 10
         assert frames_at_least >= seconds * 1000 / interval / 10, ('too few frames to judge memory', reads, seconds)
         stable_memory(samples, 'scope redrawing every 10 ms through the real /proc, odd, missing and bad files')
         rss = [s['Rss'] for s in samples]
@@ -1838,6 +2444,7 @@ def memory_checks(args, x, display, evidence, passed):
         app.finish()
         passed('scope-memory-flat', seconds=seconds, samples=len(samples), read_calls=reads,
                frames_at_least=frames_at_least, states_seen_as_they_should_look=seen,
+               live_temperatures='this computer\'s sensors' if real_drive and real_processor else 'files',
                rss_kib_start=rss[0], rss_kib_end=rss[-1], rss_kib_min=min(rss), rss_kib_max=max(rss),
                rss_tolerance_kib=64, vm_size_kib=samples[0]['VmSize'], vm_size_must_not_change=True)
         passed('scope-memory-flat-while-knocking', every_ms=every, limit_ms=limit,
@@ -1878,6 +2485,8 @@ def main():
             sample_checks(args, evidence, passed)
             list_checks(args, evidence, passed)
             reply_checks(args, evidence, passed)
+            heat_checks(args, evidence, passed)
+            disk_checks(args, evidence, passed)
         if args.only in ('all', 'window', 'memory'):
             with private_display(evidence, size='1280x900') as display:
                 x = XConnection(display)

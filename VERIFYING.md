@@ -114,16 +114,24 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   its `--sample` output on 72 sets of fixed `/proc/stat`, `/proc/meminfo` and name files against hand-written answers
   (one and 64 processors, long lines, lines across reads and at the 1 MiB bound, tabs, fields missing, reordered or
   malformed, exact rounding at half a percent and 99.5 % also past 2^56, zero-length intervals, counters that went
-  back, numbers past 2^64) and eleven refused command lines; its `--computers` reading of 86 lists of other
+  back, numbers past 2^64) and 24 refused command lines; its `--computers` reading of 86 lists of other
   computers (comments, blanks, tabs, CRLF, names at 24 and 25 bytes, every malformed address and port, 6 and 7
   computers, more problems than rows, 64 KiB and one byte more), of files that are not lists (a FIFO and
   `/dev/zero` within 2 s) and of the list in HOME, each line against a hand-written answer, with socket() made to
   fail; its `--replies` reading of 12 runs of well-formed helper replies and 45 malformed ones (no newline, bytes
   after it, CRLF, other prefixes and versions, stray spaces, leading zeros, 2^64, a busy count above the total, a zero
   memory total, an SSH banner, 256 and 257 bytes), each between good ones, every row against a hand-written answer;
+  its `--readings` search and reading of temperatures in 62 stand-in hwmon directories (the drive at `hwmon63` and
+  past `hwmon64`, gaps, `k10temp` before `coretemp`, look-alike names, limits missing, zero, absurd and malformed, the
+  colour at each edge of its bands, rounding at a half degree, 17 readings that are n/a, FIFOs within 2 s), each line
+  against a hand-written answer, and this computer's own `/sys/class/hwmon` against a search the check works out; its
+  disk arithmetic (`--disk-figures`) on 23 sets of numbers against hand-written answers, up to and past 64 bits in KiB,
+  and `--readings` on real paths against `os.statvfs` read just before and after;
   its window's name, figures, inks and bars read back from its pixels, from the real `/proc` (memory against
-  `/proc/meminfo` read around the frame of a new reading) and from files the check writes, removes (amber
-  `unavailable`) and restores; the redraw light changing at every reading; quitting on Escape, q, Shift+Q and the
+  `/proc/meminfo` read around the frame of a new reading, the disk against `os.statvfs('/')`) and from files the check
+  writes, removes (amber `unavailable`) and restores; the drive's temperature green, amber and red at the edges of its
+  bands, n/a in grey, and its sensors and limits read at startup only, from a stand-in hwmon directory changed while
+  the window runs; the redraw light changing at every reading; quitting on Escape, q, Shift+Q and the
   close button; the other computers' rows (names alone, nothing drawn under them; answers from a listener and from a
   closed port, checking, no answer from a full accept queue, kept while the next knock is under way, problems, a
   seventh computer never knocked, and unreachable and errors made by strace), with every knock on 127.x and every
@@ -134,10 +142,12 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   Escape within 300 ms); under strace, knocks 700 ms apart, no answer only after a look at its 300 ms limit,
   refusals and a helper's figures seen within 50 ms, a silent listener read only without waiting until its limit,
   waits for POLLOUT while connecting and POLLIN while reading, and the knock under way closed at exit; and 120 seconds
-  redrawing every 10 ms through the real `/proc`, missing, malformed and unusual files, knocking every 20 ms on a
+  redrawing every 10 ms through the real `/proc`, missing, malformed and unusual files, with the disk and the
+  temperatures read live, knocking every 20 ms on a
   listener, a closed port, a full accept queue and a helper replying to every knock, with the same virtual size
-  throughout, resident memory within 64 KiB and no socket outliving its knock. `make check-scope` runs those checks
-  alone. Then `check_scope_helper.py` checks Scope's helper, on 127.x only: malformed command lines refused before any
+  throughout, resident memory within 64 KiB, no socket outliving its knock and no file left open. `make check-scope`
+  runs those checks alone. Then `check_scope_helper.py` checks Scope's helper, on 127.x only: malformed command lines
+  refused before any
   socket (under strace) and a socket or port it cannot have ending it with status 1; its reply for every `/proc` file
   of the `--sample` cases carrying exactly their hand-written figures, in all four shapes, and the real `/proc`
   agreeing; the line only for allowed addresses and a close with no byte for others; under strace, one non-waiting
