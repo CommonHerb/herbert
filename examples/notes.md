@@ -61,8 +61,9 @@ document unsaved, even when it returns to the saved bytes.
 over further screen rows: it breaks after the last space or tab that fits, the
 blank staying at the end of the row, and a word wider than the window breaks
 after the last character that fits, never inside a character's accents or a
-joined emoji. One space or tab may hang just past the right edge, drawn as
-nothing, and the row then ends: typing a space after a word that fills a row
+joined emoji. A space that starts at the right edge, or a tab whose stop lies
+past it, hangs past the edge, drawn as nothing, and the row then ends: typing a
+space after a word that fills a row
 moves the cursor on to the next row instead of pulling the word down, and a line
 that ends with such a blank gets an empty last row for the cursor. Wrapping is
 only how the text is shown: the file's bytes, saving, undo, recovery copies and
@@ -297,7 +298,10 @@ a 4 MiB document costs under a millisecond and its checkpoint a few. A very long
 line is slower to edit: each edit re-marks the character boundaries of its whole
 line, so in a single line of 4 MiB a key takes about 70 ms on the development
 machine. The first move to the far end of such a line walks its screen rows once
-(about 60 ms); later moves and drawing start from rows Notes remembers. A search
+(about 60 ms); later moves and drawing start from rows Notes remembers, for four
+lines at a time, and a long line keeps its rows while short lines come and go
+around it. An edit in a long line makes the next move past the edit walk from
+the rows before it again. A search
 that finds nothing in 4 MiB takes about 0.2 s, each character typed in Find
 included. The bitmap letters have no descenders, so g, p, q
 and y sit on the baseline. There is no desktop launcher or install step; start

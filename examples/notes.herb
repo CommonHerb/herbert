@@ -870,20 +870,24 @@ func notes_keys(c, t, s, recovery, query, event):
 end
 
 -- The view follows the cursor every frame, except while the wheel has moved it
--- away; the next key, click or drag re-attaches it (notes_attach). The top is
--- first found again as the start of its screen row, since an edit may have
--- moved where rows begin. A cursor above the view puts its row at the top; one
--- below it, at the bottom.
+-- away; the next key, click or drag re-attaches it (notes_attach). A cursor
+-- above the view puts its row at the top; one below it, at the bottom. The top
+-- is found again as the start of its screen row, since an edit may have moved
+-- where rows begin, but only when the cursor's row starts after it: a cursor
+-- row starting at or before the old top is the new top (no other row starts
+-- between the start of the old top's row and the old top), and the old top, far
+-- into a long line an edit has just changed, may cost the whole line to find.
 func notes_view(t, s):
-    let top = text_wrap_start(t, s.top)
-    if not s.detached:
-        let cursor = text_wrap_start(t, text_cursor(t))
-        if cursor < top:
-            top = cursor
-        else:
-            let reach = text_wrap_ahead(t, top, 20)
-            if reach.0 < cursor: top = text_wrap_back(t, cursor, 20) end
-        end
+    if s.detached:
+        s.top = notes_bottom(t, text_wrap_start(t, s.top))
+        return 0
+    end
+    let cursor = text_wrap_start(t, text_cursor(t))
+    let top = cursor
+    if cursor > s.top:
+        top = text_wrap_start(t, s.top)
+        let reach = text_wrap_ahead(t, top, 20)
+        if reach.0 < cursor: top = text_wrap_back(t, cursor, 20) end
     end
     s.top = notes_bottom(t, top)
     return 0

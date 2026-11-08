@@ -56,9 +56,8 @@ func text_buffer(capacity): return text_buffer_history(capacity, capacity) end
 
 -- A history budget of twice the capacity holds any one replace of the whole text.
 func text_buffer_history(capacity, history):
-    -- Screen rows (text_wrap): two rows hold over 70 columns between them and
-    -- a byte is at most 4 columns, so a row holds 9 bytes or more on average and
-    -- every 32nd row of a line the size of the capacity fits in limit entries.
+    -- Screen rows (text_wrap): enough for every 32nd row of a line the size of
+    -- the capacity at 70 columns (see text_wrap).
     let limit = capacity / 288 + 2
     let wrap = TextWrap(0 - 1, 32, 0 - 1, 0, 0, limit, linux_buffer(4 * (48 + 16 * limit)), 0, 0, 0, 0, 0)
     let t = Text(TextState(0, 0, 0 - 1, 0, 0, 0, false, 0, 0, 0, 0, 0, wrap), linux_buffer(capacity), linux_buffer(14336), linux_buffer(capacity), linux_buffer(capacity + 1), linux_buffer(history), linux_buffer(4))
@@ -629,16 +628,17 @@ end
 -- staying at the row's end, or, in a row with no such blank, before the first
 -- grapheme that does not fit. A grapheme is one column and a tab runs to the
 -- next four-column stop counted from the row's start; a blank is a grapheme of
--- that one byte (a space with an accent is not one). A blank may start at the
--- width itself and hang past it; it then ends the row, at a line's end too, so
--- the line gets an empty last row and every place a caret can stand on a row
--- lies at or before the width. An offset where a line wraps belongs to the
+-- that one byte (a space with an accent is not one). A blank that reaches past
+-- the width (a space starting at the width, or a tab whose stop lies past it)
+-- hangs past the edge and ends the row, at a line's end too, so the line gets an
+-- empty last row and every place a caret can stand on a row lies at or before
+-- the width. An offset where a line wraps belongs to the
 -- lower row, and a line's end (its newline, or the text's end) to its last row.
 -- A row's break depends only on its own text and the next row's, so an edit
 -- leaves every row before the edited row's predecessor where it was.
 --
--- Rows found are remembered for up to four lines, in rows (one slot each, the
--- least recently used replaced): at a slot's base the line's start, its number,
+-- Rows found are remembered for four lines, in rows (one slot each; see
+-- text_wrap_slot for which is replaced): at a slot's base the line's start, its number,
 -- its end (2^64 - 1 until seen), how many rows are remembered (0 for an empty
 -- slot) and when the slot was last used; from base + 48, 16 bytes a row, the
 -- start and the file column of rows 0, every, 2 * every, ... of the line, found
@@ -663,7 +663,12 @@ ref record TextWrap:
 end
 
 -- Rows of width columns, a row remembered every every rows (both at least 1).
--- Forgets every remembered row; nothing is allocated.
+-- Forgets every remembered row; nothing is allocated. Any two rows in a row hold
+-- more than width columns, so at least (width + 1) / 4 bytes, rounded up (a tab
+-- is up to four columns): the capacity / 288 + 2 rows a slot remembers reach the
+-- end of a line the size of the capacity when every times that is 576 or more
+-- (Notes: 32 * 18). Otherwise lookups past the last remembered row walk on from
+-- it each time.
 func text_wrap(t, width, every):
     let w = t.state.wrap
     w.width = width
@@ -783,8 +788,11 @@ func text_wrap_holds(t, w, base, p):
     return true
 end
 
--- The base of the slot holding p's line, taking the least recently used one
--- (an empty one first) when none does.
+-- The base of the slot holding p's line. When none does, a slot is taken: an
+-- empty one first, then the least recently used of those remembering only their
+-- line's start (one walks at most every rows to find its rows again), and only
+-- when there is none the least recently used, so a long line's rows outlast
+-- short lines coming and going.
 func text_wrap_slot(t, w, p):
     let slot = 0
     let best = 0
@@ -792,8 +800,10 @@ func text_wrap_slot(t, w, p):
     while slot != 4:
         let base = text_wrap_base(w, slot)
         if text_wrap_holds(t, w, base, p): return base end
+        let known = linux_u64(w.rows, base + 24)
         let used = 0
-        if linux_u64(w.rows, base + 24) != 0: used = linux_u64(w.rows, base + 32) + 1 end
+        if known != 0: used = linux_u64(w.rows, base + 32) + 1 end
+        if known > 1: used = used + 4611686018427387904 end
         if used < oldest:
             oldest = used
             best = slot

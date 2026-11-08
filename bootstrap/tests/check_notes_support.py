@@ -1398,8 +1398,15 @@ result('session-2000-full-capacity-crlf-checkpoints-undo-redo-search-bounded-mem
 # Screen rows (word wrap; lib/text_buffer.herb's text_wrap_ functions) against notes_wrap_model.py, which lays the
 # same documents out again from the rule. Documents are built from clusters whose boundaries are known (each a whole
 # grapheme cluster that joins neither neighbour), and the probe's own boundaries are compared with them first.
-import bisect
+import bisect, re
 from notes_wrap_model import Layout, ascii_row_starts
+
+def notes_functions(*names):
+    """Functions copied as they stand from examples/notes.herb, so the probe runs Notes' own code."""
+    source = (root / 'examples/notes.herb').read_text()
+    found = [re.search(r'^func ' + name + r'\(.*?^end$', source, re.M | re.S) for name in names]
+    assert all(found), names
+    return '\n' + '\n'.join(m.group(0) for m in found) + '\n'
 wrap_units = ['lib/linux.herb', 'lib/text.herb', 'lib/file_io.herb', 'lib/utf8.herb', 'lib/unicode_tables.herb',
               'lib/unicode_grapheme.herb', 'lib/text_buffer.herb']
 wrap_probe = compile('wrap-probe', r"""-- Commands, space-separated tokens read from the file named by argument 2; one
@@ -1410,7 +1417,13 @@ wrap_probe = compile('wrap-probe', r"""-- Commands, space-separated tokens read 
 -- place. P r c: the place at column c. B r n, A r n: n rows back, ahead (and
 -- how many). V down n: Up/Down, then the cursor and goal. C p: seek. i scalar,
 -- d, b, u, r, x start stop count scalars...: edits. O: the document loaded
--- again. K: rows walked so far.
+-- again. K: rows walked so far. Q top, D detached (1 or 0): Notes' view state;
+-- T: Notes' own notes_view (copied from examples/notes.herb below), then the
+-- view's top and the rows walked so far.
+ref record NotesState:
+    top: int
+    detached: bool
+end
 func probe_flush(out, at):
     do linux_write(1, out, 0, at)
     return 0
@@ -1466,7 +1479,7 @@ func probe_marks(t, out, at):
     return text_put(out, at, "\n")
 end
 
-func probe_run(t, cmds, at, stop, out, o, scratch, document):
+func probe_run(t, cmds, at, stop, out, o, scratch, document, s):
     while true:
         let f = text_field(cmds, at, stop)
         if f.0 == stop: return probe_flush(out, o) end
@@ -1554,6 +1567,19 @@ func probe_run(t, cmds, at, stop, out, o, scratch, document):
             o = probe_line(out, o, text_replace(t, a.0, b.0, scratch, 0, size), text_cursor(t), 0)
         elif text_is(cmds, f.0, f.1, "O"):
             o = probe_line(out, o, text_load(t, document.bytes, file_count(document)), text_cursor(t), 0)
+        elif text_is(cmds, f.0, f.1, "Q"):
+            let a = probe_value(cmds, at, stop)
+            at = a.1
+            s.top = a.0
+            o = probe_line(out, o, s.top, 0, 0)
+        elif text_is(cmds, f.0, f.1, "D"):
+            let a = probe_value(cmds, at, stop)
+            at = a.1
+            s.detached = a.0 == 1
+            o = probe_line(out, o, a.0, 0, 0)
+        elif text_is(cmds, f.0, f.1, "T"):
+            do notes_view(t, s)
+            o = probe_line(out, o, s.top, text_wrap_walked(t), 0)
         elif text_is(cmds, f.0, f.1, "K"):
             o = probe_line(out, o, text_wrap_walked(t), 0, 0)
         else:
@@ -1576,11 +1602,11 @@ func main():
     if loaded != 0: return linux_die("probe: cannot load the document\n") end
     let cmds = linux_read_file(linux_argument(args, 2), 67108864)
     if cmds.0 != 0: return linux_die("probe: cannot read the commands\n") end
-    do probe_run(t, cmds.1, 0, cmds.2, linux_buffer(65536), 0, linux_buffer(65536), f)
+    do probe_run(t, cmds.1, 0, cmds.2, linux_buffer(65536), 0, linux_buffer(65536), f, NotesState(0, false))
     do process_exit(0)
     return 0
 end
-""", wrap_units)
+""" + notes_functions('notes_view', 'notes_bottom'), wrap_units)
 
 def wrap_run(label, clusters, commands, crlf=False, timeout=60):
     d = work / ('wrap-' + label); d.mkdir()
@@ -1686,10 +1712,57 @@ for name, clusters, width in wrap_cases:
         answers += len(commands)
     result(f'wrap-layout-{name}-width-{width}', True, rows=len(L.rows), answers=answers)
 
-# Edits, undo and redo between lookups: the remembered rows of up to four lines must answer as a fresh layout does.
+# Edits, undo and redo between lookups: the remembered rows of four lines must answer as a fresh layout does.
 # Rows are remembered every 1 to 3 rows here, so most lookups start from a remembered row an edit may have moved, and
-# documents of eight lines with lookups all over them make the four slots change hands.
-WRAP_TYPED = [c.encode() for c in 'abcxyz09 \t\n'] + ['é'.encode(), '漢'.encode()]
+# documents of eight lines with lookups all over them make the four slots change hands. Often two or three edits come
+# before one lookup, as two keys drained together do in Notes, at rising or falling offsets, so the lowest of them
+# must be the one that counts. U+0301 (a combining acute) is typed too, often at or beside a place where a line
+# wraps: it joins the cluster before it (making a trailing blank a non-blank), except first in the text or after a
+# newline or a tab, which always end a cluster, where it begins a non-blank cluster of its own. That is the whole
+# segmentation rule for this alphabet: every other piece below begins a cluster and joins nothing.
+WRAP_MARK = '́'.encode()
+WRAP_TYPED = [c.encode() for c in 'abcxyz09 \t\n'] + ['é'.encode(), '漢'.encode(), WRAP_MARK, WRAP_MARK]
+
+def wrap_clusters(pieces):
+    clusters = []
+    for piece in pieces:
+        if piece == WRAP_MARK and clusters and clusters[-1] not in (b'\n', b'\t'):
+            clusters[-1] += piece
+        else:
+            clusters.append(piece)
+    return clusters
+
+class WrapText:
+    """The text the probe edits, as pieces; a place is a byte offset."""
+    def __init__(self, pieces, width):
+        self.pieces, self.width = list(pieces), width
+        self.layout()
+    def layout(self):
+        self.L = Layout(wrap_clusters(self.pieces), self.width)
+        self.bounds = self.L.starts + [self.L.size]
+    def piece_at(self, p):
+        at = 0
+        for i, piece in enumerate(self.pieces):
+            if at == p: return i
+            at += len(piece)
+        assert at == p, p
+        return len(self.pieces)
+    def ceil(self, p):
+        return self.bounds[bisect.bisect_left(self.bounds, p)]
+    def replace(self, a, b, new):
+        i, j = self.piece_at(a), self.piece_at(b)
+        self.pieces[i:j] = new
+        self.layout()
+        n = sum(len(x) for x in new)
+        return self.ceil(a + n) if n else self.L.floor(a)
+
+def wrap_place(T, rng):
+    """A cluster boundary: often a place where a line wraps, or the boundary before or after one."""
+    wraps = [r for r, _, _ in T.L.rows if r and T.L.text[r - 1:r] != b'\n']
+    if wraps and rng.random() < .4:
+        k = T.bounds.index(rng.choice(wraps)) + rng.choice([-1, 0, 0, 1])
+        return T.bounds[max(0, min(k, len(T.bounds) - 1))]
+    return rng.choice(T.bounds)
 
 def wrap_queries(L, rng, cursor, commands, expected):
     for p in [cursor] + [rng.randrange(L.size + 1) for _ in range(3)]:
@@ -1702,63 +1775,69 @@ def wrap_queries(L, rng, cursor, commands, expected):
     expected += [wrap_line(*L.ahead(r, n)), wrap_line(L.back(r, n)), wrap_line(L.last(r)),
                  wrap_line(L.position(r, int(commands[-1].split()[2])))]
 
-for case in range(12):
+for case in range(16):
     rng = random.Random(1000 + case)
     width, every = rng.choice([5, 7, 10, 13]), rng.choice([1, 2, 3])
-    units = wrap_document(rng, width, 8, 12 * width)
-    initial = list(units)
-    cursor, history, applied = 0, [], 0
-    offset = lambda i: sum(len(u) for u in units[:i])
-    L = Layout(units, width)
+    initial = wrap_document(rng, width, 8, 12 * width)
+    T = WrapText(initial, width)
+    cursor, history, applied, together = 0, [], 0, 0
     commands, expected = [f'W {width} {every}'], [wrap_line(0, 0, 0)]
-    wrap_queries(L, rng, 0, commands, expected)
-    for step in range(90):
-        op = rng.choice('iiiddbbxxuurCCO')
-        before = (list(units), cursor)
+    wrap_queries(T.L, rng, 0, commands, expected)
+    def edit(op):
+        # One edit at the cursor, as the probe makes it: (changed, the cursor after).
+        global cursor
+        before = (list(T.pieces), cursor)
         if op == 'i':
-            unit = rng.choice(WRAP_TYPED)
-            units.insert(cursor, unit); cursor += 1
-            commands.append(f'i {ord(unit.decode())}'); changed = 1
+            piece = rng.choice(WRAP_TYPED)
+            commands.append(f'i {ord(piece.decode())}')
+            cursor = T.replace(cursor, cursor, [piece]); changed = 1
         elif op == 'd':
-            changed = int(cursor < len(units))
-            if changed: del units[cursor]
-            commands.append('d')
+            commands.append('d'); changed = int(cursor < T.L.size)
+            if changed: cursor = T.replace(cursor, T.L.next(cursor), [])
         elif op == 'b':
-            changed = int(cursor > 0)
-            if changed: cursor -= 1; del units[cursor]
-            commands.append('b')
-        elif op == 'x':
-            i = rng.randrange(len(units) + 1); j = min(len(units), i + rng.choice([0, 1, 3, 2 * width]))
-            new = wrap_word(rng, rng.choice([0, 1, 4, width + 2])) + rng.choice([[], [b'\n'], [b' ']])
-            if i == j and not new: new = [b'Q']
+            commands.append('b'); changed = int(cursor > 0)
+            if changed: cursor = T.replace(T.L.previous(cursor), cursor, [])
+        else:
+            a = cursor; b = T.bounds[min(len(T.bounds) - 1, T.bounds.index(a) + rng.choice([0, 1, 3, 2 * width]))]
+            new = wrap_word(rng, rng.choice([0, 1, 4, width + 2])) + rng.choice([[], [b'\n'], [b' '], [WRAP_MARK]])
+            if a == b and not new: new = [b'Q']
             scalars = [ord(ch) for u in new for ch in u.decode()]
-            commands.append(f'x {offset(i)} {offset(j)} {len(scalars)} ' + ' '.join(map(str, scalars)))
-            units[i:j] = new; cursor = i + len(new); changed = 1
+            commands.append(f'x {a} {b} {len(scalars)} ' + ' '.join(map(str, scalars)))
+            cursor = T.replace(a, b, new); changed = 1
+        expected.append(wrap_line(changed, cursor))
+        return changed, before
+    for step in range(90):
+        op = rng.choice('eeeeeeEEEuurO')
+        if op in 'eE':
+            # One edit, or (E) two or three at rising or falling places, before the next lookup.
+            count, rising = (1, True) if op == 'e' else (rng.choice([2, 3]), rng.random() < .5)
+            last = None
+            for _ in range(count):
+                place = wrap_place(T, rng)
+                if last is not None and (place < last if rising else place > last):
+                    place = last if rising else min(last, place)
+                commands.append(f'C {place}'); expected.append(wrap_line(place)); cursor = place
+                changed, before = edit(rng.choice('iiidbx'))
+                if changed:
+                    history = history[:applied] + [(before, (list(T.pieces), cursor))]; applied = len(history)
+                last = cursor
+            together += count > 1
         elif op == 'u':
             changed = int(applied > 0)
-            if changed: applied -= 1; units, cursor = list(history[applied][0][0]), history[applied][0][1]
-            commands.append('u')
+            if changed: applied -= 1; T.pieces, cursor = list(history[applied][0][0]), history[applied][0][1]; T.layout()
+            commands.append('u'); expected.append(wrap_line(changed, cursor))
         elif op == 'r':
             changed = int(applied < len(history))
-            if changed: units, cursor = list(history[applied][1][0]), history[applied][1][1]; applied += 1
-            commands.append('r')
-        elif op == 'O':
-            # The document loaded again: the rows remembered for the edited text must all go.
-            units, cursor, history, applied = list(initial), 0, [], 0
-            commands.append('O'); expected.append(wrap_line(0, 0)); changed = None
+            if changed: T.pieces, cursor = list(history[applied][1][0]), history[applied][1][1]; T.layout(); applied += 1
+            commands.append('r'); expected.append(wrap_line(changed, cursor))
         else:
-            cursor = rng.randrange(len(units) + 1)
-            commands.append(f'C {offset(cursor)}'); expected.append(wrap_line(offset(cursor)))
-            changed = None
-        if changed is not None:
-            expected.append(wrap_line(changed, offset(cursor)))
-            if changed and op in 'idbx':
-                history = history[:applied] + [(before, (list(units), cursor))]; applied = len(history)
-        L = Layout(units, width)
-        wrap_queries(L, rng, offset(cursor), commands, expected)
+            # The document loaded again: the rows remembered for the edited text must all go.
+            T.pieces, cursor, history, applied = list(initial), 0, [], 0; T.layout()
+            commands.append('O'); expected.append(wrap_line(0, 0))
+        wrap_queries(T.L, rng, cursor, commands, expected)
     actual, d, seconds = wrap_run(f'edits-{case}', initial, commands)
     wrap_compare(f'wrap-edits-undo-redo-{case}-width-{width}-every-{every}', d, actual, ''.join(expected),
-                 answers=len(commands), final_rows=len(L.rows))
+                 answers=len(commands), lookups_after_two_or_three_edits=together, final_rows=len(T.L.rows))
 
 
 # One line wider than the remembered rows can hold every 32nd row of: with every row remembered and 15,000 rows,
@@ -1783,7 +1862,8 @@ pieces, size = [], 0
 while size < 4194304 - 100:
     w = rng.choice(words) + ' '; pieces.append(w); size += len(w)
 one_line = ''.join(pieces)
-rows = len(ascii_row_starts(one_line, 70))
+line_starts = ascii_row_starts(one_line, 70)
+rows = len(line_starts)
 end, middle = len(one_line), len(one_line) // 2
 commands = ['W 70 32', 'K', f'S {end}', 'K']
 for k in range(50):
@@ -1791,6 +1871,23 @@ for k in range(50):
 commands += [f'C {middle}', 'i 120', 'K', f'S {end + 51}', 'K', 'S 0', 'K', f'F {end + 51}']
 actual, d, seconds = wrap_run('work-one-line', [one_line.encode()], commands, timeout=120)
 a = wrap_answers(actual)
+# Every answer against the model too. Edits at the end leave the rows before the edited row's predecessor where they
+# were, so the rows near the end are laid out again from a row start 200 rows back, which none of them reaches.
+base = len(line_starts) - 200
+assert a[2:4] == [[line_starts[-1], 0, rows - 1], [0, line_starts[-1], 0]], a[2:4]
+text = one_line
+for k in range(50):
+    text += 'x'
+    starts = [line_starts[base] + x for x in ascii_row_starts(text[line_starts[base]:], 70)]
+    at = 4 + 8 * k + 1
+    cursor = len(text); row = len(starts) - 1
+    wanted = [[end + k, 0, 0], [1, cursor, 0], [starts[row], 0, base + row], [0, starts[row], 0]]
+    goal = cursor - starts[row]
+    for down, n in [(0, 1), (0, 20), (1, 1)]:
+        row = row + n if down else row - n
+        cursor = min(starts[row] + goal, starts[row + 1] - 1) if row + 1 < len(starts) else min(starts[row] + goal, len(text))
+        wanted.append([cursor, goal, 0])
+    assert a[at:at + 7] == wanted, (k, a[at:at + 7], wanted)
 walked = [line[0] for i, line in enumerate(a) if i in (1, 4) or (i > 4 and (i - 4) % 8 == 0 and i <= 4 + 8 * 50)]
 first = walked[1] - walked[0]
 steps = [walked[i + 1] - walked[i] for i in range(1, len(walked) - 1)]
@@ -1799,12 +1896,42 @@ final = one_line[:middle] + 'x' + one_line[middle:] + 'x' * 50
 starts = ascii_row_starts(final, 70)
 row = starts[bisect.bisect_right(starts, len(final)) - 1]
 middle_walk, start_walk = tail[5][0] - tail[2][0], tail[8][0] - tail[5][0]
-assert tail[0] == [middle, 0, 0] and tail[3] == [row, 0, len(starts) - 1] and tail[6] == [0, 0, 0], tail
-assert tail[9][:2] == [0, len(final)], tail[9]
+assert tail[0] == [middle, 0, 0] and tail[1] == [1, middle + 1, 0] and tail[3] == [row, 0, len(starts) - 1], tail
+assert tail[4] == [0, row, 0] and tail[6] == [0, 0, 0] and tail[7] == [0, 0, 0] and tail[9][:2] == [0, len(final)], tail
 result('wrap-work-4-MiB-line', rows - 1 <= first <= rows + 2 and max(steps) <= 300
        and len(starts) // 2 - 100 <= middle_walk <= len(starts) // 2 + 100 and start_walk <= 2,
        rows=rows, first_lookup_at_end=first, most_per_edit_and_moves=max(steps), lookup_after_edit_in_middle=middle_walk,
        seconds=seconds)
+
+# Short lines after a long one: looking back across four of them must not cost the long line's remembered rows (a
+# slot remembering only its line's start is replaced before one remembering more), so each step back of 20 rows,
+# each Page Up there and Notes' own view keeping the last row at the bottom walk under 300 rows, not the 61,945 of
+# the long line again.
+four = one_line + '\na\nb\nc\nd'
+last = len(four)
+R = rows                                                  # the rows of a, b, c and d are R to R + 3
+commands = ['W 70 32', f'S {end - 1}', 'K']
+for _ in range(3):
+    commands += [f'B {last} 20', 'K']
+commands += [f'C {last}', 'V 0 20', 'K', f'Q {line_starts[R - 10]}', f'C {last}', 'T', f'Q {line_starts[R - 10]}', 'T']
+actual, d, seconds = wrap_run('work-short-lines-after-a-long-one', [four.encode()], commands, timeout=120)
+a = wrap_answers(actual)
+walks = [a[3][0], a[5][0], a[7][0], a[9][0], a[12][0], a[15][1], a[17][1]]
+assert a[1][:1] == [line_starts[bisect.bisect_right(line_starts, end - 1) - 1]], a[1]
+assert all(a[i] == [line_starts[R - 17], 0, 0] for i in (4, 6, 8)) and a[11] == [line_starts[R - 17] + 1, 1, 0], a[4:12]
+assert a[15][0] == line_starts[R - 17] and a[17][0] == line_starts[R - 17], a[13:]
+result('wrap-work-short-lines-after-a-4-MiB-line', max(b - a for a, b in zip(walks, walks[1:])) < 300,
+       first_lookup=walks[0], most_per_step=max(b - a for a, b in zip(walks, walks[1:])), seconds=seconds)
+
+# Notes' view after an edit at the start of a 4 MiB line while the view showed its end: the cursor's row, at the
+# start, is the new top, found without looking up the old top, which the edit left 61,945 rows from any row still
+# remembered.
+commands = ['W 70 32', f'C {end}', 'Q 0', 'T', 'C 0', 'i 120', 'T', 'u', 'T']
+actual, d, seconds = wrap_run('work-view-after-edit-at-start', [one_line.encode()], commands, timeout=120)
+a = wrap_answers(actual)
+assert a[3][0] == line_starts[-21] and a[6][0] == 0 and a[8][0] == 0, (a[3], a[6], a[8])
+result('wrap-work-view-after-an-edit-at-the-start', a[6][1] - a[3][1] < 300 and a[8][1] - a[6][1] < 300,
+       view_at_end=a[3][1], after_edit=a[6][1] - a[3][1], after_undo=a[8][1] - a[6][1], seconds=seconds)
 
 # 4 MiB of short lines: a lookup walks only its own line, also after an edit at the very start.
 rng = random.Random(5)

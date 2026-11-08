@@ -110,18 +110,23 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   out again from the rule: 31 documents of clusters with known boundaries (blanks and tabs at the edge, words of 70 and
   71 columns, CJK, accents, emoji, flags, an Indic conjunct, an accented space, empty lines, CRLF) at widths 1 to 70,
   each with rows remembered every 1, 2 and 32 rows: every row, the row, line and column of every offset, each row's
-  last place, positions at each column, rows back and ahead, and Up/Down runs; then twelve runs of 90 random edits,
-  undos and redos between lookups; a line of 15,000 rows, past what the remembered rows hold; and the work as a count
-  of rows walked, not a time: a lookup at the end of a 4 MiB line walks its 61,945 rows once, then an edit there with
-  its lookup, Up, Page Up and Down walks under 300 rows, and on 4 MiB of short lines a lookup walks one row. Then
+  last place, positions at each column, rows back and ahead, and Up/Down runs; then 16 runs of 90 random steps of
+  edits, undos and redos between lookups, a step often two or three edits at rising or falling places before one
+  lookup, with U+0301 typed at and beside places where lines wrap; a line of 15,000 rows, past what the remembered
+  rows hold; and the work as a count of rows walked, not a time: a lookup at the end of a 4 MiB line walks its 61,945
+  rows once, then an edit there with its lookup, Up, Page Up and Down walks under 300 rows, every answer checked
+  against the model too; four short lines after that line do not cost it its remembered rows (stepping back 20 rows,
+  Page Up and Notes' own view, copied from `examples/notes.herb`, each under 300); that view after an edit at the
+  line's start walks under 300; and on 4 MiB of short lines a lookup walks one row. Then
   `check_text.py` checks `lib/text.herb` through a probe it compiles: its readers and writers against Python's own
   answers (the 2^64 edge, zeros in front, fields, tenths rounded half up), a write past a buffer's end stopping,
   `linux_argument_count`, `and` and `or` stopping early, and no allocation over 300,000 rounds.
 - `make check-hosted-apps`: Maze and Notes on private XTest windows: movement, collection, completion and restart;
   typing, navigation, Unicode entry, search, save, reopen, rescue, recovery and editing copies of the project's own
-  documents; word wrap, every drawn cell of a wrapped document against the model, and clicks, Home, End, Up, Down,
-  Page Down, Shift+Down, a drag beside the text, the wheel and the footer, each by the bytes saved after a marker, also
-  near the end of a 4 MiB single line; with strace, the visible warning after a failed sync and its retry; plus
+  documents; word wrap, every drawn cell of a wrapped document against the model (ink in each cell holding a
+  character, none elsewhere), the selection's cells across a wrap and over a blank hanging at column 70, and clicks,
+  Home, End, Up, Down, Page Down, Shift+Down, a drag beside the text, the wheel and the footer, each by the bytes saved
+  after a marker, also near the end of a 4 MiB single line; with strace, the visible warning after a failed sync and its retry; plus
   120-second memory checks of
   Maze play and of Notes editing LF and CRLF files. Evidence includes
   screenshots, input history, saved bytes and memory samples. Then `check_scope.py` checks Scope:

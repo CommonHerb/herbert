@@ -3934,9 +3934,23 @@ def wrap_drawn(frame, cells, shown, skip=()):
         if ch is None:
             assert ink not in pixels, ('ink in a blank cell', place)
         else:
+            assert ink in pixels, ('no ink in a cell holding a character', place, ch)
             assert shown.setdefault(ch, pixels) == pixels, ('a cell differs from its character', place, ch)
     assert len(set(shown.values())) == len(shown), 'two characters drawn alike'
     assert ink not in region(frame, 868, 100, 6, 420), 'ink past the 70 columns'
+
+
+SELECTION = 3033707                 # behind selected text (notes_draw)
+
+
+def wrap_selected(frame, row, cols):
+    """The selection on a screen row is exactly the cells `cols`: each cell read at its last pixel column and row,
+    where no glyph and no caret ever draws, holds the selection's colour there and the background elsewhere; and no
+    selection is drawn past column 70."""
+    got = [rgb_at(frame, 28 + col * 12 + 11, 100 + row * 20 + 19) for col in range(70)]
+    want = [SELECTION if col in cols else TEXT_BACKGROUND for col in range(70)]
+    assert got == want, ('selected cells', row, [col for col in range(70) if got[col] != want[col]])
+    assert SELECTION.to_bytes(3,'big') not in region(frame, 868, 100 + row * 20, 12, 20), ('selection past column 70', row)
 
 
 def notes_wrap_checks(args, x, display, evidence, passed):
@@ -3988,15 +4002,30 @@ def notes_wrap_checks(args, x, display, evidence, passed):
         h = line_row[3]
         app.click(870, 100 + h * 20 + 10); marked(starts[h] + 70, 'a click right of the text: the row\'s last place')
         app.tap('Down'); marked(starts[h] + 71, 'the line\'s end after a hanging blank is on the next row')
+        # The hanging blank selected: from column 68 down to the line's end on the empty row below, the highlight
+        # covers columns 68 and 69 and stops at the edge; the empty row shows none (its newline is not selected).
+        app.click(*at(h, 68)); app.key('Shift_L', True); app.tap('Down'); app.key('Shift_L', False)
+        hung = drawn_frame(app, lambda frame: rgb_at(frame, 28 + 69 * 12 + 11, 100 + h * 20 + 19) == SELECTION,
+                           'the hanging blank selected')
+        wrap_selected(hung, h, range(68, 70)); wrap_selected(hung, h + 1, ())
+        app.tap('Left')
         # Tabs: the row after 18 tabs starts with the 19th; the footer gives the file's line and column (19 tabs
         # reach column 72 counted from the line's start), not the column on the screen.
         b = line_row[4]
         app.click(*at(b + 1, 0))
         drawn_frame(app, lambda frame: footer_numbers(frame)[:2] == ('5', '73'), 'the file\'s line and column on a continuation row')
         marked(starts[b + 1], 'a click on a row of tabs')
-        # Shift+Down selects one screen row; typing replaces it.
+        # Shift+Down selects one screen row across the place where the line wraps: the highlight runs from the click
+        # to the first row's end, its trailing blank included, then from the next row's start to the cursor, and no
+        # further; typing replaces the selection.
         app.click(*at(0, 3)); app.key('Shift_L', True); app.tap('Down'); app.key('Shift_L', False)
         a1, b1 = L.position(starts[0], 3), L.position(starts[1], 3)
+        lit = [range(L.columns(starts[0], a1, 0), L.columns(starts[0], starts[1], 0)), range(0, L.columns(starts[1], b1, 0))]
+        across = drawn_frame(app, lambda frame: rgb_at(frame, 28 + (lit[1][-1]) * 12 + 11, 100 + 20 + 19) == SELECTION,
+                             'the selection across a wrap drawn')
+        app.frame('selected-across-a-wrap')
+        for row in range(4):
+            wrap_selected(across, row, lit[row] if row < 2 else ())
         app.type('Z'); app.tap('s','Control_L')
         wait_for(lambda: doc.read_bytes() == (text[:a1] + 'Z' + text[b1:]).encode(), 'Shift+Down selects one screen row')
         app.tap('z','Control_L')

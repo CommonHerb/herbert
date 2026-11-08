@@ -100,8 +100,10 @@ source; the retained source map identifies its original units.
   boundary once; an edit re-marks only the lines it touched, and `text_row` and `text_row_offset` count rows
   from one remembered line instead of the start. With a width set (`text_wrap(t, width, every)`), lines wider than it
   go on over further screen rows, breaking after the last blank that fits (`text_wrap_start`, `_end`, `_back`,
-  `_ahead`, `_last`, `_position`, `_vertical`, `_file`); rows of up to four lines are remembered every `every` rows,
-  in storage allocated with the rest, and an edit keeps those before it, so no lookup walks a long line again. The
+  `_ahead`, `_last`, `_position`, `_vertical`, `_file`). Rows of four lines are remembered, every `every`th row, in
+  storage allocated with the rest; a long line keeps its rows while short lines come and go, and an edit keeps those
+  before it. They reach the end of a line the size of the capacity when `every` times (width + 1) / 4, rounded up, is
+  576 or more (Notes: 32 × 18); past the last one remembered, lookups walk on from it each time. The
   state is the reference record `TextState` inside the value
   record `Text`, which names its buffers (`t.bytes` is the logical text). Uniform LF/CRLF loads retain
   their style; internal logical bytes use LF. Save with `text_file_bytes(t)` and

@@ -5,8 +5,12 @@ A document is a list of grapheme clusters, each a bytes value, chosen by the che
 without a segmentation of our own. A cluster is one column; a tab runs to the next four-column stop counted from the
 row's start (from the line's start for the file's column). A line wider than `width` breaks after the last single-byte
 space or tab that fits, the blank staying on the row; a row with no such blank breaks before the first cluster that does
-not fit. A blank may start at the width and hang past it, and then ends the row, at a line's end too. An offset where a
-line wraps belongs to the lower row; a line's end (its newline, or the text's end) to its last row.
+not fit. A blank that reaches past the width (a space starting at the width, or a tab whose stop lies past it) hangs
+past the edge and ends the row, at a line's end too. An offset where a line wraps belongs to the lower row; a line's
+end (its newline, or the text's end) to its last row.
+
+Its limits: it takes the clusters the checks choose instead of finding them in the bytes, and it and the Herbert code
+were written from the same short rule by one author, so a misreading of the rule shared by both would pass.
 """
 import bisect
 
