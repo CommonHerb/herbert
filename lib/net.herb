@@ -1,6 +1,6 @@
 -- Knocking on a computer over TCP: does it answer at this IPv4 address and
--- port? Requires lib/linux.herb; no main, no libc. Addresses only: no name
--- (DNS, /etc/hosts) is looked up. A knock starts a connection, waits for it at
+-- port? Requires lib/linux.herb and lib/text.herb; no main, no libc.
+-- Addresses only: no name (DNS, /etc/hosts) is looked up. A knock starts a connection, waits for it at
 -- most a time limit, closes it on every path and never sends a byte.
 -- A Net record (net_new, once) holds everything a knock needs: a knock
 -- allocates nothing, so a program may knock every few seconds for weeks.
@@ -15,8 +15,9 @@
 -- Scope hears from its helper. It still never sends a byte.
 -- Layouts and numbers: Linux x86-64 UAPI. sockaddr_in is 16 bytes (family 2,
 -- then port and address in network byte order, then 8 zero bytes); pollfd 8;
--- timespec 16. socket 41, connect 42, recvfrom 45, getsockopt 55, close 3;
--- MSG_DONTWAIT 64; POLLIN 1, POLLOUT 4.
+-- timespec 16. The system calls and flags go by their names in lib/linux.herb
+-- (linux_socket, linux_connect, linux_receive, linux_get_option, linux_close);
+-- POLLIN 1, POLLOUT 4.
 -- https://man7.org/linux/man-pages/man2/connect.2.html (EINPROGRESS, SO_ERROR)
 -- https://man7.org/linux/man-pages/man2/recv.2.html (MSG_DONTWAIT, EAGAIN)
 -- https://man7.org/linux/man-pages/man7/tcp.7.html
@@ -84,23 +85,6 @@ func net_new():
     return Net(st, linux_buffer(16), linux_buffer(8), linux_buffer(16), linux_buffer(8), linux_buffer(256))
 end
 
-func net_digit(b): return b >= 48 and b <= 57 end
-
--- Up to most digits from at: (ok, value, next). Not ok with no digit, more
--- than most, or a zero in front of another digit.
-func net_number(text, at, most):
-    let start = at
-    let value = 0
-    while at < length(text) and net_digit(index(text, at)):
-        if at - start == most: return (false, 0, at) end
-        value = value * 10 + index(text, at) - 48
-        at = at + 1
-    end
-    if at == start: return (false, 0, at) end
-    if at - start > 1 and index(text, start) == 48: return (false, 0, at) end
-    return (true, value, at)
-end
-
 -- Dotted IPv4 text: exactly four numbers 0 to 255 joined by single dots, and
 -- nothing else, not even a space. (true, address), the first number in the top
 -- byte, or (false, 0). A leading zero is refused, since some tools read "010"
@@ -114,7 +98,7 @@ func net_ipv4(text):
             if at >= length(text) or index(text, at) != 46: return (false, 0) end
             at = at + 1
         end
-        let part = net_number(text, at, 3)
+        let part = text_string_whole_strict(text, at, length(text))
         if not part.0 or part.1 > 255: return (false, 0) end
         address = (address << 8) | part.1
         at = part.2
@@ -124,9 +108,10 @@ func net_ipv4(text):
     return (true, address)
 end
 
--- A whole decimal number from 1 to most, the whole text: (true, n) or (false, 0).
+-- A whole decimal number from 1 to most, the whole text, with no zero in
+-- front: (true, n) or (false, 0).
 func net_whole(text, most):
-    let n = net_number(text, 0, 5)
+    let n = text_string_whole_strict(text, 0, length(text))
     if not n.0 or n.2 != length(text) or n.1 == 0 or n.1 > most: return (false, 0) end
     return (true, n.1)
 end
@@ -147,11 +132,7 @@ end
 -- Microseconds on the monotonic clock, through n.clock, or raw -errno. A knock
 -- times itself in microseconds so that rounding to whole milliseconds can
 -- never cut its time limit short.
-func net_clock(n):
-    let result = linux_syscall6(228, 1, buffer_address(n.clock), 0, 0, 0, 0)
-    if linux_error(result): return result end
-    return linux_u64(n.clock, 0) * 1000000 + linux_u64(n.clock, 8) / 1000
-end
+func net_clock(n): return linux_clock_us(n.clock) end
 
 -- Whole milliseconds since started (microseconds).
 func net_since(n, started):
@@ -166,9 +147,7 @@ end
 -- error, and writable without a hang-up (an unconnected socket polls as
 -- POLLOUT|POLLHUP with no error). (outcome, error).
 func net_ended(n, fd, ready):
-    do linux_put32(n.option, 0, 0)
-    do linux_put32(n.option, 4, 4)
-    let got = linux_syscall6(55, fd, 1, 4, buffer_address(n.option), buffer_address(n.option) + 4, 0)
+    let got = linux_get_option(fd, linux_sol_socket(), linux_so_error(), n.option)
     if linux_error(got): return (4, 0 - got) end
     let e = linux_u32(n.option, 0)
     if e == 104 or e == 32: return (0, e) end
@@ -203,7 +182,7 @@ end
 -- connect on a non-blocking socket either ends at once (loopback can accept or
 -- refuse in the call; a missing route fails in it) or is under way (EINPROGRESS).
 func net_attempt(n, fd, started, limit):
-    let connected = linux_syscall6(42, fd, buffer_address(n.address), 16, 0, 0, 0)
+    let connected = linux_connect(fd, n.address, 16)
     if connected == 0: return (0, 0) end
     if connected != 0 - 115: return (net_classify(0 - connected), 0 - connected) end
     return net_wait(n, fd, started, limit)
@@ -213,6 +192,15 @@ end
 -- to 60000 ms.
 func net_range(address, port, limit):
     return address <= 4294967295 and port != 0 and port <= 65535 and limit != 0 and limit <= 60000
+end
+
+-- A 32-bit address in the dotted form net_ipv4 reads, into b at at: the
+-- offset after it.
+func net_put_address(b, at, address):
+    at = text_put(b, text_put_whole(b, at, address >> 24), ".")
+    at = text_put(b, text_put_whole(b, at, (address >> 16) & 255), ".")
+    at = text_put(b, text_put_whole(b, at, (address >> 8) & 255), ".")
+    return text_put_whole(b, at, address & 255)
 end
 
 -- The 16-byte sockaddr_in for a 32-bit address and a port, into b.
@@ -234,7 +222,7 @@ end
 -- raw -errno.
 func net_socket(n, address, port):
     do net_sockaddr(n.address, address, port)
-    return linux_syscall6(41, 2, 526337, 6, 0, 0, 0)
+    return linux_socket(linux_af_inet(), linux_sock_stream() | linux_sock_nonblock() | linux_sock_cloexec(), linux_ipproto_tcp())
 end
 
 -- A knock begins: nothing found yet, nothing read.
@@ -277,7 +265,7 @@ func net_knock(n, address, port, limit):
         return 4
     end
     let found = net_attempt(n, fd, started, limit)
-    do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    do linux_close(fd)
     st.outcome = found.0
     st.error = found.1
     st.elapsed = net_since(n, started)
@@ -288,7 +276,7 @@ end
 -- as what it found. Returns the outcome.
 func net_finish(n, outcome, error):
     let st = n.state
-    do linux_syscall6(3, st.fd, 0, 0, 0, 0, 0)
+    do linux_close(st.fd)
     st.pending = false
     st.outcome = outcome
     st.error = error
@@ -351,7 +339,7 @@ func net_begin(n, address, port, limit, reading):
     st.fd = fd
     st.started = started
     st.limit = limit
-    let connected = linux_syscall6(42, fd, buffer_address(n.address), 16, 0, 0, 0)
+    let connected = linux_connect(fd, n.address, 16)
     if connected == 0: return net_connected(n, 0, 0) end
     if connected != 0 - 115: return net_finish(n, net_classify(0 - connected), 0 - connected) end
     return 5
@@ -384,7 +372,7 @@ func net_read(n):
         if linux_error(now): return net_finish(n, 0, 0 - now) end
         let want = buffer_length(n.reply) - st.got
         if want == 0: return net_finish(n, 0, 0) end
-        let r = linux_syscall6(45, st.fd, buffer_address(n.reply) + st.got, want, 64, 0, 0)
+        let r = linux_receive(st.fd, n.reply, st.got, want, linux_msg_dontwait())
         if r == 0:
             st.closed = true
             return net_finish(n, 0, 0)

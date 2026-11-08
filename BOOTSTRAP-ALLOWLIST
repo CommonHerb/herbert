@@ -45,6 +45,7 @@ bootstrap/tests/check_scope_helper.py
 bootstrap/tests/check_grid_map.py
 bootstrap/tests/check_notes_support.py
 bootstrap/tests/check_x11_text.py
+bootstrap/tests/check_text.py
 bootstrap/tests/check_link44_attempts.py
 # Test tooling for the Herbert-authored sustained input utility.
 bootstrap/tests/check_wordcount.py

@@ -166,9 +166,9 @@ DESKTOP_LIBS := lib/linux.herb lib/x11.herb lib/pixel_text.herb
 first-steps_SOURCES := $(DESKTOP_LIBS) examples/first_steps.herb
 maze_SOURCES := $(DESKTOP_LIBS) lib/grid_map.herb examples/maze.herb
 notes_SOURCES := $(DESKTOP_LIBS) lib/x11_clipboard.herb lib/utf8.herb lib/unicode_tables.herb lib/unicode_grapheme.herb lib/unicode_display.herb lib/file_io.herb lib/text_buffer.herb lib/session_recovery.herb examples/notes.herb
-scope_SOURCES := $(DESKTOP_LIBS) lib/net.herb lib/figures.herb examples/scope.herb
-scope-helper_SOURCES := lib/linux.herb lib/net.herb lib/figures.herb examples/scope_helper.herb
-knock_SOURCES := lib/linux.herb lib/net.herb examples/knock.herb
+scope_SOURCES := $(DESKTOP_LIBS) lib/text.herb lib/net.herb lib/figures.herb examples/scope.herb
+scope-helper_SOURCES := lib/linux.herb lib/text.herb lib/net.herb lib/figures.herb examples/scope_helper.herb
+knock_SOURCES := lib/linux.herb lib/text.herb lib/net.herb examples/knock.herb
 .PHONY: first-steps maze notes scope scope-helper knock hosted-apps hosted-memory-io check-desktop check-hosted-apps check-scope check-scope-helper check-net
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze
@@ -217,6 +217,7 @@ check-app-support: maze
 	@python3 bootstrap/tests/check_notes_support.py
 	@python3 bootstrap/tests/check_utf8_text.py
 	@python3 bootstrap/tests/check_x11_text.py
+	@python3 bootstrap/tests/check_text.py
 
 check-hosted-apps: maze notes scope scope-helper knock
 	@python3 bootstrap/tests/check_hosted_apps.py --maze $(BUILD)/maze --notes $(BUILD)/notes

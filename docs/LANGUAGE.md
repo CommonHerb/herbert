@@ -78,6 +78,7 @@ The native compiler currently permits repeated `let` bindings in one scope and s
 - **There is NO unary minus.** Prefix unary is only `not` (boolean) and `~` (one's-complement int). Write negation-of-a-constant as modular subtraction: `0 - 1` is `18446744073709551615`, not `-1`.
 - **Bitwise/shift operands must be parenthesised/atomic and single-class.** Unparenthesised mixing like `a & b | c`, `a << 2 + 3`, `x & 1 == 0` is rejected `ERR 442`. Fully-parenthesised forms parse: `(a & b)`, `(x << 2)`.
 - **Atoms:** integer literal, char literal `'x'` (a byte value / int), string literal `"…"` (escapes: G10), `true`, `false`, a bare NAME, a call `NAME(args)`, or a parenthesised group/tuple.
+- **`and` and `or` stop once the answer is known.** The right side of `a and b` is not evaluated when `a` is false, nor the right side of `a or b` when `a` is true, so `i < n and buffer_get(b, i) == 1` is safe at `i == n`. Observed on the committed seed (2026-11-08) with probes whose right side reads past the end of a one-byte buffer at `i == n`: none faulted with the guard as the condition of an `if`, an `elif` and a `while`, bound with `let` (`and` and `or`), returned, passed as an argument, and nested as `(i < n and (n > 0 and buffer_get(b, i) == 1)) or false`; the same read with a guard that lets it through (`i <= n and …`) stopped with `herbert: line 6: get: position 1 out of range (count 1)`; and a right side that writes to stderr wrote only when its value was needed (`true and …`, `false or …`), never after `false and` or `true or`. `make check-app-support` keeps one `and` and one `or` case (`check_text.py`).
 
 **Integer model — 64-bit UNSIGNED, modular:** literals are decimal, unsigned, must fit in 64 bits (`ERR 103` otherwise). `+ - *` keep the low 64 bits (wrap): `18446744073709551615 + 1 == 0`. `/ %` are unsigned and **fault on a zero divisor**: the program stops with `herbert: line N: division by zero` on stderr, `N` being the line of the `/` or `%`, and exit status 1; what it wrote to stdout before stays. The message is best effort, as in §4(a): with stderr closed the 1 is silent, and with stderr a pipe whose reader has gone the program is killed by SIGPIPE (status 141 in a shell) unless SIGPIPE is ignored or blocked. Shifts mask the count with `& 63`. Comparisons are unsigned. There are no negatives and no floats.
 
@@ -224,6 +225,19 @@ func main():
     return length(input.1)
 end
 ```
+
+**Files and the command line.** The language itself reads only standard input. Files, the command line, the environment and Linux's other services come from the support unit `lib/linux.herb`, joined in front of a program with `make program SOURCE=my-program.herb SUPPORT=linux` ([BUILDING.md](BUILDING.md)); `SUPPORT="linux text"` adds `lib/text.herb`, which reads whole numbers and fields and writes text and numbers into fixed buffers. [lib/README.md](../lib/README.md) tables both units' functions with their arguments and results, among them `linux_read_file(path, cap)`, `linux_arguments()`, `linux_argument(args, k)` (`""` for a missing argument and an empty one alike) and `linux_argument_count(args)`, which tells the two apart.
+
+**Print a line and exit 0.** `flogger` writes the line and `process_exit(0)` ends the program before `main`'s result is rendered; the `return` after it is never reached but must be there (d):
+
+```herbert
+func main():
+    do flogger("up 2 days\n")
+    do process_exit(0)
+    return 0
+end
+```
+**stdout:** `up 2 days\n`, once, and status 0. Without the `process_exit`, `main`'s `0` would follow the line (`up 2 days\n0\n`).
 
 ## 5. THE COMPILE + RUN COMMAND
 

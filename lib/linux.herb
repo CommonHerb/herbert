@@ -344,3 +344,151 @@ func linux_decimal(b, offset, n):
     do buffer_set(b, at, 48 + n % 10)
     return at + 1
 end
+
+-- How many arguments args (as linux_arguments gives it) holds, the program's
+-- own name included: 1 when it was given none. linux_argument(args, k) is ""
+-- both past the last argument and for an empty one; this tells them apart.
+func linux_argument_count(args):
+    let total = 0
+    let offset = 0
+    while offset < args.1:
+        offset = linux_nul_end(args.0, offset, args.1) + 1
+        total = total + 1
+    end
+    return total
+end
+
+-- Microseconds on the monotonic clock, through clockbuf (at least 16 bytes),
+-- or raw -errno: linux_clock_ms finer.
+func linux_clock_us(clockbuf):
+    do linux_require_range(clockbuf, 0, 16)
+    let result = linux_syscall6(228, 1, buffer_address(clockbuf), 0, 0, 0, 0)
+    if linux_error(result): return result end
+    return linux_u64(clockbuf, 0) * 1000000 + linux_u64(clockbuf, 8) / 1000
+end
+
+-- Linux's numbers by name. Flags (x86-64 UAPI): open's (O_RDONLY is 0, so a
+-- file opened to read needs only these), socket's, send and receive's, the
+-- socket options used here, and the file-type bits of a stat's st_mode.
+func linux_o_nonblock(): return 2048 end
+func linux_o_cloexec(): return 524288 end
+func linux_af_inet(): return 2 end
+func linux_sock_stream(): return 1 end
+func linux_sock_nonblock(): return 2048 end
+func linux_sock_cloexec(): return 524288 end
+func linux_ipproto_tcp(): return 6 end
+func linux_sol_socket(): return 1 end
+func linux_so_reuseaddr(): return 2 end
+func linux_so_error(): return 4 end
+func linux_msg_dontwait(): return 64 end
+func linux_msg_nosignal(): return 16384 end
+func linux_s_ifmt(): return 61440 end
+func linux_s_ifreg(): return 32768 end
+
+-- The system calls, one each, by name (x86-64 numbers from the kernel's
+-- syscall_64.tbl), their arguments in the order of their man pages and passed
+-- through unchanged. Each returns what Linux returns: a count or descriptor,
+-- or raw -errno (test it with linux_error). A buffer span given to Linux is
+-- checked first, as linux_poll does; a path is a NUL-terminated buffer (see
+-- linux_cstring). EINTR is returned to the caller. None allocates.
+-- https://man7.org/linux/man-pages/man2/syscalls.2.html
+
+-- open(2): a descriptor for path.
+func linux_open(path, flags, mode):
+    do linux_require_range(path, 0, 1)
+    return linux_syscall6(2, buffer_address(path), flags, mode, 0, 0, 0)
+end
+
+-- read(2): up to count bytes from fd into b at at; the count read, 0 at the end.
+func linux_read(fd, b, at, count):
+    do linux_require_range(b, at, count)
+    return linux_syscall6(0, fd, buffer_address(b) + at, count, 0, 0, 0)
+end
+
+-- write(2): up to count bytes of b from at to fd; the count written.
+func linux_write(fd, b, at, count):
+    do linux_require_range(b, at, count)
+    return linux_syscall6(1, fd, buffer_address(b) + at, count, 0, 0, 0)
+end
+
+-- close(2). Linux frees the descriptor even when it reports an error.
+func linux_close(fd): return linux_syscall6(3, fd, 0, 0, 0, 0, 0) end
+
+-- fstat(2): fd's struct stat (144 bytes) into answer; st_mode is the 32-bit
+-- field at 24.
+func linux_fstat(fd, answer):
+    do linux_require_range(answer, 0, 144)
+    return linux_syscall6(5, fd, buffer_address(answer), 0, 0, 0, 0)
+end
+
+-- statfs(2): the struct statfs (120 bytes) of the file system holding path,
+-- into answer.
+func linux_statfs(path, answer):
+    do linux_require_range(path, 0, 1)
+    do linux_require_range(answer, 0, 120)
+    return linux_syscall6(137, buffer_address(path), buffer_address(answer), 0, 0, 0, 0)
+end
+
+-- socket(2): a descriptor; kind is the type, with linux_sock_nonblock() and
+-- linux_sock_cloexec() or-ed in as wanted.
+func linux_socket(domain, kind, protocol): return linux_syscall6(41, domain, kind, protocol, 0, 0, 0) end
+
+-- connect(2) and bind(2) to the first size bytes of address (a sockaddr_in is
+-- 16; net_sockaddr fills one).
+func linux_connect(fd, address, size):
+    do linux_require_range(address, 0, size)
+    return linux_syscall6(42, fd, buffer_address(address), size, 0, 0, 0)
+end
+
+func linux_bind(fd, address, size):
+    do linux_require_range(address, 0, size)
+    return linux_syscall6(49, fd, buffer_address(address), size, 0, 0, 0)
+end
+
+-- listen(2), with a queue of backlog.
+func linux_listen(fd, backlog): return linux_syscall6(50, fd, backlog, 0, 0, 0, 0) end
+
+-- accept4(2): a descriptor for the next connection, its address into address
+-- and that address's length into size (4 bytes), which the caller first sets
+-- to the room in address (linux_put32(size, 0, 16)).
+func linux_accept(fd, address, size, flags):
+    do linux_require_range(size, 0, 4)
+    do linux_require_range(address, 0, linux_u32(size, 0))
+    return linux_syscall6(288, fd, buffer_address(address), buffer_address(size), flags, 0, 0)
+end
+
+-- send and receive on a connected socket, sendto(2) and recvfrom(2) with no
+-- address: count bytes of b from at, with flags (linux_msg_dontwait(),
+-- linux_msg_nosignal()). The count sent or received; 0 received at the end.
+func linux_send(fd, b, at, count, flags):
+    do linux_require_range(b, at, count)
+    return linux_syscall6(44, fd, buffer_address(b) + at, count, flags, 0, 0)
+end
+
+func linux_receive(fd, b, at, count, flags):
+    do linux_require_range(b, at, count)
+    return linux_syscall6(45, fd, buffer_address(b) + at, count, flags, 0, 0)
+end
+
+-- setsockopt(2) of a 32-bit option: value is put into the first 4 bytes of b,
+-- which is passed as the option.
+func linux_set_option(fd, level, name, b, value):
+    do linux_put32(b, 0, value)
+    return linux_syscall6(54, fd, level, name, buffer_address(b), 4, 0)
+end
+
+-- getsockopt(2) of a 32-bit option, through b (8 bytes): the option's room
+-- (zeroed first) at 0 and its length (set to 4 first) at 4. Then the value is
+-- linux_u32(b, 0).
+func linux_get_option(fd, level, name, b):
+    do linux_put32(b, 0, 0)
+    do linux_put32(b, 4, 4)
+    return linux_syscall6(55, fd, level, name, buffer_address(b), buffer_address(b) + 4, 0)
+end
+
+-- nanosleep(2) for the struct timespec in timespec (16 bytes: seconds, then
+-- nanoseconds); 0, or raw -errno (EINTR when a signal ends it early).
+func linux_sleep(timespec):
+    do linux_require_range(timespec, 0, 16)
+    return linux_syscall6(35, buffer_address(timespec), 0, 0, 0, 0, 0)
+end

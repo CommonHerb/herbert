@@ -262,10 +262,11 @@ Any other arguments print `scope: usage: scope` and exit with status 1, before a
 
 ## How it is built
 
-The build joins `lib/linux.herb`, `lib/x11.herb`, `lib/pixel_text.herb`, `lib/net.herb`, `lib/figures.herb` and
-`examples/scope.herb` and compiles them with the committed Herbert compiler, as for First steps. Scope reads `/proc`
-with `lib/figures.herb` (the helper reads it with the same code), knocks with `lib/net.herb` and draws through its own
-X11 client; no foreign runtime or graphics library is linked in.
+The build joins `lib/linux.herb`, `lib/x11.herb`, `lib/pixel_text.herb`, `lib/text.herb`, `lib/net.herb`,
+`lib/figures.herb` and `examples/scope.herb` and compiles them with the committed Herbert compiler, as for First
+steps. Scope reads `/proc` with `lib/figures.herb` (the helper reads it with the same code), knocks with
+`lib/net.herb`, builds its text with `lib/text.herb` and draws through its own X11 client; no foreign runtime or
+graphics library is linked in.
 
 ## Verification
 

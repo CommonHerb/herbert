@@ -11,9 +11,10 @@ On loopback, needing no privileges:
   even asked for, and no build, however broken its parser, can send a packet from them. Every malformed address is
   built around 127.x, so a mis-read would still name this computer. `--parse` shows what good command lines mean,
   edges included, under the same strace; each test mode with the wrong number of arguments prints its own usage.
-- The library itself, through a small Herbert probe this check compiles from lib/linux.herb, lib/net.herb and a main
-  of its own: net_knock's range guard (an address past 32 bits, port 0 and 65536, limit 0 and 60001) is error 22
-  with no socket asked for, while the edges just inside it do ask for one; net_classify's mapping of every error
+- The library itself, through a small Herbert probe this check compiles from lib/linux.herb, lib/text.herb,
+  lib/net.herb and a main of its own: net_knock's range guard (an address past 32 bits, port 0 and 65536, limit 0
+  and 60001) is error 22 with no socket asked for, while the edges just inside it do ask for one; net_classify's
+  mapping of every error
   the library names (100, 101, 112 and 113 unreachable, 110 no answer, 111 refused, the rest error) and
   net_error_name's words for each.
 - The system calls of one knock, from strace, to 127.200.1.254 (four different bytes, two past 127): one socket,
@@ -699,14 +700,15 @@ def refusal_checks(args, evidence, passed):
 
 
 def compile_probe(args, root, main):
-    """lib/linux.herb, the net.herb under test and main, compiled in root with the committed seed: the image."""
+    """lib/linux.herb, lib/text.herb, the net.herb under test and main, compiled in root with the committed seed: the
+    image."""
     root.mkdir()
     seed = ROOT / 'bootstrap/seed/gen1.seed'
     expected = (ROOT / 'bootstrap/seed/gen1.seed.sha256').read_text().split()[0]
     assert hashlib.sha256(seed.read_bytes()).hexdigest() == expected, 'committed seed hash mismatch'
-    units = [ROOT / 'lib/linux.herb', ROOT / 'lib/net.herb']
+    units = [ROOT / 'lib/linux.herb', ROOT / 'lib/text.herb', ROOT / 'lib/net.herb']
     if args.library is not None:
-        units = [ROOT / 'lib/linux.herb', args.library]
+        units = [ROOT / 'lib/linux.herb', ROOT / 'lib/text.herb', args.library]
     source = b''.join(unit.read_bytes() + b'\n' for unit in units) + main.encode()
     (root / 'source.herb').write_bytes(source)
     compiler = root / 'compiler'

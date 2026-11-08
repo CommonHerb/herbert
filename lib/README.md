@@ -11,9 +11,17 @@ back to original files and lines. Runtime bounds faults still refer to combined
 source; the retained source map identifies its original units.
 
 - `linux.herb`: fixed byte buffers and endian fields; bounded file/environment
-  reading; startup command-line arguments; unsigned decimal formatting; hostname; monotonic clock; polling one
-  descriptor or several at once; complete socket transfers with
-  partial-transfer, EINTR, EOF, broken-peer and deadline handling.
+  reading; startup command-line arguments and their count; unsigned decimal formatting; hostname; monotonic clock;
+  polling one descriptor or several at once; complete socket transfers with
+  partial-transfer, EINTR, EOF, broken-peer and deadline handling; and the system calls and flags the programs here
+  use, by name (`linux_open`, `linux_read`, `linux_statfs`, `linux_socket`, `linux_o_cloexec()`, ...), so no
+  program passes Linux a bare number. Its functions are tabled [below](#linuxherb).
+- `text.herb`: text in and out, [tabled below](#textherb): whether a byte is a digit or a blank, a whole number
+  read from a span of a buffer or a string with the 2^64 check (zeros in front allowed, or refused), the next field
+  of a line split on spaces and tabs, a span compared with a string, and text, whole numbers, numbers padded with
+  zeros and tenths written into a fixed buffer at an offset, each writer returning the offset after it. None of
+  these allocates; the four growing writers at its end (`text_add`, ...) do, for output made once. Requires
+  `linux.herb`. Used by knock, Scope and Scope's helper, and by `net.herb` and `figures.herb`, which need it.
 - `net.herb`: strict dotted IPv4, port and time-limit parsing, and a TCP knock:
   answered, refused, no answer, unreachable or a named error, within a time
   limit, never sending a byte, the socket closed on every path. A `Net` record
@@ -24,8 +32,9 @@ source; the retained source map identifies its original units.
   knocks without waiting too and, once the connection is taken, reads what the
   computer sends into the Net's fixed 256-byte reply buffer, never waiting,
   until it closes the connection, 256 bytes have come or the time limit
-  passes. `net_sockaddr` fills a sockaddr_in. Used by knock, Scope and Scope's
-  helper.
+  passes. `net_sockaddr` fills a sockaddr_in and `net_put_address` writes an
+  address in the dotted form `net_ipv4` reads. Requires `text.herb`. Used by
+  knock, Scope and Scope's helper.
 - `figures.herb`: a computer's processor and memory counts from `/proc/stat`
   and `/proc/meminfo`, and the first line of a name file, read a byte at a time
   through one fixed 4096-byte chunk, only the first 1 MiB of a file looked at,
@@ -33,8 +42,8 @@ source; the retained source map identifies its original units.
   allocates nothing; and the one line Scope's helper sends them in
   (`herbert-scope 1 TOTAL BUSY MEMTOTAL MEMAVAILABLE`, a half `unavailable`
   when it cannot be read): `figures_reply_put` writes it, `figures_reply_read`
-  reads it strictly. Used by Scope and Scope's helper, so the two work out the
-  figures with the same code.
+  reads it strictly. Requires `text.herb`. Used by Scope and Scope's helper, so
+  the two work out the figures with the same code.
 - `x11.herb`: local display/authentication, a fixed-size window, server pixmap,
   keyboard mapping and key/focus/close events, rectangle/ellipse requests and
   presentation. X11 itself remains an external desktop service. Its supported
@@ -211,3 +220,95 @@ processed; keys received before that use the last completed keymap snapshot.
 Already queued keys retain their symbols. This is not an atomic layout switch
 while typing. Drawing requests flush bounded batches into the retained pixmap;
 `x11_present` copies the finished frame into the window.
+
+## Function tables
+
+Results in parentheses are tuples, read with `.0`, `.1`, .... "-errno" is Linux's raw error, which `linux_error`
+tells from a result; Herbert integers are unsigned, so never test it with `< 0`. A *span* is `b` from `at` up to
+`stop`, `stop` not included. A *path* is a NUL-terminated buffer (`linux_cstring(s)` makes one). Functions marked
+*allocates* make new storage each call: call them at startup or in output made once, never in a loop that runs for
+ever.
+
+### linux.herb
+
+| Function | Gives |
+| --- | --- |
+| `linux_error(r)` | true when `r` is a raw -errno (`r >= 0 - 4095`) |
+| `linux_die(message)` | writes `message` (a string; include the newline) to stderr and exits 1; never returns |
+| `linux_buffer(size)` | a buffer of `size` zero bytes; *allocates* |
+| `linux_range(b, offset, size)` | true when `size` bytes from `offset` lie inside `b` |
+| `linux_require_range(b, offset, size)` | 0, or stops the program with `linux: byte-buffer range is outside its allocation` |
+| `linux_u16(b, o)`, `linux_u32(b, o)`, `linux_u64(b, o)` | the little-endian field at `o` |
+| `linux_put16(b, o, v)`, `linux_put32(b, o, v)`, `linux_put64(b, o, v)` | 0; stores the low bits of `v` at `o`, little-endian |
+| `linux_copy(dst, offset, src, from, n)` | 0; moves `n` bytes, overlap-safe |
+| `linux_text(dst, offset, s)` | 0; the bytes of string `s` into `dst` at `offset` (`text_put` also gives the offset after) |
+| `linux_cstring(s)` | a path: `s` and a NUL; *allocates* |
+| `linux_decimal(b, offset, n)` | the offset after `n` written in decimal (the same as `text_put_whole`) |
+| `linux_nul_end(b, from, limit)` | the first NUL at or after `from`, or `limit` |
+| `linux_read_file(path, cap)` | (status, buffer, count): the whole file at `path`, a string, of at most `cap` bytes; status 0, -errno, or -27 when larger; *allocates* |
+| `linux_environment()` | the environment as a buffer, read once; *allocates* |
+| `linux_env(env, name)` | the value of `name` in `env`, `""` when absent or empty; *allocates* |
+| `linux_hostname()` | the host name; *allocates* |
+| `linux_arguments()` | (buffer, size): the command line, read once; *allocates* |
+| `linux_argument(args, k)` | argument `k` (0 is the program) as a string, `""` when missing or empty; *allocates* |
+| `linux_argument_count(args)` | how many arguments there are, the program included (1 when none was given) |
+| `linux_clock_ms(clockbuf)`, `linux_clock_us(clockbuf)` | milliseconds, microseconds, on the monotonic clock (`clockbuf` at least 16 bytes), or -errno |
+| `linux_poll(fd, pollbuf, events, timeout)` | the events ready on `fd`, 0 after `timeout` ms, or -errno (`pollbuf` 8 bytes) |
+| `linux_poll_entry(pollbuf, i, fd, events)`, `linux_poll_many(pollbuf, count, timeout)` | entry `i` written, `i + 1`; then how many of `count` entries are ready, 0, or -errno |
+| `linux_send_all(fd, b, offset, count, pollbuf, clockbuf)`, `linux_read_exact(...)` | 0 once all `count` bytes moved on a connected socket within 5 s, or -errno |
+| `linux_o_nonblock()`, `linux_o_cloexec()` | open's flags (reading is 0, so a file opened to read needs only these, or-ed with `\|`) |
+| `linux_af_inet()`, `linux_sock_stream()`, `linux_sock_nonblock()`, `linux_sock_cloexec()`, `linux_ipproto_tcp()` | socket's numbers |
+| `linux_sol_socket()`, `linux_so_reuseaddr()`, `linux_so_error()` | socket option level and names |
+| `linux_msg_dontwait()`, `linux_msg_nosignal()` | send and receive flags |
+| `linux_s_ifmt()`, `linux_s_ifreg()` | a stat's file-type bits and the regular file's value |
+| `linux_open(path, flags, mode)` | open(2): a descriptor, or -errno |
+| `linux_read(fd, b, at, count)` | read(2) into `b` at `at`: the count read, 0 at the end, or -errno |
+| `linux_write(fd, b, at, count)` | write(2) from `b` at `at`: the count written, or -errno (`linux_write(1, b, 0, n)` prints `n` bytes) |
+| `linux_close(fd)` | close(2): 0 or -errno |
+| `linux_fstat(fd, answer)` | fstat(2) into `answer` (144 bytes; st_mode is `linux_u32(answer, 24)`): 0 or -errno |
+| `linux_statfs(path, answer)` | statfs(2) into `answer` (120 bytes): 0 or -errno |
+| `linux_socket(domain, kind, protocol)`, `linux_connect(fd, address, size)`, `linux_bind(fd, address, size)`, `linux_listen(fd, backlog)` | socket(2), connect(2), bind(2), listen(2): a descriptor or 0, or -errno |
+| `linux_accept(fd, address, size, flags)` | accept4(2): a descriptor, or -errno; `size` a 4-byte buffer set to the room in `address` first |
+| `linux_send(fd, b, at, count, flags)`, `linux_receive(fd, b, at, count, flags)` | sendto(2), recvfrom(2) with no address: the count, or -errno |
+| `linux_set_option(fd, level, name, b, value)`, `linux_get_option(fd, level, name, b)` | setsockopt(2), getsockopt(2) of a 32-bit option through `b` (4, 8 bytes): 0 or -errno; the value read is `linux_u32(b, 0)` |
+| `linux_sleep(timespec)` | nanosleep(2) for the seconds and nanoseconds in `timespec` (16 bytes): 0 or -errno |
+
+`linux_transfer`, `linux_read_file_loop`, `linux_name_matches` and `linux_string_loop` are its internal steps.
+
+### text.herb
+
+| Function | Gives |
+| --- | --- |
+| `text_digit(byte)` | true for `0` to `9` |
+| `text_blank(byte)` | true for a space or a tab |
+| `text_fits(value, digit)` | true when `value * 10 + digit` is below 2^64 |
+| `text_skip(b, at, stop)` | the first byte from `at` that is not a blank, or `stop` |
+| `text_field(b, at, stop)` | (start, after): the next field, blanks skipped; (stop, stop) when none is left |
+| `text_whole(b, at, stop)` | (ok, value, next): the digits from `at`, zeros in front allowed; ok false with no digit or past 2^64 - 1; `next == stop` when the span is all number |
+| `text_whole_strict(b, at, stop)` | the same, refusing a zero in front of another digit (`07`) |
+| `text_string_whole(s, at, stop)`, `text_string_whole_strict(s, at, stop)` | the same two for a string, such as an argument |
+| `text_starts(b, at, stop, s)` | true when the bytes of string `s` come at `at` |
+| `text_is(b, at, stop, s)` | true when the span is exactly `s` |
+| `text_put(b, at, s)` | the offset after string `s`, written at `at` |
+| `text_put_whole(b, at, n)` | the offset after `n` in decimal |
+| `text_put_padded(b, at, n, width)` | the offset after `n` with zeros in front to `width` digits (`07`) |
+| `text_put_tenths(b, at, n, unit)` | the offset after `n / unit` to the nearest tenth, `12.3` (`unit` 1 to 2^60) |
+| `text_add(out, s)`, `text_add_span(out, b, from, count)`, `text_add_whole(out, n)` | 0; `s`, `count` bytes of `b`, or `n` in decimal added to the end of `out`; *allocates* as `out` grows |
+| `text_string(b, from, stop)` | the bytes from `from` to `stop` as a string; *allocates* |
+
+A line is built by passing each writer's result on, then printed without allocating:
+
+```herbert
+func main():
+    let line = linux_buffer(64)
+    let at = text_put(line, 0, "up ")
+    at = text_put_whole(line, at, 2)
+    at = text_put(line, at, " days, 6:")
+    at = text_put_padded(line, at, 5, 2)
+    at = text_put(line, at, "\n")
+    do linux_write(1, line, 0, at)
+    return 0
+end
+```
+
+prints `up 2 days, 6:05` and then `main`'s `0` (built with `SUPPORT="linux text"`).

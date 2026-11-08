@@ -2,7 +2,8 @@
 -- /proc files, its name, and the one line that carries the figures from
 -- Scope's helper (examples/scope_helper.herb) to Scope (examples/scope.herb).
 -- Both programs link this file, so the figures a helper sends are worked out
--- exactly as Scope works out its own. Requires lib/linux.herb; no main.
+-- exactly as Scope works out its own. Requires lib/linux.herb and
+-- lib/text.herb; no main.
 -- A FiguresScan (figures_scan_new, once) holds everything a reading needs: one
 -- fixed 4096-byte chunk, a byte at a time, keeping only the numbers wanted, so
 -- reading again and again allocates nothing.
@@ -70,19 +71,11 @@ func figures_scan_reset(s):
     return 0
 end
 
-func figures_digit(b): return b >= 48 and b <= 57 end
-func figures_blank(b): return b == 32 or b == 9 end
-
--- Whether value * 10 + d is still below 2^64: the one rule for the size of a
--- number, in the files and in a reply.
-func figures_fits(value, d):
-    return value < 1844674407370955161 or (value == 1844674407370955161 and d <= 5)
-end
-
--- value * 10 + the digit b; false, leaving value alone, past 2^64 - 1.
+-- value * 10 + the digit b; false, leaving value alone, past 2^64 - 1 (the
+-- same rule, text_fits, as for a number in a reply).
 func figures_accumulate(s, b):
     let d = b - 48
-    if not figures_fits(s.value, d): return false end
+    if not text_fits(s.value, d): return false end
     s.value = s.value * 10 + d
     s.digits = s.digits + 1
     return true
@@ -120,7 +113,7 @@ func figures_stat_byte(s, b):
         if b == 10:
             if s.label == 3: return figures_stat_end(s) end
             s.label = 0
-        elif figures_blank(b):
+        elif text_blank(b):
             s.phase = 2
             if s.label == 3: s.phase = 1 end
         elif s.label < 3 and b == index("cpu", s.label):
@@ -129,11 +122,11 @@ func figures_stat_byte(s, b):
             s.label = 4
         end
     elif s.phase == 1:
-        if figures_digit(b):
+        if text_digit(b):
             if not figures_accumulate(s, b): s.bad = true end
         elif b == 10:
             return figures_stat_end(s)
-        elif figures_blank(b):
+        elif text_blank(b):
             if s.digits > 0: do figures_stat_field(s) end
         else:
             s.bad = true
@@ -213,16 +206,16 @@ func figures_mem_byte(s, b):
             do figures_mem_name(s, b)
         end
     elif s.phase == 1:
-        if figures_digit(b):
+        if text_digit(b):
             s.phase = 2
             do figures_mem_digit(s, b)
-        elif not figures_blank(b):
+        elif not text_blank(b):
             s.phase = 6
         end
     elif s.phase == 2:
-        if figures_digit(b):
+        if text_digit(b):
             do figures_mem_digit(s, b)
-        elif figures_blank(b):
+        elif text_blank(b):
             s.phase = 3
         else:
             s.phase = 6
@@ -230,14 +223,14 @@ func figures_mem_byte(s, b):
     elif s.phase == 3:
         if b == 107:
             s.phase = 4
-        elif not figures_blank(b):
+        elif not text_blank(b):
             s.phase = 6
         end
     elif s.phase == 4:
         s.phase = 6
         if b == 66: s.phase = 5 end
     elif s.phase == 5:
-        if not figures_blank(b): s.phase = 6 end
+        if not text_blank(b): s.phase = 6 end
     end
     return 0
 end
@@ -284,7 +277,7 @@ end
 -- there. False if the file cannot be opened or read, or goes on past 1 MiB
 -- without the scanner having finished.
 func figures_read(s, path, kind):
-    let fd = linux_syscall6(2, buffer_address(path), 524288, 0, 0, 0, 0)
+    let fd = linux_open(path, linux_o_cloexec(), 0)
     if linux_error(fd): return false end
     let seen = 0
     let ok = true
@@ -293,7 +286,7 @@ func figures_read(s, path, kind):
         let want = buffer_length(s.chunk)
         if 1048576 - seen < want: want = 1048576 - seen end
         if want == 0: want = 1 end
-        let n = linux_syscall6(0, fd, buffer_address(s.chunk), want, 0, 0, 0)
+        let n = linux_read(fd, s.chunk, 0, want)
         if n != 0 - 4:
             if linux_error(n) or n > want:
                 ok = false
@@ -310,7 +303,7 @@ func figures_read(s, path, kind):
             end
         end
     end
-    do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+    do linux_close(fd)
     return ok
 end
 
@@ -359,64 +352,34 @@ end
 --   herbert-scope 1 unavailable unavailable\n
 -- The longest is 100 bytes.
 
-func figures_put(b, at, text):
-    do linux_text(b, at, text)
-    return at + length(text)
-end
-
 func figures_put_half(b, at, reading):
-    if not reading.0: return figures_put(b, at, "unavailable") end
-    at = linux_decimal(b, at, reading.1)
-    at = figures_put(b, at, " ")
-    return linux_decimal(b, at, reading.2)
+    if not reading.0: return text_put(b, at, "unavailable") end
+    at = text_put_whole(b, at, reading.1)
+    at = text_put(b, at, " ")
+    return text_put_whole(b, at, reading.2)
 end
 
 -- The reply for a processor reading and a memory reading (each as
 -- figures_read_stat and figures_read_meminfo return them), into b from 0
 -- (at least 100 bytes): its length.
 func figures_reply_put(b, cpu, memory):
-    let at = figures_put(b, 0, "herbert-scope 1 ")
+    let at = text_put(b, 0, "herbert-scope 1 ")
     at = figures_put_half(b, at, cpu)
-    at = figures_put(b, at, " ")
+    at = text_put(b, at, " ")
     at = figures_put_half(b, at, memory)
-    return figures_put(b, at, "\n")
-end
-
--- A decimal number at at, before stop: 1 to 20 digits, no zero in front of
--- another digit, below 2^64. (ok, value, next).
-func figures_reply_number(b, at, stop):
-    let start = at
-    let value = 0
-    while at < stop and figures_digit(buffer_get(b, at)):
-        let d = buffer_get(b, at) - 48
-        if not figures_fits(value, d): return (false, 0, at) end
-        value = value * 10 + d
-        at = at + 1
-    end
-    if at == start: return (false, 0, at) end
-    if at - start > 1 and buffer_get(b, start) == 48: return (false, 0, at) end
-    return (true, value, at)
-end
-
--- Whether the bytes of text come at at, before stop.
-func figures_reply_word(b, at, stop, text):
-    if stop - at < length(text): return false end
-    let i = 0
-    while i < length(text):
-        if buffer_get(b, at + i) != index(text, i): return false end
-        i = i + 1
-    end
-    return true
+    return text_put(b, at, "\n")
 end
 
 -- One half at at: (well-formed, given, first, second, next). "unavailable"
--- is well-formed and not given; otherwise two numbers and one space between.
+-- is well-formed and not given; otherwise two numbers and one space between,
+-- each 1 to 20 digits, no zero in front of another digit, below 2^64
+-- (text_whole_strict).
 func figures_reply_half(b, at, stop):
-    if figures_reply_word(b, at, stop, "unavailable"): return (true, false, 0, 0, at + 11) end
-    let first = figures_reply_number(b, at, stop)
+    if text_starts(b, at, stop, "unavailable"): return (true, false, 0, 0, at + 11) end
+    let first = text_whole_strict(b, at, stop)
     if not first.0 or first.2 >= stop: return (false, false, 0, 0, at) end
     if buffer_get(b, first.2) != 32: return (false, false, 0, 0, at) end
-    let second = figures_reply_number(b, first.2 + 1, stop)
+    let second = text_whole_strict(b, first.2 + 1, stop)
     if not second.0: return (false, false, 0, 0, at) end
     return (true, true, first.1, second.1, second.2)
 end
@@ -428,7 +391,7 @@ end
 -- given, MEMTOTAL, MEMAVAILABLE); anything else is (false, ...).
 func figures_reply_read(b, n):
     let none = (false, false, 0, 0, false, 0, 0)
-    if n > buffer_length(b) or not figures_reply_word(b, 0, n, "herbert-scope 1 "): return none end
+    if n > buffer_length(b) or not text_starts(b, 0, n, "herbert-scope 1 "): return none end
     let cpu = figures_reply_half(b, 16, n)
     if not cpu.0 or cpu.4 >= n or buffer_get(b, cpu.4) != 32: return none end
     let memory = figures_reply_half(b, cpu.4 + 1, n)

@@ -105,7 +105,10 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
 - `make check-app-support`: the map parser, text-buffer models, UTF-8 decoding against the pinned Unicode 18
   grapheme oracle, font geometry, key mapping, LF/CRLF-preserving edits, bounded history, atomic saving, external
   conflicts, rescue and recovery, with syscall fault injection (needs strace). Its Notes endurance case has wall-time
-  limits (60 s to ready, 300 s for 2,000 sampled iterations) that are hang guards, not performance bounds.
+  limits (60 s to ready, 300 s for 2,000 sampled iterations) that are hang guards, not performance bounds. Then
+  `check_text.py` checks `lib/text.herb` through a probe it compiles: its readers and writers against Python's own
+  answers (the 2^64 edge, zeros in front, fields, tenths rounded half up), a write past a buffer's end stopping,
+  `linux_argument_count`, `and` and `or` stopping early, and no allocation over 300,000 rounds.
 - `make check-hosted-apps`: Maze and Notes on private XTest windows: movement, collection, completion and restart;
   typing, navigation, Unicode entry, search, save, reopen, rescue, recovery and editing copies of the project's own
   documents; with strace, the visible warning after a failed sync and its retry; plus 120-second memory checks of

@@ -123,8 +123,8 @@ carry.
 
 ## How it is built
 
-The build joins `lib/linux.herb`, `lib/net.herb`, `lib/figures.herb` and `examples/scope_helper.herb` and compiles
-them with the committed Herbert compiler. It talks to Linux with system calls; no foreign runtime is linked in.
+The build joins `lib/linux.herb`, `lib/text.herb`, `lib/net.herb`, `lib/figures.herb` and
+`examples/scope_helper.herb` and compiles them with the committed Herbert compiler. It talks to Linux with system calls; no foreign runtime is linked in.
 
 ## Verification
 

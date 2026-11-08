@@ -1,6 +1,6 @@
 -- scope-helper: answers Scope with this computer's processor and memory
--- figures. No window. Linked after lib/linux.herb, lib/net.herb and
--- lib/figures.herb by Make. See examples/scope_helper.md.
+-- figures. No window. Linked after lib/linux.herb, lib/text.herb, lib/net.herb
+-- and lib/figures.herb by Make. See examples/scope_helper.md.
 --   scope-helper LISTEN_ADDRESS PORT ALLOWED_ADDRESS [ALLOWED_ADDRESS ...]
 -- listens for TCP connections at exactly LISTEN_ADDRESS and PORT (IPv4; 1 to 4
 -- allowed addresses) and runs until it is stopped. For each connection: when
@@ -15,10 +15,10 @@
 -- socket is made; a listening socket it cannot set up prints why and exits 1.
 -- It writes nothing else, anywhere. Everything is made at startup; nothing is
 -- allocated after.
--- Linux x86-64: socket 41, setsockopt 54, bind 49, listen 50, accept4 288,
--- sendto 44, nanosleep 35, close 3; SOCK_STREAM|SOCK_CLOEXEC 524289;
--- SOCK_NONBLOCK|SOCK_CLOEXEC 526336; MSG_DONTWAIT|MSG_NOSIGNAL 16448;
--- SOL_SOCKET 1, SO_REUSEADDR 2.
+-- Linux's calls and flags go by their names in lib/linux.herb: socket,
+-- setsockopt, bind, listen, accept4, sendto, nanosleep and close as
+-- linux_socket, linux_set_option, linux_bind, linux_listen, linux_accept,
+-- linux_send, linux_sleep and linux_close.
 -- https://man7.org/linux/man-pages/man2/accept.2.html
 -- https://man7.org/linux/man-pages/man7/socket.7.html (SO_REUSEADDR)
 
@@ -56,45 +56,14 @@ func helper_address(text):
     return address.1
 end
 
-func helper_arguments(args):
-    let count = 0
-    let offset = 0
-    while offset < args.1:
-        offset = linux_nul_end(args.0, offset, args.1) + 1
-        count = count + 1
-    end
-    return count
-end
-
 -- A setup step that failed: why, with Linux's error number, on stderr; exit 1.
 func helper_fail(what, result):
     let b = new_buffer()
-    let text = "scope-helper: cannot "
-    let i = 0
-    while i < length(text):
-        do append(b, index(text, i))
-        i = i + 1
-    end
-    i = 0
-    while i < length(what):
-        do append(b, index(what, i))
-        i = i + 1
-    end
-    let tail = " (Linux error "
-    i = 0
-    while i < length(tail):
-        do append(b, index(tail, i))
-        i = i + 1
-    end
-    let digits = linux_buffer(20)
-    let stop = linux_decimal(digits, 0, 0 - result)
-    i = 0
-    while i < stop:
-        do append(b, buffer_get(digits, i))
-        i = i + 1
-    end
-    do append(b, 41)
-    do append(b, 10)
+    do text_add(b, "scope-helper: cannot ")
+    do text_add(b, what)
+    do text_add(b, " (Linux error ")
+    do text_add_whole(b, 0 - result)
+    do text_add(b, ")\n")
     return linux_die(freeze(b))
 end
 
@@ -103,15 +72,14 @@ end
 -- after a stop while the last connections linger in TIME_WAIT, and a queue of
 -- 16. Its descriptor; any failure ends the helper.
 func helper_listen(h, address, port):
-    let fd = linux_syscall6(41, 2, 524289, 6, 0, 0, 0)
+    let fd = linux_socket(linux_af_inet(), linux_sock_stream() | linux_sock_cloexec(), linux_ipproto_tcp())
     if linux_error(fd): return helper_fail("make a socket", fd) end
-    do linux_put32(h.one, 0, 1)
-    let set = linux_syscall6(54, fd, 1, 2, buffer_address(h.one), 4, 0)
+    let set = linux_set_option(fd, linux_sol_socket(), linux_so_reuseaddr(), h.one, 1)
     if linux_error(set): return helper_fail("set SO_REUSEADDR", set) end
     do net_sockaddr(h.peer, address, port)
-    let bound = linux_syscall6(49, fd, buffer_address(h.peer), 16, 0, 0, 0)
+    let bound = linux_bind(fd, h.peer, 16)
     if linux_error(bound): return helper_fail("listen at that address and port", bound) end
-    let listening = linux_syscall6(50, fd, 16, 0, 0, 0, 0)
+    let listening = linux_listen(fd, 16)
     if linux_error(listening): return helper_fail("listen", listening) end
     return fd
 end
@@ -136,7 +104,7 @@ func helper_answer(h, fd):
     let cpu = figures_read_stat(h.scan, h.stat_path)
     let memory = figures_read_meminfo(h.scan, h.meminfo_path)
     let n = figures_reply_put(h.reply, cpu, memory)
-    do linux_syscall6(44, fd, buffer_address(h.reply), n, 16448, 0, 0)
+    do linux_send(fd, h.reply, 0, n, linux_msg_dontwait() | linux_msg_nosignal())
     return 0
 end
 
@@ -148,12 +116,12 @@ end
 func helper_serve(h, listener):
     while true:
         do linux_put32(h.peer_size, 0, 16)
-        let fd = linux_syscall6(288, listener, buffer_address(h.peer), buffer_address(h.peer_size), 526336, 0, 0)
+        let fd = linux_accept(listener, h.peer, h.peer_size, linux_sock_nonblock() | linux_sock_cloexec())
         if linux_error(fd):
-            do linux_syscall6(35, buffer_address(h.pause), 0, 0, 0, 0, 0)
+            do linux_sleep(h.pause)
         else:
             if helper_allowed(h): do helper_answer(h, fd) end
-            do linux_syscall6(3, fd, 0, 0, 0, 0, 0)
+            do linux_close(fd)
         end
     end
     return 0
@@ -180,7 +148,7 @@ end
 
 func main():
     let args = linux_arguments()
-    let count = helper_arguments(args)
+    let count = linux_argument_count(args)
     if count >= 2 and equal(linux_argument(args, 1), "--test"):
         if count < 7: return helper_usage() end
         return helper_run(args, count, 4, linux_argument(args, 2), linux_argument(args, 3))
