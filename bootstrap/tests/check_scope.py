@@ -1062,21 +1062,32 @@ def disk_checks(args, evidence, passed):
              'missing': str(root / 'not-here'), 'too-long': '/' + 'x/' * 3000}
     seen = {}
     for name, path in paths.items():
-        before = os.statvfs(path) if name not in ('missing', 'too-long') else None
-        got, _, _ = readings_run(args, root, 'readings-' + name, hwmon, path, env)
-        after = os.statvfs(path) if before else None
-        if before is None:
+        if name in ('missing', 'too-long'):
+            got, _, _ = readings_run(args, root, 'readings-' + name, hwmon, path, env)
             assert {k: got[k] for k in NO_DISK} == NO_DISK, (name, got)
             seen[name] = got['statfs']
             continue
-        figures = [int(n) for n in got['statfs'].split(' ')]
-        assert len(figures) == 4, (name, got['statfs'])
-        blocks, bfree, bavail, frsize = figures
-        assert blocks == before.f_blocks == after.f_blocks and frsize == before.f_frsize == after.f_frsize, (
-            name, figures, before, after)
-        for got_free, field in ((bfree, 'f_bfree'), (bavail, 'f_bavail')):
-            around = (getattr(before, field), getattr(after, field))
-            assert min(around) <= got_free <= max(around), (name, field, figures, before, after)
+        # Other programs may write to the disk while Scope reads it: the free counts Scope prints must lie between
+        # two statvfs readings taken just before and just after it. Free space that moves and moves back between
+        # them can miss that, so each path is tried up to eight times, every try kept; a wrong field (f_bfree for
+        # f_bavail differs by the blocks kept back, about 5 % of a disk) misses every time.
+        tries = []
+        for attempt in range(8):
+            before = os.statvfs(path)
+            got, _, _ = readings_run(args, root, f'readings-{name}-{attempt}', hwmon, path, env)
+            after = os.statvfs(path)
+            figures = [int(n) for n in got['statfs'].split(' ')]
+            assert len(figures) == 4, (name, got['statfs'])
+            blocks, bfree, bavail, frsize = figures
+            assert blocks == before.f_blocks == after.f_blocks and frsize == before.f_frsize == after.f_frsize, (
+                name, figures, before, after)
+            tries.append((figures, tuple(before), tuple(after)))
+            if all(min(getattr(before, field), getattr(after, field)) <= got_free
+                   <= max(getattr(before, field), getattr(after, field))
+                   for got_free, field in ((bfree, 'f_bfree'), (bavail, 'f_bavail'))):
+                break
+        else:
+            raise AssertionError(('free counts never between two statvfs readings', name, tries))
         expected = disk_expected(*figures)
         assert [f'disk={got["disk"]}', f'disk-bar={got["disk-bar"]}',
                 f'disk-detail={got["disk-detail"]}'] == disk_lines(expected), (name, got, expected)
@@ -1443,22 +1454,23 @@ def memory_at_a_reading(app, evidence, attempts=6):
 
 def disk_at_a_reading(app, path, interval, attempts=8):
     """The disk row against os.statvfs(path) when Scope asked statfs: statvfs is read, then, after three of the
-    window's intervals (interval seconds), a frame is taken, then statvfs again. When the two agree, the frame's
-    reading was taken between them, so the row must show exactly what they give (the free space moving and moving
-    back between them aside); otherwise, or if the frame is late, it is tried again, up to attempts times."""
+    window's intervals (interval seconds), a frame is taken, then statvfs again. Other programs may be writing to
+    the disk all the while, so the row must show exactly what one of the two readings gives (they rarely differ in a
+    shown figure); if it shows neither, or the frame is late, it is tried again, up to attempts times."""
     tries = []
     for _ in range(attempts):
         before = os.statvfs(path)
         time.sleep(3 * interval)
         reading = shown(app.frame())
         after = os.statvfs(path)
-        figures = (before.f_blocks, before.f_bfree, before.f_bavail, before.f_frsize)
-        text, width, detail = disk_expected(*figures)
-        want = ((text, {WHITE}), width, (detail, {GREY}))
+        wants = []
+        for s in (before, after):
+            text, width, detail = disk_expected(s.f_blocks, s.f_bfree, s.f_bavail, s.f_frsize)
+            wants.append(((text, {WHITE}), width, (detail, {GREY})))
         got = (reading['disk'], reading['disk-bar'], reading['disk-detail'])
-        tries.append({'statvfs': [figures, (after.f_blocks, after.f_bfree, after.f_bavail, after.f_frsize)],
-                      'shown': got, 'expected': want})
-        if figures == (after.f_blocks, after.f_bfree, after.f_bavail, after.f_frsize) and got == want:
+        tries.append({'statvfs': [(s.f_blocks, s.f_bfree, s.f_bavail, s.f_frsize) for s in (before, after)],
+                      'shown': got, 'expected': wants})
+        if got in wants:
             return reading, len(tries)
     raise AssertionError(('the disk row never matched os.statvfs at a reading', path, tries))
 
