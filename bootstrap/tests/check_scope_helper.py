@@ -9,10 +9,22 @@ by this check, on addresses and ports it picks, and stopped by its own process i
   socket() made to fail, so the trace shows no socket was even asked for. A socket it cannot make, and a port it
   cannot listen at (another program listens there), end it with status 1 and a line saying why.
 - The exact reply for fixed files: through `--test`, for every /proc/stat and /proc/meminfo file of check_scope's
-  `--sample` cases, the reply must carry exactly the figures check_scope's hand-written answers give for them, or
-  `unavailable` for that half: the helper and Scope share one reader (lib/figures.herb). All four shapes of the line
-  must come up. Then the real /proc: MEMTOTAL must be /proc/meminfo's, and TOTAL lie between /proc/stat's read just
-  before and just after.
+  `--sample` cases, the version-2 reply must carry exactly the figures check_scope's hand-written answers give for
+  them, or `unavailable` for that part, and `unavailable none` for the disk and the drive, which that form does not
+  read: the helper and Scope share one reader (lib/figures.herb). All four shapes of the processor and memory must
+  come up. Then the real /proc, /sys/class/hwmon and /: MEMTOTAL must be /proc/meminfo's, TOTAL lie between
+  /proc/stat's read just before and just after, the disk's blocks in use and free between os.statvfs('/') read just
+  before and just after (tried again, up to eight times, while other programs write to the disk), and the drive's
+  part `none` exactly when the search check_scope works out finds no nvme, its limit otherwise the one it reads.
+- The line's writer through a probe compiled here with the committed seed from lib/linux.herb, lib/text.herb and
+  lib/figures.herb: the longest line, 155 bytes (figures_reply_longest), byte for byte the one check_scope reads, and
+  one byte less of room stopping the probe with lib/linux.herb's range message; and every form of the disk and the
+  drive (a reading of 1000 C or more, a reading that is n/a, no drive sensor, no limit, a disk that cannot be shown).
+- With `--test-all` and a stand-in hwmon directory: the drive read again at every connection (the colour edges
+  73849, 73850, 83849 and 83850, 999999 and 1000000, negative, malformed and missing readings), its limit and the
+  search at startup only, the limits missing, absurd and at 200 C, the first of two drives, the drive at hwmon63 and
+  past hwmon64, no drive (`none`); the disk holding a link this check turns between / (against os.statvfs, tried
+  again as above), /proc and nothing (`unavailable`).
 - The allow-list: from each of four allowed 127.x addresses a reply; from 127.x addresses not on it, the listening
   address itself included, a connection that is taken and closed with not one byte.
 - Under strace: the listening socket's set-up (SO_REUSEADDR, bind to exactly the given address and port), every
@@ -25,14 +37,19 @@ by this check, on addresses and ports it picks, and stopped by its own process i
 - 64 clients that connect and never read hold nothing up: other clients are answered at once meanwhile, the helper
   keeps no socket of theirs, and each of them finds its whole reply waiting when it does read.
 - 20,000 connections in one process (one in five from an address not allowed), stopping every 2,500 to look: its
-  virtual size (VmSize) unchanged, resident memory (Rss) within 64 KiB, and the same descriptors throughout.
+  virtual size (VmSize) unchanged, resident memory (Rss) within 64 KiB, and the same descriptors throughout. It runs
+  with `--test-all` on the real /proc and /, and a stand-in hwmon directory, so every allowed connection also reads
+  the disk and a drive's temperature (a file, not this computer's drive, which takes Linux about 2 ms to ask).
 - An accept that fails does not spin: with strace failing every accept4 (EMFILE, ECONNABORTED, EINTR), at most 15
   accept4 calls in a second; and with a real EMFILE (its open files limited to 4) and a client waiting, at most
   0.05 s of processor time in 1.5 s, and the client answered once the limit is raised.
 - End to end, on a private Xvfb display: the real helper on 127.x, reading files this check writes (`--test`), and
-  Scope's window listing it: its row shows the processor's dash, then the exact figures as the files change, then
-  `answers` once the helper is stopped (its port refused); and the real helper reading the real /proc, its row
-  showing a processor figure and a memory figure that agrees with /proc/meminfo.
+  Scope's window listing it: its row shows the processor's dash, then the exact figures as the files change, the
+  disk n/a and no drive, then `answers` once the helper is stopped (its port refused); with `--test-all`, the drive's
+  part in green, amber, red and grey n/a as its stand-in reading changes, and the disk's percent that of
+  os.statvfs('/'); and the real helper reading the real /proc and /, its row showing a processor figure, a memory
+  figure that agrees with /proc/meminfo, a disk figure that agrees with os.statvfs('/'), and a drive's part exactly
+  when this computer has an nvme drive.
 
 Python, strace, prlimit, Xvfb, libX11 and libXtst are test tools only; the helper links none of them. Evidence is
 kept in /tmp/herbert-hosted-apps-scope-helper-*.
@@ -42,10 +59,12 @@ if not __debug__:
     raise SystemExit('verification requires Python assertions; remove -O/-OO and PYTHONOPTIMIZE')
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import resource
 import select
 import shutil
 import signal
@@ -58,8 +77,10 @@ from check_desktop import private_display, XConnection
 from check_desktop import memory as process_memory
 from check_hosted_apps import stable_memory, static_elf, wait_for
 from check_net import HIGH, Listener, LOOPBACK, MALFORMED_ADDRESSES, MALFORMED_PORTS, SPREAD
-from check_scope import (ANSWER, CASES, FILES, FIRST, MEM_TYPICAL, STAT_ONE_1, STAT_ONE_2, Scope, computer_row,
-                         empty_home, fixed_files, put, real_memory, section, show_until, stat_line)
+from check_scope import (ACPI, AMBER, ANSWER, CASES, FILES, FIRST, GREEN, GREY, K10, LONGEST, MEM_TYPICAL, MISSING,
+                         NVME, RED, STAT_ONE_1, STAT_ONE_2, Scope, computer_row, disk_expected, drive, empty_home,
+                         fixed_files, hwmon_search, hwmon_tree, put, real_limit, real_memory, section, show_until,
+                         stat_line)
 
 ROOT = Path(__file__).resolve().parents[2]
 ENV = {k: v for k, v in os.environ.items() if k not in ('DISPLAY', 'HOME')}
@@ -67,7 +88,9 @@ USAGE = (b'scope-helper: usage: scope-helper LISTEN_ADDRESS PORT ALLOWED_ADDRESS
          b'(1 to 4 allowed addresses)\n')
 BAD_ADDRESS = b'scope-helper: not an IPv4 address; write four numbers 0 to 255 joined by dots, like 127.0.0.1\n'
 BAD_PORT = b'scope-helper: not a port; write a number 1 to 65535\n'
-REPLY = re.compile(rb'herbert-scope 1 (\d+) (\d+) (\d+) (\d+)\n')
+# The helper's line, version 2 (lib/figures.herb): the processor, the memory, the disk's blocks in use and free, and
+# the drive's reading and warning limit or "unavailable" or "none".
+REPLY = re.compile(rb'herbert-scope 2 (\d+) (\d+) (\d+) (\d+) (\d+ \d+|unavailable) (\d+ \d+|unavailable|none)\n')
 LISTEN_AT = '127.0.0.9'                                 # where the helper listens in these checks
 ALLOWED = ['127.0.0.1', '127.0.0.3', '127.0.0.4', '127.0.0.5']
 NOT_ALLOWED = ['127.0.0.2', '127.0.0.6', LISTEN_AT, '127.1.0.1']
@@ -212,8 +235,35 @@ def refusal_checks(args, evidence, passed):
 
 
 def expected_reply(stat, meminfo):
-    """The reply for a stat file and a meminfo file whose --sample answers (check_scope) are stat and meminfo."""
-    return b'herbert-scope 1 %s %s\n' % (stat.encode(), meminfo.encode())
+    """The reply of `--test` for a stat file and a meminfo file whose --sample answers (check_scope) are stat and
+    meminfo: that form reads no disk and looks for no drive."""
+    return b'herbert-scope 2 %s %s unavailable none\n' % (stat.encode(), meminfo.encode())
+
+
+def disk_between(part, before, after):
+    """Whether the disk's part of a reply, blocks in use and free, lies between two os.statvfs readings."""
+    if part == b'unavailable':
+        return False
+    used, free = (int(n) for n in part.split())
+    return (min(s.f_blocks - s.f_bfree for s in (before, after)) <= used <= max(s.f_blocks - s.f_bfree
+                                                                                  for s in (before, after))
+            and min(s.f_bavail for s in (before, after)) <= free <= max(s.f_bavail for s in (before, after)))
+
+
+def ask_disk(port, path, attempts=8):
+    """Replies until one's disk part lies between os.statvfs(path) read just before and just after it: other
+    programs may be writing to the disk, so up to attempts tries, every one kept. (the reply's match, the tries)."""
+    tries = []
+    for _ in range(attempts):
+        before = os.statvfs(path)
+        got = ask(HIGH, port)
+        after = os.statvfs(path)
+        m = REPLY.fullmatch(got)
+        assert m, got
+        tries.append((got.decode(), [(s.f_blocks, s.f_bfree, s.f_bavail) for s in (before, after)]))
+        if disk_between(m.group(5), before, after):
+            return m, tries
+    raise AssertionError(('the disk never lay between two statvfs readings', path, tries))
 
 
 def point(link, target):
@@ -264,7 +314,7 @@ def reply_checks(args, evidence, passed):
     assert shapes == {(False, False), (True, False), (False, True), (True, True)}, ('not every shape of reply', shapes)
     passed('scope-helper-replies-with-scopes-own-figures', cases=len(CASES), replies=count,
            shapes=['both', 'processor unavailable', 'memory unavailable', 'both unavailable'])
-    # The real /proc.
+    # The real /proc, /sys/class/hwmon and /.
     port = free_port(HIGH)
     helper = Helper(args, evidence, 'scope-helper-real-proc', [HIGH, str(port), LOOPBACK], address=HIGH, port=port)
     try:
@@ -272,28 +322,218 @@ def reply_checks(args, evidence, passed):
             fields = Path('/proc/stat').read_text().split('\n', 1)[0].split()
             assert fields[0] == 'cpu', fields
             return sum(int(n) for n in fields[1:9])
-        before = totals()
-        memory_before = real_memory()
-        got = ask(HIGH, port)
-        memory_after = real_memory()
-        after = totals()
+        tries = []
+        for _ in range(8):
+            before, memory_before, disk_before = totals(), real_memory(), os.statvfs('/')
+            got = ask(HIGH, port)
+            disk_after, memory_after, after = os.statvfs('/'), real_memory(), totals()
+            m = REPLY.fullmatch(got)
+            assert m, got
+            total, busy, mem_total, available = (int(g) for g in m.groups()[:4])
+            assert before <= total <= after and busy <= total, (before, total, after, busy)
+            assert mem_total == memory_before[0] == memory_after[0], (mem_total, memory_before, memory_after)
+            assert (min(memory_before[1], memory_after[1]) - 65536 <= available
+                    <= max(memory_before[1], memory_after[1]) + 65536)
+            tries.append(got.decode())
+            if disk_between(m.group(5), disk_before, disk_after):
+                break
+        else:
+            raise AssertionError(('the disk never lay between two statvfs readings', tries))
     finally:
         helper.stop()
-    m = REPLY.fullmatch(got)
-    assert m, got
-    total, busy, mem_total, available = (int(g) for g in m.groups())
-    assert before <= total <= after and busy <= total, (before, total, after, busy)
-    assert mem_total == memory_before[0] == memory_after[0], (mem_total, memory_before, memory_after)
-    assert min(memory_before[1], memory_after[1]) - 65536 <= available <= max(memory_before[1], memory_after[1]) + 65536
+    found_drive, _ = hwmon_search('/sys/class/hwmon')
+    drive_part = m.group(6).decode()
+    if found_drive:
+        limit = real_limit('/sys/class/hwmon', found_drive[0], 'temp1_max')
+        assert re.fullmatch(r'(\d{1,6} %s|unavailable)' % (0 if limit == 'none' else limit), drive_part), (
+            drive_part, limit)
+    else:
+        assert drive_part == 'none', drive_part
     passed('scope-helper-reads-the-real-proc', reply=got.decode().strip(), total_between=[before, after],
-           mem_total_matches=True)
+           mem_total_matches=True, disk_between_statvfs=True, disk_tries=len(tries),
+           drive=f'hwmon{found_drive[0]}' if found_drive else 'none')
+
+
+# A probe of the line's writer, compiled with lib/linux.herb, lib/text.herb and lib/figures.herb: the longest line
+# into a buffer of figures_reply_longest() bytes, then each form of the disk and the drive. With an argument it then
+# writes the longest line into one byte less, which must stop it.
+PROBE = r"""
+func probe_sensor(found, state, reading, warning):
+    let s = figures_sensor_new()
+    s.found = found
+    s.state = state
+    s.reading = reading
+    s.warning = warning
+    return s
+end
+
+func probe_line(out, b, cpu, memory, disk, drive):
+    let n = figures_reply_put(b, cpu, memory, disk, drive)
+    return text_add_span(out, b, 0, n)
+end
+
+func main():
+    let top = 0 - 1
+    let out = new_buffer()
+    let b = linux_buffer(figures_reply_longest())
+    let largest = figures_disk_new("")
+    do figures_disk_figures(largest, true, 10000000000000000000, 0, top - 10000000000000000000, 1)
+    let longest = probe_sensor(true, 1, 999999, 200000)
+    do probe_line(out, b, (true, top, top), (true, top, top), largest, longest)
+    let disk = figures_disk_new("")
+    do figures_disk_figures(disk, true, 1000, 300, 250, 4096)
+    let none = (false, 0, 0)
+    do probe_line(out, b, none, none, disk, probe_sensor(true, 1, 1000000, 83850))
+    do probe_line(out, b, none, none, disk, probe_sensor(true, 2, 35850, 83850))
+    do probe_line(out, b, none, none, disk, probe_sensor(false, 1, 35850, 83850))
+    do probe_line(out, b, none, none, disk, probe_sensor(true, 1, 0, 0))
+    let past = figures_disk_new("")
+    do figures_disk_figures(past, true, top, 0, 1, 1)
+    do probe_line(out, b, (true, 10000, 1500), (true, 16384000, 4096000), past, probe_sensor(true, 1, 35850, 83850))
+    do flogger(freeze(out))
+    if length(linux_argument(linux_arguments(), 1)) > 0:
+        let short = linux_buffer(figures_reply_longest() - 1)
+        do figures_reply_put(short, (true, top, top), (true, top, top), largest, longest)
+        do flogger("written\n")
+    end
+    do process_exit(0)
+    return 0
+end
+"""
+PROBE_LINES = [LONGEST,
+               b'herbert-scope 2 unavailable unavailable 700 250 unavailable\n',
+               b'herbert-scope 2 unavailable unavailable 700 250 unavailable\n',
+               b'herbert-scope 2 unavailable unavailable 700 250 none\n',
+               b'herbert-scope 2 unavailable unavailable 700 250 0 0\n',
+               b'herbert-scope 2 10000 1500 16384000 4096000 unavailable 35850 83850\n']
+
+
+def line_checks(args, evidence, passed):
+    """figures_reply_put through a probe compiled here: the longest line exactly fills figures_reply_longest() bytes,
+    and every form of the disk and the drive is written as the grammar says."""
+    root = evidence / 'line-probe'
+    root.mkdir()
+    seed = ROOT / 'bootstrap/seed/gen1.seed'
+    expected = (ROOT / 'bootstrap/seed/gen1.seed.sha256').read_text().split()[0]
+    assert hashlib.sha256(seed.read_bytes()).hexdigest() == expected, 'committed seed hash mismatch'
+    library = args.figures or ROOT / 'lib/figures.herb'
+    source = b''.join(unit.read_bytes() + b'\n' for unit in (ROOT / 'lib/linux.herb', ROOT / 'lib/text.herb', library))
+    source += PROBE.encode()
+    (root / 'source.herb').write_bytes(source)
+    compiler = root / 'compiler'
+    shutil.copyfile(seed, compiler)
+    compiler.chmod(0o755)
+    compiled = subprocess.run([str(compiler)], input=source, cwd=root, capture_output=True, timeout=60,
+                              preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
+    assert compiled.returncode == 0 and compiled.stdout == b'0\n' and not compiled.stderr, (
+        'the probe did not compile', compiled.returncode, compiled.stdout, compiled.stderr[:2000])
+    compiler.unlink()
+    image = root / 'a.out'
+    image.chmod(0o755)
+    result = subprocess.run([str(image)], cwd=root, capture_output=True, timeout=30, env=ENV)
+    (root / 'stdout').write_bytes(result.stdout)
+    assert (result.returncode, result.stderr) == (0, b''), result
+    assert result.stdout.splitlines(keepends=True) == PROBE_LINES, (result.stdout, PROBE_LINES)
+    assert len(PROBE_LINES[0]) == 155, len(PROBE_LINES[0])
+    short = subprocess.run([str(image), 'short'], cwd=root, capture_output=True, timeout=30, env=ENV)
+    assert (short.returncode, short.stdout, short.stderr) == (
+        1, b''.join(PROBE_LINES), b'linux: byte-buffer range is outside its allocation\n'), short
+    passed('scope-helper-line-fits-its-buffer', longest_bytes=len(LONGEST), scope_reply_buffer=256,
+           one_byte_less='stops with the range message', forms=[line.decode().strip() for line in PROBE_LINES[1:]])
+
+
+def sensor_checks(args, evidence, passed):
+    """--test-all: the drive under a stand-in hwmon directory, read again at every connection, and the disk holding
+    a link this check turns."""
+    root = evidence / 'sensors'
+    root.mkdir()
+    tree = hwmon_tree(root / 'hwmon', {0: ACPI, 2: dict(NVME), 5: dict(K10)})
+    reading = tree / 'hwmon2' / 'temp1_input'
+    disk = root / 'disk'
+    os.symlink('/', disk)
+    stat, meminfo = root / 'stat', root / 'meminfo'
+    put(stat, STAT_ONE_1)
+    put(meminfo, MEM_TYPICAL)
+    port = free_port(HIGH)
+    helper = Helper(args, evidence, 'scope-helper-sensors', ['--test-all', str(stat), str(meminfo), str(tree),
+                                                             str(disk), HIGH, str(port), LOOPBACK], address=HIGH,
+                    port=port)
+    steps = [(b'35850\n', '35850 83850'), (b'73849\n', '73849 83850'), (b'73850\n', '73850 83850'),
+             (b'83849\n', '83849 83850'), (b'83850\n', '83850 83850'), (b'999999\n', '999999 83850'),
+             (b'1000000\n', 'unavailable'), (b'-5000\n', 'unavailable'), (b'abc\n', 'unavailable'),
+             (MISSING, 'unavailable'), (b'0', '0 83850')]
+    try:
+        for data, part in steps:
+            if data == MISSING:
+                reading.unlink()
+            else:
+                put(reading, data)
+            m, _ = ask_disk(port, '/')
+            assert m.group(0).startswith(b'herbert-scope 2 10000 1500 16384000 4096000 '), m.group(0)
+            assert m.group(6).decode() == part, (data, m.group(0), part)
+        # The search and the limit are read at startup only.
+        put(tree / 'hwmon2' / 'temp1_max', b'40000\n')
+        put(tree / 'hwmon2' / 'name', b'acpitz\n')
+        put(reading, b'50000\n')
+        assert REPLY.fullmatch(ask(HIGH, port)).group(6) == b'50000 83850'
+        # The disk: /proc (statfs gives no blocks) and nothing there, each between figures for /, then / again.
+        for target in ('/proc', None, '/'):
+            point(disk, target)
+            got = REPLY.fullmatch(ask(HIGH, port))
+            if target is None or target == '/proc':
+                assert got.group(5) == b'unavailable', (target, got.group(0))
+            else:
+                m, tries = ask_disk(port, '/')
+        # A long line: the processor's and memory's numbers at 2^64 - 1 and the drive at 999999, more than the 128
+        # bytes the helper's buffer held before version 2 (the longest, 155, needs a disk of 20-digit blocks, which
+        # line_checks' probe writes).
+        top = 2**64 - 1
+        put(stat, stat_line(top, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        put(meminfo, b'MemTotal: %d kB\nMemAvailable: %d kB\n' % (top, top))
+        put(reading, b'999999\n')
+        m, _ = ask_disk(port, '/')
+        long_line = m.group(0)
+        assert long_line.startswith(b'herbert-scope 2 %d %d %d %d ' % (top, top, top, top)), long_line
+        assert long_line.endswith(b' 999999 83850\n') and len(long_line) > 128, long_line
+    finally:
+        status = helper.stop()
+    assert helper.stderr() == b'', helper.stderr()
+    passed('scope-helper-reads-the-drive-and-the-disk-at-each-connection', drive=[part for _, part in steps],
+           long_line_bytes=len(long_line),
+           startup_only=['temp1_max 40000', 'name acpitz'], disk=['/ between statvfs', '/proc unavailable',
+                                                                   'nothing unavailable'])
+    # Trees read at startup, one helper each: the drive's part in the first reply.
+    put(stat, STAT_ONE_1)
+    put(meminfo, MEM_TYPICAL)
+    trees = [('no-drive', {0: ACPI, 1: K10}, 'none'),
+             ('no-devices', {}, 'none'),
+             ('limit-missing', {0: drive(b'90000\n', temp1_max=MISSING)}, '90000 0'),
+             ('limit-absurd', {0: drive(b'90000\n', temp1_max=b'65261850\n')}, '90000 0'),
+             ('limit-zero', {0: drive(b'90000\n', temp1_max=b'0\n')}, '90000 0'),
+             ('limit-at-200-degrees', {0: drive(b'190000\n', temp1_max=b'200000\n')}, '190000 200000'),
+             ('first-of-two-drives', {1: drive(b'40000\n'), 2: drive(b'50000\n', temp1_max=b'45000\n')},
+              '40000 83850'),
+             ('nvme-at-hwmon63', {0: ACPI, 63: NVME}, '35000 83850'),
+             ('nvme-at-hwmon64-is-past-the-last', {64: NVME}, 'none')]
+    for label, devices, part in trees:
+        tree = hwmon_tree(root / label, devices)
+        port = free_port(HIGH)
+        helper = Helper(args, evidence, 'scope-helper-tree-' + label,
+                        ['--test-all', str(stat), str(meminfo), str(tree), str(root / 'no-disk-here'), HIGH, str(port),
+                         LOOPBACK], address=HIGH, port=port)
+        try:
+            got = ask(HIGH, port)
+        finally:
+            helper.stop()
+        assert got == b'herbert-scope 2 10000 1500 16384000 4096000 unavailable %s\n' % part.encode(), (label, got)
+    passed('scope-helper-finds-its-drive-at-startup', trees={label: part for label, _, part in trees})
 
 
 def allow_checks(args, evidence, passed):
     """The allow-list, and under strace what the helper does with each connection."""
     port = free_port(LISTEN_AT)
     trace = evidence / 'scope-helper-connections.strace'
-    prefix = ['strace', '-f', '-qq', '-s', '128', '-o', str(trace), '-e',
+    prefix = ['strace', '-f', '-qq', '-s', '256', '-o', str(trace), '-e',
               'trace=socket,setsockopt,bind,listen,accept4,read,readv,pread64,preadv,preadv2,recvfrom,recvmsg,'
               'recvmmsg,write,writev,pwrite64,sendto,sendmsg,sendmmsg,openat,open,close,exit_group']
     helper = Helper(args, evidence, 'scope-helper-allowed', [LISTEN_AT, str(port), *ALLOWED], prefix=prefix,
@@ -346,7 +586,8 @@ def allow_checks(args, evidence, passed):
     for a in accepted:
         if a['peer'] in ALLOWED:
             assert len(a['calls']) == 2 and re.fullmatch(
-                r'sendto\(\d+, "herbert-scope 1 [\d ]+\\n", (\d+), MSG_DONTWAIT\|MSG_NOSIGNAL, NULL, 0\) = \1',
+                r'sendto\(\d+, "herbert-scope 2 [\d ]+ (\d+ \d+|unavailable) (\d+ \d+|unavailable|none)\\n", (\d+), '
+                r'MSG_DONTWAIT\|MSG_NOSIGNAL, NULL, 0\) = \3',
                 a['calls'][0]) and a['calls'][1] == 'close', ('not one sendto and close', a)
         else:
             assert a['calls'] == ['close'], ('a peer not allowed got more than a close', a)
@@ -434,9 +675,12 @@ def idle_checks(args, evidence, passed):
 
 
 def flood_checks(args, evidence, passed):
-    """20,000 connections, one in five not allowed: memory and descriptors flat."""
+    """20,000 connections, one in five not allowed: memory and descriptors flat. Each allowed one reads the real
+    /proc and / and a stand-in drive's temperature (--test-all)."""
     port = free_port(LISTEN_AT)
-    helper = Helper(args, evidence, 'scope-helper-flood', [LISTEN_AT, str(port), *ALLOWED], address=LISTEN_AT,
+    tree = hwmon_tree(evidence / 'flood-hwmon', {0: ACPI, 1: dict(NVME), 2: dict(K10)})
+    helper = Helper(args, evidence, 'scope-helper-flood', ['--test-all', '/proc/stat', '/proc/meminfo', str(tree), '/',
+                                                          LISTEN_AT, str(port), *ALLOWED], address=LISTEN_AT,
                     port=port)
     total, every, samples = 20000, 2500, []
     sources = ALLOWED + ['127.0.0.2']
@@ -448,7 +692,7 @@ def flood_checks(args, evidence, passed):
             if source == '127.0.0.2':
                 assert got == b'', (n, got)
             else:
-                assert REPLY.fullmatch(got), (n, got)
+                assert REPLY.fullmatch(got) and got.endswith(b' 35000 83850\n'), (n, got)
             if n % every == 0:
                 sample = process_memory(pid)
                 sample['connections'] = n
@@ -465,7 +709,7 @@ def flood_checks(args, evidence, passed):
     passed('scope-helper-memory-flat', connections=total, not_allowed=total // len(sources), samples=len(samples),
            measured_connections=total - every, vm_size_kib=samples[0]['VmSize'], vm_size_must_not_change=True,
            rss_kib_first=rss[0], rss_kib_last=rss[-1], rss_kib_min=min(rss), rss_kib_max=max(rss),
-           rss_tolerance_kib=64, descriptors=samples[0]['descriptors'])
+           rss_tolerance_kib=64, descriptors=samples[0]['descriptors'], reads=['/proc', 'statfs /', 'a drive file'])
 
 
 def spin_checks(args, evidence, passed):
@@ -556,13 +800,13 @@ def window_checks(args, evidence, passed):
                 def step(row, what):
                     show_until(app, {'others': [computer_row('noggin', row)]}, what, 6)
                     steps.append(f'{what}: {row}')
-                step(FIRST, 'the first reply')
+                step(FIRST + '  DISK n/a', 'the first reply')
                 put(stat, STAT_ONE_2)
-                step('CPU 40%  MEM 75%', 'the helper\'s /proc/stat moved on')
+                step('CPU 40%  MEM 75%  DISK n/a', 'the helper\'s /proc/stat moved on')
                 app.frame('figures')
                 put(stat, stat_line(2300, 0, 600, 8550, 550, 0, 0, 0, 0, 0))
                 put(meminfo, b'MemTotal:  524288 kB\nMemAvailable:  104858 kB\n')
-                step('CPU 100%  MEM 80%', 'busy and memory changed')
+                step('CPU 100%  MEM 80%  DISK n/a', 'busy and memory changed')
                 helper.stop()
                 step('answers', 'the helper stopped')
                 app.tap('Escape')
@@ -571,6 +815,47 @@ def window_checks(args, evidence, passed):
                 app.close()
                 helper.stop()
             passed('scope-shows-the-real-helpers-figures', steps=steps)
+            # --test-all: a stand-in drive whose reading this check changes, and the disk holding /.
+            tree = hwmon_tree(evidence / 'end-to-end-hwmon', {0: ACPI, 2: dict(NVME)})
+            reading = tree / 'hwmon2' / 'temp1_input'
+            put(stat, STAT_ONE_1)
+            put(meminfo, MEM_TYPICAL)
+            port = free_port(SPREAD)
+            helper = Helper(args, evidence, 'scope-helper-end-to-end-all',
+                            ['--test-all', str(stat), str(meminfo), str(tree), '/', SPREAD, str(port), LOOPBACK],
+                            address=SPREAD, port=port)
+            computers.write_text(f'noggin {SPREAD} {port}\n')
+            app = Scope(args.scope, ['--test', scope_stat, scope_mem, scope_host, '1000', str(computers), '300', '200'],
+                        x, display, evidence, 'scope-end-to-end-all', empty_home(evidence, 'end-to-end-all'))
+            steps = []
+            try:
+                def drive_step(milli, text, ink):
+                    put(reading, b'%d\n' % milli)
+                    seen = {}
+                    def ready():
+                        before = os.statvfs('/')
+                        row = section(app.frame())[0]
+                        after = os.statvfs('/')
+                        seen['row'] = row
+                        percents = {disk_expected(s.f_blocks, s.f_bfree, s.f_bavail, s.f_frsize)[0] for s in
+                                    (before, after)}
+                        return any(row == computer_row('noggin', f'CPU -  MEM 75%  DISK {p}  DRIVE {text}', drive=ink)
+                                   for p in percents)
+                    try:
+                        wait_for(ready, f'the drive at {milli}', 6)
+                    except AssertionError as error:
+                        raise AssertionError(f'{error}; last read {seen}') from None
+                    steps.append(f'{milli}: {seen["row"][3][3]}')
+                for milli, text, ink in ((73849, '74 C', GREEN), (73850, '74 C', AMBER), (83850, '84 C', RED),
+                                         (-5000, 'n/a', GREY), (35000, '35 C', GREEN)):
+                    drive_step(milli, text, ink)
+                app.frame('drive-and-disk')
+                app.tap('Escape')
+                app.finish()
+            finally:
+                app.close()
+                helper.stop()
+            passed('scope-shows-the-real-helpers-disk-and-drive', steps=steps, disk='os.statvfs(\'/\')')
             # The real /proc.
             port = free_port(HIGH)
             helper = Helper(args, evidence, 'scope-helper-end-to-end-real', [HIGH, str(port), LOOPBACK], address=HIGH,
@@ -580,16 +865,26 @@ def window_checks(args, evidence, passed):
                         x, display, evidence, 'scope-end-to-end-real', empty_home(evidence, 'end-to-end-real'))
             try:
                 seen = {}
+                found_drive, _ = hwmon_search('/sys/class/hwmon')
                 def figures():
+                    before = os.statvfs('/')
                     row = section(app.frame())[0]
+                    after = os.statvfs('/')
                     seen['row'] = row
-                    m = re.fullmatch(r'CPU (\d{1,3})%  MEM (\d{1,3})%', row[3][0])
-                    if not m:
+                    if row[3][0] != 'small':
+                        return False
+                    m = re.fullmatch(r'CPU (\d{1,3})%  MEM (\d{1,3})%  DISK (\d{1,3}%)', row[3][1])
+                    if not m or row[3][2] != {GREEN}:
                         return False
                     total, available = real_memory()
                     percent = round(100 * (total - available) / total)
                     seen['memory'] = (int(m.group(2)), percent)
-                    return abs(int(m.group(2)) - percent) <= 2 and int(m.group(1)) <= 100
+                    disks = {disk_expected(s.f_blocks, s.f_bfree, s.f_bavail, s.f_frsize)[0] for s in (before, after)}
+                    seen['disk'] = (m.group(3), sorted(disks))
+                    drive_shown = (re.fullmatch(r'DRIVE (\d+ C|n/a)', row[3][3]) is not None
+                                   and row[3][4] in ({GREEN}, {AMBER}, {RED}, {GREY}))
+                    return (abs(int(m.group(2)) - percent) <= 2 and int(m.group(1)) <= 100 and m.group(3) in disks
+                            and (drive_shown if found_drive else row[3][3:] == ('', set())))
                 wait_for(figures, 'the real helper\'s figures', 6)
                 app.frame('real')
                 app.tap('Escape')
@@ -597,13 +892,13 @@ def window_checks(args, evidence, passed):
             finally:
                 app.close()
                 helper.stop()
-            passed('scope-shows-the-real-helpers-real-figures', row=seen['row'][3][0],
-                   memory_percent_and_proc_meminfo=seen['memory'])
+            passed('scope-shows-the-real-helpers-real-figures', row=seen['row'][3][1] + '  ' + seen['row'][3][3],
+                   memory_percent_and_proc_meminfo=seen['memory'], disk_and_statvfs=seen['disk'])
         finally:
             x.close()
 
 
-SECTIONS = ('refusals', 'replies', 'allowed', 'address', 'idle', 'flood', 'spin', 'window')
+SECTIONS = ('refusals', 'replies', 'line', 'sensors', 'allowed', 'address', 'idle', 'flood', 'spin', 'window')
 
 
 def main():
@@ -612,6 +907,7 @@ def main():
     parser.add_argument('--scope', type=Path, default=ROOT / 'build/scope')
     parser.add_argument('--only', choices=['all', *SECTIONS], default='all')
     parser.add_argument('--evidence', type=Path)
+    parser.add_argument('--figures', type=Path, help='a lib/figures.herb to compile the line probe with (mutants)')
     args = parser.parse_args()
     assert shutil.which('strace') and shutil.which('prlimit'), 'strace and prlimit are required (test tools)'
     evidence = (args.evidence or Path(tempfile.mkdtemp(prefix='herbert-hosted-apps-scope-helper-'))).resolve()
@@ -627,7 +923,8 @@ def main():
         print('PASS:', name, json.dumps(details, sort_keys=True) if details else '', flush=True)
         (evidence / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print('Evidence:', evidence, flush=True)
-    checks = {'refusals': refusal_checks, 'replies': reply_checks, 'allowed': allow_checks, 'address': address_checks,
+    checks = {'refusals': refusal_checks, 'replies': reply_checks, 'line': line_checks, 'sensors': sensor_checks,
+              'allowed': allow_checks, 'address': address_checks,
               'idle': idle_checks, 'flood': flood_checks, 'spin': spin_checks, 'window': window_checks}
     try:
         for section in SECTIONS:

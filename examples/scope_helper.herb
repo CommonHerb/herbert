@@ -1,15 +1,24 @@
 -- scope-helper: answers Scope with this computer's processor and memory
--- figures. No window. Linked after lib/linux.herb, lib/text.herb, lib/net.herb
--- and lib/figures.herb by Make. See examples/scope_helper.md.
+-- figures, how full its disk is and how warm its drive is. No window. Linked
+-- after lib/linux.herb, lib/text.herb, lib/net.herb and lib/figures.herb by
+-- Make. See examples/scope_helper.md.
 --   scope-helper LISTEN_ADDRESS PORT ALLOWED_ADDRESS [ALLOWED_ADDRESS ...]
 -- listens for TCP connections at exactly LISTEN_ADDRESS and PORT (IPv4; 1 to 4
--- allowed addresses) and runs until it is stopped. For each connection: when
--- it comes from an allowed address, it reads /proc/stat and /proc/meminfo
--- afresh, writes one line (figures_reply_put in lib/figures.herb) and closes;
--- from any other address it closes at once and writes nothing. It never reads
--- from a connection, so nothing that comes over the network is ever looked at.
+-- allowed addresses) and runs until it is stopped. At startup it finds the
+-- drive's temperature among the hwmon devices in /sys/class/hwmon, as Scope
+-- does. For each connection: when it comes from an allowed address, it reads
+-- /proc/stat, /proc/meminfo, the disk holding / (statfs) and the drive's
+-- temperature afresh, writes one line (figures_reply_put in lib/figures.herb,
+-- version 2) and closes; from any other address it closes at once and writes
+-- nothing. It never reads from a connection, so nothing that comes over the
+-- network is ever looked at.
 --   scope-helper --test STAT MEMINFO LISTEN_ADDRESS PORT ALLOWED_ADDRESS [...]
--- does the same, reading STAT and MEMINFO instead of the files in /proc. For
+-- does the same, reading STAT and MEMINFO instead of the files in /proc, with
+-- no disk and no drive (its line says "unavailable" and "none" for them), so
+-- the line depends only on the two files.
+--   scope-helper --test-all STAT MEMINFO HWMON STATFS LISTEN_ADDRESS PORT ALLOWED_ADDRESS [...]
+-- also finds the drive under the directory HWMON instead of /sys/class/hwmon
+-- and reads the disk holding STATFS instead of /. Both --test forms are for
 -- the tests.
 -- A command line it cannot read prints why on stderr and exits 2 before any
 -- socket is made; a listening socket it cannot set up prints why and exits 1.
@@ -18,18 +27,22 @@
 -- Linux's calls and flags go by their names in lib/linux.herb: socket,
 -- setsockopt, bind, listen, accept4, sendto, nanosleep and close as
 -- linux_socket, linux_set_option, linux_bind, linux_listen, linux_accept,
--- linux_send, linux_sleep and linux_close.
+-- linux_send, linux_sleep and linux_close; statfs and the files' open, read
+-- and close through lib/figures.herb.
 -- https://man7.org/linux/man-pages/man2/accept.2.html
 -- https://man7.org/linux/man-pages/man7/socket.7.html (SO_REUSEADDR)
 
 -- What the helper keeps: the two files' paths (NUL-terminated), the scanner,
--- the reply, the allowed addresses (32-bit, as net_ipv4 gives them), a
--- connection's sockaddr_in and its length, the value 1 for setsockopt, and the
--- 100 ms timespec it pauses for after a failed accept.
+-- the disk and the temperatures (lib/figures.herb), the reply, sized for the
+-- longest line (figures_reply_longest), the allowed addresses (32-bit, as
+-- net_ipv4 gives them), a connection's sockaddr_in and its length, the value 1
+-- for setsockopt, and the 100 ms timespec it pauses for after a failed accept.
 ref record Helper:
     stat_path: buffer
     meminfo_path: buffer
     scan: FiguresScan
+    disk: FiguresDisk
+    heat: FiguresHeat
     reply: buffer
     allowed: array(int)
     peer: buffer
@@ -99,11 +112,14 @@ end
 
 -- The reply, read afresh, as one send that waits for nothing and raises no
 -- SIGPIPE. Whatever send says, the connection is closed next: a reply that
--- does not go out whole is not tried again.
+-- does not go out whole is not tried again. The processor's temperature is
+-- not read: the line does not carry it.
 func helper_answer(h, fd):
     let cpu = figures_read_stat(h.scan, h.stat_path)
     let memory = figures_read_meminfo(h.scan, h.meminfo_path)
-    let n = figures_reply_put(h.reply, cpu, memory)
+    do figures_disk_read(h.disk)
+    do figures_sensor_read(h.heat.drive, h.heat.line)
+    let n = figures_reply_put(h.reply, cpu, memory, h.disk, h.heat.drive)
     do linux_send(fd, h.reply, 0, n, linux_msg_dontwait() | linux_msg_nosignal())
     return 0
 end
@@ -128,19 +144,22 @@ func helper_serve(h, listener):
 end
 
 -- first is the argument index of LISTEN_ADDRESS; the rest follow it. Every
--- argument is read, and refused if need be, before the socket is made.
-func helper_run(args, count, first, stat, meminfo):
+-- argument is read, and refused if need be, before the sensors are looked for
+-- and the socket is made. watch is false for --test, which has no disk (an
+-- empty path, which statfs refuses) and looks for no sensor.
+func helper_run(args, count, first, stat, meminfo, watch, hwmon, disk):
     let allowed = count - first - 2
     if allowed < 1 or allowed > 4: return helper_usage() end
     let address = helper_address(linux_argument(args, first))
     let port = net_port(linux_argument(args, first + 1))
     if not port.0: return helper_refuse("scope-helper: not a port; write a number 1 to 65535\n") end
-    let h = Helper(linux_cstring(stat), linux_cstring(meminfo), figures_scan_new(), linux_buffer(128), new_array(int), linux_buffer(16), linux_buffer(8), linux_buffer(8), linux_buffer(16))
+    let h = Helper(linux_cstring(stat), linux_cstring(meminfo), figures_scan_new(), figures_disk_new(disk), figures_heat_new(), linux_buffer(figures_reply_longest()), new_array(int), linux_buffer(16), linux_buffer(8), linux_buffer(8), linux_buffer(16))
     let k = first + 2
     while k < count:
         do add(h.allowed, helper_address(linux_argument(args, k)))
         k = k + 1
     end
+    if watch: do figures_heat_find(h.heat, hwmon) end
     do linux_put64(h.pause, 0, 0)
     do linux_put64(h.pause, 8, 100000000)
     return helper_serve(h, helper_listen(h, address, port.1))
@@ -149,9 +168,14 @@ end
 func main():
     let args = linux_arguments()
     let count = linux_argument_count(args)
-    if count >= 2 and equal(linux_argument(args, 1), "--test"):
+    let mode = linux_argument(args, 1)
+    if count >= 2 and equal(mode, "--test"):
         if count < 7: return helper_usage() end
-        return helper_run(args, count, 4, linux_argument(args, 2), linux_argument(args, 3))
+        return helper_run(args, count, 4, linux_argument(args, 2), linux_argument(args, 3), false, "", "")
     end
-    return helper_run(args, count, 1, "/proc/stat", "/proc/meminfo")
+    if count >= 2 and equal(mode, "--test-all"):
+        if count < 9: return helper_usage() end
+        return helper_run(args, count, 6, linux_argument(args, 2), linux_argument(args, 3), true, linux_argument(args, 4), linux_argument(args, 5))
+    end
+    return helper_run(args, count, 1, "/proc/stat", "/proc/meminfo", true, "/sys/class/hwmon", "/")
 end

@@ -121,9 +121,12 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   computers (comments, blanks, tabs, CRLF, names at 24 and 25 bytes, every malformed address and port, 6 and 7
   computers, more problems than rows, 64 KiB and one byte more), of files that are not lists (a FIFO and
   `/dev/zero` within 2 s) and of the list in HOME, each line against a hand-written answer, with socket() made to
-  fail; its `--replies` reading of 12 runs of well-formed helper replies and 45 malformed ones (no newline, bytes
-  after it, CRLF, other prefixes and versions, stray spaces, leading zeros, 2^64, a busy count above the total, a zero
-  memory total, an SSH banner, 256 and 257 bytes), each between good ones, every row against a hand-written answer;
+  fail; its `--replies` reading of 26 runs of well-formed helper replies, 12 of version 1 and 14 of version 2 (the
+  disk's percent at its edges, the drive's colour at 73.849, 73.850, 83.849 and 83.850 °C, no drive sensor, n/a, the
+  widest row of 43 characters, the longest line of 155 bytes), and 46 malformed version-1 and 43 malformed version-2
+  ones (no newline, bytes after it, CRLF, other prefixes and versions, parts missing or extra, stray spaces, leading
+  zeros, 2^64, a busy count above the total, a zero memory total, the disk past 2^64, a reading of 1000 °C, a limit
+  above 200 °C, an SSH banner, 256 and 257 bytes), each between good ones, every row against a hand-written answer;
   its `--readings` search and reading of temperatures in 62 stand-in hwmon directories (the drive at `hwmon63` and
   past `hwmon64`, gaps, `k10temp` before `coretemp`, look-alike names, limits missing, zero, absurd and malformed, the
   colour at each edge of its bands, rounding at a half degree, 17 readings that are n/a, FIFOs within 2 s), each line
@@ -139,26 +142,35 @@ It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`
   closed port, checking, no answer from a full accept queue, kept while the next knock is under way, problems, a
   seventh computer never knocked, and unreachable and errors made by strace), with every knock on 127.x and every
   run in a home of the check's own; fake helpers on 127.x, which count every byte Scope sends (none): figures (a
-  dash, then 40 %) beside ten malformed replies showing answers knock after knock, and a row dropping its figures
-  when its helper is refused or silent and starting its processor again when it comes back; a
+  dash, then 40 %) beside ten malformed replies showing answers knock after knock; version-2 rows read back at scale
+  1, the drive green, amber, amber and red at the edges of its bands, grey n/a and left out with no drive, the disk
+  n/a and the widest row inside the panel, beside a version-1 row and three malformed replies; and a row dropping its
+  figures when its helper is refused or silent and starting its processor again when it comes back; a
   knock that never answers and a helper that drips holding nothing up (the light on time, little processor time,
   Escape within 300 ms); under strace, knocks 700 ms apart, no answer only after a look at its 300 ms limit,
   refusals and a helper's figures seen within 50 ms, a silent listener read only without waiting until its limit,
   waits for POLLOUT while connecting and POLLIN while reading, and the knock under way closed at exit; and 120 seconds
   redrawing every 10 ms through the real `/proc`, missing, malformed and unusual files, with the disk and the
   temperatures read live, knocking every 20 ms on a
-  listener, a closed port, a full accept queue and a helper replying to every knock, with the same virtual size
+  listener, a closed port, a full accept queue and two helpers replying to every knock (versions 1 and 2), with the
+  same virtual size
   throughout, resident memory within 64 KiB, no socket outliving its knock and no file left open. `make check-scope`
   runs those checks alone. Then `check_scope_helper.py` checks Scope's helper, on 127.x only: malformed command lines
   refused before any
-  socket (under strace) and a socket or port it cannot have ending it with status 1; its reply for every `/proc` file
-  of the `--sample` cases carrying exactly their hand-written figures, in all four shapes, and the real `/proc`
-  agreeing; the line only for allowed addresses and a close with no byte for others; under strace, one non-waiting
-  send and close per allowed connection, never a read; exactly its own address listened at; a restart at once while
-  TIME_WAIT lingers on its port; 64 clients that never read holding nothing up; 20,000 connections with the same
-  virtual size, resident memory within 64 KiB and the same descriptors; at most 15 accepts a second while strace
-  fails them, and next to no processor time at a real EMFILE; and Scope's window showing its exact figures, then
-  `answers` once it stops, and real figures from the real `/proc`. `make check-scope-helper` runs those checks alone.
+  socket (under strace) and a socket or port it cannot have ending it with status 1; its version-2 reply for every
+  `/proc` file of the `--sample` cases carrying exactly their hand-written figures, in all four shapes, and the real
+  `/proc`, `/` (against `os.statvfs`, tried again while other programs write to the disk) and drive agreeing; the
+  line's writer through a probe compiled from `lib/figures.herb` (the longest line, 155 bytes, filling its buffer
+  exactly and one byte less stopping it; every form of the disk and the drive); with a stand-in hwmon directory, the
+  drive read again at each connection at the edges of its bands, at 1000 °C and n/a, its limit and search at startup
+  only, no drive `none`, and the disk turned between `/`, `/proc` and nothing; the line only for allowed addresses and
+  a close with no byte for others; under strace, one non-waiting send and close per allowed connection, never a read;
+  exactly its own address listened at; a restart at once while TIME_WAIT lingers on its port; 64 clients that never
+  read holding nothing up; 20,000 connections, each reading `/proc`, `/` and a drive, with the same virtual size,
+  resident memory within 64 KiB and the same descriptors; at most 15 accepts a second while strace fails them, and
+  next to no processor time at a real EMFILE; and Scope's window showing its exact figures, then `answers` once it
+  stops, the drive's colours and the disk against `os.statvfs('/')`, and real figures from the real `/proc` and `/`.
+  `make check-scope-helper` runs those checks alone.
   Last, `check_net.py` checks knock (`lib/net.herb`), knocking
   only on 127.x and inside a private network namespace it makes: malformed command lines refused before any socket
   (under strace), the library's own range guard and error classes through a probe it compiles, one knock's system

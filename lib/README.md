@@ -35,15 +35,20 @@ source; the retained source map identifies its original units.
   passes. `net_sockaddr` fills a sockaddr_in and `net_put_address` writes an
   address in the dotted form `net_ipv4` reads. Requires `text.herb`. Used by
   knock, Scope and Scope's helper.
-- `figures.herb`: a computer's processor and memory counts from `/proc/stat`
-  and `/proc/meminfo`, and the first line of a name file, read a byte at a time
-  through one fixed 4096-byte chunk, only the first 1 MiB of a file looked at,
-  with a `FiguresScan` record (`figures_scan_new()`, once) so reading again
-  allocates nothing; and the one line Scope's helper sends them in
-  (`herbert-scope 1 TOTAL BUSY MEMTOTAL MEMAVAILABLE`, a half `unavailable`
-  when it cannot be read): `figures_reply_put` writes it, `figures_reply_read`
-  reads it strictly. Requires `text.herb`. Used by Scope and Scope's helper, so
-  the two work out the figures with the same code.
+- `figures.herb`: a computer's figures, [tabled below](#figuresherb): its
+  processor and memory counts from `/proc/stat` and `/proc/meminfo`, and the
+  first line of a name file, read a byte at a time through one fixed 4096-byte
+  chunk, only the first 1 MiB of a file looked at, with a `FiguresScan` record
+  (`figures_scan_new()`, once) so reading again allocates nothing; how full the
+  disk holding a path is (`statfs`, worked out as `df` does, in a `FiguresDisk`);
+  the drive's and the processor's temperatures from Linux's hwmon files, found
+  once at startup (`FiguresHeat`), with the drive's limits and colour bands; and
+  the one line Scope's helper sends them in (`herbert-scope 2 CPU MEMORY DISK
+  DRIVE`, a part `unavailable` when it cannot be read, the drive `none` with no
+  drive sensor; Scope still reads version 1, the first two parts alone):
+  `figures_reply_put` writes it, `figures_reply_read` reads either version
+  strictly. Requires `text.herb`. Used by Scope and Scope's helper, so the two
+  work out the figures with the same code.
 - `x11.herb`: local display/authentication, a fixed-size window, server pixmap,
   keyboard mapping and key/focus/close events, rectangle/ellipse requests and
   presentation. X11 itself remains an external desktop service. Its supported
@@ -312,3 +317,41 @@ end
 ```
 
 prints `up 2 days, 6:05` and then `main`'s `0` (built with `SUPPORT="linux text"`).
+
+### figures.herb
+
+Readings allocate nothing once their record is made; the records' constructors and `figures_heat_find` allocate,
+at startup. Temperatures are in millidegrees Celsius, as Linux gives them.
+
+| Function | Gives |
+| --- | --- |
+| `figures_scan_new()` | a `FiguresScan` for reading `/proc` files; *allocates* |
+| `figures_read_stat(scan, path)` | (readable, total, busy) from a `/proc/stat` file: the first eight counters' sum, and it less idle and iowait; the eight counters stay in `scan.counts` |
+| `figures_read_meminfo(scan, path)` | (usable, MemTotal, MemAvailable) in KiB from a `/proc/meminfo` file; a total of zero is unusable |
+| `figures_read_name(scan, path)` | the length of the name file's first line, cut at 64 bytes, into `scan.name`; 0 when unreadable |
+| `figures_percent(part, whole)` | `part / whole` as a whole percent, a half rounding up, exact for any 64-bit numbers (`whole` above 0, `part` not above it) |
+| `figures_disk_new(path)` | a `FiguresDisk` for the disk holding `path` (`""` for none: statfs refuses it); *allocates* |
+| `figures_statfs(disk)` | (asked, blocks, bfree, bavail, frsize) from statfs, f_bsize for an f_frsize of 0 |
+| `figures_disk_figures(disk, ok, blocks, bfree, bavail, frsize)` | 0; sets `disk.state` (1 shown, 2 not), `used` and `avail` (blocks), `percent`, `size` and `free` (KiB), as `df` works them out |
+| `figures_disk_read(disk)` | 0; the two above, again |
+| `figures_disk_percent(used, avail)` | in use over in use and free (their sum below 2^64), 100 with neither |
+| `figures_kib(n, f)` | (fits, KiB): `n` blocks of `f` bytes, rounded down, without forming `n * f` |
+| `figures_read_small(path, b)` | (readable, count): the start of a file into `b`, opened without blocking |
+| `figures_read_value(path, b)` | (plain, value): a file holding one whole number and at most one newline |
+| `figures_hwmon_path(b, root, which, file)` | the offset of the NUL after `root/hwmonN/file`, written into `b` |
+| `figures_hwmon_name(path, b)` | the length of a hwmon name file, less one newline; 0 when unreadable |
+| `figures_heat_new()`, `figures_sensor_new()` | a `FiguresHeat` (drive, processor, a 32-byte line) with nothing found, and one `FiguresSensor`; *allocate* |
+| `figures_heat_find(heat, root)` | 0; finds the first `nvme` and the first `k10temp` (else `coretemp`) in `root/hwmon0` to `hwmon63`, and the drive's `temp1_max` and `temp1_crit` (0 for none: missing, not plain, 0 or above 200000); *allocates* |
+| `figures_sensor_found(sensor, root, which, kind)`, `figures_limit(path, b)` | its steps: a sensor found at `hwmonN` (kind 1 nvme, 2 k10temp, 3 coretemp); a limit read |
+| `figures_sensor_read(sensor, b)`, `figures_heat_read(heat)` | 0; a sensor's `temp1_input` again (state 1 and `reading`, or 2 for n/a); both of them |
+| `figures_degrees(milli)` | whole degrees, a half rounding up |
+| `figures_shade(state, reading, warning)` | a drive's colour: 0 green, 1 amber within 10 °C under `warning`, 2 red at or above it, 3 grey when `state` is not 1; `warning` 0 is none (green) |
+| `figures_reply_longest()` | 155: the longest version-2 line, its newline included |
+| `figures_reply_put(b, cpu, memory, disk, drive)` | the length of the version-2 line written into `b` from 0, for two readings as `figures_read_stat` and `figures_read_meminfo` give them, a `FiguresDisk` and the drive's `FiguresSensor` |
+| `figures_put_half(b, at, reading)`, `figures_put_drive(b, at, drive)` | its steps: a part, two numbers or `unavailable`; the drive's part |
+| `figures_reply_new()` | a `FiguresReply` to read replies into; *allocates* |
+| `figures_reply_read(r, b, n)` | true when the first `n` bytes of `b` are exactly a line of version 1 or 2, within its rules, and `r` then filled (`version`, `cpu`, `total`, `busy`, `memory`, `mem_total`, `mem_available`, `disk`, `used`, `free`, `drive` 0 none, 1 n/a, 2 `reading` and `limit`) |
+| `figures_reply_half(b, at, stop)`, `figures_reply_space(b, at, stop)` | its steps: one part (well-formed, given, first, second, next); a space next |
+
+The other `figures_` functions (`figures_stat_byte`, `figures_mem_byte`, `figures_feed`, `figures_read`, ...) are the
+scanner's internal steps.

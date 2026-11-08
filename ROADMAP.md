@@ -11,8 +11,9 @@ checkable on demand.
   use, read from `/proc` once a second, and the owner's other computers, listed in a file on his machine, each
   knocked every 5 seconds with [knock](examples/knock.md)'s library (`lib/net.herb`) to show whether it answers,
   without the window ever waiting; nothing is allocated after it starts. [Scope's helper](examples/scope_helper.md),
-  a small program with no window, runs on another computer and answers Scope's knock with that computer's processor
-  and memory figures, which its row then shows; it is Herbert's first program that listens for connections.
+  a small program with no window, runs on another computer and answers Scope's knock with that computer's processor,
+  memory, disk and drive figures, which its row then shows; it is Herbert's first program that listens for
+  connections.
 - Notes, Maze, First steps, Scope and the word counter keep working, and change when using them shows a need.
 
 ## Memory

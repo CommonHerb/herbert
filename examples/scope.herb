@@ -5,16 +5,19 @@
 -- ~/.config/herbert/computers.txt answers, knocked every 5 seconds without
 -- the window ever waiting for one; a computer that runs Scope's helper
 -- (examples/scope_helper.herb) on the port it is knocked at answers with its
--- own processor and memory figures, which its row then shows. Linked after
+-- own processor and memory figures, and from version 2 of its line its disk
+-- and its drive's temperature, which its row then shows. Linked after
 -- lib/linux.herb, lib/x11.herb, lib/pixel_text.herb, lib/text.herb,
--- lib/net.herb and lib/figures.herb by Make.
+-- lib/net.herb and lib/figures.herb by Make; lib/figures.herb reads the
+-- figures (here and in the helper) and this file shows them.
 -- Every buffer and record is built at startup. A frame reads each /proc file
 -- through the one fixed 4096-byte chunk of lib/figures.herb's scanner, a byte
 -- at a time, keeping only the numbers it wants, asks statfs about the disk into
 -- one fixed 120-byte answer, reads each temperature into one fixed 32-byte
 -- buffer, and draws from fixed text buffers; each computer has one Net for all
 -- its knocks, and the figures its helper sends are read from that Net's fixed
--- reply buffer. So a run of days allocates nothing after startup.
+-- reply buffer into one FiguresReply. So a run of days allocates nothing after
+-- startup.
 
 -- The window's state. The three paths are NUL-terminated; scan reads them
 -- (lib/figures.herb), and its name buffer holds this computer's name, host_count
@@ -54,52 +57,24 @@ ref record Scope:
     heat: ScopeHeat
 end
 
--- The disk this computer runs from, as Linux's statfs system call
--- (linux_statfs) gives it for path, NUL-terminated: "/" in the window, empty
--- (which statfs refuses) in the --test forms that name no disk. answer is
--- statfs's 120-byte struct statfs (x86-64), the 64-bit words at 8, 16, 24, 32
--- and 72 being f_bsize, f_blocks, f_bfree, f_bavail and f_frsize. state is 1
--- with a reading, 2 when statfs failed or its figures cannot be shown; percent
--- is the part in use, size and free are KiB. text and detail hold what the
--- window draws for the row and the line under it.
+-- The disk row: the disk this computer runs from (lib/figures.herb's
+-- FiguresDisk, for "/" in the window, for an empty path, which statfs
+-- refuses, in the --test forms that name no disk), and text and detail, what
+-- the window draws for the row and the line under it.
 ref record ScopeDisk:
-    path: buffer
-    answer: buffer
-    state: int
-    percent: int
-    size: int
-    free: int
+    figures: FiguresDisk
     text: buffer
     count: int
     detail: buffer
     detail_count: int
 end
 
--- One temperature, from Linux's hwmon files. found is whether startup found
--- its device: hwmon number which, kind 1 nvme (the drive), 2 k10temp or 3
--- coretemp (the processor); path is its temp1_input, NUL-terminated, the one
--- file read again at each sample. warning and critical are the drive's
--- temp1_max and temp1_crit, read once at startup, in millidegrees Celsius, 0
--- for none. state is 1 with a reading (reading, in millidegrees), 2 for n/a.
-ref record ScopeSensor:
-    found: bool
-    which: int
-    kind: int
-    path: buffer
-    warning: int
-    critical: int
-    state: int
-    reading: int
-end
-
--- The temperature line: the drive and the processor, line the bytes read from
--- a sensor's file (32, more than a reading needs), and text what the window
--- draws, count bytes: the drive's part, drive_count bytes, then the
--- processor's. A part whose device was not found is left out.
+-- The temperature line: the drive and the processor (lib/figures.herb's
+-- FiguresHeat), and text, what the window draws, count bytes: the drive's
+-- part, drive_count bytes, then the processor's. A part whose device was not
+-- found is left out.
 ref record ScopeHeat:
-    drive: ScopeSensor
-    processor: ScopeSensor
-    line: buffer
+    figures: FiguresHeat
     text: buffer
     drive_count: int
     count: int
@@ -112,11 +87,14 @@ end
 -- due is when its next knock starts, in ms on the window's clock; note holds
 -- "Linux error N" for an error that has no words in net_error_name.
 -- figures is true when that knock read a reply from the computer's helper
--- (figures_reply_read): the row then shows text, text_count bytes, instead of
--- "answers". The fields from have_prev to mem_total are the computer's
--- processor and memory, kept by scope_cpu and scope_memory exactly as the
--- window's own are; counts is the reply's processor reading as scope_cpu reads
--- counters (BUSY first, the rest of TOTAL fourth, as idle).
+-- (figures_reply_read, into reply): the row then shows text, text_count
+-- bytes, instead of "answers". The fields from have_prev to mem_total are the
+-- computer's processor and memory, kept by scope_cpu and scope_memory exactly
+-- as the window's own are; counts is the reply's processor reading as
+-- scope_cpu reads counters (BUSY first, the rest of TOTAL fourth, as idle).
+-- small is true for a version-2 reply, whose row is drawn at scale 1 to make
+-- room for the disk and the drive: the drive's part starts at drive_at in
+-- text (text_count when there is none) and is drawn in its shade.
 ref record ScopeComputer:
     address: int
     port: int
@@ -138,6 +116,10 @@ ref record ScopeComputer:
     mem_total: int
     text: buffer
     text_count: int
+    reply: FiguresReply
+    small: bool
+    drive_at: int
+    shade: int
 end
 
 -- A row of the other computers' section. kind 0 is a computer (which is its
@@ -174,18 +156,14 @@ func scope_list_new(every, limit):
     return ScopeList(new_array(ScopeComputer), new_array(ScopeRow), 0, new_array(int), new_array(int), every, limit, linux_buffer(56))
 end
 
--- A disk, the one holding path, and a temperature line with no device found;
--- the window's own are set up by scope_watch.
+-- A disk row, for the disk holding path, and a temperature line with no
+-- device found; the window's own are set up by scope_watch.
 func scope_disk_new(path):
-    return ScopeDisk(linux_cstring(path), linux_buffer(120), 2, 0, 0, 0, linux_buffer(32), 0, linux_buffer(96), 0)
-end
-
-func scope_sensor_new():
-    return ScopeSensor(false, 0, 0, linux_buffer(1), 0, 0, 2, 0)
+    return ScopeDisk(figures_disk_new(path), linux_buffer(32), 0, linux_buffer(96), 0)
 end
 
 func scope_heat_new():
-    return ScopeHeat(scope_sensor_new(), scope_sensor_new(), linux_buffer(32), linux_buffer(64), 0, 0)
+    return ScopeHeat(figures_heat_new(), linux_buffer(64), 0, 0)
 end
 
 func scope_new(stat, meminfo, host, interval):
@@ -194,7 +172,7 @@ end
 
 -- A computer to knock at address and port, with its Net and buffers.
 func scope_computer_new(address, port):
-    return ScopeComputer(address, port, net_new(), 5, 0, 0, linux_buffer(24), false, false, 0, linux_buffer(64), linux_buffer(64), 0, 0, 2, 0, 0, 0, linux_buffer(32), 0)
+    return ScopeComputer(address, port, net_new(), 5, 0, 0, linux_buffer(24), false, false, 0, linux_buffer(64), linux_buffer(64), 0, 0, 2, 0, 0, 0, linux_buffer(48), 0, figures_reply_new(), false, 0, 0)
 end
 
 -- This computer's name, from host_path, into the scanner's name buffer.
@@ -202,29 +180,6 @@ func scope_read_host(st):
     st.host_count = figures_read_name(st.scan, st.host_path)
     st.host_ok = st.host_count > 0
     return 0
-end
-
--- part / whole as a whole percent, to the nearest, a half rounding up, exact
--- for any 64-bit numbers; whole is above zero and part not above it. 100 *
--- part is never formed: part is added up 100 times modulo whole, rest staying
--- below whole and the sum never passing 2^64, and the wraps counted are the
--- quotient. Then rest is the remainder, and rest >= whole - rest says it is at
--- least half of whole.
-func scope_percent(part, whole):
-    let quotient = 0
-    let rest = 0
-    let i = 0
-    while i < 100:
-        if part >= whole - rest:
-            rest = part - (whole - rest)
-            quotient = quotient + 1
-        else:
-            rest = rest + part
-        end
-        i = i + 1
-    end
-    if rest >= whole - rest: return quotient + 1 end
-    return quotient
 end
 
 -- A new processor sample, whose eight counters are in counts and sum to
@@ -258,7 +213,7 @@ func scope_cpu(st, ok, total, counts):
             i = i + 1
         end
         if spent != 0:
-            st.cpu_percent = scope_percent(worked, spent)
+            st.cpu_percent = figures_percent(worked, spent)
             st.cpu_state = 1
         end
     end
@@ -279,7 +234,7 @@ func scope_memory(st, ok, total, available):
     if available < total: used = total - available end
     st.mem_used = used
     st.mem_total = total
-    st.mem_percent = scope_percent(used, total)
+    st.mem_percent = figures_percent(used, total)
     st.mem_state = 1
     return 0
 end
@@ -314,231 +269,36 @@ func scope_texts(st):
     return 0
 end
 
--- n blocks of f bytes, in KiB, rounded down: (fits, kib). n * f is never
--- formed. With n = 1024 a + b and f = 1024 q + r it is n q + a r + b r / 1024,
--- rounded down; a r is below 2^54 * 2^10 and b r below 2^20, so only n q and
--- the sum can pass 2^64, and both are checked.
-func scope_kib(n, f):
-    let q = f / 1024
-    let r = f % 1024
-    if q != 0 and n > (0 - 1) / q: return (false, 0) end
-    let whole = n * q
-    let rest = (n / 1024) * r + ((n % 1024) * r) / 1024
-    if whole + rest < whole: return (false, 0) end
-    return (true, whole + rest)
-end
-
--- statfs's figures as df works them out (through statvfs): blocks of frsize
--- bytes, the disk's size blocks, in use blocks less bfree (none if more is
--- free than there is), and free bavail, what an ordinary user may still
--- write. The percent is in use over in use and free, so the blocks Linux keeps
--- back for the system count as neither, as in df, and the block size cancels
--- out of it; with nothing in use and nothing free (all kept back) the disk is
--- full for the owner, 100 %. A disk of no blocks or blocks of no bytes, or
--- figures too large for 64 bits in KiB, cannot be shown.
-func scope_disk_figures(disk, ok, blocks, bfree, bavail, frsize):
-    disk.state = 2
-    if not ok or blocks == 0 or frsize == 0: return 0 end
-    let used = 0
-    if bfree < blocks: used = blocks - bfree end
-    if bavail > (0 - 1) - used: return 0 end
-    let size = scope_kib(blocks, frsize)
-    let free = scope_kib(bavail, frsize)
-    if not size.0 or not free.0: return 0 end
-    disk.size = size.1
-    disk.free = free.1
-    disk.percent = 100
-    if used + bavail != 0: disk.percent = scope_percent(used, used + bavail) end
-    disk.state = 1
-    return 0
-end
-
--- statfs on the disk's path, into its fixed answer: (asked, blocks, bfree,
--- bavail, frsize), f_bsize standing in for an f_frsize of zero, as statvfs
--- does. asked is false when statfs refused.
-func scope_statfs(disk):
-    let got = linux_statfs(disk.path, disk.answer)
-    if linux_error(got): return (false, 0, 0, 0, 0) end
-    let frsize = linux_u64(disk.answer, 72)
-    if frsize == 0: frsize = linux_u64(disk.answer, 8) end
-    return (true, linux_u64(disk.answer, 16), linux_u64(disk.answer, 24), linux_u64(disk.answer, 32), frsize)
-end
-
 -- What the disk row shows: "54%", and under it "413.2 GiB free of 936.8 GiB"
 -- (in MiB for a disk under 1 GiB), or "unavailable" and nothing under it.
 func scope_disk_texts(disk):
-    if disk.state != 1:
+    let figures = disk.figures
+    if figures.state != 1:
         disk.count = text_put(disk.text, 0, "unavailable")
         disk.detail_count = 0
         return 0
     end
-    disk.count = text_put(disk.text, text_put_whole(disk.text, 0, disk.percent), "%")
+    disk.count = text_put(disk.text, text_put_whole(disk.text, 0, figures.percent), "%")
     let unit = 1048576
     let name = " GiB"
-    if disk.size < 1048576:
+    if figures.size < 1048576:
         unit = 1024
         name = " MiB"
     end
-    let at = text_put_tenths(disk.detail, 0, disk.free, unit)
+    let at = text_put_tenths(disk.detail, 0, figures.free, unit)
     at = text_put(disk.detail, at, name)
     at = text_put(disk.detail, at, " free of ")
-    at = text_put_tenths(disk.detail, at, disk.size, unit)
+    at = text_put_tenths(disk.detail, at, figures.size, unit)
     disk.detail_count = text_put(disk.detail, at, name)
     return 0
 end
 
 func scope_disk_sample(disk):
-    let asked = scope_statfs(disk)
-    do scope_disk_figures(disk, asked.0, asked.1, asked.2, asked.3, asked.4)
+    do figures_disk_read(disk.figures)
     return scope_disk_texts(disk)
 end
 
--- Up to buffer_length(b) bytes from the start of the file at path
--- (NUL-terminated), into b: (readable, bytes read). It is opened without
--- blocking (O_NONBLOCK), so a FIFO put in its place cannot hold the window.
--- Allocates nothing.
-func scope_read_small(path, b):
-    let fd = linux_open(path, linux_o_nonblock() | linux_o_cloexec(), 0)
-    if linux_error(fd): return (false, 0) end
-    let n = 0
-    let ok = true
-    let going = true
-    while going:
-        let got = linux_read(fd, b, n, buffer_length(b) - n)
-        if got != 0 - 4:
-            if linux_error(got) or got > buffer_length(b) - n:
-                ok = false
-                going = false
-            elif got == 0:
-                going = false
-            else:
-                n = n + got
-                going = n < buffer_length(b)
-            end
-        end
-    end
-    do linux_close(fd)
-    return (ok, n)
-end
-
--- The file at path, read into b, as a whole number in plain decimal, as Linux
--- writes a sensor's file: digits only, at least one, below 2^64, and at most
--- one newline after them; a sign, a space or anything else, an empty file, or
--- a file that fills b (it may go on) is not plain. (plain, value).
-func scope_read_value(path, b):
-    let got = scope_read_small(path, b)
-    let n = got.1
-    if not got.0 or n == buffer_length(b): return (false, 0) end
-    if n > 0 and buffer_get(b, n - 1) == 10: n = n - 1 end
-    let value = text_whole(b, 0, n)
-    if not value.0 or value.2 != n: return (false, 0) end
-    return (true, value.1)
-end
-
--- root/hwmonN/file into b, NUL-terminated; b holds length(root) + 32 bytes,
--- room for "/hwmon", two digits, "/", "temp1_input" and the NUL.
-func scope_hwmon_path(b, root, which, file):
-    let at = text_put_whole(b, text_put(b, text_put(b, 0, root), "/hwmon"), which)
-    at = text_put(b, text_put(b, at, "/"), file)
-    do buffer_set(b, at, 0)
-    return at
-end
-
--- The name file at path, into b: its length, less one newline after it; 0
--- when it cannot be read. A name longer than b is cut there, which no name
--- looked for is near.
-func scope_name_read(path, b):
-    let got = scope_read_small(path, b)
-    let n = got.1
-    if not got.0: return 0 end
-    if n > 0 and buffer_get(b, n - 1) == 10: n = n - 1 end
-    return n
-end
-
-func scope_sensor_found(sensor, root, which, kind):
-    sensor.found = true
-    sensor.which = which
-    sensor.kind = kind
-    sensor.path = linux_buffer(length(root) + 32)
-    do scope_hwmon_path(sensor.path, root, which, "temp1_input")
-    return 0
-end
-
--- A limit of the drive's, in millidegrees, read once at startup: none (0) when
--- its file cannot be read or is not plain decimal, or it says 0 or more than
--- 200 °C (200000), which no drive means: this computer's drive says 65261850
--- for one of its other limits.
-func scope_limit(path, b):
-    let value = scope_read_value(path, b)
-    if not value.0 or value.1 > 200000: return 0 end
-    return value.1
-end
-
--- The temperatures under root, the hwmon directory (/sys/class/hwmon), found
--- once, at startup, since Linux may number its devices differently at each
--- boot. Each of hwmon0 to hwmon63 is looked at, a number whose name file
--- cannot be read (a gap Linux leaves when a device goes) being skipped: the
--- drive is the first named nvme, its temp1_input the temperature the drive
--- judges its own limits by, and the processor the first k10temp (AMD), or else
--- the first coretemp (Intel). The drive's two limits are read here too.
-func scope_heat_find(heat, root):
-    let path = linux_buffer(length(root) + 32)
-    let core = 64
-    let which = 0
-    while which < 64:
-        do scope_hwmon_path(path, root, which, "name")
-        let n = scope_name_read(path, heat.line)
-        if not heat.drive.found and text_is(heat.line, 0, n, "nvme"):
-            do scope_sensor_found(heat.drive, root, which, 1)
-        elif not heat.processor.found and text_is(heat.line, 0, n, "k10temp"):
-            do scope_sensor_found(heat.processor, root, which, 2)
-        elif core == 64 and text_is(heat.line, 0, n, "coretemp"):
-            core = which
-        end
-        which = which + 1
-    end
-    if not heat.processor.found and core < 64: do scope_sensor_found(heat.processor, root, core, 3) end
-    let drive = heat.drive
-    if drive.found:
-        do scope_hwmon_path(path, root, drive.which, "temp1_max")
-        drive.warning = scope_limit(path, heat.line)
-        do scope_hwmon_path(path, root, drive.which, "temp1_crit")
-        drive.critical = scope_limit(path, heat.line)
-    end
-    return 0
-end
-
--- A sensor's temp1_input again: a reading, or n/a when it cannot be read or is
--- not plain decimal (a negative one included).
-func scope_sensor_read(sensor, b):
-    if not sensor.found: return 0 end
-    let value = scope_read_value(sensor.path, b)
-    sensor.state = 2
-    if value.0:
-        sensor.state = 1
-        sensor.reading = value.1
-    end
-    return 0
-end
-
--- Millidegrees as whole degrees, to the nearest, a half rounding up.
-func scope_degrees(milli):
-    if milli % 1000 >= 500: return milli / 1000 + 1 end
-    return milli / 1000
-end
-
--- The drive's shade: 0 green, more than 10 °C under its warning limit or with
--- no limit; 1 amber, within 10 °C under it; 2 red, at or above it; 3 grey,
--- n/a. Each compares the reading in millidegrees, as the drive itself does.
-func scope_drive_shade(sensor):
-    if sensor.state != 1: return 3 end
-    let warning = sensor.warning
-    if warning == 0: return 0 end
-    if sensor.reading >= warning: return 2 end
-    if warning <= 10000 or sensor.reading >= warning - 10000: return 1 end
-    return 0
-end
-
+-- The ink for a drive's shade (figures_shade): green, amber, red, grey.
 func scope_shade_ink(shade):
     if shade == 0: return 6867876 end
     if shade == 1: return 16173151 end
@@ -549,35 +309,38 @@ end
 func scope_heat_part(heat, at, name, sensor):
     at = text_put(heat.text, at, name)
     if sensor.state != 1: return text_put(heat.text, at, "n/a") end
-    return text_put(heat.text, text_put_whole(heat.text, at, scope_degrees(sensor.reading)), " C")
+    return text_put(heat.text, text_put_whole(heat.text, at, figures_degrees(sensor.reading)), " C")
 end
 
 -- What the temperature line shows: "DRIVE 35 C  PROCESSOR 39 C", a part
 -- whose device was not found left out.
 func scope_heat_texts(heat):
+    let figures = heat.figures
     let at = 0
-    if heat.drive.found: at = scope_heat_part(heat, at, "DRIVE ", heat.drive) end
+    if figures.drive.found: at = scope_heat_part(heat, at, "DRIVE ", figures.drive) end
     heat.drive_count = at
-    if heat.processor.found:
+    if figures.processor.found:
         if at > 0: at = text_put(heat.text, at, "  ") end
-        at = scope_heat_part(heat, at, "PROCESSOR ", heat.processor)
+        at = scope_heat_part(heat, at, "PROCESSOR ", figures.processor)
     end
     heat.count = at
     return 0
 end
 
 func scope_heat_sample(heat):
-    do scope_sensor_read(heat.drive, heat.line)
-    do scope_sensor_read(heat.processor, heat.line)
+    do figures_heat_read(heat.figures)
     return scope_heat_texts(heat)
 end
+
+-- The drive's shade (figures_shade) for a FiguresSensor.
+func scope_drive_shade(sensor): return figures_shade(sensor.state, sensor.reading, sensor.warning) end
 
 -- The window's own disk and temperatures: statfs on path, the sensors under
 -- hwmon (startup only).
 func scope_watch(st, hwmon, path):
-    let disk = st.disk
+    let disk = st.disk.figures
     disk.path = linux_cstring(path)
-    return scope_heat_find(st.heat, hwmon)
+    return figures_heat_find(st.heat.figures, hwmon)
 end
 
 func scope_sample(st):
@@ -793,7 +556,9 @@ func scope_height(list): return 552 + count(list.rows) * 34 end
 
 -- What a computer's row shows with figures: "CPU 12%  MEM 41%", the processor
 -- a dash until a second reply and either figure n/a when its helper could not
--- read it.
+-- read it; from a version-2 reply also "  DISK 7%  DRIVE 31 C" (each n/a when
+-- its helper could not read it, the drive's part left out when the computer
+-- has no drive sensor), at most 43 characters, which fit the row at scale 1.
 func scope_figures_text(it):
     let at = text_put(it.text, 0, "CPU ")
     if it.cpu_state == 0:
@@ -805,10 +570,34 @@ func scope_figures_text(it):
     end
     at = text_put(it.text, at, "  MEM ")
     if it.mem_state == 1:
-        it.text_count = text_put(it.text, text_put_whole(it.text, at, it.mem_percent), "%")
+        at = text_put(it.text, text_put_whole(it.text, at, it.mem_percent), "%")
     else:
-        it.text_count = text_put(it.text, at, "n/a")
+        at = text_put(it.text, at, "n/a")
     end
+    let r = it.reply
+    it.small = r.version == 2
+    if it.small:
+        at = text_put(it.text, at, "  DISK ")
+        if r.disk:
+            at = text_put(it.text, text_put_whole(it.text, at, figures_disk_percent(r.used, r.free)), "%")
+        else:
+            at = text_put(it.text, at, "n/a")
+        end
+        if r.drive != 0: at = text_put(it.text, at, "  ") end
+    end
+    it.drive_at = at
+    if it.small and r.drive != 0:
+        at = text_put(it.text, at, "DRIVE ")
+        let state = 2
+        if r.drive == 2:
+            state = 1
+            at = text_put(it.text, text_put_whole(it.text, at, figures_degrees(r.reading)), " C")
+        else:
+            at = text_put(it.text, at, "n/a")
+        end
+        it.shade = figures_shade(state, r.reading, r.limit)
+    end
+    it.text_count = at
     return 0
 end
 
@@ -817,19 +606,21 @@ end
 -- of what the computer sent before it closed the connection, gives the row
 -- figures: the reply's processor reading goes through scope_cpu as two
 -- counters, BUSY and the rest of TOTAL, and its memory through scope_memory,
--- the same steps as the window's own figures. Any other end drops the figures,
--- and the processor's two-reading history starts over.
+-- the same steps as the window's own figures; a version-2 reply's disk
+-- percent and drive shade come from figures_disk_percent and figures_shade,
+-- as the window's own do. Any other end drops the figures, and the
+-- processor's two-reading history starts over.
 func scope_result(it):
     let st = it.net.state
     let had = it.figures
     it.figures = false
     if st.outcome == 0 and st.closed:
-        let reply = figures_reply_read(it.net.reply, st.got)
-        if reply.0:
-            do linux_put64(it.counts, 0, reply.3)
-            do linux_put64(it.counts, 24, reply.2 - reply.3)
-            do scope_cpu(it, reply.1, reply.2, it.counts)
-            do scope_memory(it, reply.4, reply.5, reply.6)
+        let r = it.reply
+        if figures_reply_read(r, it.net.reply, st.got):
+            do linux_put64(it.counts, 0, r.busy)
+            do linux_put64(it.counts, 24, r.total - r.busy)
+            do scope_cpu(it, r.cpu, r.total, it.counts)
+            do scope_memory(it, r.memory, r.mem_total, r.mem_available)
             do scope_figures_text(it)
             it.figures = true
         end
@@ -932,8 +723,20 @@ end
 -- A computer's result, at (352, y): its helper's figures (in green), answers
 -- (answered or refused, in green), checking (grey) until its first knock ends,
 -- or no answer, unreachable or error in amber; under error, what Linux said.
+-- Figures from a version-2 reply are drawn at scale 1, 4 pixels down, level
+-- with the middle of the name, the drive's part in its shade: at most 43
+-- characters, ending by x = 610, inside the panel's edge at 614.
 func scope_status(c, it, y):
     let shown = it.shown
+    if it.figures and it.small:
+        do x11_color(c, 6867876)
+        do pixel_text_buffer(c, it.text, 0, it.drive_at, 352, y + 4, 1)
+        if it.text_count > it.drive_at:
+            do x11_color(c, scope_shade_ink(it.shade))
+            do pixel_text_buffer(c, it.text, it.drive_at, it.text_count - it.drive_at, 352 + it.drive_at * 6, y + 4, 1)
+        end
+        return 0
+    end
     if it.figures:
         do x11_color(c, 6867876)
         return pixel_text_buffer(c, it.text, 0, it.text_count, 352, y, 2)
@@ -991,12 +794,12 @@ end
 -- then the processor's in white (grey for n/a), after it.
 func scope_heat_draw(c, heat, y):
     if heat.drive_count > 0:
-        do x11_color(c, scope_shade_ink(scope_drive_shade(heat.drive)))
+        do x11_color(c, scope_shade_ink(scope_drive_shade(heat.figures.drive)))
         do pixel_text_buffer(c, heat.text, 0, heat.drive_count, 46, y, 2)
     end
     if heat.count > heat.drive_count:
         let ink = 15265527
-        if heat.processor.state != 1: ink = 11255503 end
+        if heat.figures.processor.state != 1: ink = 11255503 end
         do x11_color(c, ink)
         do pixel_text_buffer(c, heat.text, heat.drive_count, heat.count - heat.drive_count, 46 + heat.drive_count * 12, y, 2)
     end
@@ -1029,7 +832,7 @@ func scope_draw(c, st, pulse):
     do scope_row(c, "MEMORY", 212, st.mem_state, st.mem_percent, st.mem_text, st.mem_count, 7317724)
     do x11_color(c, 11255503)
     do pixel_text_buffer(c, st.detail, 0, st.detail_count, 46, 270, 1)
-    do scope_row(c, "DISK", 300, st.disk.state, st.disk.percent, st.disk.text, st.disk.count, 11833005)
+    do scope_row(c, "DISK", 300, st.disk.figures.state, st.disk.figures.percent, st.disk.text, st.disk.count, 11833005)
     do x11_color(c, 11255503)
     do pixel_text_buffer(c, st.disk.detail, 0, st.disk.detail_count, 46, 358, 1)
     do scope_heat_draw(c, st.heat, 388)
@@ -1198,7 +1001,8 @@ end
 -- when the computer closes the connection after it and stops reading once it
 -- has 256 bytes. What the computer's row then shows
 -- is printed, one line each: "row=CPU 40%  MEM 75%", or "row=answers" when it
--- shows no figures. No knock is made.
+-- shows no figures; a row with a drive's part (from a version-2 reply) is
+-- followed by a tab and that part's colour, "drive=amber". No knock is made.
 func scope_replies_mode(args, count):
     let it = scope_computer_new(0, 0)
     let st = it.net.state
@@ -1218,6 +1022,10 @@ func scope_replies_mode(args, count):
         do text_add(out, "row=")
         if it.figures:
             do text_add_span(out, it.text, 0, it.text_count)
+            if it.small and it.text_count > it.drive_at:
+                do text_add(out, "\tdrive=")
+                do text_add(out, scope_shade_name(it.shade))
+            end
         else:
             do text_add(out, "answers")
         end
@@ -1235,10 +1043,18 @@ func scope_out_disk(out, disk):
     do text_add(out, "disk=")
     do text_add_span(out, disk.text, 0, disk.count)
     do text_add(out, "\ndisk-bar=")
-    do text_add_whole(out, scope_bar_width(disk.state, disk.percent))
+    do text_add_whole(out, scope_bar_width(disk.figures.state, disk.figures.percent))
     do text_add(out, "\ndisk-detail=")
     do text_add_span(out, disk.detail, 0, disk.detail_count)
     return text_add(out, "\n")
+end
+
+-- A shade's name, as the test modes print it.
+func scope_shade_name(shade):
+    if shade == 0: return "green" end
+    if shade == 1: return "amber" end
+    if shade == 2: return "red" end
+    return "grey"
 end
 
 func scope_out_limit(out, limit):
@@ -1273,15 +1089,15 @@ end
 -- (f_blocks, f_bfree, f_bavail and the block size) or "unavailable".
 func scope_readings_mode(args):
     let heat = scope_heat_new()
-    do scope_heat_find(heat, linux_argument(args, 2))
+    do figures_heat_find(heat.figures, linux_argument(args, 2))
     do scope_heat_sample(heat)
     let disk = scope_disk_new(linux_argument(args, 3))
-    let asked = scope_statfs(disk)
-    do scope_disk_figures(disk, asked.0, asked.1, asked.2, asked.3, asked.4)
+    let asked = figures_statfs(disk.figures)
+    do figures_disk_figures(disk.figures, asked.0, asked.1, asked.2, asked.3, asked.4)
     do scope_disk_texts(disk)
     let out = new_buffer()
-    do scope_out_sensor(out, "drive-sensor=", heat.drive)
-    do scope_out_sensor(out, "processor-sensor=", heat.processor)
+    do scope_out_sensor(out, "drive-sensor=", heat.figures.drive)
+    do scope_out_sensor(out, "processor-sensor=", heat.figures.processor)
     do text_add(out, "statfs=")
     if asked.0:
         do text_add_whole(out, asked.1)
@@ -1299,17 +1115,10 @@ func scope_readings_mode(args):
     do text_add(out, "temperatures=")
     do text_add_span(out, heat.text, 0, heat.count)
     do text_add(out, "\ndrive-colour=")
-    let shade = scope_drive_shade(heat.drive)
-    if not heat.drive.found:
-        do text_add(out, "none")
-    elif shade == 0:
-        do text_add(out, "green")
-    elif shade == 1:
-        do text_add(out, "amber")
-    elif shade == 2:
-        do text_add(out, "red")
+    if heat.figures.drive.found:
+        do text_add(out, scope_shade_name(scope_drive_shade(heat.figures.drive)))
     else:
-        do text_add(out, "grey")
+        do text_add(out, "none")
     end
     do text_add(out, "\n")
     do flogger(freeze(out))
@@ -1335,7 +1144,7 @@ func scope_disk_figures_mode(args):
     let frsize = scope_whole(linux_argument(args, 5))
     if not blocks.0 or not bfree.0 or not bavail.0 or not frsize.0: return linux_die("scope: usage: scope\n") end
     let disk = scope_disk_new("")
-    do scope_disk_figures(disk, true, blocks.1, bfree.1, bavail.1, frsize.1)
+    do figures_disk_figures(disk.figures, true, blocks.1, bfree.1, bavail.1, frsize.1)
     do scope_disk_texts(disk)
     let out = new_buffer()
     do scope_out_disk(out, disk)

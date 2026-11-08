@@ -13,12 +13,15 @@ comments, tabs and CRLF to every malformed address and port check_net knows, 7 c
 the 64 KiB bound), files that are not lists (a FIFO, /dev/zero, a directory) and the list in HOME; every line it
 prints is compared with an answer written by hand, and strace makes socket() fail so nothing could be knocked.
 
-`scope --replies FILE ...` then puts replies a helper might send (lib/figures.herb's format) through the steps a
-knock's reply goes through, and every row it prints is compared with an answer written by hand: well-formed replies
-(the processor a dash first, then its figure; unavailable halves; the largest numbers; a total that went back) and
-dozens of malformed ones (no newline, bytes after it, CRLF, two lines, other prefixes and versions, extra or missing
-spaces, tabs, leading zeros, 2^64, a busy count above the total, a memory total of zero, 256 and 257 bytes, an SSH
-banner), each between good replies, so the row must drop its figures and its processor start again.
+`scope --replies FILE ...` then puts replies a helper might send (lib/figures.herb's format, versions 1 and 2)
+through the steps a knock's reply goes through, and every row it prints is compared with an answer written by hand:
+well-formed replies (the processor a dash first, then its figure; unavailable parts; the largest numbers; a total that
+went back; in version 2 the disk's percent at its edges, the drive's degrees and its colour at each edge of its
+bands, no drive sensor, the widest row and the longest line) and dozens of malformed ones (no newline, bytes after it,
+CRLF, two lines, other prefixes and versions, parts missing or extra, extra or missing spaces, tabs, leading zeros,
+2^64, a busy count above the total, a memory total of zero, the disk past 2^64, a reading of 1000 C, a limit above
+200 C, 256 and 257 bytes, an SSH banner), each between good replies, so the row must drop its figures and its
+processor start again.
 
 `scope --readings HWMON STATFS` then finds and reads temperatures in stand-in hwmon directories this check writes (the
 drive at a high number and past the last, gaps, k10temp before coretemp, look-alike names, limits missing, zero,
@@ -45,16 +48,18 @@ after his trial; problems and notes keep their detail): checking, answers (a lis
 no answer (a full accept queue), kept while the next knock is under way, problems, a seventh computer never knocked,
 and unreachable and error made by strace failing the knocks' connects. A fake helper's figures are read back too: the
 processor a dash after the first reply and its figure after the second, every malformed reply (wrong prefix, version
-2, an extra space, no newline, bytes after it, a number at 2^64, 257 bytes, a drip that misses the time limit, a
+3, an extra space, no newline, bytes after it, a number at 2^64, 257 bytes, a drip that misses the time limit, a
 helper that never sends, an SSH banner) showing answers, a refusal showing answers, and a row dropping its figures
-when its helper goes away and starting its processor again when it comes back. A knock that never answers, and a
+when its helper goes away and starting its processor again when it comes back. Version-2 helpers' rows are read at
+scale 1: the drive's part in green, amber, amber and red at 73849, 73850, 83849 and 83850 (an 83850 limit), grey
+n/a, left out with no drive sensor, the disk n/a, the widest row with nothing past it, beside a version-1 row. A knock that never answers, and a
 helper that drips, must hold nothing up: the light changes on time, Scope uses little processor time and Escape
 closes the window within 300 ms. Under strace, the knocks' interval and time limit are read from their own clock,
 and a reading knock reads only without waiting and is waited on for POLLIN. Last, for --seconds (default 120) it reads
 every 10 ms through links this check turns between the real /proc, files without a final newline (MiB, a 60-byte
 name), missing files and malformed files, the temperatures and the disk turned with them, while knocking every 20 ms on
-four computers, one a helper replying to every knock, and must stay the same size in memory with no socket outliving
-its knock.
+five computers, two of them helpers replying to every knock (versions 1 and 2), and must stay the same size in memory
+with no socket outliving its knock.
 
 Python, strace, Xvfb, libX11 and libXtst are test tools only; Scope links none of them. Evidence (frames, input
 history, outputs, traces, memory samples) is kept in /tmp/herbert-hosted-apps-scope-*.
@@ -100,10 +105,13 @@ DETAIL_AT, DISK_DETAIL_AT = (46, 270), (46, 358)
 HEAT_AT, HEAT_CELLS = (46, 388), 47              # the temperature line, scale 2, as far as the panel's edge
 # The other computers' section: its heading, then a panel from y=458 with a row every 34 pixels from y=472: the main
 # text at x=46, scale 2, the detail 19 below at scale 1, and a computer's result at x=352 (scale 2, and under it what
-# Linux said, scale 1). The panel ends at 478 + 34 * rows; the footer lines are 22 and 44 below it, and the window is
-# 74 taller than that: 552 + 34 * rows in all, one row at least (a note) and eight at most.
+# Linux said, scale 1). A version-2 helper's figures are drawn at scale 1, 4 below the row's top, at most 43
+# characters, so they end by x=610, inside the panel's inner edge at 614. The panel ends at 478 + 34 * rows; the
+# footer lines are 22 and 44 below it, and the window is 74 taller than that: 552 + 34 * rows in all, one row at least
+# (a note) and eight at most.
 OTHERS_AT = (28, 442)
 ROW_TOP, ROW_STEP, DETAIL_DY, STATUS_X = 472, 34, 19, 352
+SMALL_DY, SMALL_CELLS, PANEL_EDGE = 4, 43, 614
 
 
 def height(rows):
@@ -626,6 +634,71 @@ REPLY_CASES = [
     ('longest-reply-100-bytes', [b'herbert-scope 1 %d %d %d %d\n' % (TOP, TOP - 1, TOP, TOP - 1)], ['CPU -  MEM 0%']),
 ]
 assert len(b'herbert-scope 1 %d %d %d %d\n' % (TOP, TOP, TOP, TOP)) == 100
+
+
+# Version 2 (lib/figures.herb): version 1's two parts, then the disk's blocks in use and blocks free to an ordinary
+# user and the drive's reading and warning limit in millidegrees, each part "unavailable" when the helper could not
+# read it, and the drive "none" when the computer has no drive sensor. S1 then S2: the processor and memory as R1 and
+# R2; this computer's disk (124754138 blocks in use, 108326237 free: 53.5 %, so 54 %); the drive at 35.85 C, 36,
+# under its warning limit of 83.85 C (green). --replies prints a row with a drive's part followed by a tab and that
+# part's colour. Worked out by hand: the disk's percent is in use over in use and free, a half rounding up, 100 with
+# neither; the drive's whole degrees round a half up and its colour follows the limit exactly as this computer's
+# drive's does (examples/scope.md).
+DISK_PART, DRIVE_PART = b'124754138 108326237', b'35850 83850'
+
+
+def v2(cpu, memory=b'16384000 4096000', disk=DISK_PART, drive=DRIVE_PART):
+    return b'herbert-scope 2 %s %s %s %s\n' % (cpu, memory, disk, drive)
+
+
+def rising2(n, **parts):
+    """The n-th version-2 reply (from 0) of a helper whose processor works 40 % of every interval, as rising(n)."""
+    return v2(b'%d %d' % (10000 + 1000 * n, 1500 + 400 * n), **parts)
+
+
+S1, S2, S3 = rising2(0), rising2(1), rising2(2)
+S_FIRST = 'CPU -  MEM 75%  DISK 54%  DRIVE 36 C\tdrive=green'
+S_FORTY = 'CPU 40%  MEM 75%  DISK 54%  DRIVE 36 C\tdrive=green'
+
+
+def dash(disk='54%', drive=None):
+    """The row after a first version-2 reply with S1's processor and memory: the disk's and the drive's parts given."""
+    return f'CPU -  MEM 75%  DISK {disk}' + ('' if drive is None else f'  DRIVE {drive}')
+
+
+LONGEST = v2(b'%d %d' % (TOP, TOP), b'%d %d' % (TOP, TOP), b'%d %d' % (10**19, TOP - 10**19), b'999999 200000')
+assert len(LONGEST) == 155          # figures_reply_longest: of the disk's two numbers only one can have 20 digits
+WIDEST = 'CPU 100%  MEM 100%  DISK 100%  DRIVE 1000 C'
+assert len(WIDEST) == 43            # the most the row holds at scale 1 (SMALL_CELLS)
+REPLY_CASES += [
+    ('version-2-dash-then-figure', [S1, S2], [S_FIRST, S_FORTY]),
+    ('version-1-then-2-then-1-keeps-the-processor', [R1, S2, rising(2)], [FIRST, S_FORTY, FORTY]),
+    ('version-2-drive-at-each-edge', [rising2(0, drive=b'%d 83850' % m) for m in (73849, 73850, 83849, 83850)],
+     [dash(drive='74 C\tdrive=green'), dash(drive='74 C\tdrive=amber'), dash(drive='84 C\tdrive=amber'),
+      dash(drive='84 C\tdrive=red')]),
+    ('version-2-no-limit-is-green', [rising2(0, drive=b'90000 0')], [dash(drive='90 C\tdrive=green')]),
+    ('version-2-limits-of-5-10-and-10.001-degrees',
+     [rising2(0, drive=d) for d in (b'0 5000', b'0 10000', b'0 10001', b'1 10001', b'190000 200000')],
+     [dash(drive='0 C\tdrive=amber'), dash(drive='0 C\tdrive=amber'), dash(drive='0 C\tdrive=green'),
+      dash(drive='0 C\tdrive=amber'), dash(drive='190 C\tdrive=amber')]),
+    ('version-2-rounding', [rising2(0, drive=b'%d 83850' % m) for m in (34499, 34500, 499, 500)],
+     [dash(drive=f'{d} C\tdrive=green') for d in (34, 35, 0, 1)]),
+    ('version-2-largest-reading', [rising2(0, drive=b'999999 83850'), rising2(0, drive=b'999999 0')],
+     [dash(drive='1000 C\tdrive=red'), dash(drive='1000 C\tdrive=green')]),
+    ('version-2-drive-unavailable', [rising2(0, drive=b'unavailable'), S2],
+     [dash(drive='n/a\tdrive=grey'), S_FORTY]),
+    ('version-2-no-drive-sensor', [rising2(0, drive=b'none'), S2], [dash(), S_FORTY]),
+    ('version-2-disk-unavailable', [rising2(0, disk=b'unavailable')], [dash('n/a', '36 C\tdrive=green')]),
+    ('version-2-disk-edges', [rising2(0, disk=d, drive=b'none') for d in (
+        b'0 0', b'0 5', b'1 199', b'1 200', b'199 1', b'%d 0' % TOP, b'0 %d' % TOP, b'%d %d' % (2**63, 2**63 - 1))],
+     [dash(p) for p in ('100%', '0%', '1%', '0%', '100%', '100%', '0%', '50%')]),
+    ('version-2-all-unavailable', [b'herbert-scope 2 unavailable unavailable unavailable none\n',
+                                   b'herbert-scope 2 unavailable unavailable unavailable unavailable\n'],
+     ['CPU n/a  MEM n/a  DISK n/a', 'CPU n/a  MEM n/a  DISK n/a  DRIVE n/a\tdrive=grey']),
+    ('version-2-widest-row', [v2(b'%d %d' % (200 * n, 200 * n), b'1 0', b'1 0', b'999999 0') for n in (0, 1)],
+     ['CPU -  MEM 100%  DISK 100%  DRIVE 1000 C\tdrive=green', WIDEST + '\tdrive=green']),
+    ('version-2-longest-reply-155-bytes', [LONGEST], ['CPU -  MEM 0%  DISK 54%  DRIVE 1000 C\tdrive=red']),
+]
 # Malformed replies: each is put between good ones (R1 before, R2 and R3 after), so the row must show figures, then
 # answers, then a dash (the processor's history started again: kept, R2 after R1 would show 40 % at once), then the
 # figure.
@@ -642,7 +715,8 @@ MALFORMED_REPLIES = [
     ('capital-h', b'Herbert-scope 1 10000 1500 16384000 4096000\n'),
     ('underscore', b'herbert_scope 1 10000 1500 16384000 4096000\n'),
     ('space-in-front', b' herbert-scope 1 10000 1500 16384000 4096000\n'),
-    ('version-2', b'herbert-scope 2 10000 1500 16384000 4096000\n'),
+    ('version-2-with-version-1-fields', b'herbert-scope 2 10000 1500 16384000 4096000\n'),
+    ('version-3', b'herbert-scope 3 10000 1500 16384000 4096000\n'),
     ('version-01', b'herbert-scope 01 10000 1500 16384000 4096000\n'),
     ('version-10', b'herbert-scope 10 10000 1500 16384000 4096000\n'),
     ('no-version', b'herbert-scope 10000 1500 16384000 4096000\n'),
@@ -678,6 +752,53 @@ MALFORMED_REPLIES = [
     ('a-good-line-then-300-bytes', R1 + b' ' * 300),
 ]
 assert len(dict(MALFORMED_REPLIES)) == len(MALFORMED_REPLIES)
+# Malformed version-2 replies, each put between good version-2 ones (S1 before, S2 and S3 after) as above.
+MALFORMED_V2 = [
+    ('version-3', S1.replace(b'scope 2', b'scope 3')),
+    ('version-02', S1.replace(b'scope 2', b'scope 02')),
+    ('missing-the-drive', b'herbert-scope 2 10000 1500 16384000 4096000 124754138 108326237\n'),
+    ('missing-the-disk', b'herbert-scope 2 10000 1500 16384000 4096000 35850 83850\n'),
+    ('missing-the-disk-and-the-drive-unavailable', b'herbert-scope 2 10000 1500 16384000 4096000 unavailable\n'),
+    ('an-extra-number', S1[:-1] + b' 7\n'),
+    ('an-extra-unavailable', S1[:-1] + b' unavailable\n'),
+    ('an-extra-none', S1[:-1] + b' none\n'),
+    ('the-drive-one-number', rising2(0, drive=b'35850')),
+    ('the-drive-three-numbers', rising2(0, drive=b'35850 83850 87850')),
+    ('the-disk-one-number', rising2(0, disk=b'124754138')),
+    ('none-for-the-disk', rising2(0, disk=b'none')),
+    ('none-for-the-processor', v2(b'none')),
+    ('none-for-the-memory', v2(b'10000 1500', b'none')),
+    ('none-with-a-number', rising2(0, drive=b'none 83850')),
+    ('none-glued', rising2(0, drive=b'none5')),
+    ('none-in-capitals', rising2(0, drive=b'None')),
+    ('n/a-for-the-drive', rising2(0, drive=b'n/a')),
+    ('unavailable-for-the-limit-alone', rising2(0, drive=b'35850 unavailable')),
+    ('unavailable-glued', rising2(0, disk=b'unavailable5')),
+    ('two-spaces-before-the-drive', rising2(0, drive=b' 35850 83850')),
+    ('tab-before-the-disk', S1.replace(b' 124754138', b'\t124754138')),
+    ('tab-before-the-drive', S1.replace(b' 35850', b'\t35850')),
+    ('space-before-the-newline', S1[:-1] + b' \n'),
+    ('in-use-and-free-past-2^64', rising2(0, disk=b'%d 1' % TOP)),
+    ('in-use-at-2^64', rising2(0, disk=b'18446744073709551616 0')),
+    ('reading-at-1000-degrees', rising2(0, drive=b'1000000 83850')),
+    ('reading-at-2^64', rising2(0, drive=b'18446744073709551616 83850')),
+    ('limit-above-200-degrees', rising2(0, drive=b'35850 200001')),
+    ('limit-of-21-digits', rising2(0, drive=b'35850 100000000000000000000')),
+    ('leading-zero-in-the-reading', rising2(0, drive=b'035850 83850')),
+    ('leading-zero-in-the-disk', rising2(0, disk=b'0124754138 108326237')),
+    ('negative-reading', rising2(0, drive=b'-5000 83850')),
+    ('a-point-in-the-reading', rising2(0, drive=b'35.85 83850')),
+    ('busy-above-total', v2(b'1500 10000')),
+    ('memory-total-zero', v2(b'10000 1500', b'0 0')),
+    ('no-newline', S1[:-1]),
+    ('crlf', S1[:-1] + b'\r\n'),
+    ('two-lines', S1 + S2),
+    ('255-bytes', S1[:-1] + b' ' * (255 - len(S1)) + b'\n'),
+    ('256-bytes', S1[:-1] + b' ' * (256 - len(S1)) + b'\n'),
+    ('257-bytes', S1 + b' ' * (257 - len(S1))),
+    ('a-good-line-then-300-bytes', S1 + b' ' * 300),
+]
+assert len(dict(MALFORMED_V2)) == len(MALFORMED_V2)
 
 
 def reply_checks(args, evidence, passed):
@@ -689,6 +810,8 @@ def reply_checks(args, evidence, passed):
     env['HOME'] = str(empty_home(evidence, 'replies'))
     cases = list(REPLY_CASES) + [(f'malformed-{name}', [R1, data, R2, R3], [FIRST, 'answers', FIRST, FORTY])
                                  for name, data in MALFORMED_REPLIES]
+    cases += [(f'malformed-2-{name}', [S1, data, S2, S3], [S_FIRST, 'answers', S_FIRST, S_FORTY])
+              for name, data in MALFORMED_V2]
     for name, replies, rows in cases:
         directory = root / name.replace('/', '-')
         directory.mkdir()
@@ -707,7 +830,8 @@ def reply_checks(args, evidence, passed):
         expected = ''.join(f'row={row}\n' for row in rows).encode()
         assert result.stdout == expected, (name, result.stdout.decode(errors='replace'), expected.decode())
     passed('scope-reads-replies-strictly', well_formed=len(REPLY_CASES), malformed=len(MALFORMED_REPLIES),
-           each_malformed_between='R1 before, R2 and R3 after: figures, answers, a dash, the figure')
+           malformed_version_2=len(MALFORMED_V2),
+           each_malformed_between='R1 (S1) before, R2 and R3 (S2 and S3) after: figures, answers, a dash, the figure')
 
 
 # Stand-ins for Linux's hwmon directory (/sys/class/hwmon): each device hwmonN a directory of files. A file's value
@@ -1315,12 +1439,28 @@ def blank(frame, x, y, width, rows, ink):
                for row in range(rows))
 
 
+def small_result(frame, y):
+    """A version-2 helper's figures read back, scale 1, from SMALL_DY below the row's top: ('small', the figures'
+    text, their inks, the drive's part, its inks), the drive's part ('', set()) when there is none. The line is read
+    whole first, then each part on its own cells, so each part's ink is its own. Anything drawn from the line's 43rd
+    cell to the panel's inner edge, over the row's height, reads as '<past the row>' after the drive's part."""
+    text, _ = read_text(frame, STATUS_X, y + SMALL_DY, SMALL_CELLS, PANEL)
+    at = text.find('  DRIVE ')
+    figures = text if at < 0 else text[:at]
+    drive = ('', set()) if at < 0 else read_text(frame, STATUS_X + (at + 2) * 6, y + SMALL_DY, len(text) - at - 2, PANEL)
+    right = STATUS_X + SMALL_CELLS * 6
+    if not blank(frame, right, y, PANEL_EDGE - right, ROW_STEP, PANEL):
+        drive = (drive[0] + '<past the row>', drive[1])
+    return ('small', *read_text(frame, STATUS_X, y + SMALL_DY, len(figures), PANEL), *drive)
+
+
 def section(frame):
     """The other computers' rows, read back. A row whose first cells are white is a computer's: ('computer', name,
     what lies under the name, result, what Linux said under it); any other is ('text', main, detail). Each text part
     is (text, inks). Under a computer's name the window draws nothing (the owner's choice): from the panel's left edge
     to the result's column, from the name's foot to the next row, every pixel must be the panel's, which reads as
-    'nothing'; anything drawn there reads as the text found where an address line would be."""
+    'nothing'; anything drawn there reads as the text found where an address line would be. A result that does not
+    read at scale 2 is read as a version-2 helper's figures (small_result)."""
     rows = []
     for i in range(rows_of(frame)):
         y = ROW_TOP + ROW_STEP * i
@@ -1329,17 +1469,25 @@ def section(frame):
             under = 'nothing'
             if not blank(frame, 26, y + 14, STATUS_X - 26, ROW_STEP - 14, PANEL):
                 under = read_text(frame, 46, y + DETAIL_DY, 51, PANEL)
-            rows.append(('computer', first, under, read_text(frame, STATUS_X, y, 21, PANEL, 2),
-                         read_text(frame, STATUS_X, y + DETAIL_DY, 43, PANEL)))
+            result = read_text(frame, STATUS_X, y, 21, PANEL, 2)
+            if '\0' in result[0]:
+                result = small_result(frame, y)
+            rows.append(('computer', first, under, result, read_text(frame, STATUS_X, y + DETAIL_DY, 43, PANEL)))
         else:
             rows.append(('text', read_text(frame, 46, y, 47, PANEL, 2), read_text(frame, 46, y + DETAIL_DY, 94, PANEL)))
     return rows
 
 
-def computer_row(name, result, said=''):
+def computer_row(name, result, said='', drive=GREEN):
     """A computer's row as section() reads it: the name in white with nothing under it, the result in green (answers,
     or a helper's figures, "CPU 40%  MEM 75%"), grey (checking) or amber, and what Linux said under an error in
-    amber."""
+    amber. A version-2 helper's figures ("CPU 40%  MEM 75%  DISK 54%  DRIVE 35 C") are small_result's form: the
+    figures in green and the drive's part, if any, in the ink drive."""
+    if ' DISK ' in result:
+        at = result.find('  DRIVE ')
+        part = ('', set()) if at < 0 else (result[at + 2:], {drive})
+        return ('computer', (name, {WHITE}), 'nothing', ('small', result if at < 0 else result[:at], {GREEN}, *part),
+                ('', set()))
     ink = GREEN if result == 'answers' or result.startswith('CPU ') else GREY if result == 'checking' else AMBER
     return ('computer', (name, {WHITE}), 'nothing', (result, {ink}), (said, {AMBER} if said else set()))
 
@@ -2075,7 +2223,7 @@ def helper_checks(args, x, display, evidence, passed):
     sets = [
         ('helper-malformed-a', [('good', rising, FIRST),
                                 ('prefix', b'herbert-scop 1 10000 1500 16384000 4096000\n', 'answers'),
-                                ('version-2', b'herbert-scope 2 10000 1500 16384000 4096000\n', 'answers'),
+                                ('version-3', S1.replace(b'scope 2', b'scope 3'), 'answers'),
                                 ('space', b'herbert-scope 1 10000  1500 16384000 4096000\n', 'answers'),
                                 ('no-newline', R1[:-1], 'answers'),
                                 ('after-newline', R1 + b'X', 'answers')]),
@@ -2141,6 +2289,48 @@ def helper_checks(args, x, display, evidence, passed):
             held.close()
     passed('scope-row-drops-its-figures-when-its-helper-goes-away', steps=steps,
            processor_starts_again=['after a refusal', 'after a knock with no reply'])
+
+
+def helper_version_2_checks(args, x, display, evidence, passed):
+    # Version 2, read back from the pixels: at scale 1, the drive's part in its shade at each edge of its bands with
+    # an 83.85 C limit (73.849 and 73.850, 83.849 and 83.850 C), n/a in grey, no drive's part for a computer with no
+    # drive sensor, the disk n/a, the widest row (43 characters, nothing past them up to the panel's edge), and beside
+    # them a version-1 helper still drawn at scale 2, a version-3 line and malformed version-2 lines showing answers.
+    def shaded(n, reading):
+        return rising2(n, drive=b'%d 83850' % reading)
+    def widest(n):
+        return v2(b'%d %d' % (200 * n, 200 * n), b'1 0', b'1 0', b'999999 0')
+    figures = 'CPU -  MEM 75%  DISK 54%  DRIVE {} C', 'CPU 40%  MEM 75%  DISK 54%  DRIVE {} C'
+    sets = [
+        ('helper-version-2-bands', [
+            ('green', lambda n: shaded(n, 73849), [computer_row('green', f.format(74)) for f in figures]),
+            ('amber', lambda n: shaded(n, 73850), [computer_row('amber', f.format(74), drive=AMBER) for f in figures]),
+            ('amber-top', lambda n: shaded(n, 83849),
+             [computer_row('amber-top', f.format(84), drive=AMBER) for f in figures]),
+            ('red', lambda n: shaded(n, 83850), [computer_row('red', f.format(84), drive=RED) for f in figures]),
+            ('drive-n/a', lambda n: rising2(n, drive=b'unavailable'),
+             [computer_row('drive-n/a', f.replace('{} C', 'n/a'), drive=GREY) for f in figures]),
+            ('no-drive', lambda n: rising2(n, drive=b'none'),
+             [computer_row('no-drive', f.replace('  DRIVE {} C', '')) for f in figures])]),
+        ('helper-version-2-mixed', [
+            ('disk-n/a', lambda n: rising2(n, disk=b'unavailable'),
+             [computer_row('disk-n/a', f.format(36).replace('54%', 'n/a')) for f in figures]),
+            ('widest', widest, [computer_row('widest', 'CPU -  MEM 100%  DISK 100%  DRIVE 1000 C'),
+                                computer_row('widest', WIDEST)]),
+            ('version-1', rising, [computer_row('version-1', FIRST), computer_row('version-1', FORTY)]),
+            ('version-3', S1.replace(b'scope 2', b'scope 3'), [computer_row('version-3', 'answers')] * 2),
+            ('no-drive-part', dict(MALFORMED_V2)['missing-the-drive'], [computer_row('no-drive-part', 'answers')] * 2),
+            ('257-bytes', dict(MALFORMED_V2)['257-bytes'], [computer_row('257-bytes', 'answers')] * 2)])]
+    seen = {}
+    for label, parts in sets:
+        rows = ([row[0] for _, _, row in parts], [row[1] for _, _, row in parts])
+        knocked, frames = helper_rows(args, x, display, evidence, label, [(name, part, None) for name, part, _ in parts],
+                                      rows, 3000, 1000, 4.5)
+        seen[label] = knocked
+    passed('scope-shows-a-version-2-helpers-disk-and-drive', bands=['73849 green', '73850 amber', '83849 amber',
+                                                                  '83850 red', 'n/a grey', 'none: no drive part'],
+           widest=WIDEST, beside=['version 1 at scale 2', 'version 3: answers', 'no drive part: answers',
+                                  '257 bytes: answers'], knocks=seen)
 
 
 def heat_window_checks(args, x, display, evidence, passed):
@@ -2249,6 +2439,7 @@ def window_checks(args, x, display, evidence, passed):
     injected_checks(args, x, display, evidence, passed)
     timing_checks(args, x, display, evidence, passed)
     helper_checks(args, x, display, evidence, passed)
+    helper_version_2_checks(args, x, display, evidence, passed)
 
 
 def io_counts(pid):
@@ -2262,12 +2453,12 @@ def memory_checks(args, x, display, evidence, passed):
     # five states: the real /proc; files without a final newline (memory under 1 GiB, a 60-byte name); the next such
     # processor file (a figure from files); all three missing; all three malformed (unavailable). Each state's picture
     # is read back once per turn; every state must have been seen as it should look.
-    # All the while it knocks on four computers every 20 ms, 250 times its own rate, with a 10 ms limit: a listener
-    # that sends nothing (answers, at the limit), a port held closed (refused), the black hole (no answer) and a fake
-    # helper that replies to every knock, its processor 40 % busy in every interval (its figures); their rows must
-    # look so in every state seen. At every sample its descriptors must be the same, but for knocks under way: at most
-    # four sockets besides the display's, none of them one seen at the sample before (a knock lasts 10 ms; samples
-    # are 2 s apart), so no knock leaves its socket open. At the end the closed port becomes a black hole and the
+    # All the while it knocks on five computers every 20 ms, 250 times its own rate, with a 10 ms limit: a listener
+    # that sends nothing (answers, at the limit), a port held closed (refused), the black hole (no answer) and two fake
+    # helpers that reply to every knock, one in version 1 and one in version 2, their processors 40 % busy in every
+    # interval (their figures); their rows must look so in every state seen. At every sample its descriptors must be
+    # the same, but for knocks under way: at most five sockets besides the display's, none of them one seen at the
+    # sample before (a knock lasts 10 ms; samples are 2 s apart), so no knock leaves its socket open. At the end the closed port becomes a black hole and the
     # black hole a listener, and both rows must follow, so those two were still being knocked.
     # The disk and the temperatures are read at every frame too: the disk is a link turned with the others (statfs
     # follows it) to /, to the evidence folder, to nothing and to /proc (no blocks); the stand-in hwmon directory's
@@ -2348,20 +2539,21 @@ def memory_checks(args, x, display, evidence, passed):
     read_each_frame = {os.path.realpath(target) for _, targets, _ in states for key, target in targets.items()
                        if target is not None and key != 'disk'}
     interval, every, limit = 10, 20, 10
-    here, shut, far, aide = Listener(), ClosedPort(), BlackHole(), FakeHelper(rising)
+    here, shut, far, aide, aide2 = Listener(), ClosedPort(), BlackHole(), FakeHelper(rising), FakeHelper(rising2)
     computers = fixtures / 'computers.txt'
     computers.write_text(f'here 127.0.0.1 {here.port}\nshut 127.0.0.1 {shut.port}\nfar 127.0.0.1 {far.port}\n'
-                         f'aide 127.0.0.1 {aide.port}\n')
+                         f'aide 127.0.0.1 {aide.port}\naide2 127.0.0.1 {aide2.port}\n')
     def others(here_shows, shut_shows, far_shows):
         return [computer_row('here', here_shows),
                 computer_row('shut', shut_shows),
                 computer_row('far', far_shows),
-                computer_row('aide', FORTY)]
+                computer_row('aide', FORTY),
+                computer_row('aide2', S_FORTY.split('\t')[0])]
     knocking = others('answers', 'answers', 'no answer')
     app = Scope(args.scope, ['--test', str(links / 'stat'), str(links / 'meminfo'), str(links / 'hostname'),
                              str(interval), str(computers), str(every), str(limit), str(hwmon), str(links / 'disk')],
-                x, display, evidence, 'scope-memory', empty_home(evidence, 'memory'), rows=4)
-    fixtures_open = [here, shut, far, aide]
+                x, display, evidence, 'scope-memory', empty_home(evidence, 'memory'), rows=5)
+    fixtures_open = [here, shut, far, aide, aide2]
     try:
         show_until(app, {'host': (real_name(), {WHITE}), 'others': knocking}, 'memory run drawn', 10)
         seen = {name: [0, 0] for name, _, _ in states}
@@ -2408,6 +2600,7 @@ def memory_checks(args, x, display, evidence, passed):
                 sample['knock_sockets'] = sorted(knocks)
                 sample['listener_connections'] = here.connections
                 sample['helper_replies'] = aide.connections
+                sample['helper_2_replies'] = aide2.connections
                 if steady is None:
                     # Besides its standard input, output and error, only the display's socket: a file opened at
                     # startup (a hwmon name or limit, the list of computers) and left open would be here.
@@ -2415,7 +2608,7 @@ def memory_checks(args, x, display, evidence, passed):
                         ('a file opened at startup stayed open', sample['descriptors'])
                 steady = steady or sample['descriptors']
                 assert sample['descriptors'] == steady, ('descriptors changed', steady, sample['descriptors'])
-                assert len(knocks) <= 4 and not knocks & before, ('a knock kept its socket', knocks, before)
+                assert len(knocks) <= 5 and not knocks & before, ('a knock kept its socket', knocks, before)
                 before = knocks
                 samples.append(sample)
                 (evidence / 'scope-memory.json').write_text(json.dumps(samples, indent=2) + '\n')
@@ -2443,13 +2636,16 @@ def memory_checks(args, x, display, evidence, passed):
         assert answered >= seconds * 1000 / every / 4, ('too few knocks answered to judge memory', answered, seconds)
         replies = samples[-1]['helper_replies'] - samples[0]['helper_replies']
         assert replies >= seconds * 1000 / every / 4, ('too few replies read to judge memory', replies, seconds)
+        replies_2 = samples[-1]['helper_2_replies'] - samples[0]['helper_2_replies']
+        assert replies_2 >= seconds * 1000 / every / 4, ('too few version-2 replies read', replies_2, seconds)
         assert here.received == 0 and not here.errors, ('a knock sent bytes', here.received, here.errors[:3])
         assert aide.received == 0 and not aide.errors, ('a knock sent bytes', aide.received, aide.errors[:3])
+        assert aide2.received == 0 and not aide2.errors, ('a knock sent bytes', aide2.received, aide2.errors[:3])
         point(proc)
         shut_port, far_port = shut.port, far.port
         shut.close()
         far.close()
-        fixtures_open = [here, aide, BlackHole(port=shut_port), Listener(port=far_port)]
+        fixtures_open = [here, aide, aide2, BlackHole(port=shut_port), Listener(port=far_port)]
         show_until(app, {'others': others('answers', 'no answer', 'answers')},
                    'the closed port now a black hole, the black hole a listener', 5)
         x.delete(app.window)
@@ -2461,7 +2657,8 @@ def memory_checks(args, x, display, evidence, passed):
                rss_tolerance_kib=64, vm_size_kib=samples[0]['VmSize'], vm_size_must_not_change=True)
         passed('scope-memory-flat-while-knocking', every_ms=every, limit_ms=limit,
                knocks_answered_while_measured=answered, helper_replies_read_while_measured=replies,
-               rows=['answers', 'answers (refused)', 'no answer', FORTY],
+               version_2_replies_read_while_measured=replies_2,
+               rows=['answers', 'answers (refused)', 'no answer', FORTY, S_FORTY.split('\t')[0]],
                descriptors=steady, knock_sockets_at_samples=[s['knock_sockets'] for s in samples],
                still_knocked_at_the_end={'shut': 'no answer', 'far': 'answers'})
     finally:

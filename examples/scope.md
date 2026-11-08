@@ -3,7 +3,8 @@
 A window to leave open on this computer. It shows the computer's name, how busy its processor is, how much of its
 memory is in use, how full its disk is and how warm its drive and processor are, read again once a second, and the
 owner's other computers, each with whether it answers, checked every 5 seconds, and, for a computer that runs
-[Scope's helper](scope_helper.md), how busy its processor is and how much of its memory is in use.
+[Scope's helper](scope_helper.md), how busy its processor is, how much of its memory is in use, how full its disk is
+and how warm its drive is.
 
 ```sh
 make scope
@@ -59,10 +60,16 @@ with **Escape**, **Q** or the window's close button. It is 552 pixels tall plus 
   limit alone.
 - **Other computers**: one row for each computer in the owner's list (below), in the list's order: its name alone,
   and to the right what the last check found:
-  - **its figures**, in green, for example `CPU 12%  MEM 41%`: the computer took the connection and its
-    [helper](scope_helper.md) sent its processor and memory figures. The processor is worked out from two answers
-    5 seconds apart, as this computer's is from two readings, so it shows a dash (`CPU -`) after the first; memory
-    comes from one answer. A figure the helper could not read shows `n/a`;
+  - **its figures**, for example `CPU 12%  MEM 41%  DISK 7%  DRIVE 31 C`: the computer took the connection and its
+    [helper](scope_helper.md) sent its figures. The processor is worked out from two answers 5 seconds apart, as
+    this computer's is from two readings, so it shows a dash (`CPU -`) after the first; memory, the disk and the
+    drive come from one answer each, the disk's percent and the drive's whole degrees worked out as this computer's
+    are. All of it is green but the drive's part, which takes this computer's drive's colours against that drive's
+    own warning limit (green, amber within 10 °C under it, red at it or above, grey for `n/a`). A figure the helper
+    could not read shows `n/a`, and a computer with no NVMe drive has no `DRIVE` part. These figures are drawn
+    smaller than the rest of the row (at most 43 characters, `CPU 100%  MEM 100%  DISK 100%  DRIVE 1000 C`, fit
+    before the panel's edge). A helper of the older kind (version 1 of [its line](scope_helper.md#the-line-it-writes))
+    sends the processor and memory alone, and its row shows `CPU 12%  MEM 41%`, at the row's full size, as before;
   - **answers**, in green: the computer took the connection, or refused it, and sent no figures;
   - **no answer**, in amber: nothing came back within 2 seconds (it is off, asleep, too far, or a firewall keeps
     quiet);
@@ -141,10 +148,10 @@ as before.
 
 ## Limits
 
-- For the other computers, whether each answers, and the processor and memory figures of those that run the helper.
-  The helper sends two totals for the processor (all its time, and the busy part), not each counter, so a counter
-  that goes backwards there cannot be left out as it is here: Scope works the percent out from those two, with the
-  same steps as its own.
+- For the other computers, whether each answers, and the processor, memory, disk and drive figures of those that
+  run the helper; not their processors' temperatures (there is no room in a row). The helper sends two totals for the
+  processor (all its time, and the busy part), not each counter, so a counter that goes backwards there cannot be left
+  out as it is here: Scope works the percent out from those two, with the same steps as its own.
 - At most 6 other computers, IPv4 addresses only, read once at startup. A knock can tell that a computer is there,
   not whether the program you care about on it works.
 - The whole processor only: no figure per processor, and nothing on swap or the network. One disk, the one holding
@@ -236,12 +243,14 @@ must be 1 to 20 digits and below 2^64.
 
 `scope --replies FILE [FILE ...]` puts each file's bytes, in order, through the steps one computer's knock puts a
 helper's reply through (as much as a knock reads, 256 bytes, counted as the whole reply only when the file ends
-before its 256th byte), and prints what that computer's row then shows, one line each, then exits. It knocks on
+before its 256th byte), and prints what that computer's row then shows, one line each, then exits; a row with a
+drive's part is followed by a tab and that part's colour (`green`, `amber`, `red`, or `grey` for `n/a`). It knocks on
 nothing:
 
 ```text
 row=CPU -  MEM 75%
 row=CPU 40%  MEM 75%
+row=CPU 40%  MEM 75%  DISK 54%  DRIVE 74 C<TAB>drive=amber
 row=answers
 ```
 
@@ -264,7 +273,8 @@ Any other arguments print `scope: usage: scope` and exit with status 1, before a
 
 The build joins `lib/linux.herb`, `lib/x11.herb`, `lib/pixel_text.herb`, `lib/text.herb`, `lib/net.herb`,
 `lib/figures.herb` and `examples/scope.herb` and compiles them with the committed Herbert compiler, as for First
-steps. Scope reads `/proc` with `lib/figures.herb` (the helper reads it with the same code), knocks with
+steps. Scope reads `/proc`, the disk and the temperatures with `lib/figures.herb` (the helper reads them with the same
+code), knocks with
 `lib/net.herb`, builds its text with `lib/text.herb` and draws through its own X11 client; no foreign runtime or
 graphics library is linked in.
 
@@ -289,14 +299,25 @@ one, two and four words, every malformed address and port knock refuses, the edg
 problems than rows, line 40,000, empty lists, a list of exactly 64 KiB and one byte more; then a missing list, a
 dangling link, a directory, a FIFO and a link to `/dev/zero` (each within 2 seconds), a list it may not read, and the
 list in HOME, missing, and with HOME unset or empty. Then `--replies`, with the network closed to it, each row against
-an answer written by hand: 12 runs of well-formed replies (the dash, then the figure; an interval of no time, totals and
-busy counts that went back, 100 %, unavailable halves, the largest numbers, the longest line) and 45 malformed ones,
-each between good ones so the row must drop its figures and its processor start again (no newline, bytes or a second
-newline after it, CRLF, two lines, other prefixes and versions, missing, doubled and trailing spaces, a tab, three and
-five numbers, leading zeros, signs, hexadecimal, letters, numbers at 2^64 and of 21 digits, a busy count above the
-total, a memory total of zero, a misspelt `unavailable`, a NUL byte, an SSH banner, an HTTP answer, 255, 256 and 257
-bytes, and a good line followed by 300 bytes). Then `--readings` on 62 stand-in hwmon directories the check writes and
-one that is not there, each line against an answer written by hand: this computer's own layout, the drive at `hwmon63`
+an answer written by hand: 12 runs of well-formed version-1 replies (the dash, then the figure; an interval of no time,
+totals and busy counts that went back, 100 %, unavailable halves, the largest numbers, the longest line) and 46
+malformed ones, each between good ones so the row must drop its figures and its processor start again (no newline, bytes
+or a second newline after it, CRLF, two lines, other prefixes and versions, a version 2 with only version 1's parts,
+missing, doubled and trailing spaces, a tab, three and five numbers, leading zeros, signs, hexadecimal, letters, numbers
+at 2^64 and of 21 digits, a busy count above the total, a memory total of zero, a misspelt `unavailable`, a NUL byte, an
+SSH banner, an HTTP answer, 255, 256 and 257 bytes, and a good line followed by 300 bytes); then 14 runs of well-formed
+version-2 replies (the dash, then the figure; versions 1, 2 and 1 in turn keeping the processor going; the drive's
+colour at 73.849, 73.850, 83.849 and 83.850 °C under an 83.85 °C limit, no limit, limits of 5, 10, 10.001 and 200 °C,
+rounding at a half degree, the largest reading, 999.999 °C, a drive n/a and no drive sensor; the disk n/a, all kept
+back, half a percent either way, 99.5 % and the largest numbers; everything n/a; the widest row, 43 characters; the
+longest line, 155 bytes) and 43 malformed ones between good version-2 ones (version 3 and `02`, the disk or the drive
+missing, a number, `unavailable` or `none` too many, a part of one or three numbers, `none` for the disk, the processor
+or the memory, `none` with a number, glued or in capitals, `n/a`, a limit `unavailable` alone, doubled spaces, a tab
+before the disk and before the drive, the disk past 2^64 together or alone, a reading of 1000 °C and at 2^64, a limit
+above 200 °C and of 21 digits, leading zeros, a sign, a point, a busy count above the total, a memory total of zero, no
+newline, CRLF, two lines, 255, 256 and 257 bytes, and a good line followed by 300 bytes). Then `--readings` on 62
+stand-in hwmon directories the check writes and one that is not there, each line against an answer written by hand: this
+computer's own layout, the drive at `hwmon63`
 and past it at `hwmon64`, gaps in the numbering, `k10temp` after a `coretemp`, `coretemp` alone, the first of two drives
 and of two processors, none of either, look-alike names (`nvme0`, `NVME`, spaces, a carriage return, a NUL), names of 32
 bytes, a name that is a directory or a FIFO, devices behind links as in `/sys`; limits missing, zero, above 200 °C, at
@@ -329,10 +350,14 @@ at every reading (200 ms), Scope uses under a quarter of the processor's time an
 ms; eight rows of every kind, a row keeping no answer while its next knock is under way, and the seventh computer never
 knocked; unreachable, error with Linux's words, and error with a number, made by strace failing the knocks' connects.
 Fake helpers the check runs on 127.x, which count every byte Scope sends them (none): a dash after the first reply and
-40 % after the second, beside a wrong prefix, version 2, an extra space, no newline, a byte after it, a number at 2^64,
+40 % after the second, beside a wrong prefix, version 3, an extra space, no newline, a byte after it, a number at 2^64,
 257 bytes, a drip that misses the time limit, a helper that never sends and an SSH banner, each showing answers knock
-after knock; and a helper that goes away (its port refused), comes back, goes silent and comes back, its row dropping
-its figures each time and its processor showing a dash first again. Under strace, with knocks every 700 ms and a limit
+after knock; version-2 helpers read back from the pixels at the smaller size, the drive's part green, amber, amber and
+red at 73.849, 73.850, 83.849 and 83.850 °C, grey `n/a`, and left out for no drive, the disk `n/a`, and the widest
+row with nothing drawn after it up to the panel's edge, beside a version-1 helper at full size, a version-3 line, a
+line without its drive and one of 257 bytes, those three showing answers; and a helper that goes away (its port
+refused), comes back, goes silent and comes back, its row dropping its figures each time and its processor showing a
+dash first again. Under strace, with knocks every 700 ms and a limit
 of 300 ms: each computer's knocks start 700 ms apart, no answer comes only after a look at or past the limit and within
 100 ms of it, refusals and a helper's figures are seen within 50 ms, a listener that sends nothing is read from only
 without waiting and given up only after a read at or past the limit, within 100 ms of it, every wait of the window
@@ -341,7 +366,8 @@ way at Escape is closed before Scope exits. Last, for 120 seconds it reads every
 between the real `/proc`, files without a final newline (memory under 1 GiB, a 60-byte name), missing files and
 malformed files, with the temperatures and the disk turned with them (this computer's own sensors and `/`, readings in
 files, nothing, readings that are not numbers and `/proc`), while it knocks every 20 ms on a listener, a closed port,
-the silent listener and a helper replying to every knock: its memory may not grow (the same virtual size throughout,
+the silent listener and two helpers replying to every knock, one with version 1 of the line and one with version 2:
+its memory may not grow (the same virtual size throughout,
 resident memory within 64 KiB), its descriptors stay the same but for knocks under way (no socket outlives its knock)
 and the one file it may be reading at that moment, no file opened at startup stays open, and at least one look finds
 no file it reads open, and at the end the closed port is made silent and the silent listener

@@ -1,14 +1,20 @@
 -- A computer's figures: its processor and memory counts read from Linux's
--- /proc files, its name, and the one line that carries the figures from
--- Scope's helper (examples/scope_helper.herb) to Scope (examples/scope.herb).
--- Both programs link this file, so the figures a helper sends are worked out
--- exactly as Scope works out its own. Requires lib/linux.herb and
--- lib/text.herb; no main.
--- A FiguresScan (figures_scan_new, once) holds everything a reading needs: one
--- fixed 4096-byte chunk, a byte at a time, keeping only the numbers wanted, so
--- reading again and again allocates nothing.
+-- /proc files, its name, how full its disk is (statfs), how warm its drive
+-- and processor are (Linux's hwmon files), and the one line that carries them
+-- from Scope's helper (examples/scope_helper.herb) to Scope
+-- (examples/scope.herb). Both programs link this file, so the figures a helper
+-- sends are worked out exactly as Scope works out its own. Requires
+-- lib/linux.herb and lib/text.herb; no main.
+-- A FiguresScan (figures_scan_new, once) holds everything a reading of /proc
+-- needs: one fixed 4096-byte chunk, a byte at a time, keeping only the numbers
+-- wanted, so reading again and again allocates nothing. A FiguresDisk
+-- (figures_disk_new) and a FiguresHeat (figures_heat_new, then
+-- figures_heat_find, at startup) do the same for the disk and the
+-- temperatures.
 -- https://man7.org/linux/man-pages/man5/proc_stat.5.html
 -- https://man7.org/linux/man-pages/man5/proc_meminfo.5.html
+-- https://man7.org/linux/man-pages/man2/statfs.2.html
+-- https://docs.kernel.org/hwmon/sysfs-interface.html
 
 -- One pass over one file. The scanner sees each byte once and keeps no line, so
 -- neither the chunk size, the number of processors nor the length of any line
@@ -338,19 +344,332 @@ func figures_read_name(s, path):
     return 0
 end
 
--- The reply. Scope's helper answers each connection with one line and closes:
+-- part / whole as a whole percent, to the nearest, a half rounding up, exact
+-- for any 64-bit numbers; whole is above zero and part not above it. 100 *
+-- part is never formed: part is added up 100 times modulo whole, rest staying
+-- below whole and the sum never passing 2^64, and the wraps counted are the
+-- quotient. Then rest is the remainder, and rest >= whole - rest says it is at
+-- least half of whole.
+func figures_percent(part, whole):
+    let quotient = 0
+    let rest = 0
+    let i = 0
+    while i < 100:
+        if part >= whole - rest:
+            rest = part - (whole - rest)
+            quotient = quotient + 1
+        else:
+            rest = rest + part
+        end
+        i = i + 1
+    end
+    if rest >= whole - rest: return quotient + 1 end
+    return quotient
+end
+
+-- The disk, the one holding path (NUL-terminated), as Linux's statfs system
+-- call (linux_statfs) gives it. answer is statfs's 120-byte struct statfs
+-- (x86-64), the 64-bit words at 8, 16, 24, 32 and 72 being f_bsize, f_blocks,
+-- f_bfree, f_bavail and f_frsize. state is 1 with a reading, 2 when statfs
+-- failed or its figures cannot be shown. used and avail are the blocks in use
+-- and the blocks an ordinary user may still write, percent the part in use,
+-- size and free the disk and avail in KiB.
+ref record FiguresDisk:
+    path: buffer
+    answer: buffer
+    state: int
+    percent: int
+    used: int
+    avail: int
+    size: int
+    free: int
+end
+
+-- The disk holding path; an empty path is one statfs refuses (no disk).
+func figures_disk_new(path):
+    return FiguresDisk(linux_cstring(path), linux_buffer(120), 2, 0, 0, 0, 0, 0)
+end
+
+-- n blocks of f bytes, in KiB, rounded down: (fits, kib). n * f is never
+-- formed. With n = 1024 a + b and f = 1024 q + r it is n q + a r + b r / 1024,
+-- rounded down; a r is below 2^54 * 2^10 and b r below 2^20, so only n q and
+-- the sum can pass 2^64, and both are checked.
+func figures_kib(n, f):
+    let q = f / 1024
+    let r = f % 1024
+    if q != 0 and n > (0 - 1) / q: return (false, 0) end
+    let whole = n * q
+    let rest = (n / 1024) * r + ((n % 1024) * r) / 1024
+    if whole + rest < whole: return (false, 0) end
+    return (true, whole + rest)
+end
+
+-- The part of a disk in use, as a percent: used over used and avail (their
+-- sum below 2^64), so the blocks Linux keeps back for the system count as
+-- neither, as in df, and the block size cancels out; with nothing in use and
+-- nothing free (all kept back) the disk is full for the owner, 100.
+func figures_disk_percent(used, avail):
+    if used + avail == 0: return 100 end
+    return figures_percent(used, used + avail)
+end
+
+-- statfs's figures as df works them out (through statvfs): blocks of frsize
+-- bytes, the disk's size blocks, in use blocks less bfree (none if more is
+-- free than there is), and free bavail, what an ordinary user may still
+-- write. A disk of no blocks or blocks of no bytes, figures too large for 64
+-- bits in KiB, or in use and free together past 2^64 - 1, cannot be shown.
+func figures_disk_figures(disk, ok, blocks, bfree, bavail, frsize):
+    disk.state = 2
+    if not ok or blocks == 0 or frsize == 0: return 0 end
+    let used = 0
+    if bfree < blocks: used = blocks - bfree end
+    if bavail > (0 - 1) - used: return 0 end
+    let size = figures_kib(blocks, frsize)
+    let free = figures_kib(bavail, frsize)
+    if not size.0 or not free.0: return 0 end
+    disk.used = used
+    disk.avail = bavail
+    disk.size = size.1
+    disk.free = free.1
+    disk.percent = figures_disk_percent(used, bavail)
+    disk.state = 1
+    return 0
+end
+
+-- statfs on the disk's path, into its fixed answer: (asked, blocks, bfree,
+-- bavail, frsize), f_bsize standing in for an f_frsize of zero, as statvfs
+-- does. asked is false when statfs refused.
+func figures_statfs(disk):
+    let got = linux_statfs(disk.path, disk.answer)
+    if linux_error(got): return (false, 0, 0, 0, 0) end
+    let frsize = linux_u64(disk.answer, 72)
+    if frsize == 0: frsize = linux_u64(disk.answer, 8) end
+    return (true, linux_u64(disk.answer, 16), linux_u64(disk.answer, 24), linux_u64(disk.answer, 32), frsize)
+end
+
+-- The disk asked about again, and its figures worked out. Allocates nothing.
+func figures_disk_read(disk):
+    let asked = figures_statfs(disk)
+    return figures_disk_figures(disk, asked.0, asked.1, asked.2, asked.3, asked.4)
+end
+
+-- Up to buffer_length(b) bytes from the start of the file at path
+-- (NUL-terminated), into b: (readable, bytes read). It is opened without
+-- blocking (O_NONBLOCK), so a FIFO put in its place cannot hold the reader.
+-- Allocates nothing.
+func figures_read_small(path, b):
+    let fd = linux_open(path, linux_o_nonblock() | linux_o_cloexec(), 0)
+    if linux_error(fd): return (false, 0) end
+    let n = 0
+    let ok = true
+    let going = true
+    while going:
+        let got = linux_read(fd, b, n, buffer_length(b) - n)
+        if got != 0 - 4:
+            if linux_error(got) or got > buffer_length(b) - n:
+                ok = false
+                going = false
+            elif got == 0:
+                going = false
+            else:
+                n = n + got
+                going = n < buffer_length(b)
+            end
+        end
+    end
+    do linux_close(fd)
+    return (ok, n)
+end
+
+-- The file at path, read into b, as a whole number in plain decimal, as Linux
+-- writes a sensor's file: digits only, at least one, below 2^64, and at most
+-- one newline after them; a sign, a space or anything else, an empty file, or
+-- a file that fills b (it may go on) is not plain. (plain, value).
+func figures_read_value(path, b):
+    let got = figures_read_small(path, b)
+    let n = got.1
+    if not got.0 or n == buffer_length(b): return (false, 0) end
+    if n > 0 and buffer_get(b, n - 1) == 10: n = n - 1 end
+    let value = text_whole(b, 0, n)
+    if not value.0 or value.2 != n: return (false, 0) end
+    return (true, value.1)
+end
+
+-- root/hwmonN/file into b, NUL-terminated; b holds length(root) + 32 bytes,
+-- room for "/hwmon", two digits, "/", "temp1_input" and the NUL.
+func figures_hwmon_path(b, root, which, file):
+    let at = text_put_whole(b, text_put(b, text_put(b, 0, root), "/hwmon"), which)
+    at = text_put(b, text_put(b, at, "/"), file)
+    do buffer_set(b, at, 0)
+    return at
+end
+
+-- The hwmon name file at path, into b: its length, less one newline after it;
+-- 0 when it cannot be read. A name longer than b is cut there, which no name
+-- looked for is near.
+func figures_hwmon_name(path, b):
+    let got = figures_read_small(path, b)
+    let n = got.1
+    if not got.0: return 0 end
+    if n > 0 and buffer_get(b, n - 1) == 10: n = n - 1 end
+    return n
+end
+
+-- One temperature, from Linux's hwmon files. found is whether startup found
+-- its device: hwmon number which, kind 1 nvme (the drive), 2 k10temp or 3
+-- coretemp (the processor); path is its temp1_input, NUL-terminated, the one
+-- file read again at each reading. warning and critical are the drive's
+-- temp1_max and temp1_crit, read once at startup, in millidegrees Celsius, 0
+-- for none. state is 1 with a reading (reading, in millidegrees), 2 for n/a.
+ref record FiguresSensor:
+    found: bool
+    which: int
+    kind: int
+    path: buffer
+    warning: int
+    critical: int
+    state: int
+    reading: int
+end
+
+-- The drive and the processor, and line, the bytes read from a sensor's file
+-- (32, more than a reading needs).
+ref record FiguresHeat:
+    drive: FiguresSensor
+    processor: FiguresSensor
+    line: buffer
+end
+
+func figures_sensor_new():
+    return FiguresSensor(false, 0, 0, linux_buffer(1), 0, 0, 2, 0)
+end
+
+-- Temperatures with no device found; figures_heat_find finds them.
+func figures_heat_new():
+    return FiguresHeat(figures_sensor_new(), figures_sensor_new(), linux_buffer(32))
+end
+
+func figures_sensor_found(sensor, root, which, kind):
+    sensor.found = true
+    sensor.which = which
+    sensor.kind = kind
+    sensor.path = linux_buffer(length(root) + 32)
+    do figures_hwmon_path(sensor.path, root, which, "temp1_input")
+    return 0
+end
+
+-- A limit of the drive's, in millidegrees, read once at startup: none (0) when
+-- its file cannot be read or is not plain decimal, or it says 0 or more than
+-- 200 °C (200000), which no drive means: the owner's drive says 65261850 for
+-- one of its other limits.
+func figures_limit(path, b):
+    let value = figures_read_value(path, b)
+    if not value.0 or value.1 > 200000: return 0 end
+    return value.1
+end
+
+-- The temperatures under root, the hwmon directory (/sys/class/hwmon), found
+-- once, at startup, since Linux may number its devices differently at each
+-- boot. Each of hwmon0 to hwmon63 is looked at, a number whose name file
+-- cannot be read (a gap Linux leaves when a device goes) being skipped: the
+-- drive is the first named nvme, its temp1_input the temperature the drive
+-- judges its own limits by, and the processor the first k10temp (AMD), or else
+-- the first coretemp (Intel). The drive's two limits are read here too.
+-- Allocates (the paths), so at startup only.
+func figures_heat_find(heat, root):
+    let path = linux_buffer(length(root) + 32)
+    let core = 64
+    let which = 0
+    while which < 64:
+        do figures_hwmon_path(path, root, which, "name")
+        let n = figures_hwmon_name(path, heat.line)
+        if not heat.drive.found and text_is(heat.line, 0, n, "nvme"):
+            do figures_sensor_found(heat.drive, root, which, 1)
+        elif not heat.processor.found and text_is(heat.line, 0, n, "k10temp"):
+            do figures_sensor_found(heat.processor, root, which, 2)
+        elif core == 64 and text_is(heat.line, 0, n, "coretemp"):
+            core = which
+        end
+        which = which + 1
+    end
+    if not heat.processor.found and core < 64: do figures_sensor_found(heat.processor, root, core, 3) end
+    let drive = heat.drive
+    if drive.found:
+        do figures_hwmon_path(path, root, drive.which, "temp1_max")
+        drive.warning = figures_limit(path, heat.line)
+        do figures_hwmon_path(path, root, drive.which, "temp1_crit")
+        drive.critical = figures_limit(path, heat.line)
+    end
+    return 0
+end
+
+-- A sensor's temp1_input again, through b: a reading, or n/a when it cannot be
+-- read or is not plain decimal (a negative one included). Allocates nothing.
+func figures_sensor_read(sensor, b):
+    if not sensor.found: return 0 end
+    let value = figures_read_value(sensor.path, b)
+    sensor.state = 2
+    if value.0:
+        sensor.state = 1
+        sensor.reading = value.1
+    end
+    return 0
+end
+
+-- Both temperatures again.
+func figures_heat_read(heat):
+    do figures_sensor_read(heat.drive, heat.line)
+    return figures_sensor_read(heat.processor, heat.line)
+end
+
+-- Millidegrees as whole degrees, to the nearest, a half rounding up.
+func figures_degrees(milli):
+    if milli % 1000 >= 500: return milli / 1000 + 1 end
+    return milli / 1000
+end
+
+-- A drive's shade, for a reading (state 1; anything else is n/a) in
+-- millidegrees and its warning limit (0 for none): 0 green, more than 10 °C
+-- under the limit or with no limit; 1 amber, within 10 °C under it; 2 red, at
+-- or above it; 3 grey, n/a. Each compares millidegrees, as the drive itself
+-- does.
+func figures_shade(state, reading, warning):
+    if state != 1: return 3 end
+    if warning == 0: return 0 end
+    if reading >= warning: return 2 end
+    if warning <= 10000 or reading >= warning - 10000: return 1 end
+    return 0
+end
+
+-- The reply. Scope's helper answers each connection with one line and closes.
+-- Version 2, which the helper sends:
+--   herbert-scope 2 CPU MEMORY DISK DRIVE\n
+-- "herbert-scope", a space, the version 2, a space, then four parts, one space
+-- between each, and a newline; nothing else.
+--   CPU    TOTAL BUSY, as figures_read_stat gives them, or "unavailable";
+--   MEMORY MEMTOTAL MEMAVAILABLE in KiB, as figures_read_meminfo gives them,
+--          or "unavailable";
+--   DISK   USED FREE, the disk's blocks in use and free to an ordinary user
+--          (FiguresDisk's used and avail; the percent needs no block size,
+--          so none is sent), or "unavailable";
+--   DRIVE  READING LIMIT, the drive's temperature and its warning limit in
+--          millidegrees (LIMIT 0 for none), "unavailable" when the reading
+--          cannot be read or is 1000 °C (1000000) or more, which no drive
+--          means and the row has no room for, or "none" when the computer has
+--          no drive sensor.
+-- Numbers are decimal, 1 to 20 digits, no zero in front of another digit,
+-- below 2^64. Strictly, BUSY is not above TOTAL, MEMTOTAL is not zero, USED
+-- and FREE together are below 2^64, READING is below 1000000 and LIMIT not
+-- above 200000: a helper never sends anything else. For example:
+--   herbert-scope 2 10000 1500 16384000 4096000 116826368 108331196 35850 83850\n
+--   herbert-scope 2 10000 1500 16384000 4096000 unavailable none\n
+-- The longest is 155 bytes (figures_reply_longest): of USED and FREE, only one
+-- can have 20 digits, since together they are below 2^64.
+-- Version 1, which helpers sent before, is the first two parts alone:
 --   herbert-scope 1 TOTAL BUSY MEMTOTAL MEMAVAILABLE\n
--- "herbert-scope", a space, the version 1, a space, the processor half, a
--- space, the memory half and a newline; nothing else. The processor half is
--- TOTAL and BUSY as figures_read_stat gives them, the memory half MEMTOTAL and
--- MEMAVAILABLE in KiB as figures_read_meminfo gives them, each two decimal
--- numbers with one space between; a half whose file could not be read or used
--- is the word "unavailable" instead. So there are four shapes:
---   herbert-scope 1 10000 1500 16384000 4096000\n
---   herbert-scope 1 unavailable 16384000 4096000\n
---   herbert-scope 1 10000 1500 unavailable\n
---   herbert-scope 1 unavailable unavailable\n
--- The longest is 100 bytes.
+-- (each part a pair or "unavailable"), at most 100 bytes. Scope reads both.
+
+func figures_reply_longest(): return 155 end
 
 func figures_put_half(b, at, reading):
     if not reading.0: return text_put(b, at, "unavailable") end
@@ -359,21 +678,56 @@ func figures_put_half(b, at, reading):
     return text_put_whole(b, at, reading.2)
 end
 
--- The reply for a processor reading and a memory reading (each as
--- figures_read_stat and figures_read_meminfo return them), into b from 0
--- (at least 100 bytes): its length.
-func figures_reply_put(b, cpu, memory):
-    let at = text_put(b, 0, "herbert-scope 1 ")
+-- The drive part for a FiguresSensor.
+func figures_put_drive(b, at, drive):
+    if not drive.found: return text_put(b, at, "none") end
+    if drive.state != 1 or drive.reading >= 1000000: return text_put(b, at, "unavailable") end
+    return figures_put_half(b, at, (true, drive.reading, drive.warning))
+end
+
+-- The version-2 reply for a processor reading and a memory reading (each as
+-- figures_read_stat and figures_read_meminfo return them), a FiguresDisk and
+-- the drive's FiguresSensor, into b from 0 (at least figures_reply_longest()
+-- bytes): its length.
+func figures_reply_put(b, cpu, memory, disk, drive):
+    let at = text_put(b, 0, "herbert-scope 2 ")
     at = figures_put_half(b, at, cpu)
     at = text_put(b, at, " ")
     at = figures_put_half(b, at, memory)
+    at = text_put(b, at, " ")
+    at = figures_put_half(b, at, (disk.state == 1, disk.used, disk.avail))
+    at = text_put(b, at, " ")
+    at = figures_put_drive(b, at, drive)
     return text_put(b, at, "\n")
 end
 
--- One half at at: (well-formed, given, first, second, next). "unavailable"
--- is well-formed and not given; otherwise two numbers and one space between,
--- each 1 to 20 digits, no zero in front of another digit, below 2^64
--- (text_whole_strict).
+-- A reply as read: version 1 or 2; for each part whether it was given and its
+-- numbers. drive is 0 for "none", 1 for "unavailable", 2 with a reading.
+-- Made once (figures_reply_new) and filled by figures_reply_read.
+ref record FiguresReply:
+    version: int
+    cpu: bool
+    total: int
+    busy: int
+    memory: bool
+    mem_total: int
+    mem_available: int
+    disk: bool
+    used: int
+    free: int
+    drive: int
+    reading: int
+    limit: int
+end
+
+func figures_reply_new():
+    return FiguresReply(0, false, 0, 0, false, 0, 0, false, 0, 0, 0, 0, 0)
+end
+
+-- One part at at, before stop: (well-formed, given, first, second, next).
+-- "unavailable" is well-formed and not given; otherwise two numbers and one
+-- space between, each 1 to 20 digits, no zero in front of another digit,
+-- below 2^64 (text_whole_strict).
 func figures_reply_half(b, at, stop):
     if text_starts(b, at, stop, "unavailable"): return (true, false, 0, 0, at + 11) end
     let first = text_whole_strict(b, at, stop)
@@ -384,19 +738,61 @@ func figures_reply_half(b, at, stop):
     return (true, true, first.1, second.1, second.2)
 end
 
--- The first n bytes of b as a reply, read strictly: exactly the line above
--- and nothing more, BUSY not above TOTAL and MEMTOTAL not zero (a helper never
--- sends those). MEMAVAILABLE above MEMTOTAL is allowed: Linux can say so, and
--- it counts as nothing in use. (usable, processor given, TOTAL, BUSY, memory
--- given, MEMTOTAL, MEMAVAILABLE); anything else is (false, ...).
-func figures_reply_read(b, n):
-    let none = (false, false, 0, 0, false, 0, 0)
-    if n > buffer_length(b) or not text_starts(b, 0, n, "herbert-scope 1 "): return none end
-    let cpu = figures_reply_half(b, 16, n)
-    if not cpu.0 or cpu.4 >= n or buffer_get(b, cpu.4) != 32: return none end
-    let memory = figures_reply_half(b, cpu.4 + 1, n)
-    if not memory.0 or memory.4 != n - 1 or buffer_get(b, n - 1) != 10: return none end
-    if cpu.1 and cpu.3 > cpu.2: return none end
-    if memory.1 and memory.2 == 0: return none end
-    return (true, cpu.1, cpu.2, cpu.3, memory.1, memory.2, memory.3)
+-- Whether a part that ended at at is followed by one space and more before stop.
+func figures_reply_space(b, at, stop):
+    return at < stop and buffer_get(b, at) == 32
+end
+
+-- The first n bytes of b as a reply, read strictly into r: exactly a line of
+-- version 1 or 2 above and nothing more, within the rules above (MEMAVAILABLE
+-- above MEMTOTAL is allowed: Linux can say so, and it counts as nothing in
+-- use). True if it is one; r is then filled. Anything else is false, and r is
+-- not to be used.
+func figures_reply_read(r, b, n):
+    if n == 0 or n > buffer_length(b) or buffer_get(b, n - 1) != 10: return false end
+    let stop = n - 1
+    let version = 0
+    if text_starts(b, 0, stop, "herbert-scope 1 "): version = 1 end
+    if text_starts(b, 0, stop, "herbert-scope 2 "): version = 2 end
+    if version == 0: return false end
+    let cpu = figures_reply_half(b, 16, stop)
+    if not cpu.0 or not figures_reply_space(b, cpu.4, stop): return false end
+    let memory = figures_reply_half(b, cpu.4 + 1, stop)
+    if not memory.0: return false end
+    let disk = (true, false, 0, 0, memory.4)
+    let drive = (true, false, 0, 0, memory.4)
+    let none = false
+    if version == 2:
+        if not figures_reply_space(b, memory.4, stop): return false end
+        disk = figures_reply_half(b, memory.4 + 1, stop)
+        if not disk.0 or not figures_reply_space(b, disk.4, stop): return false end
+        if text_starts(b, disk.4 + 1, stop, "none"):
+            none = true
+            drive = (true, false, 0, 0, disk.4 + 5)
+        else:
+            drive = figures_reply_half(b, disk.4 + 1, stop)
+        end
+        if not drive.0: return false end
+    end
+    if drive.4 != stop: return false end
+    if cpu.1 and cpu.3 > cpu.2: return false end
+    if memory.1 and memory.2 == 0: return false end
+    if disk.1 and disk.2 + disk.3 < disk.2: return false end
+    if drive.1 and (drive.2 >= 1000000 or drive.3 > 200000): return false end
+    r.version = version
+    r.cpu = cpu.1
+    r.total = cpu.2
+    r.busy = cpu.3
+    r.memory = memory.1
+    r.mem_total = memory.2
+    r.mem_available = memory.3
+    r.disk = disk.1
+    r.used = disk.2
+    r.free = disk.3
+    r.drive = 1
+    if none: r.drive = 0 end
+    if drive.1: r.drive = 2 end
+    r.reading = drive.2
+    r.limit = drive.3
+    return true
 end
