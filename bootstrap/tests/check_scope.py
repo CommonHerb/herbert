@@ -2153,8 +2153,10 @@ def timing_checks(args, x, display, evidence, passed):
             assert k['waits_without'] == 0, (name, 'the window waited without a knock under way', k)
             assert k['waits_wrong'] == 0, (name, 'the window waited on a knock for the wrong events', k)
             took = (k['end'] - k['start']) / 10**6
-            if k is mine[-1] and name in ('far', 'mute'):
-                continue                              # possibly given up at Escape
+            if k is mine[-1]:
+                # Possibly cut short at Escape: far and mute given up, near closed before its reply was read (seen on
+                # GitHub's slower machine, run 42458142438: near's eighth knock ended at exit with no read).
+                continue
             if name == 'far':
                 assert k['waits'] >= 1, (name, 'the window never waited while this knock was under way', k)
                 assert k['looks'] and all(found == 0 for _, found in k['looks']), (name, 'a look found something', k)
