@@ -1,0 +1,386 @@
+case arithmetic
+source until ----
+-- Integer arithmetic, all six comparisons, and modular wrap on overflow.
+
+func main():
+    let a    = 7 + 5         -- 12
+    let b    = a - 3         -- 9
+    let lt   = a < b         -- false
+    let le   = b <= b        -- true
+    let gt   = a > b         -- true
+    let ge   = a >= b        -- true
+    let eq   = a == 12       -- true
+    let ne   = b != 9        -- false
+    let big  = 18446744073709551615   -- 2^64 - 1
+    let wrap = big + 1                 -- wraps to 0 (uint64 modular)
+    let sub  = 0 - 1                   -- wraps to 2^64 - 1
+    return (a, b, lt, le, gt, ge, eq, ne, wrap, sub)
+end
+----
+stdout until ----
+(12, 9, false, true, true, true, true, false, 0, 18446744073709551615)
+----
+end
+case if, elif and else
+source until ----
+-- if / elif / else, multi-arm chain selecting each arm in turn.
+
+func classify(n):
+    if n == 0:
+        return 100
+    elif n == 1:
+        return 200
+    elif n == 2:
+        return 300
+    elif n == 3:
+        return 400
+    else:
+        return 999
+    end
+end
+
+func main():
+    let r0  = classify(0)    -- hits the if
+    let r1  = classify(1)    -- hits the 1st elif
+    let r2  = classify(2)    -- hits the 2nd elif
+    let r3  = classify(3)    -- hits the 3rd elif
+    let r99 = classify(99)   -- hits the else
+    return (r0, r1, r2, r3, r99)
+end
+----
+stdout until ----
+(100, 200, 300, 400, 999)
+----
+end
+case recursion
+source until ----
+-- Functions with parameters and locals, plus GENUINE non-tail recursion:
+-- sum(n) = n + sum(n-1). The recursive call is not in tail position
+-- because we still have to add `n` to its result before returning.
+
+func sum(n):
+    if n == 0:
+        return 0
+    else:
+        let rest = sum(n - 1)
+        return n + rest
+    end
+end
+
+func main():
+    -- Sum of 1..10 is 55.
+    return sum(10)
+end
+----
+stdout until ----
+55
+----
+end
+case a let ends with its block
+source until ----
+-- Block-scoped `let`: the same name `y` is bound separately in each
+-- branch arm and does not leak past the arm's `end`. Each arm rebinds
+-- the enclosing `x` (which lives in the function's outer scope) via
+-- assignment (no `let`).
+
+func main():
+    let x = 100
+    if true:
+        let y = 1
+        x = x + y    -- x becomes 101
+    else:
+        let y = 99
+        x = x + y    -- not taken
+    end
+    -- y is gone here; if we let y again it is a fresh binding.
+    if false:
+        let y = 50
+        x = x + y    -- not taken
+    else:
+        let y = 7
+        x = x + y    -- x becomes 108
+    end
+    -- One more nested arm to show shadowing works across nesting too.
+    if x > 0:
+        let z = 1000
+        if x < 200:
+            let z = 2   -- inner z shadows outer z; only inner is visible here
+            x = x + z   -- x becomes 110
+        else:
+            x = x + z   -- not taken
+        end
+        -- The inner z is gone; outer z is still 1000 here.
+        x = x + z       -- x becomes 1110
+    end
+    return x
+end
+----
+stdout until ----
+1110
+----
+end
+case tuples
+source until ----
+-- Tuples: construction, positional .N access, mixed element types,
+-- nested tuples reached via chained dot access.
+
+func main():
+    let mixed  = (42, true, "hi")
+    let nested = (mixed, (10, 20), false)
+
+    let a = mixed.0       -- 42
+    let b = mixed.1       -- true
+    let c = mixed.2       -- "hi"
+    let d = nested.0      -- (42, true, "hi")
+    let e = nested.0.2    -- "hi"
+    let f = nested.1.0    -- 10
+    let g = nested.1.1    -- 20
+    let h = nested.2      -- false
+
+    return (a, b, c, d, e, f, g, h)
+end
+----
+stdout until ----
+(42, true, "hi", (42, true, "hi"), "hi", 10, 20, false)
+----
+end
+case arrays
+source until ----
+-- Growable array of ints: new_array(int), add, get, count. Also
+-- exercise an array whose element type is itself a tuple.
+
+func main():
+    let xs = new_array(int)
+    do add(xs, 10)
+    do add(xs, 20)
+    do add(xs, 30)
+    let n  = count(xs)        -- 3
+    let v0 = get(xs, 0)       -- 10
+    let v1 = get(xs, 1)       -- 20
+    let v2 = get(xs, 2)       -- 30
+
+    let pairs = new_array((int, bool))
+    do add(pairs, (1, true))
+    do add(pairs, (2, false))
+    let p_n = count(pairs)         -- 2
+    let p0  = get(pairs, 0).0      -- 1
+    let p1  = get(pairs, 1).1      -- false
+
+    return (n, v0, v1, v2, p_n, p0, p1)
+end
+----
+stdout until ----
+(3, 10, 20, 30, 2, 1, false)
+----
+end
+case strings and buffers
+source until ----
+-- Strings (including the empty string), index/length/equal, and the
+-- buffer pipeline new_buffer -> append -> freeze -> string.
+
+func main():
+    let s     = "hello"
+    let empty = ""
+    let len_s   = length(s)             -- 5
+    let len_e   = length(empty)         -- 0
+    let c0      = index(s, 0)           -- 104  ('h')
+    let c4      = index(s, 4)           -- 111  ('o')
+    let eq_same = equal(s, "hello")     -- true
+    let eq_diff = equal(s, "world")     -- false
+    let eq_emp  = equal(empty, "")      -- true
+
+    -- Build "abc" through a buffer and freeze it back to an immutable string.
+    let b = new_buffer()
+    do append(b, 'a')
+    do append(b, 'b')
+    do append(b, 'c')
+    let frozen = freeze(b)
+    let len_f  = length(frozen)         -- 3
+    let eq_f   = equal(frozen, "abc")   -- true
+
+    -- After freeze, the buffer is still alive and independently mutable.
+    do append(b, 'd')
+    let after = freeze(b)
+    let len_a = length(after)           -- 4
+    let eq_a  = equal(after, "abcd")    -- true
+    -- The earlier frozen snapshot is unaffected.
+    let eq_snapshot = equal(frozen, "abc")  -- true
+
+    return (len_s, len_e, c0, c4, eq_same, eq_diff, eq_emp,
+            len_f, eq_f, len_a, eq_a, eq_snapshot)
+end
+----
+stdout until ----
+(5, 0, 104, 111, true, false, true, 3, true, 4, true, true)
+----
+end
+case shared and copied values
+source until ----
+-- Reference vs value semantics.
+--
+-- An array is a reference type: passing it shares the same underlying
+-- storage, so a mutation inside the callee is visible to the caller.
+-- An integer is a value type: passing it copies the value, and a
+-- rebinding in the callee leaves the caller's binding untouched.
+
+func mutate_array(arr):
+    do add(arr, 99)
+    return 0
+end
+
+func change_int(n):
+    n = n + 1000
+    return n
+end
+
+func main():
+    -- reference type: array
+    let a = new_array(int)
+    do add(a, 1)
+    do add(a, 2)
+    let ignore = mutate_array(a)
+    let n_after = count(a)        -- 3 (1, 2, 99)
+    let last    = get(a, 2)       -- 99
+
+    -- value type: integer
+    let x  = 5
+    let xx = change_int(x)
+    -- x is unchanged outside change_int
+    return (n_after, last, x, xx)
+end
+----
+stdout until ----
+(3, 99, 5, 1005)
+----
+end
+case a tail call uses no stack
+source until ----
+-- Tail-call stress test (IMPL-TCO).
+--
+-- countdown(n) recurses ten million deep with the self-call in tail
+-- position. Without TCO this would blow the C stack; with TCO, the
+-- single frame is reused and the program completes returning 0.
+
+func countdown(n):
+    if n == 0:
+        return 0
+    else:
+        return countdown(n - 1)
+    end
+end
+
+func main():
+    return countdown(10000000)
+end
+----
+stdout until ----
+0
+----
+end
+case a tail call to another function
+source until ----
+-- T3 — cross-function tail-call chain.
+--
+-- a -> b -> c -> a, each call in TAIL position. The existing IMPL-TCO
+-- collapses tail self-calls to a single activation; the rework extends
+-- this to any tail call so an a/b/c chain also runs with a single
+-- activation reused in place. Ten million deep verifies the chain is
+-- truly flat.
+
+func a(n):
+    if n == 0:
+        return 0
+    else:
+        return b(n - 1)
+    end
+end
+
+func b(n):
+    if n == 0:
+        return 0
+    else:
+        return c(n - 1)
+    end
+end
+
+func c(n):
+    if n == 0:
+        return 0
+    else:
+        return a(n - 1)
+    end
+end
+
+func main():
+    return a(10000000)
+end
+----
+stdout until ----
+0
+----
+end
+case a long loop of small allocations (a)
+source until ----
+func payload(seed):
+    let buf = new_buffer()
+    do append(buf, 65)
+    do append(buf, 66)
+    do append(buf, 67)
+    do append(buf, 68)
+    let s = freeze(buf)
+    let arr = new_array(string)
+    do add(arr, s)
+    do add(arr, "fixed-literal-payload")
+    let t = (s, count(arr), seed)
+    return length(s) + t.1
+end
+
+func loop(i, n, acc):
+    if i >= n:
+        return acc
+    end
+    let r = payload(i)
+    return loop(i + 1, n, acc + r)
+end
+
+func main():
+    return loop(0, 10000, 0)
+end
+----
+stdout until ----
+60000
+----
+end
+case a long loop of small allocations (b)
+source until ----
+func payload(seed):
+    let buf = new_buffer()
+    do append(buf, 65)
+    do append(buf, 66)
+    do append(buf, 67)
+    do append(buf, 68)
+    let s = freeze(buf)
+    let arr = new_array(string)
+    do add(arr, s)
+    do add(arr, "fixed-literal-payload")
+    let t = (s, count(arr), seed)
+    return length(s) + t.1
+end
+
+func loop(i, n, acc):
+    if i >= n:
+        return acc
+    end
+    let r = payload(i)
+    return loop(i + 1, n, acc + r)
+end
+
+func main():
+    return loop(0, 100000, 0)
+end
+----
+stdout until ----
+600000
+----
+end
+cases 12

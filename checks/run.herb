@@ -1,0 +1,577 @@
+-- The check runner: Herbert checking Herbert. It runs a compiler over files of
+-- cases, each a program with its right answer, and says which cases did not
+-- give their answer. Needs lib/linux.herb and lib/text.herb in front.
+--
+--   run COMPILER WORK ROOT CASES...
+--
+-- COMPILER is the compiler to check, ROOT the checkout the cases name files in
+-- and each CASES a file of cases; WORK is an empty folder the runner may fill.
+-- All are absolute paths. Exit status 0 when every case gave its answer, 1
+-- when one did not, 2 when the runner could not do its own work: a cases file
+-- it cannot read or follow, a file a case names that is not there, a compiler
+-- that cannot be started.
+--
+-- A cases file is a list of cases, each written in this order:
+--   case NAME
+--   planted WORDS       optional: a failure planted on purpose; the case
+--                       passes only when the runner finds exactly WORDS wrong
+--   libs UNIT UNIT      optional: ROOT/lib/UNIT.herb, put in front of the source
+--   source COUNT        then COUNT bytes of program and a newline; or
+--   source-file PATH    the program is the file ROOT/PATH
+--   stdin COUNT         optional: then what the program reads, the same way
+--   refused COUNT       the compiler must refuse the source in these words
+--   stdout COUNT        or else the program must write exactly this
+--   stderr COUNT        optional: and this to standard error (default nothing)
+--   status NUMBER       optional: and end with this status (default 0)
+--   builds PATH         optional: what the compiler writes must be, byte for
+--                       byte, the file ROOT/PATH
+--   memory KIB          optional: the compiler may use at most this much
+--                       memory at its peak while compiling the case
+--   limit SECONDS       optional: how long the program may run (default 20)
+--   end
+-- A counted field (source, stdin, refused, stdout, stderr) can also be written
+-- without its count, for cases written by hand:
+--   stdout until ----
+--   42
+--   ----
+-- The field is then every line up to the first line that is exactly the words
+-- after "until", each with its newline. Text that does not end in a newline
+-- needs the counted form. A file may end with the line "cases NUMBER", the
+-- number of cases it holds; the runner stops if it ran another number.
+--
+-- A refused case names its source and the refusal and nothing else. It passes
+-- when the compiler ends with status 1, writes nothing to standard output,
+-- says exactly the words given and leaves no program. Any other case passes
+-- when the compiler ends with status 0, prints its marker "0", says nothing on
+-- standard error and leaves a program; that program is then compared (builds),
+-- or run and held to the error output, status and output the case names
+-- (stdout), or both. A case needs refused, stdout or builds. Each compile gets
+-- 60 seconds and each program its limit, then Linux stops it.
+--
+-- The planted cases keep the runner honest. A runner that passed everything
+-- would fail every one of them, and one that failed a case for the wrong
+-- reason would fail it too, because the reason is part of the case.
+
+-- What a run needs, made once. data is the cases file being run, size bytes of
+-- it. got and want each hold one piece (cap bytes) of a file being read, and
+-- first keeps the start of the last result file compared, count bytes of it,
+-- to show when show is true: the last comparison failed on that file's text.
+-- usage is where Linux reports what a finished program used, and peak its
+-- peak memory in KiB; zero is sixteen zero bytes and pipe two descriptors.
+-- The eight paths are NUL-terminated names inside WORK.
+ref record Check:
+    compiler: buffer
+    root: string
+    data: buffer
+    size: int
+    got: buffer
+    want: buffer
+    cap: int
+    first: buffer
+    count: int
+    show: bool
+    argv: buffer
+    status: buffer
+    usage: buffer
+    zero: buffer
+    pipe: buffer
+    peak: int
+    passed: int
+    failed: int
+    p_source: buffer
+    p_cout: buffer
+    p_cerr: buffer
+    p_aout: buffer
+    p_run: buffer
+    p_stdin: buffer
+    p_pout: buffer
+    p_perr: buffer
+end
+
+func check_die(message):
+    do stderr_write("check runner: ")
+    do stderr_write(message)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- The next piece of fd into b: up to cap bytes, fewer only at the file's end.
+-- (true, bytes read), or false when Linux reports an error.
+func check_fill(fd, b, cap):
+    let used = 0
+    while used < cap:
+        let r = linux_read(fd, b, used, cap - used)
+        if linux_error(r):
+            if r != 0 - 4: return (false, used) end
+        elif r == 0:
+            return (true, used)
+        else:
+            used = used + r
+        end
+    end
+    return (true, used)
+end
+
+-- count bytes of b from from, all of them, to fd.
+func check_write_all(fd, b, from, count):
+    let done = 0
+    while done < count:
+        let r = linux_write(fd, b, from + done, count - done)
+        if linux_error(r):
+            if r != 0 - 4: return false end
+        else:
+            done = done + r
+        end
+    end
+    return true
+end
+
+-- A new file at path holding count bytes of b from from; an old one of that
+-- name is removed first.
+func check_write(path, b, from, count):
+    do linux_syscall6(87, buffer_address(path), 0, 0, 0, 0, 0)
+    let fd = linux_open(path, 577, 384)
+    if linux_error(fd): return false end
+    let ok = check_write_all(fd, b, from, count)
+    do linux_close(fd)
+    return ok
+end
+
+func check_exists(path):
+    let fd = linux_open(path, 0, 0)
+    if linux_error(fd): return false end
+    do linux_close(fd)
+    return true
+end
+
+-- Keep the start of a result file, the first n bytes of c.got, to show.
+func check_keep(c, n):
+    c.count = n
+    if n > 400: c.count = 400 end
+    do buffer_copy(c.first, 0, c.got, 0, c.count)
+    return 0
+end
+
+-- Whether the file at path holds exactly count bytes of c.data from from. The
+-- file is read a piece at a time, so it may be of any size.
+func check_file_same(c, path, from, count):
+    c.show = true
+    c.count = 0
+    let fd = linux_open(path, 0, 0)
+    if linux_error(fd): do check_die("a result file in WORK cannot be opened") end
+    let seen = 0
+    let same = true
+    let more = true
+    while more:
+        let r = check_fill(fd, c.got, c.cap)
+        if not r.0: do check_die("a result file in WORK cannot be read") end
+        if seen == 0: do check_keep(c, r.1) end
+        if r.1 > count - seen:
+            same = false
+        else:
+            let i = 0
+            while same and i < r.1:
+                if buffer_get(c.got, i) != buffer_get(c.data, from + seen + i): same = false end
+                i = i + 1
+            end
+            seen = seen + r.1
+        end
+        if r.1 < c.cap or not same: more = false end
+    end
+    do linux_close(fd)
+    if same and seen != count: same = false end
+    if same: c.show = false end
+    return same
+end
+
+-- Whether the file at path holds exactly the short text s.
+func check_file_text(c, path, s):
+    c.show = true
+    c.count = 0
+    let fd = linux_open(path, 0, 0)
+    if linux_error(fd): do check_die("a result file in WORK cannot be opened") end
+    let r = check_fill(fd, c.got, c.cap)
+    do linux_close(fd)
+    if not r.0: do check_die("a result file in WORK cannot be read") end
+    do check_keep(c, r.1)
+    if r.1 != length(s): return false end
+    let i = 0
+    while i < length(s):
+        if buffer_get(c.got, i) != index(s, i): return false end
+        i = i + 1
+    end
+    c.show = false
+    return true
+end
+
+-- Whether the file at made, which the compiler wrote, holds the same bytes as
+-- the file at named, which the case names and which must be there.
+func check_files_same(c, made, named):
+    let fn = linux_open(named, 0, 0)
+    if linux_error(fn): do check_die("cases file: 'builds' names a file that cannot be read") end
+    let fm = linux_open(made, 0, 0)
+    if linux_error(fm):
+        do linux_close(fn)
+        return false
+    end
+    let same = true
+    let more = true
+    while more:
+        let x = check_fill(fm, c.got, c.cap)
+        let y = check_fill(fn, c.want, c.cap)
+        if not x.0 or not y.0: do check_die("a file to compare cannot be read") end
+        if x.1 != y.1:
+            same = false
+        else:
+            let i = 0
+            while same and i < x.1:
+                if buffer_get(c.got, i) != buffer_get(c.want, i): same = false end
+                i = i + 1
+            end
+        end
+        if x.1 < c.cap or not same: more = false end
+    end
+    do linux_close(fm)
+    do linux_close(fn)
+    return same
+end
+
+-- Run the program at path inside WORK: standard input from in_path, output
+-- into out_path and error output into err_path, with no core file, stopped by
+-- Linux's alarm after limit seconds (an alarm set before the program starts
+-- stays set in it). (0, status) when it ended by itself; (1, signal) when a
+-- signal ended it, 14 being the alarm; (2, 0) when it could not be started.
+-- The new process says so itself, through a pipe that closes without a word
+-- when the program does start: one byte, 2 for a program that cannot be
+-- started and 1 for files in WORK that cannot be opened, which stops the
+-- runner. The output files are removed first, so nothing an earlier program
+-- did to them carries over. c.peak is then its peak memory in KiB.
+func check_spawn(c, path, in_path, out_path, err_path, limit):
+    do linux_put64(c.argv, 0, buffer_address(path))
+    do linux_put64(c.argv, 8, 0)
+    do linux_syscall6(87, buffer_address(out_path), 0, 0, 0, 0, 0)
+    do linux_syscall6(87, buffer_address(err_path), 0, 0, 0, 0, 0)
+    if linux_error(linux_syscall6(293, buffer_address(c.pipe), 524288, 0, 0, 0, 0)): do check_die("Linux gave no pipe") end
+    let reader = linux_u32(c.pipe, 0)
+    let writer = linux_u32(c.pipe, 4)
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if linux_error(pid): do check_die("Linux started no new process") end
+    if pid == 0:
+        do buffer_set(c.pipe, 0, 1)
+        let i = linux_open(in_path, 0, 0)
+        let o = linux_open(out_path, 577, 384)
+        let e = linux_open(err_path, 577, 384)
+        if not linux_error(i) and not linux_error(o) and not linux_error(e):
+            do linux_syscall6(33, i, 0, 0, 0, 0, 0)
+            do linux_syscall6(33, o, 1, 0, 0, 0, 0)
+            do linux_syscall6(33, e, 2, 0, 0, 0, 0)
+            do linux_close(i)
+            do linux_close(o)
+            do linux_close(e)
+            do linux_syscall6(160, 4, buffer_address(c.zero), 0, 0, 0, 0)
+            do linux_syscall6(37, limit, 0, 0, 0, 0, 0)
+            do linux_syscall6(59, buffer_address(path), buffer_address(c.argv), 0, 0, 0, 0)
+            do buffer_set(c.pipe, 0, 2)
+        end
+        do linux_syscall6(1, writer, buffer_address(c.pipe), 1, 0, 0, 0)
+        do process_exit(127)
+        return (2, 0)
+    end
+    do linux_close(writer)
+    let told = linux_syscall6(0, reader, buffer_address(c.pipe), 1, 0, 0, 0)
+    while told == 0 - 4:
+        told = linux_syscall6(0, reader, buffer_address(c.pipe), 1, 0, 0, 0)
+    end
+    do linux_close(reader)
+    let w = linux_syscall6(61, pid, buffer_address(c.status), 0, buffer_address(c.usage), 0, 0)
+    while w == 0 - 4:
+        w = linux_syscall6(61, pid, buffer_address(c.status), 0, buffer_address(c.usage), 0, 0)
+    end
+    if linux_error(w): do check_die("Linux lost a process the runner started") end
+    if told == 1 and buffer_get(c.pipe, 0) == 2: return (2, 0) end
+    if told != 0: do check_die("the files a program reads and writes in WORK cannot be opened") end
+    c.peak = linux_u64(c.usage, 32)
+    let st = linux_u32(c.status, 0)
+    if (st & 127) != 0: return (1, (st & 127)) end
+    return (0, ((st >> 8) & 255))
+end
+
+-- Where the line starting at at ends: its newline's offset, or c.size.
+func check_line_end(c, at):
+    while at < c.size and buffer_get(c.data, at) != 10: at = at + 1 end
+    return at
+end
+
+-- Whether the n bytes of c.data at a and at b are the same.
+func check_spans_same(c, a, b, n):
+    let i = 0
+    while i < n:
+        if buffer_get(c.data, a + i) != buffer_get(c.data, b + i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- The field called name (written with its space, "source ") at at, counted or
+-- closed by its "until" line: (true, where its bytes start, how many, the
+-- offset after it), or (false, 0, 0, at) when the line at at is not that field.
+func check_field(c, at, name):
+    let stop = check_line_end(c, at)
+    if not text_starts(c.data, at, stop, name): return (false, 0, 0, at) end
+    let value = at + length(name)
+    let from = stop + 1
+    if text_starts(c.data, value, stop, "until "):
+        let mark = value + 6
+        let size = stop - mark
+        if size == 0: do check_die("cases file: 'until' needs the line that closes the field") end
+        let line = from
+        while line < c.size:
+            let stops = check_line_end(c, line)
+            if stops - line == size and check_spans_same(c, line, mark, size): return (true, from, line - from, stops + 1) end
+            line = stops + 1
+        end
+        do check_die("cases file: a field's closing line is missing")
+    end
+    let n = text_whole(c.data, value, stop)
+    if not n.0 or n.2 != stop: do check_die("cases file: a field's count is not a number") end
+    if from >= c.size or n.1 >= c.size - from: do check_die("cases file: a count runs past the end of the file") end
+    if buffer_get(c.data, from + n.1) != 10: do check_die("cases file: a field's bytes do not end where its count says") end
+    return (true, from, n.1, from + n.1 + 1)
+end
+
+-- The one-line field called name at at, its value being the rest of the line:
+-- (true, where the value starts, where it stops, the offset after the line),
+-- or (false, 0, 0, at).
+func check_line(c, at, name):
+    let stop = check_line_end(c, at)
+    if not text_starts(c.data, at, stop, name): return (false, 0, 0, at) end
+    return (true, at + length(name), stop, stop + 1)
+end
+
+-- The number that is the whole value of a one-line field.
+func check_number(c, line):
+    let n = text_whole(c.data, line.1, line.2)
+    if not n.0 or n.2 != line.2: do check_die("cases file: a number is expected after status, memory, limit or cases") end
+    return n.1
+end
+
+-- ROOT/before + the name at from..stop in c.data + after, NUL-terminated.
+func check_root_path(c, before, from, stop, after):
+    let b = new_buffer()
+    do text_add(b, c.root)
+    do text_add(b, "/")
+    do text_add(b, before)
+    do text_add_span(b, c.data, from, stop - from)
+    do text_add(b, after)
+    do append(b, 0)
+    return b
+end
+
+-- All of the file at path, which must be there, added to fd.
+func check_copy(c, fd, path, missing):
+    let from = linux_open(path, 0, 0)
+    if linux_error(from): do check_die(missing) end
+    let more = true
+    while more:
+        let r = check_fill(from, c.got, c.cap)
+        if not r.0 or not check_write_all(fd, c.got, 0, r.1): do check_die("a file could not be copied into WORK") end
+        if r.1 < c.cap: more = false end
+    end
+    do linux_close(from)
+    return 0
+end
+
+-- The source the compiler reads: each named unit, then the case's own source,
+-- which is count bytes of c.data from from, or the file named there (file).
+func check_put_source(c, libs, file, from, count):
+    do linux_syscall6(87, buffer_address(c.p_source), 0, 0, 0, 0, 0)
+    let fd = linux_open(c.p_source, 577, 384)
+    if linux_error(fd): do check_die("WORK cannot be written in") end
+    let unit = text_field(c.data, libs.1, libs.2)
+    while unit.0 < unit.1:
+        do check_copy(c, fd, check_root_path(c, "lib/", unit.0, unit.1, ".herb"), "cases file: 'libs' names a unit that cannot be read")
+        unit = text_field(c.data, unit.1, libs.2)
+    end
+    if file:
+        do check_copy(c, fd, check_root_path(c, "", from, from + count, ""), "cases file: 'source-file' names a file that cannot be read")
+    elif not check_write_all(fd, c.data, from, count):
+        do check_die("WORK cannot be written in")
+    end
+    do linux_close(fd)
+    return 0
+end
+
+-- Run one case. "" when it gave its answer, or what the runner found wrong.
+func check_judge(c, libs, file, from, count, input, refused, out, err, status, builds, capped, ceiling, seconds):
+    c.show = false
+    do check_put_source(c, libs, file, from, count)
+    do linux_syscall6(87, buffer_address(c.p_aout), 0, 0, 0, 0, 0)
+    if check_exists(c.p_aout): do check_die("an old program in WORK cannot be removed") end
+    let built = check_spawn(c, c.compiler, c.p_source, c.p_cout, c.p_cerr, 60)
+    if built.0 == 2: do check_die("the compiler cannot be started") end
+    if built.0 == 1 and built.1 == 14: return "the compiler ran past its time limit" end
+    if built.0 != 0: return "the compiler was stopped by a signal" end
+    if refused.0:
+        if not check_file_same(c, c.p_cerr, refused.1, refused.2): return "the compiler did not refuse it in the words expected" end
+        if built.1 != 1: return "the compiler did not end with status 1" end
+        if not check_file_text(c, c.p_cout, ""): return "the compiler wrote to standard output while refusing" end
+        if check_exists(c.p_aout): return "the compiler refused it and still wrote a program" end
+        return ""
+    end
+    if not check_file_text(c, c.p_cerr, ""): return "the compiler refused it or complained" end
+    if built.1 != 0: return "the compiler ended with an error status" end
+    if not check_file_text(c, c.p_cout, "0\n"): return "the compiler did not print its marker 0" end
+    if not check_exists(c.p_aout): return "the compiler wrote no program" end
+    if capped and c.peak > ceiling: return "the compiler used more memory than the case allows" end
+    if builds.0:
+        if not check_files_same(c, c.p_aout, check_root_path(c, "", builds.1, builds.2, "")): return "what the compiler wrote differs from the file named" end
+    end
+    if not out.0: return "" end
+    do linux_syscall6(90, buffer_address(c.p_aout), 448, 0, 0, 0, 0)
+    if not check_write(c.p_stdin, c.data, input.1, input.2): do check_die("WORK cannot be written in") end
+    let ran = check_spawn(c, c.p_run, c.p_stdin, c.p_pout, c.p_perr, seconds)
+    if ran.0 == 2: return "the program the compiler wrote cannot be started" end
+    if ran.0 == 1 and ran.1 == 14: return "the program ran past its time limit" end
+    if ran.0 != 0: return "the program was stopped by a signal" end
+    if not check_file_same(c, c.p_perr, err.1, err.2): return "the program's error output is wrong" end
+    if ran.1 != status: return "the program's exit status is wrong" end
+    if not check_file_same(c, c.p_pout, out.1, out.2): return "the program's output is wrong" end
+    return ""
+end
+
+-- Say that the case named at from..stop failed, and show what it gave when a
+-- comparison of text failed (the first 400 bytes of it at most).
+func check_say_fail(c, from, stop, why, more):
+    let line = new_buffer()
+    do text_add(line, "FAIL ")
+    do text_add_span(line, c.data, from, stop - from)
+    do text_add(line, ": ")
+    do text_add(line, why)
+    do text_add(line, more)
+    do text_add(line, "\n")
+    if c.show:
+        do text_add(line, "  it gave: ")
+        do text_add_span(line, c.first, 0, c.count)
+        if c.count == 0 or buffer_get(c.first, c.count - 1) != 10: do text_add(line, "\n") end
+    end
+    do flogger(freeze(line))
+    return 0
+end
+
+-- Read and run the case whose "case NAME" line is at at: the offset after it.
+func check_case(c, at):
+    let name = check_line(c, at, "case ")
+    if not name.0 or name.1 == name.2: do check_die("cases file: 'case NAME' expected") end
+    let planted = check_line(c, name.3, "planted ")
+    if planted.0 and planted.1 == planted.2: do check_die("cases file: 'planted' needs the finding the runner must report") end
+    let libs = check_line(c, planted.3, "libs ")
+    let source = check_field(c, libs.3, "source ")
+    let file = check_line(c, source.3, "source-file ")
+    if (source.0 and file.0) or (not source.0 and not file.0): do check_die("cases file: a case needs source or source-file, and not both") end
+    let from = source.1
+    let count = source.2
+    if file.0:
+        from = file.1
+        count = file.2 - file.1
+    end
+    let input = check_field(c, file.3, "stdin ")
+    let refused = check_field(c, input.3, "refused ")
+    let out = check_field(c, refused.3, "stdout ")
+    let err = check_field(c, out.3, "stderr ")
+    let wanted = check_line(c, err.3, "status ")
+    let status = 0
+    if wanted.0: status = check_number(c, wanted) end
+    if status > 255: do check_die("cases file: a status is 0 to 255") end
+    let builds = check_line(c, wanted.3, "builds ")
+    let memory = check_line(c, builds.3, "memory ")
+    let limit = check_line(c, memory.3, "limit ")
+    let seconds = 20
+    if limit.0: seconds = check_number(c, limit) end
+    if seconds == 0 or seconds > 86400: do check_die("cases file: a limit is 1 to 86400 seconds") end
+    let ceiling = 0
+    if memory.0: ceiling = check_number(c, memory) end
+    let stop = check_line_end(c, limit.3)
+    if not text_is(c.data, limit.3, stop, "end"): do check_die("cases file: 'end' expected, or a field out of order") end
+    if refused.0 and (input.0 or out.0 or err.0 or wanted.0 or builds.0 or memory.0 or limit.0): do check_die("cases file: a refused case names its source and the refusal, nothing else") end
+    if not refused.0 and not out.0 and not builds.0: do check_die("cases file: a case needs refused, stdout or builds") end
+    if not out.0 and (input.0 or err.0 or wanted.0 or limit.0): do check_die("cases file: stdin, stderr, status and limit need stdout") end
+    let why = check_judge(c, libs, file.0, from, count, input, refused, out, err, status, builds, memory.0, ceiling, seconds)
+    if planted.0 and text_is(c.data, planted.1, planted.2, why):
+        c.passed = c.passed + 1
+    elif planted.0 and length(why) == 0:
+        c.failed = c.failed + 1
+        do check_say_fail(c, name.1, name.2, "this failure was planted and the runner did not catch it", "")
+    elif planted.0:
+        c.failed = c.failed + 1
+        do check_say_fail(c, name.1, name.2, "this failure was planted and the runner found something else: ", why)
+    elif length(why) == 0:
+        c.passed = c.passed + 1
+    else:
+        c.failed = c.failed + 1
+        do check_say_fail(c, name.1, name.2, why, "")
+    end
+    return stop + 1
+end
+
+-- Run every case of the cases file at path.
+func check_file(c, path):
+    let file = linux_read_file(path, 16777216)
+    if file.0 != 0: do check_die("a cases file cannot be read, or is larger than 16 MiB") end
+    c.data = file.1
+    c.size = file.2
+    let at = 0
+    let ran = 0
+    while at < c.size:
+        let total = check_line(c, at, "cases ")
+        if total.0:
+            if check_number(c, total) != ran or total.3 < c.size: do check_die("cases file: its closing count of cases is wrong, or is not its last line") end
+            at = c.size
+        else:
+            at = check_case(c, at)
+            ran = ran + 1
+        end
+    end
+    return 0
+end
+
+-- An argument that must be an absolute path.
+func check_path(args, k):
+    let s = linux_argument(args, k)
+    if length(s) == 0 or index(s, 0) != 47: do check_die("usage: run COMPILER WORK ROOT CASES... (absolute paths)") end
+    return s
+end
+
+func main():
+    let args = linux_arguments()
+    let given = linux_argument_count(args)
+    if given < 5: do check_die("usage: run COMPILER WORK ROOT CASES... (absolute paths)") end
+    let c = Check(linux_cstring(check_path(args, 1)), check_path(args, 3), new_buffer(), 0,
+                  linux_buffer(65536), linux_buffer(65536), 65536, linux_buffer(400), 0, false,
+                  linux_buffer(16), linux_buffer(8), linux_buffer(144), linux_buffer(16), linux_buffer(8), 0, 0, 0,
+                  linux_cstring("in.herb"), linux_cstring("compile.out"), linux_cstring("compile.err"),
+                  linux_cstring("a.out"), linux_cstring("./a.out"), linux_cstring("program.in"),
+                  linux_cstring("program.out"), linux_cstring("program.err"))
+    let work = linux_cstring(check_path(args, 2))
+    if linux_error(linux_syscall6(80, buffer_address(work), 0, 0, 0, 0, 0)): do check_die("cannot enter WORK") end
+    let k = 4
+    while k < given:
+        do check_file(c, check_path(args, k))
+        k = k + 1
+    end
+    let line = new_buffer()
+    do text_add_whole(line, c.passed + c.failed)
+    do text_add(line, " cases, ")
+    do text_add_whole(line, c.passed)
+    do text_add(line, " gave their answers")
+    if c.failed != 0:
+        do text_add(line, ", ")
+        do text_add_whole(line, c.failed)
+        do text_add(line, " did not")
+    end
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    if c.failed != 0: do process_exit(1) end
+    do process_exit(0)
+    return 0
+end

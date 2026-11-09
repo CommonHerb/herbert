@@ -20,6 +20,21 @@ check: $(SCANNER) compiler-source-check
 	@python3 bootstrap/tests/compiler_conformance.py --check-corpus
 	@python3 bootstrap/tests/stdin_contract.py --check-spec
 
+# The checks written in Herbert (checks/). The committed seed builds the runner,
+# and the runner holds a compiler (the seed, or COMPILER=/absolute/path) to
+# every case in the files below: it must rebuild itself byte for byte, and each
+# program must give its answer. VERIFYING.md says what a case is.
+ANSWERS := checks/rebuild.cases checks/first.cases checks/language.cases checks/planted.cases
+.PHONY: answers
+answers:
+	@work=$$(mktemp -d "$${TMPDIR:-/tmp}/herbert-answers.XXXXXX") && mkdir "$$work/build" "$$work/run" && \
+	  (cd bootstrap/seed && sha256sum -c --quiet gen1.seed.sha256) && \
+	  cp bootstrap/seed/gen1.seed "$$work/build/seed" && chmod u+x "$$work/build/seed" && \
+	  cat lib/linux.herb lib/text.herb checks/run.herb > "$$work/build/run.herb" && \
+	  (cd "$$work/build" && ./seed < run.herb > marker 2> errors) && chmod u+x "$$work/build/a.out" && \
+	  "$$work/build/a.out" "$${COMPILER:-$$work/build/seed}" "$$work/run" "$(CURDIR)" $(addprefix $(CURDIR)/,$(ANSWERS)) && \
+	  rm -rf "$${work:?}" || { echo "answers: FAILED; what it left is in $$work" >&2; exit 1; }
+
 test:
 	@bash tools/check_full_test_host.sh
 	@PATH="$(abspath tools):$$PATH" bash bootstrap/tests/run_tests.sh
@@ -358,7 +373,7 @@ reseed: compiler-source-check
 # make test already dispatches the six fragment/mutation pairs, the closed-loop
 # memory diet and the error-vocab gate. Their standalone targets above remain for
 # diagnosis; error-vocab-native also runs that gate's mutation proof.
-verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
+verify-local: compiler-metadata check answers verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
 
 clean:
 	rm -rf $(BUILD)

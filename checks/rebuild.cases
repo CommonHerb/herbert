@@ -1,0 +1,6 @@
+case the compiler rebuilds itself, byte for byte, in under 128 MiB
+source-file stack/native_compile_fragment.herb
+builds bootstrap/seed/gen1.seed
+memory 131072
+end
+cases 1

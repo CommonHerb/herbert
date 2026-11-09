@@ -33,6 +33,12 @@ examples/scope.md
 examples/knock.md
 examples/scope_helper.md
 lib/README.md
+# The cases of the checks written in Herbert (checks/run.herb): programs and
+# their right answers. Data, not a host language; they stay.
+checks/rebuild.cases
+checks/first.cases
+checks/language.cases
+checks/planted.cases
 # Independent Linux syscall/memory and interactive desktop TEST tooling.
 bootstrap/tests/check_hosted_memory_io.py
 bootstrap/tests/check_desktop.py

@@ -1,0 +1,172 @@
+case the right answer passes
+source until ----
+func main():
+    return 40 + 2
+end
+----
+stdout until ----
+42
+----
+end
+case a library is put in front of the source
+libs linux text
+source until ----
+func main():
+    let b = linux_buffer(8)
+    let n = text_put_whole(b, 0, 1234)
+    do flogger(text_string(b, 0, n))
+    do flogger("\n")
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+1234
+----
+end
+case planted: the output is wrong
+planted the program's output is wrong
+source until ----
+func main():
+    return 40 + 2
+end
+----
+stdout until ----
+43
+----
+end
+case planted: the output is one byte short
+planted the program's output is wrong
+source until ----
+func main():
+    return 40 + 2
+end
+----
+stdout 2
+42
+end
+case planted: the exit status is wrong
+planted the program's exit status is wrong
+source until ----
+func main():
+    return 40 + 2
+end
+----
+stdout until ----
+42
+----
+status 3
+end
+case planted: error output nobody expected
+planted the program's error output is wrong
+source until ----
+func main():
+    do stderr_write("oops\n")
+    return 1
+end
+----
+stdout until ----
+1
+----
+end
+case planted: a program that stops with a fault
+planted the program's error output is wrong
+source until ----
+func main():
+    let a = new_array(int)
+    return get(a, 3)
+end
+----
+stdout until ----
+----
+end
+case planted: a program stopped by a signal
+planted the program was stopped by a signal
+source until ----
+func main():
+    do linux_syscall6(62, linux_syscall6(39, 0, 0, 0, 0, 0, 0), 15, 0, 0, 0, 0)
+    return 0
+end
+----
+stdout until ----
+0
+----
+end
+case planted: a program that never ends
+planted the program ran past its time limit
+source until ----
+func main():
+    let i = 0
+    while i < 1:
+        i = 0
+    end
+    return i
+end
+----
+stdout until ----
+0
+----
+limit 1
+end
+case planted: a good program expected to be refused
+planted the compiler did not refuse it in the words expected
+source until ----
+func main():
+    return 40 + 2
+end
+----
+refused until ----
+line 1: nope (ERR 1)
+----
+end
+case planted: a refusal in other words
+planted the compiler did not refuse it in the words expected
+source until ----
+func main():
+    return nope()
+end
+----
+refused until ----
+line 2: native-subset: unknown callee 'nopf' (ERR 419)
+----
+end
+case planted: a refused program expected to run
+planted the compiler refused it or complained
+source until ----
+func main():
+    return nope()
+end
+----
+stdout until ----
+1
+----
+end
+case planted: a library answer that is wrong
+planted the program's output is wrong
+libs linux text
+source until ----
+func main():
+    let b = linux_buffer(8)
+    let n = text_put_whole(b, 0, 1234)
+    do flogger(text_string(b, 0, n))
+    do flogger("\n")
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+1235
+----
+end
+case planted: what the compiler writes is not its own source
+planted what the compiler wrote differs from the file named
+source-file stack/native_compile_fragment.herb
+builds stack/native_compile_fragment.herb
+end
+case planted: the compiler cannot build itself in 10 MiB
+planted the compiler used more memory than the case allows
+source-file stack/native_compile_fragment.herb
+builds bootstrap/seed/gen1.seed
+memory 10240
+end
+cases 15

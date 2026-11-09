@@ -24,6 +24,37 @@ time limits; CI or real Linux/x86-64 hardware is the authority for `make test`.
 - The self-checks of the conformance corpus and the stdin contract (their declarations and oracles), without running
   the compiler.
 
+## make answers (about 7 seconds): the checks written in Herbert
+
+Herbert's checks are being rewritten in Herbert, and no new check is written in Python or shell. `checks/run.herb` is
+the runner. The committed seed builds it, and it holds a compiler (the seed, or `make answers COMPILER=/absolute/path`
+for a candidate) to every case in four files:
+
+- `checks/rebuild.cases`: the compiler compiles its own source and what it writes must be the committed seed, byte for
+  byte, using at most 128 MiB.
+- `checks/first.cases`: twelve small programs covering the basics, each with the output it must print.
+- `checks/language.cases`: 588 cases of what the compiler accepts and refuses: a program with the output, error output
+  and exit status it must give, or the exact words the compiler must refuse it in. They came from the conformance
+  corpus below, which they will replace.
+- `checks/planted.cases`: two cases that must pass and thirteen failures planted on purpose (a wrong answer, an answer
+  one byte short, a wrong status, a fault, a signal, a program that never ends, a refusal in other words, a compiler
+  that writes something else, a compiler held to 10 MiB). Each planted case names the exact finding the runner must
+  report and passes only on that finding. A runner that passed everything would fail all thirteen, and one that
+  failed a case for another reason would fail it too.
+
+A case is plain text: its name, the program (or the file it is in), and its answer; the top of `checks/run.herb` gives
+the format, with a form for cases written by hand and a counted form for text of any bytes. A refused case passes when
+the compiler ends with status 1, writes nothing to standard output, says exactly the words given and leaves no
+program. Any other case passes when the compiler ends with status 0, prints its `0` marker, says nothing on standard
+error and leaves a program that gives exactly the answer. The runner prints one `FAIL` line for each case that did not
+give its answer, with what it gave, then the count. Its exit status is 0 when every case passed and 1 when one did
+not. It is 2, with one line on standard error, when the runner could not do its own work: a cases file it cannot
+follow, a file a case names that is not there, a compiler that cannot be started, or a file's closing count of cases
+that does not match the cases it held. `make verify-local` and CI run it.
+
+What it does not check: the planted cases cannot plant a broken compiler, so the findings about a compiler that
+writes no program, a wrong marker or a program that cannot be started are exercised by hand, not by a case.
+
 ## make test (about 45 seconds)
 
 `bootstrap/tests/run_tests.sh` runs a pinned number of tests (37) with the committed seed; a test silently dropped or
@@ -71,7 +102,7 @@ keep successful ones with `--keep-work`.
 
 ## make verify-local (the full local set)
 
-It runs `compiler-metadata`, `check`, `verification-helpers`, `program-contract`, `test-timeout`, `test`,
+It runs `compiler-metadata`, `check`, `answers`, `verification-helpers`, `program-contract`, `test-timeout`, `test`,
 `error-vocab-native`, `lexer-copy-sync`, `compiler-cli-contract`, `check-desktop`, `check-app-support` and
 `check-hosted-apps`. Beyond `make check` and `make test`:
 
@@ -218,7 +249,7 @@ A check that cannot fail proves nothing, so the important gates carry a proof th
 ## CI
 
 - `.github/workflows/check.yml` runs on every push and pull request, on `ubuntu-26.04`. It installs the test tools,
-  logs the actual OS and tool versions, then runs `make check`, `verification-helpers`, `program-contract`,
+  logs the actual OS and tool versions, then runs `make check`, `answers`, `verification-helpers`, `program-contract`,
   `test-timeout`, `test`, `compiler-metadata`, `check-desktop`, `check-app-support`, `check-hosted-apps`,
   `compiler-cli-contract`, `error-vocab-native` and `lexer-copy-sync`: all of `verify-local`. The runner image is
   not a lock on every package; the logged versions identify each run's environment. Test evidence from `/tmp` is
