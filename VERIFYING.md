@@ -24,11 +24,11 @@ time limits; CI or real Linux/x86-64 hardware is the authority for `make test`.
 - The self-checks of the conformance corpus and the stdin contract (their declarations and oracles), without running
   the compiler.
 
-## make answers (about 7 seconds): the checks written in Herbert
+## make answers (about 10 seconds): the checks written in Herbert
 
 Herbert's checks are being rewritten in Herbert, and no new check is written in Python or shell. `checks/run.herb` is
 the runner. The committed seed builds it, and it holds a compiler (the seed, or `make answers COMPILER=/absolute/path`
-for a candidate) to every case in four files:
+for a candidate) to every case in five files:
 
 - `checks/rebuild.cases`: the compiler compiles its own source and what it writes must be the committed seed, byte for
   byte, using at most 128 MiB.
@@ -36,6 +36,12 @@ for a candidate) to every case in four files:
 - `checks/language.cases`: 588 cases of what the compiler accepts and refuses: a program with the output, error output
   and exit status it must give, or the exact words the compiler must refuse it in. They came from the conformance
   corpus below, which they will replace.
+- `checks/libraries.cases`: 147 cases for the support libraries, each written from the library's documented contract
+  before it was run: the text buffer behind Notes (53: edits, the cursor, selection, undo and redo, find, word-wrap
+  rows), saving, rescuing and recovering files (31), text and numbers (15), UTF-8, graphemes and what can be drawn
+  (26), Scope's figures (8), network addresses, maps, lettering and the Linux helpers (14). A case's program runs
+  in the runner's scratch folder and may make files there; nothing in these cases opens a window or a connection.
+  They expect an ordinary umask (022, 002 or 077).
 - `checks/planted.cases`: two cases that must pass and thirteen failures planted on purpose (a wrong answer, an answer
   one byte short, a wrong status, a fault, a signal, a program that never ends, a refusal in other words, a compiler
   that writes something else, a compiler held to 10 MiB). Each planted case names the exact finding the runner must

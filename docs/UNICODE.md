@@ -64,7 +64,10 @@ U+2260/U+2264/U+2265. Exact individual support is checked by
 source, not a claim of general block coverage.
 
 The combining marks U+0300, U+0301, U+0302, U+0303, U+0308, U+030A and U+0327
-can accompany a Latin ASCII letter: at most one above mark and one cedilla below.
+can accompany a Latin letter (an ASCII letter, one of the nine Latin-1 letters
+Æ Ð Ø Þ ß æ ð ø þ, or a precomposed Latin-1 accented letter such as é or ç, which
+counts as its ASCII letter with the mark it already carries): at most one above
+mark and one cedilla below in all.
 Ring plus cedilla does not fit and is unsupported. Latin-1 precomposed accents
 share the decomposed rendering while their original UTF-8 bytes remain distinct.
 The document/query font distinguishes a three-pixel hyphen, four-pixel en dash

@@ -24,7 +24,7 @@ check: $(SCANNER) compiler-source-check
 # and the runner holds a compiler (the seed, or COMPILER=/absolute/path) to
 # every case in the files below: it must rebuild itself byte for byte, and each
 # program must give its answer. VERIFYING.md says what a case is.
-ANSWERS := checks/rebuild.cases checks/first.cases checks/language.cases checks/planted.cases
+ANSWERS := checks/rebuild.cases checks/first.cases checks/language.cases checks/libraries.cases checks/planted.cases
 .PHONY: answers
 answers:
 	@work=$$(mktemp -d "$${TMPDIR:-/tmp}/herbert-answers.XXXXXX") && mkdir "$$work/build" "$$work/run" && \

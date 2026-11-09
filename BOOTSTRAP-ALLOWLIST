@@ -38,6 +38,7 @@ lib/README.md
 checks/rebuild.cases
 checks/first.cases
 checks/language.cases
+checks/libraries.cases
 checks/planted.cases
 # Independent Linux syscall/memory and interactive desktop TEST tooling.
 bootstrap/tests/check_hosted_memory_io.py
