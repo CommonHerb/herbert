@@ -24,11 +24,6 @@ native_codegen_oracle_begin rejects || exit 1
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 native_codegen_ensure_compiler "$tmp/native-compiler" || exit 1
-# Kernel-route messages on the i386 routes come from the oracle compiler.
-production_compiler="$NATIVE_CODEGEN_COMPILER"
-native_codegen_ensure_i386_compiler "$tmp/i386" || exit 1
-i386_compiler="$NATIVE_CODEGEN_COMPILER"
-export NATIVE_CODEGEN_COMPILER="$production_compiler"
 
 pass=0
 fail=0
@@ -67,7 +62,7 @@ check_source_reject_code_once() {
     fi
 }
 
-# Kernel-route codes (above 442) print the message their site passes, never "unknown error".
+# The emit-route refusal (ERR 443) prints its whole message, never "unknown error".
 check_kernel_reject_message() {
     local label="$1"
     local code="$2"
@@ -702,119 +697,11 @@ check_source_reject_code frontier_multi_clogger 411 "$tmp/r_multi_clogger.herb"
 check_source_reject_code frontier_helper_clogger 404 "$tmp/r_helper_clogger.herb"
 check_runtime_frontier_cap frontier_clogger_arena_cap "$tmp/frontier_cap.herb"
 
-cat > "$tmp/k_mb32_calls_other.herb" <<'HERB'
--- emit: multiboot32
-func f():
-    return 1
-end
-func main():
-    return f()
-end
-HERB
-cat > "$tmp/k_mb32_too_many_locals.herb" <<'HERB'
--- emit: multiboot32
-func main():
-    let v1 = 1
-    let v2 = 2
-    let v3 = 3
-    let v4 = 4
-    let v5 = 5
-    let v6 = 6
-    let v7 = 7
-    let v8 = 8
-    let v9 = 9
-    let v10 = 10
-    let v11 = 11
-    let v12 = 12
-    let v13 = 13
-    let v14 = 14
-    let v15 = 15
-    let v16 = 16
-    let v17 = 17
-    let v18 = 18
-    let v19 = 19
-    let v20 = 20
-    let v21 = 21
-    let v22 = 22
-    let v23 = 23
-    let v24 = 24
-    let v25 = 25
-    let v26 = 26
-    let v27 = 27
-    let v28 = 28
-    let v29 = 29
-    let v30 = 30
-    let v31 = 31
-    let v32 = 32
-    return v1
-end
-HERB
-cat > "$tmp/k_input_calls_other.herb" <<'HERB'
--- emit: multiboot32-input
-func f():
-    return 1
-end
-func main():
-    return f()
-end
-HERB
-cat > "$tmp/k_input_no_read.herb" <<'HERB'
--- emit: multiboot32-input
-func main():
-    return 1
-end
-HERB
-cat > "$tmp/k_long64_too_many_locals.herb" <<'HERB'
--- emit: multiboot32-long64
-func main():
-    let a = 1
-    let b = 2
-    let c = 3
-    let d = 4
-    let e = 5
-    let f = 6
-    let g = 7
-    let h = 8
-    let i = 9
-    let j = 10
-    let k = 11
-    let l = 12
-    let m = 13
-    let n = 14
-    let o = 15
-    let p = 16
-    return a + p
-end
-HERB
-cat > "$tmp/k_long64_helper_string.herb" <<'HERB'
--- emit: multiboot32-long64
-func f(x):
-    let s = "hi"
-    return x
-end
-func main():
-    return f(1)
-end
-HERB
-
-check_kernel_reject_message mb32_calls_other 450 "$tmp/k_mb32_calls_other.herb" \
-    "program: native-subset: multiboot32: main may not call other functions (ERR 450)" "$i386_compiler"
-check_kernel_reject_message mb32_too_many_locals 453 "$tmp/k_mb32_too_many_locals.herb" \
-    "program: native-subset: multiboot32: too many locals (max 31) (ERR 453)" "$i386_compiler"
-check_kernel_reject_message input_calls_other 506 "$tmp/k_input_calls_other.herb" \
-    "program: native-subset: multiboot32-input: main may not call other functions (ERR 506)" "$i386_compiler"
-check_kernel_reject_message input_no_read 508 "$tmp/k_input_no_read.herb" \
-    "program: native-subset: multiboot32-input: main must read input_byte() exactly once (ERR 508)" "$i386_compiler"
-check_kernel_reject_message long64_too_many_locals 504 "$tmp/k_long64_too_many_locals.herb" \
-    "program: native-subset: multiboot32-long64: too many locals (max 15) (ERR 504)"
-check_kernel_reject_message long64_helper_string 605 "$tmp/k_long64_helper_string.herb" \
-    "program: native-subset: multiboot32-long64: function body not in the call+recursion subset (ERR 605)"
-
-# The production compiler rejects the 45 i386 routes by name; the oracle compiler builds them.
+# The compiler's one emit route is ast-dump; any other route name is refused by name.
 for route in multiboot32 multiboot32-cleave module-mmj; do
     printf -- '-- emit: %s\nfunc main():\n    return 7\nend\n' "$route" > "$tmp/k_moved_$route.herb"
     check_kernel_reject_message "moved_$route" 443 "$tmp/k_moved_$route.herb" \
-        "program: native-subset: emit route '$route' is built by the i386 oracle compiler (stack/i386_oracle_fragment.herb), not the production compiler (ERR 443)"
+        "program: native-subset: emit route '$route' is not in this compiler; its one route is ast-dump (the operating-system routes are kept at tag os-experiments-2026-11-09) (ERR 443)"
 done
 
 echo ""
@@ -825,5 +712,5 @@ fi
 if ! native_codegen_oracle_finish; then
     exit 1
 fi
-echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), kanawha partial-aggregate single-diagnostic rails, kernel-route messages, i386 routes rejected by name, plus frontier clogger limits)"
+echo "PASS: stack/native_compile_fragment.herb (native-codegen rejects: $pass sub-tests: stable 420/424/430/432/435/436/437/438/439/440 boundaries, zelph never-returning-bottom soundness rails (rebind/let-shadow/pure-bottom/fake-trap), kanawha partial-aggregate single-diagnostic rails, emit routes other than ast-dump refused by name, plus frontier clogger limits)"
 exit 0

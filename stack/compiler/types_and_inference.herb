@@ -140,7 +140,7 @@ func nc_diag_msg(code, payload):
     if code == 406:
         return diagnostic_with_payload("native-subset: function '", payload, "' may not return a value")
     end
-    -- Kernel-route codes carry their own text, which names the route and the rule.
+    -- A code above 442 with no text of its own above carries it in the payload.
     if code > 442 and length(payload) > 0:
         return diagnostic_with_payload("native-subset: ", payload, "")
     end
@@ -2257,15 +2257,6 @@ func nc_has_value_arity_guard(name):
     if nc_is_hosted_memory_builtin(name):
         return true
     end
-    if equal(name, "boot_read"):
-        return true
-    end
-    if equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "bufbase"):
-        return true
-    end
-    if equal(name, "sys_write") or equal(name, "output_byte") or equal(name, "yield") or equal(name, "bufget") or equal(name, "bufset"):
-        return true
-    end
     if equal(name, "stderr_write") or equal(name, "stdin_read"):
         return true
     end
@@ -2437,73 +2428,6 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
                 return (sw.0, 0, sw.1, sw.2, sw.3)
             end
             return (0, nc_type_int(), sw.1, sw.2, sw.3)
-        end
-        if equal(name, "input_byte"):
-            return (0, nc_type_int(), env, sig, 0)
-        end
-        if equal(name, "boot_read"):
-            return (0, nc_type_int(), env, sig, 0)
-        end
-        if equal(name, "module_byte"):
-            return (0, nc_type_int(), env, sig, 0)
-        end
-        if equal(name, "sys_read"):
-            return (0, nc_type_int(), env, sig, 0)
-        end
-        if equal(name, "sys_write"):
-            let sw = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
-            if sw.0 != 0:
-                return (sw.0, 0, sw.1, sw.2, sw.3)
-            end
-            return (0, nc_type_int(), sw.1, sw.2, sw.3)
-        end
-        if equal(name, "output_byte"):
-            -- riposte: output_byte(v) -- v int, returns v (int). The device write truncates
-            -- to v&0xff on the wire; the RETURNED value is the full argument (op 53 push rbx).
-            let ob = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
-            if ob.0 != 0:
-                return (ob.0, 0, ob.1, ob.2, ob.3)
-            end
-            return (0, nc_type_int(), ob.1, ob.2, ob.3)
-        end
-        if equal(name, "yield"):
-            let yl = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
-            if yl.0 != 0:
-                return (yl.0, 0, yl.1, yl.2, yl.3)
-            end
-            return (0, nc_type_int(), yl.1, yl.2, yl.3)
-        end
-        if equal(name, "bufbase"):
-            -- chiefturbo: bufbase() takes no args, returns the buffer base (int).
-            return (0, nc_type_int(), env, sig, 0)
-        end
-        if equal(name, "bufget"):
-            -- chiefturbo: bufget(base, k) -- both int, returns the loaded word (int).
-            let bg0 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
-            if bg0.0 != 0:
-                return (bg0.0, 0, bg0.1, bg0.2, bg0.3)
-            end
-            let bg1 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), bg0.1, nc_type_int(), bg0.2, fn_idx, funcs, n_params)
-            if bg1.0 != 0:
-                return (bg1.0, 0, bg1.1, bg1.2, nc_or_changed(bg0.3, bg1.3))
-            end
-            return (0, nc_type_int(), bg1.1, bg1.2, nc_or_changed(bg0.3, bg1.3))
-        end
-        if equal(name, "bufset"):
-            -- chiefturbo: bufset(base, i, v) -- all int, returns the stored value v (int).
-            let bs0 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 0), env, nc_type_int(), sig, fn_idx, funcs, n_params)
-            if bs0.0 != 0:
-                return (bs0.0, 0, bs0.1, bs0.2, bs0.3)
-            end
-            let bs1 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), bs0.1, nc_type_int(), bs0.2, fn_idx, funcs, n_params)
-            if bs1.0 != 0:
-                return (bs1.0, 0, bs1.1, bs1.2, nc_or_changed(bs0.3, bs1.3))
-            end
-            let bs2 = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 2), bs1.1, nc_type_int(), bs1.2, fn_idx, funcs, n_params)
-            if bs2.0 != 0:
-                return (bs2.0, 0, bs2.1, bs2.2, nc_or_changed(nc_or_changed(bs0.3, bs1.3), bs2.3))
-            end
-            return (0, nc_type_int(), bs2.1, bs2.2, nc_or_changed(nc_or_changed(bs0.3, bs1.3), bs2.3))
         end
         if equal(name, "length"):
             let r = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)

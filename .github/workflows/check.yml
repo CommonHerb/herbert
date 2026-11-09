@@ -6,8 +6,8 @@ on:
 
 jobs:
   check:
-    # Match the explicit kernel workflow image; package versions below are
-    # observed in each run, not guessed or claimed as locked dependencies.
+    # Package versions below are observed in each run, not guessed or claimed
+    # as locked dependencies.
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
@@ -61,9 +61,7 @@ jobs:
         run: make check-hosted-apps
       - name: compiler invocation fault contract
         run: make compiler-cli-contract
-      # verify-local suites CI historically skipped (2026-07-03 canon-cleanup, §4). The
-      # emulator-free ones run here; native-codegen-diagnostics needs QEMU so it runs in
-      # kernel-codegen-l1.yml.
+      # verify-local suites CI historically skipped (2026-07-03 canon-cleanup, §4).
       - name: error-vocab-native (C-free front-end error vocabulary + mutation)
         run: make error-vocab-native
       - name: lexer-copy-sync (copied lexer blocks match the fragment contract)

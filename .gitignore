@@ -2,15 +2,6 @@ build/
 __pycache__/
 *.pyc
 
-# Kernel-blob generator scripts (gen_<link>_blob.py): not repository content. Each
-# printed a multiboot32-<link> blob block for stack/i386_oracle/i386_targets.herb (see
-# its "Machine-generated from <link>_ref.build_elf() by gen_<link>_blob.py" comments).
-# The blobs rebuild from the tracked *_ref.py builders alone; no generator is tracked here.
-bootstrap/tests/gen_*_blob.py
-
-# Optional raw kernel-gate captures.
-_kernel_evidence/
-
 # Retained developer compiler evidence stays on disk, outside version control.
 .herbert-build.*/
 

@@ -15,10 +15,6 @@
 unset CDPATH
 native_codegen_oracle__script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)" || return 1
 
-
-# Fail closed before any emulator availability probe, including standalone runs.
-source "$native_codegen_oracle__script_dir/qemu_prefix.sh" || { echo "FAIL: cannot establish QEMU prefix" >&2; exit 1; }
-
 NATIVE_CODEGEN_GOLDENS_DIR="${NATIVE_CODEGEN_GOLDENS_DIR:-$native_codegen_oracle__script_dir/native_codegen_goldens}"
 NATIVE_CODEGEN_ORACLE="${NATIVE_CODEGEN_ORACLE:-golden}"
 NATIVE_CODEGEN_CAPTURE="${NATIVE_CODEGEN_ORACLE_CAPTURE:-0}"
@@ -228,41 +224,6 @@ native_codegen_ensure_compiler() {
     fi
     echo "FAIL: stack/native_compile_fragment.herb (C-free seed missing and C mint not permitted -- set NATIVE_CODEGEN_ALLOW_C_MINT=1 to re-seed)"
     return 1
-}
-
-# The 45 i386 routes are built by the oracle compiler, not the production
-# compiler: the committed seed compiles stack/i386_oracle_fragment.herb into it,
-# and NATIVE_CODEGEN_COMPILER points at the result for the rest of the gate. A
-# preset NATIVE_CODEGEN_I386_COMPILER is reused verbatim, like a preset
-# production compiler; a preset NATIVE_CODEGEN_COMPILER is not, since it may be
-# the production seed, which rejects these routes.
-native_codegen_ensure_i386_compiler() {
-    local mint_root="$1"
-    local fragment="$native_codegen_oracle__script_dir/../../stack/i386_oracle_fragment.herb"
-    if [[ -n "${NATIVE_CODEGEN_I386_COMPILER:-}" ]]; then
-        if [[ ! -x "$NATIVE_CODEGEN_I386_COMPILER" ]]; then
-            echo "FAIL: stack/native_compile_fragment.herb (cannot execute NATIVE_CODEGEN_I386_COMPILER=$NATIVE_CODEGEN_I386_COMPILER)"
-            return 1
-        fi
-        export NATIVE_CODEGEN_COMPILER="$NATIVE_CODEGEN_I386_COMPILER"
-        return 0
-    fi
-    if [[ ! -f "$fragment" ]]; then
-        echo "FAIL: stack/native_compile_fragment.herb (missing i386 oracle source $fragment)"
-        return 1
-    fi
-    native_codegen_seed_acquire "$mint_root" || return 1
-    local seed="$NATIVE_CODEGEN_COMPILER" work="$mint_root/i386-oracle-build" oracle="$mint_root/i386-oracle" rc=0 magic=""
-    mkdir -p "$work" || return 1
-    ( cd "$work" && "$seed" < "$fragment" > out 2> err ) || rc=$?
-    [[ -f "$work/a.out" ]] && magic=$(head -c4 "$work/a.out" | xxd -p | tr -d '\n')
-    if [[ $rc -ne 0 || "$magic" != "7f454c46" ]]; then
-        echo "FAIL: stack/native_compile_fragment.herb (the seed did not build the i386 oracle compiler: rc=$rc stderr=$(head -1 "$work/err" 2>/dev/null))"
-        return 1
-    fi
-    cp "$work/a.out" "$oracle" && chmod +x "$oracle" || return 1
-    export NATIVE_CODEGEN_COMPILER="$oracle"
-    echo "native-codegen: built the i386 oracle compiler at $oracle from stack/i386_oracle_fragment.herb with the C-free seed (sha256=$(native_codegen_oracle_sha256 "$oracle"))"
 }
 
 native_codegen_oracle_append_manifest() {
@@ -570,7 +531,7 @@ native_codegen_expect_rejection() {
     native_codegen_rejection_result "$rc" "$directory" "$out" "$err" "$pattern"
 }
 
-# Validate an already captured invocation (kernel gates retain its observations).
+# Validate an already captured invocation.
 native_codegen_rejection_result() {
     local rc="$1" directory="$2" out="$3" err="$4" pattern="$5"
     if [[ "$rc" -ne 1 || -s "$out" || -e "$directory/a.out" || -L "$directory/a.out" ]]; then

@@ -10,8 +10,8 @@
 #
 # It verifies the current seed pin, snapshots the inputs, and checks both compiler
 # invocations' complete success envelopes. A changed, self-reproducing candidate
-# must pass ordinary hosted conformance BEFORE replacing the seed. Full hosted and
-# applicable target qualification still follow; convergence is not provenance.
+# must pass ordinary hosted conformance BEFORE replacing the seed. Full hosted
+# qualification still follows; convergence is not provenance.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -114,4 +114,4 @@ mv -T -- "$stage/gen1.seed" "$seed"
 mv -T -- "$stage/gen1.seed.sha256" "$pin"
 echo "reseed: updated $seed (C-free, via the committed seed)"
 echo "reseed: $(cat "$pin")"
-echo "reseed: now qualify the changed compiler with 'make verify-local' and applicable target gates."
+echo "reseed: now qualify the changed compiler with 'make verify-local'."

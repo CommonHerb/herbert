@@ -14,7 +14,6 @@ func main():
     let l2 = emit_line("required-substrate: .github/workflows")
     let l3 = emit_line("native: tools/scan.herb")
     let l4 = emit_line("replace-later: bootstrap/tests/*.sh")
-    let l5 = emit_line("replace-later: bootstrap/tests/*_ref.py")
-    let l6 = emit_line("evidence: committed expected/golden artifacts")
-    return 7
+    let l5 = emit_line("evidence: committed expected/golden artifacts")
+    return 6
 end

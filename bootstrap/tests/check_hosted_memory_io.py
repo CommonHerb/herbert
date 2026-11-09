@@ -344,50 +344,6 @@ end
             print(f"PASS {name}-statement-call: same image as the bound call", flush=True)
             compile_probe(name + "-reserved", f"func {name}():\n    return 0\nend\nfunc main():\n    return 0\nend\n", 429)
 
-        # The i386 routes are built by the oracle compiler, which this seed
-        # compiles from stack/i386_oracle_fragment.herb.
-        oracle_dir = work / "i386-oracle"
-        oracle_dir.mkdir()
-        with open(ROOT / "stack/i386_oracle_fragment.herb", "rb") as oracle_source:
-            built = subprocess.run([str(compiler)], stdin=oracle_source, cwd=oracle_dir,
-                                   capture_output=True, timeout=300)
-        require(process_result(built), (0, b"0\n", b""), "i386 oracle build")
-        oracle = oracle_dir / "a.out"
-        oracle.chmod(0o700)
-        for target, code, built_by in [("multiboot32", 451, oracle), ("multiboot32-long64", 502, None)]:
-            # These targets have independent whitelist/depth paths. The scalar
-            # syscall alone excludes rejection merely due to new_buffer.
-            source = f"-- emit: {target}\nfunc main():\n    return linux_syscall6(39, 0, 0, 0, 0, 0, 0)\nend\n"
-            compile_probe("reject-target-" + target, source, code, built_by)
-            source = f"-- emit: {target}\nfunc main():\n    return buffer_copy(new_buffer(), 0, new_buffer(), 0, 0)\nend\n"
-            compile_probe("reject-target-copy-" + target, source, code, built_by)
-            source = f"-- emit: {target}\nfunc main():\n    return buffer_fill(new_buffer(), 0, 0)\nend\n"
-            compile_probe("reject-target-fill-" + target, source, code, built_by)
-        compile_probe("reject-target-module-chiefturbo", """-- emit: module-chiefturbo
-func main():
-    let input = sys_read()
-    let sent = sys_write(input)
-    let read = bufget(bufbase(), 0)
-    return linux_syscall6(39, 0, 0, 0, 0, 0, 0)
-end
-""", 595, oracle)
-        compile_probe("reject-target-copy-module-chiefturbo", """-- emit: module-chiefturbo
-func main():
-    let input = sys_read()
-    let sent = sys_write(input)
-    let read = bufget(bufbase(), 0)
-    return buffer_copy(new_buffer(), 0, new_buffer(), 0, 0)
-end
-""", 595, oracle)
-        compile_probe("reject-target-fill-module-chiefturbo", """-- emit: module-chiefturbo
-func main():
-    let input = sys_read()
-    let sent = sys_write(input)
-    let read = bufget(bufbase(), 0)
-    return buffer_fill(new_buffer(), 0, 0)
-end
-""", 595, oracle)
-
         sustained = compile_probe("sustained-reuse", FILL + """func update(b, delay, i):
     if i == 2000000:
         return i

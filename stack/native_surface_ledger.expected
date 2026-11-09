@@ -3,6 +3,5 @@ required-substrate: bootstrap/seed/gen1.seed
 required-substrate: .github/workflows
 native: tools/scan.herb
 replace-later: bootstrap/tests/*.sh
-replace-later: bootstrap/tests/*_ref.py
 evidence: committed expected/golden artifacts
-7
+6

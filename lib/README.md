@@ -185,8 +185,7 @@ provide general reusable memory and the Linux x86-64 boundary:
 | `linux_syscall6(n, a1, a2, a3, a4, a5, a6)` | **Unsafe** raw Linux/x86-64 system call, all arguments and result are unsigned 64-bit integers. Unused arguments are normally zero. |
 
 All seven names are reserved builtin function names. They are value expressions;
-`do buffer_set(b, i, v)` discards the result, as `do` does for any call. They
-are refused by the specialized kernel/module targets.
+`do buffer_set(b, i, v)` discards the result, as `do` does for any call.
 Existing scalar/collection behavior is unchanged. A `freeze` snapshot is still
 independent of later buffer changes; it copies, so it is not a per-frame view.
 Bounds diagnostics currently use the existing `get` wording and invalid byte

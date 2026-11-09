@@ -3,7 +3,7 @@
 The production compiler is Herbert source compiled by the committed Linux/x86-64
 seed. The source is maintained as ordered stage files under `stack/compiler/`;
 `stack/native_compile_fragment.herb` is the tracked assembled artifact consumed
-by existing self-hosting, native, kernel and historical gates. This is explicit
+by the existing self-hosting, native and historical gates. This is explicit
 source composition, not a module system or a new bootstrap path.
 
 | Source unit | Responsibility |
@@ -12,8 +12,7 @@ source composition, not a module system or a new bootstrap path.
 | `types_and_inference.herb` | Native diagnostics, types, signatures and inference |
 | `metadata.herb` | Bytecode validation, typed stack analysis and per-instruction metadata |
 | `hosted_emitter.herb` | Hosted instruction layout, native runtime and ELF emission |
-| `kernel_targets.herb` | The source-authored long64 target, the 32-bit helpers it reuses, and the recognizers of every kernel emit route |
-| `routes.herb` | Top-level route dispatch (`nc_drive`); rejects the 45 i386 routes by name |
+| `routes.herb` | Top-level dispatch (`nc_drive`): the `ast-dump` route, the refusal of any other `-- emit:` route by name (ERR 443), and the hosted compile |
 | `driver.herb` | `main`: reads stdin and calls `nc_drive` |
 
 The order is declared once by `COMPILER_SOURCES` in the Makefile. Concatenation
@@ -23,22 +22,6 @@ be embedded in emitted diagnostic paths, so even moving unchanged code can
 change a seed. Stage files need not compile independently and share function
 names through the assembled program. Some stages remain large; this establishes
 maintainable boundaries without claiming that the whole compiler is modular.
-
-## The i386 oracle compiler
-
-The 45 frozen i386 kernel routes (`multiboot32`, `multiboot32-*` other than
-`multiboot32-long64`, and `module-*`) are not in the production compiler. Their
-emitters are in `stack/i386_oracle/i386_targets.herb`, and
-`stack/i386_oracle/driver.herb` dispatches them before handing every other input
-to `nc_drive`. `ORACLE_SOURCES` in the Makefile is every production unit except
-`driver.herb`, followed by the two oracle units; `make oracle-source` assembles it
-into the tracked `stack/i386_oracle_fragment.herb`, and `make oracle-source-check`
-(part of `make check`) rejects a mismatch. The kernel gates for those routes have
-the committed seed compile that file into the oracle compiler at test time
-(`native_codegen_ensure_i386_compiler` in `bootstrap/tests/native_codegen_oracle.sh`);
-the oracle binary is never committed. It compiles everything the production
-compiler does identically, and compiles its own source to itself. Production
-answers an i386 route line with ERR 443, which names the route and the oracle.
 
 ## Editing and qualification
 
@@ -55,8 +38,8 @@ The seed remains independently pinned by its checksum. `make test` alone does
 not check composition; use `make check` or the aggregate `make verify-local`.
 
 For a real compiler change, follow `VERIFYING.md`: qualify behavior and faults,
-run `make reseed`, prove the self-hosting fixpoint and execute applicable hosted
-and target gates. Include `make compiler-metadata` when changing metadata or its
+run `make reseed`, prove the self-hosting fixpoint and run the hosted
+gates. Include `make compiler-metadata` when changing metadata or its
 consumers; `verify-local` includes that check. Expected output changes require independently justified expectations;
 do not regenerate frozen C-derived goldens from the seed as a new oracle.
 Mutation harnesses may deliberately alter a disposable assembled compiler;
@@ -68,7 +51,7 @@ bytes, and runs hosted conformance before publishing a changed candidate. It
 retains failed work and refuses inputs changed during qualification. Publication
 replaces the seed and checksum separately; an interruption between replacements
 can leave a detectable mismatch, with the previous pair retained in the failed
-work directory. Use one writer. This does not replace full hosted/target
+work directory. Use one writer. This does not replace full hosted
 qualification or establish independent seed provenance.
 
 ## Metadata stage contract
@@ -153,5 +136,5 @@ linear complexity for the full pass or compiler, or control-flow fixed-point
 verification.
 
 A source map is not proof that another maintainer can repair a stage, and a
-successful narrow repair does not establish understanding of the whole compiler,
-kernel or stack.
+successful narrow repair does not establish understanding of the whole compiler
+or stack.

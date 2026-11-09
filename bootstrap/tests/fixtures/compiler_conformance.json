@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have. Two more cases the same day pin what that batch's review found still unpinned: an upward overlapping buffer_copy of twelve bytes, which runs the eight-byte backward step once and the byte tail four times, and a buffer_copy destination start past the destination's length. The 2026-10-27 diagnostics cases pin the nesting limit from both sides (a flat sum of 2,000 terms and 1,999 nested ifs compile; 2,001 terms and 2,000 ifs are refused with ERR 405 at the first node past the limit), the array-of-unknown ERR 438 program the K1 review wrote, and a located ERR 430 and ERR 433 on a never-returning helper's result; the same day the missing-return cases moved from ERR 424/415/416 to ERR 406 at the function's own line and the ERR 436 case gained its line. The K3 cases (2026-10-27) pin the \\t, \\r and \\0 escapes in strings and chars and how main renders them, a backslash-space still unnamed, and the four ERR 429 function-table texts; the same day the nine reserved-name cases took the ERR 429 text that names the builtin and the two unknown-escape cases the ERR 104 text that names the escape. The K4 cases (2026-10-28) pin the located division-by-zero message for / and % on different lines (a modulo inside a helper, and a modulo by zero in a tuple after good divisions), output written before the fault kept, and the out-of-memory message when one buffer_fill asks for more than the 3.5 GiB heap, which fails before any memory is touched. The set cases (2026-10-31) pin `do set(a, i, v)`: in-place replacement of the first, last and a middle entry for ints, bools, strings, tuples, value and reference records, nested arrays, 18-word entries and 15-word entries (the one width whose position and array loads take different displacement sizes); an alias, a helper's parameter and a later add seeing the change; the located bounds fault in get's shape with `set:` at the count, far beyond, on an empty array, at a wrapped position and for 18- and 15-word entries, with output written before it kept and nothing after it; twenty million sets in a loop moving the heap by nothing; and ERR 420 (too few and too many arguments), 440, 429, 447, 435, 436 and 430 at their lines. The local-environment cases (2026-10-31, `locals-*`), written when the compiler began storing a new local in place over a dead one, pin that reuse: an if's three arms each declaring 60 or 40 locals of different types past positions 128 and 1,248 and the code after the join declaring as many again, a while body declaring 40 locals across a 32-entry boundary on every pass, and a local rebound in an arm before a let; every local is read, and the expected sums are computed outside the compiler.",
+  "scope": "Ordinary hosted production-seed input. Version 3 preserves all 267 version-2 source fixtures, diagnostics and successful program expectations, explicitly migrating rejection to stderr, empty stdout and status 1. Leading emit routes are excluded. Lexical, structural then native diagnostic priority remains unchanged; this is not globally earliest-error selection or complete language verification. Additional independently expected control-flow combinations cover nested returns, live continuation types, branch-local initialization, and nested short-circuit evaluation order and stack joins. Never-returning helper cases pin that a helper counts as never returning only when a fresh empty array is bound before each return that reads it, and that main is never such a helper. Statement calls (2026-10-20) changed nine expectations that had pinned `do` of a value call as ERR 404: each now expects the result of the same call bound by `let` to an unused name, as do the statement-call cases. Separate CLI contract tests output publication and injected I/O faults. Loop cases (2026-10-21, `while-*`) take their run expectations from a hand-written recursive twin of each program compiled by the seed before loops existed, and their rejections from the if-shaped behaviour of that seed. The 2026-10-27 cases pin what the mutant run found unpinned: bitwise complement, shift and `and` values, buffer_get and buffer_set bounds and byte range, buffer_copy source spans and linux_syscall6 argument order, plus ERR 420/430/429 reject coverage for buffer_get, buffer_set, buffer_length, buffer_address and linux_syscall6, one case each, the codes buffer_copy and buffer_fill already have. Two more cases the same day pin what that batch's review found still unpinned: an upward overlapping buffer_copy of twelve bytes, which runs the eight-byte backward step once and the byte tail four times, and a buffer_copy destination start past the destination's length. The 2026-10-27 diagnostics cases pin the nesting limit from both sides (a flat sum of 2,000 terms and 1,999 nested ifs compile; 2,001 terms and 2,000 ifs are refused with ERR 405 at the first node past the limit), the array-of-unknown ERR 438 program the K1 review wrote, and a located ERR 430 and ERR 433 on a never-returning helper's result; the same day the missing-return cases moved from ERR 424/415/416 to ERR 406 at the function's own line and the ERR 436 case gained its line. The K3 cases (2026-10-27) pin the \\t, \\r and \\0 escapes in strings and chars and how main renders them, a backslash-space still unnamed, and the four ERR 429 function-table texts; the same day the nine reserved-name cases took the ERR 429 text that names the builtin and the two unknown-escape cases the ERR 104 text that names the escape. The K4 cases (2026-10-28) pin the located division-by-zero message for / and % on different lines (a modulo inside a helper, and a modulo by zero in a tuple after good divisions), output written before the fault kept, and the out-of-memory message when one buffer_fill asks for more than the 3.5 GiB heap, which fails before any memory is touched. The set cases (2026-10-31) pin `do set(a, i, v)`: in-place replacement of the first, last and a middle entry for ints, bools, strings, tuples, value and reference records, nested arrays, 18-word entries and 15-word entries (the one width whose position and array loads take different displacement sizes); an alias, a helper's parameter and a later add seeing the change; the located bounds fault in get's shape with `set:` at the count, far beyond, on an empty array, at a wrapped position and for 18- and 15-word entries, with output written before it kept and nothing after it; twenty million sets in a loop moving the heap by nothing; and ERR 420 (too few and too many arguments), 440, 429, 447, 435, 436 and 430 at their lines. The local-environment cases (2026-10-31, `locals-*`), written when the compiler began storing a new local in place over a dead one, pin that reuse: an if's three arms each declaring 60 or 40 locals of different types past positions 128 and 1,248 and the code after the join declaring as many again, a while body declaring 40 locals across a 32-entry boundary on every pass, and a local rebound in an arm before a let; every local is read, and the expected sums are computed outside the compiler. The operating-system shelving (2026-11-09) changed thirteen expectations: the eleven arity cases on the former kernel-side builtins (bufbase, bufget, bufset, input_byte, module_byte, output_byte, sys_read, sys_write, yield) moved from ERR 420 to the ERR 419 unknown-callee text, `while-long64-route` moved from that route's own ERR 502 to the ERR 443 refusal of every emit route but ast-dump, and the reserved-name case on `yield` became `kernel-name-yield-user-function`, a program that compiles and runs.",
   "cases": [
     {
       "id": "uint64-zero", "profile": "run",
@@ -2240,67 +2240,67 @@
       "id": "c02-bufbase-user-call-arg",
       "profile": "reject",
       "source": "func f():\n    return 1\nend\nfunc main():\n    return bufbase(f())\nend\n",
-      "diagnostic": "line 5: native-subset: arity mismatch at call to 'bufbase' (ERR 420)"
+      "diagnostic": "line 5: native-subset: unknown callee 'bufbase' (ERR 419)"
     },
     {
       "id": "arity-output_byte-under-0",
       "profile": "reject",
       "source": "func main():\n    return output_byte()\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'output_byte' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'output_byte' (ERR 419)"
     },
     {
       "id": "arity-output_byte-extra-2",
       "profile": "reject",
       "source": "func main():\n    return output_byte(1, 2)\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'output_byte' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'output_byte' (ERR 419)"
     },
     {
       "id": "arity-sys_write-under-0",
       "profile": "reject",
       "source": "func main():\n    return sys_write()\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'sys_write' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'sys_write' (ERR 419)"
     },
     {
       "id": "arity-yield-under-0",
       "profile": "reject",
       "source": "func main():\n    return yield()\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'yield' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'yield' (ERR 419)"
     },
     {
       "id": "arity-bufget-under-1",
       "profile": "reject",
       "source": "func main():\n    return bufget(0)\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'bufget' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'bufget' (ERR 419)"
     },
     {
       "id": "arity-bufset-under-2",
       "profile": "reject",
       "source": "func main():\n    return bufset(0, 1)\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'bufset' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'bufset' (ERR 419)"
     },
     {
       "id": "arity-input_byte-extra-1",
       "profile": "reject",
       "source": "func main():\n    return input_byte(1)\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'input_byte' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'input_byte' (ERR 419)"
     },
     {
       "id": "arity-module_byte-extra-1",
       "profile": "reject",
       "source": "func main():\n    return module_byte(1)\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'module_byte' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'module_byte' (ERR 419)"
     },
     {
       "id": "arity-sys_read-extra-1",
       "profile": "reject",
       "source": "func main():\n    return sys_read(1)\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'sys_read' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'sys_read' (ERR 419)"
     },
     {
       "id": "arity-bufbase-extra-1",
       "profile": "reject",
       "source": "func main():\n    return bufbase(1)\nend\n",
-      "diagnostic": "line 2: native-subset: arity mismatch at call to 'bufbase' (ERR 420)"
+      "diagnostic": "line 2: native-subset: unknown callee 'bufbase' (ERR 419)"
     },
     {
       "id": "record-construct-read", "profile": "run",
@@ -2854,7 +2854,7 @@
     {
       "id": "while-long64-route", "profile": "reject",
       "source": "-- emit: multiboot32-long64\nfunc main():\n    let i = 0\n    while i < 3:\n        i = i + 1\n    end\n    return i\nend\n",
-      "diagnostic": "program: native-subset: multiboot32-long64: body not in the control-flow+locals 64-bit subset (ERR 502)"
+      "diagnostic": "program: native-subset: emit route 'multiboot32-long64' is not in this compiler; its one route is ast-dump (the operating-system routes are kept at tag os-experiments-2026-11-09) (ERR 443)"
     },
     {
       "id": "while-break", "profile": "reject",
@@ -3274,9 +3274,9 @@
       "diagnostic": "line 1: native-subset: main takes no parameters (ERR 429)"
     },
     {
-      "id": "kernel-name-yield-reserved", "profile": "reject",
+      "id": "kernel-name-yield-user-function", "profile": "run",
       "source": "func main():\n    return 0\nend\nfunc yield():\n    return 1\nend\n",
-      "diagnostic": "line 4: native-subset: function name 'yield' is a reserved builtin (ERR 429)"
+      "stdin": "", "stdout": "0\n", "status": 0
     },
     {
       "id": "string-escape-tab", "profile": "run",

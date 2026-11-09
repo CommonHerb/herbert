@@ -1231,14 +1231,31 @@ end
 -- so gen-1 can dump that tree NATIVELY (removing C from the dump path).
 -- ====================================================================
 
+-- Whether source begins with the bytes of marker.
+func nc_marker_match(source, marker):
+    let n = length(marker)
+    if length(source) < n:
+        return false
+    end
+    let i = 0
+    while i < n:
+        if index(source, i) != index(marker, i):
+            return false
+        end
+        i = i + 1
+    end
+    return true
+end
+
+-- The directive must be the whole first line: "-- emit: ast-dumpx" is not it.
 func nc_is_ast_dump(source):
     let marker = "-- emit: ast-dump"
     let mlen = length(marker)
-    if not nc_mb_marker_match(source, marker, 0, mlen):
+    if not nc_marker_match(source, marker):
         return false
     end
-    if length(source) <= mlen:
-        return false
+    if length(source) == mlen:
+        return true
     end
     return index(source, mlen) == 10
 end
@@ -1292,11 +1309,10 @@ func emit_kids_dump(buf, pool, kids, i, n):
     return buf
 end
 
--- Validate `source` with the checked lexer and parser before an emit route
--- builds its tree with the unchecked ones (the hosted path in routes.herb does
--- the same before parse_program). On failure, report the located diagnostic
--- the hosted path reports and exit 1. On success the route lexes and parses
--- exactly as before, so an accepted program's tree and image do not change.
+-- Validate `source` with the checked lexer and parser before the ast-dump
+-- route builds its tree with the unchecked ones (the hosted path in
+-- routes.herb does the same before parse_program). On failure, report the
+-- located diagnostic the hosted path reports and exit 1.
 func nc_check_source(source):
     let lexed = err_lex_source(source)
     if lexed.0 == err_err_tag():
@@ -1557,76 +1573,6 @@ func op_mod():
     return 44
 end
 
--- trukfit (f3, device input): a 0-arg value builtin that reads ONE byte from the
--- COM1 RBR. Lowered ONLY by the multiboot32-input emit mode (nc32_lower_loop op 45);
--- it is deliberately absent from nc32_op_allowed/nc32_pops/nc32_pushes so every
--- OTHER mode and the near-axis path reject it (a body carrying op 45 fails the depth
--- gate / is rejected explicitly), keeping the device read isolated to the input mode.
-func op_input_byte():
-    return 45
-end
-
-func op_module_byte():
-    return 46
-end
-
--- coalgate (link 22) op_sys_read: the MODULE-SIDE syscall builtin. Unlike op_module_byte (op 46, which
--- reads the kernel's absolute [answer] cell -- a kernel-only primitive), sys_read() lowers to the
--- position-independent SYS_READ syscall (int 0x30, eax=0): the kernel delivers a late-bound byte the
--- CPL3 module cannot read itself, and irets back with it in eax. Absent from nc32_op_allowed/pops/pushes
--- (like op 45/46), so only the coalgate mode's sysread_proxy admits it; every other mode rejects it.
-func op_sys_read():
-    return 47
-end
-
--- holler (link 24) op_sys_write: the MODULE-SIDE output syscall builtin. sys_write(v) emits le32(v) (4 bytes)
--- via the bounds-checked SYS_WRITE syscall (int 0x30, eax=2): the CPL3 module hands the kernel a pointer to v
--- on its OWN operand stack (ecx=esp, edx=4); the kernel relays the 4 bytes ONLY if [ecx,ecx+4) lies in the
--- module's User page [alloc_lo,alloc_hi) (the access_ok confused-deputy check). A VALUE builtin returning 0.
--- Absent from nc32_op_allowed/pops/pushes (like op 45/46/47): only the holler module mode's holler_proxy
--- admits it (net 0: pop the arg, push the result); every other mode rejects a body carrying op 48.
-func op_sys_write():
-    return 48
-end
-
--- tandem (link 28) op_yield: the COOPERATIVE-SCHEDULER builtin. yield(v) passes v to the peer program via the
--- kernel's one-cell mailbox and switches to it (SYS_YIELD = int 0x30, eax=3); when this program is resumed, the
--- call RETURNS the value the peer last passed (a synchronous rendezvous). Lowers to 10 bytes (mov eax,3; int 0x30;
--- mov [esp],eax) -- net stack 0 (pop the arg at TOS, push the return into the same slot), exactly like op 48.
--- Absent from nc32_op_allowed/pops/pushes (like op 45/46/47/48): only the tandem module mode admits op 52.
-func op_yield():
-    return 52
-end
-
--- chiefturbo (link 26) runtime-indexed-memory builtins. bufbase() pushes the captured buffer base (alloc_lo,
--- stashed at [ebp+0] by main's capture prologue); bufget(base,k) is a register-indexed SS-relative load
--- buf[k]; bufset(base,i,v) is a register-indexed SS-relative store buf[i]=v. Absent from nc32_op_allowed/
--- pops/pushes (like op 45/46/47/48): only the chiefturbo module mode admits a body carrying op 49/50/51.
-func op_bufbase():
-    return 49
-end
-
-func op_bufget():
-    return 50
-end
-
-func op_bufset():
-    return 51
-end
-
--- riposte (nc link 64, 48th kernel-arc link): output_byte(v) -- the sovereign long64
--- target's FIRST program-authored device OUTPUT. A 1-arg VALUE builtin: writes v&0xff to
--- the COM1 THR (0x3F8), then polls LSR.TEMT (0x3FD bit 6) until the byte is FULLY ON THE
--- WIRE (write-then-drain -- STEP-0 proved Bochs's baud-paced TX drops back-to-back bytes
--- under a THRE-only discipline and loses the LAST byte to shutdown without the drain),
--- and returns v (pops 1, pushes 1 -- the FULL 64-bit argument, so a checksum consuming
--- the return value pins push-semantics beyond the al-truncated device write). Admitted
--- ONLY by the multi-function long64 path (nc_tap_*); absent from nc32/nc64/every other
--- op_allowed, so all other modes reject a body carrying op 53. 53 because 46-52 are taken.
-func op_output_byte():
-    return 53
-end
-
 -- Linux-hosted process I/O only. Existing opcode numbers and target allowlists
 -- stay unchanged. process_exit is void; stderr_write consumes a string and
 -- returns zero on complete transfer or a positive Linux errno on failure.
@@ -1641,13 +1587,6 @@ end
 -- Checked hosted input: one abstract (int, string), three machine words.
 func op_stdin_read():
     return 56
-end
-
--- folio (link67): sovereign boot-file input, admitted only by nc_tap_*.
--- One scalar result: the next byte 0..255, or stable EOF 256. Unlike the
--- historical module_byte answer cell, this consumes a validated module extent.
-func op_boot_read():
-    return 57
 end
 
 -- Linux/x86-64 hosted boundary. These generic operations are deliberately not
@@ -1692,7 +1631,6 @@ end
 -- In-place array store (`do set(a, i, v)`), 68, the next free number. It
 -- replaces entry i of a with v: the same bounds check as get (its own `set:`
 -- wording), no growth and no allocation; it leaves nothing on the stack.
--- Hosted only: the kernel routes refuse it by their whitelists, as they refuse add.
 func op_arr_set():
     return 68
 end
@@ -2001,36 +1939,6 @@ func emit_call_expr(name, kids, call_node_idx, env, ir, strings, nodes, prog_idx
     end
     if equal(name, "count"):
         return emit_instr_line(ir, op_count(), 0, 0, call_line)
-    end
-    if equal(name, "input_byte"):
-        return emit_instr_line(ir, op_input_byte(), 0, 0, call_line)
-    end
-    if equal(name, "boot_read"):
-        return emit_instr_line(ir, op_boot_read(), 0, 0, call_line)
-    end
-    if equal(name, "output_byte"):
-        return emit_instr_line(ir, op_output_byte(), 0, 0, call_line)
-    end
-    if equal(name, "module_byte"):
-        return emit_instr_line(ir, op_module_byte(), 0, 0, call_line)
-    end
-    if equal(name, "sys_read"):
-        return emit_instr_line(ir, op_sys_read(), 0, 0, call_line)
-    end
-    if equal(name, "sys_write"):
-        return emit_instr_line(ir, op_sys_write(), 0, 0, call_line)
-    end
-    if equal(name, "yield"):
-        return emit_instr_line(ir, op_yield(), 0, 0, call_line)
-    end
-    if equal(name, "bufbase"):
-        return emit_instr_line(ir, op_bufbase(), 0, 0, call_line)
-    end
-    if equal(name, "bufget"):
-        return emit_instr_line(ir, op_bufget(), 0, 0, call_line)
-    end
-    if equal(name, "bufset"):
-        return emit_instr_line(ir, op_bufset(), 0, 0, call_line)
     end
     if equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "flogger") or equal(name, "process_exit"):
         return fault("void builtin in expression")
@@ -3436,9 +3344,6 @@ func err_is_builtin_name(name):
     if nc_is_hosted_memory_builtin(name):
         return true
     end
-    if equal(name, "boot_read"):
-        return true
-    end
     if equal(name, "length") or equal(name, "index") or equal(name, "slice"):
         return true
     end
@@ -3448,13 +3353,10 @@ func err_is_builtin_name(name):
     if equal(name, "new_array") or equal(name, "get") or equal(name, "count"):
         return true
     end
-    if equal(name, "bufbase") or equal(name, "bufget") or equal(name, "bufset"):
-        return true
-    end
     if equal(name, "process_exit") or equal(name, "stderr_write") or equal(name, "stdin_read"):
         return true
     end
-    return equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter") or equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "sys_write") or equal(name, "yield") or equal(name, "output_byte")
+    return equal(name, "append") or equal(name, "add") or equal(name, "set") or equal(name, "clogger") or equal(name, "flogger") or equal(name, "fwriter")
 end
 
 func err_is_void_builtin(name):
@@ -3479,9 +3381,6 @@ func err_value_builtin_arity(name):
     end
     if equal(name, "buffer_fill"):
         return 3
-    end
-    if equal(name, "boot_read"):
-        return 0
     end
     if equal(name, "stdin_read"):
         return 0
@@ -3509,24 +3408,6 @@ func err_value_builtin_arity(name):
     end
     if equal(name, "count"):
         return 1
-    end
-    if equal(name, "sys_write"):
-        return 1
-    end
-    if equal(name, "output_byte"):
-        return 1
-    end
-    if equal(name, "yield"):
-        return 1
-    end
-    if equal(name, "bufget"):
-        return 2
-    end
-    if equal(name, "bufset"):
-        return 3
-    end
-    if equal(name, "input_byte") or equal(name, "module_byte") or equal(name, "sys_read") or equal(name, "bufbase"):
-        return 0
     end
     return 0
 end

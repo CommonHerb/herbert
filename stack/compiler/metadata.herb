@@ -67,9 +67,6 @@ func nc_opcode_name_for_diag(op):
     if op == 68:
         return "ARR_SET"
     end
-    if op == 57:
-        return "BOOT_READ"
-    end
     if op == 1:
         return "PUSH_BOOL"
     end

@@ -1,146 +1,5 @@
 
--- The production routes. The 45 i386 routes are built by the oracle compiler
--- (stack/i386_oracle/); production recognizes them only to reject them.
-func nc_route_is_i386(source):
-    if nc_is_multiboot32_long(source):
-        return true
-    end
-    if nc_is_multiboot32_bluefield(source):
-        return true
-    end
-    if nc_is_multiboot32_contigo(source):
-        return true
-    end
-    if nc_is_multiboot32_cloggard(source):
-        return true
-    end
-    if nc_is_multiboot32_rizzing(source):
-        return true
-    end
-    if nc_is_multiboot32_tick(source):
-        return true
-    end
-    if nc_is_multiboot32_timer(source):
-        return true
-    end
-    if nc_is_multiboot32_demand(source):
-        return true
-    end
-    if nc_is_multiboot32_store(source):
-        return true
-    end
-    if nc_is_multiboot32_page(source):
-        return true
-    end
-    if nc_is_multiboot32_idt(source):
-        return true
-    end
-    if nc_is_multiboot32_trikon(source):
-        return true
-    end
-    if nc_is_multiboot32_nokta(source):
-        return true
-    end
-    if nc_is_multiboot32_sitopia(source):
-        return true
-    end
-    if nc_is_multiboot32_geeking(source):
-        return true
-    end
-    if nc_is_multiboot32_holler(source):
-        return true
-    end
-    if nc_is_module_holler(source):
-        return true
-    end
-    if nc_is_module_mmj(source):
-        return true
-    end
-    if nc_is_module_chiefturbo(source):
-        return true
-    end
-    if nc_is_multiboot32_mumbani(source):
-        return true
-    end
-    if nc_is_module_mumbani(source):
-        return true
-    end
-    if nc_is_multiboot32_tandem(source):
-        return true
-    end
-    if nc_is_module_tandem(source):
-        return true
-    end
-    if nc_is_multiboot32_tickover(source):
-        return true
-    end
-    if nc_is_multiboot32_rollcall(source):
-        return true
-    end
-    if nc_is_multiboot32_tenement(source):
-        return true
-    end
-    if nc_is_multiboot32_homestead(source):
-        return true
-    end
-    if nc_is_multiboot32_furlough(source):
-        return true
-    end
-    if nc_is_multiboot32_tessera(source):
-        return true
-    end
-    if nc_is_multiboot32_cleave(source):
-        return true
-    end
-    if nc_is_multiboot32_lethe(source):
-        return true
-    end
-    if nc_is_multiboot32_platter(source):
-        return true
-    end
-    if nc_is_multiboot32_durable(source):
-        return true
-    end
-    if nc_is_multiboot32_cairn(source):
-        return true
-    end
-    if nc_is_multiboot32_larder(source):
-        return true
-    end
-    if nc_is_multiboot32_growheap(source):
-        return true
-    end
-    if nc_is_multiboot32_delete(source):
-        return true
-    end
-    if nc_is_multiboot32_backfill(source):
-        return true
-    end
-    if nc_is_multiboot32_tract(source):
-        return true
-    end
-    if nc_is_multiboot32_highwater(source):
-        return true
-    end
-    if nc_is_multiboot32_coalgate(source):
-        return true
-    end
-    if nc_is_multiboot32_ouroboros(source):
-        return true
-    end
-    if nc_is_multiboot32_lodger(source):
-        return true
-    end
-    if nc_is_multiboot32_input(source):
-        return true
-    end
-    if nc_is_multiboot32(source):
-        return true
-    end
-    return false
-end
-
--- The route name after "-- emit: ", up to the newline the recognizers require.
+-- The route name after "-- emit: ", up to the end of the first line.
 func nc_route_name_loop(buf, source, i):
     while i < length(source):
         if index(source, i) == 10:
@@ -193,18 +52,16 @@ func nc_drive(source):
         do nc_emit_ast_dump_program(source)
         return 0
     end
-    if nc_is_multiboot32_long64(source):
-        do nc_emit_multiboot32_long64_program(source)
-        return 0
-    end
-    if nc_route_is_i386(source):
-        let route = diagnostic_with_payload("emit route '", nc_route_name(source), "' is built by the i386 oracle compiler (stack/i386_oracle_fragment.herb), not the production compiler")
+    -- ast-dump is the only route. Any other first line that starts "-- emit: "
+    -- names a route this compiler does not have, and is refused by name rather
+    -- than read as a comment and compiled as an ordinary program.
+    if nc_marker_match(source, "-- emit: "):
+        let route = diagnostic_with_payload("emit route '", nc_route_name(source), "' is not in this compiler; its one route is ast-dump (the operating-system routes are kept at tag os-experiments-2026-11-09)")
         do nc_fail(443, 0, route)
         return 0
     end
-    -- Use the checked lexer on the hosted production path. The emit routes above
-    -- that read their input run the same checked lexer and parser through
-    -- nc_check_source before their own lexing.
+    -- Use the checked lexer on the hosted production path; ast-dump runs the
+    -- same checked lexer and parser through nc_check_source before its own.
     let lexed = err_lex_source(source)
     if lexed.0 == err_err_tag():
         do stderr_write(serialize_diagnostic(lexed.1))

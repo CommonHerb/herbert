@@ -8,11 +8,11 @@ SCANNER := $(BUILD)/scan
 TRACKED := $(BUILD)/tracked.txt
 scan_SOURCES := lib/linux.herb tools/scan.herb
 
-.PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync native-codegen-diagnostics kernel-verify closed-loop-memory-diet reseed verify-local clean
+.PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync closed-loop-memory-diet reseed verify-local clean
 
 all: $(SCANNER)
 
-check: $(SCANNER) compiler-source-check oracle-source-check
+check: $(SCANNER) compiler-source-check
 	@python3 bootstrap/tests/check_scan.py --scanner $(SCANNER)
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
@@ -37,12 +37,8 @@ compiler-conformance:
 
 verification-helpers:
 	@python3 bootstrap/tests/check_verification_helpers.py
-	@python3 bootstrap/tests/check_debugcon_frames.py
-	@python3 bootstrap/tests/check_link44_attempts.py
-	@python3 bootstrap/tests/check_bochs_xvfb_capture.py
-	@python3 bootstrap/tests/check_bochs_emulator_crash.py
 
-# Real descriptor error/EOF checks; no ptrace, emulator, or partition change.
+# Real descriptor error/EOF checks; no ptrace or partition change.
 stdin-contract:
 	@python3 bootstrap/tests/stdin_contract.py
 
@@ -239,30 +235,6 @@ check-scope-helper: scope-helper scope
 check-net: knock
 	@python3 bootstrap/tests/check_net.py --knock $(BUILD)/knock
 
-# Useful programs on the sovereign long64 runtime, built by the same seed.
-.PHONY: long64-wordcount check-long64-wordcount long64-hexview long64-elfinfo check-long64-elfinfo
-long64-wordcount: $(BUILD)/wordcount-long64.elf
-long64-hexview: $(BUILD)/hexview-long64.elf
-long64-elfinfo: $(BUILD)/elfinfo-long64.elf
-
-$(BUILD)/%-long64.elf: examples/%_long64.herb bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
-	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
-	@set -eu; \
-	  mkdir -p $(BUILD)/$*-long64; \
-	  cp bootstrap/seed/gen1.seed $(BUILD)/$*-long64/compiler; \
-	  chmod u+x $(BUILD)/$*-long64/compiler; \
-	  (cd $(BUILD)/$*-long64 && ./compiler < ../../examples/$*_long64.herb > compiler.stdout 2> compiler.stderr) || { cat $(BUILD)/$*-long64/compiler.stderr >&2; exit 1; }; \
-	  printf '0\n' > $(BUILD)/$*-long64/expected.stdout; \
-	  cmp $(BUILD)/$*-long64/expected.stdout $(BUILD)/$*-long64/compiler.stdout; \
-	  test ! -s $(BUILD)/$*-long64/compiler.stderr; \
-	  mv $(BUILD)/$*-long64/a.out $@
-
-check-long64-wordcount: $(BUILD)/wordcount-long64.elf
-	@python3 bootstrap/tests/check_wordcount_long64.py --image $(BUILD)/wordcount-long64.elf
-
-check-long64-elfinfo: $(BUILD)/elfinfo-long64.elf
-	@python3 bootstrap/tests/check_elfinfo_long64.py --image $(BUILD)/elfinfo-long64.elf
-
 test-timeout:
 	@python3 tools/check_timeout.py
 
@@ -304,23 +276,6 @@ error-vocab-native:
 lexer-copy-sync:
 	@python3 bootstrap/tests/check_lexer_copy_sync.py
 
-# native-codegen-diagnostics: a small QEMU DIAGNOSTICS suite for the native-codegen
-# emitter -- NOT the kernel-arc boot gate. The boot gate is `make kernel-verify` (the
-# link17..67 dual/tri-substrate gates + mutation proofs under KERNEL_CODEGEN_REQUIRE_EMU=1)
-# and its CI mirror `.github/workflows/kernel-codegen-l1.yml`. Do not read this target's
-# green as "the kernels boot" -- it is diagnostics, not the tri-substrate boot proof.
-native-codegen-diagnostics:
-	@bash bootstrap/tests/run_native_codegen_qemu_diag_tests.sh
-
-# kernel-verify: the LOCAL kernel-arc boot gate. Runs every kernel-codegen link gate
-# (link17..67) + its mutation proof with KERNEL_CODEGEN_REQUIRE_EMU=1
-# (individual gates enforce emulator availability). For KVM member
-# links it checks device access when present; individual gates own execution.
-# Its aggregate summary records gate status, not per-substrate boot receipts.
-# Run this before kernel-arc pushes; see VERIFYING.md for the local/CI split.
-kernel-verify:
-	@bash bootstrap/tests/kernel_verify.sh
-
 # Self-compile must reproduce the seed within the pinned RSS ceiling.
 # make test already runs this gate (bootstrap/tests/run_tests.sh). This standalone
 # target diagnoses that same gate; adding it again to verify-local would duplicate
@@ -335,16 +290,9 @@ COMPILER_SOURCES := stack/compiler/frontend_vm.herb \
                     stack/compiler/types_and_inference.herb \
                     stack/compiler/metadata.herb \
                     stack/compiler/hosted_emitter.herb \
-                    stack/compiler/kernel_targets.herb \
                     stack/compiler/routes.herb \
                     stack/compiler/driver.herb
-# The i386 oracle compiler: every production unit but driver.herb, then the
-# oracle units. The kernel gates build it from stack/i386_oracle_fragment.herb.
-ORACLE_UNITS := stack/i386_oracle/i386_targets.herb \
-                stack/i386_oracle/driver.herb
-ORACLE_SOURCES := $(filter-out stack/compiler/driver.herb,$(COMPILER_SOURCES)) $(ORACLE_UNITS)
 .PHONY: compiler-source compiler-source-check compiler-source-membership compiler-metadata
-.PHONY: oracle-source oracle-source-check oracle-source-membership
 compiler-source-membership:
 	@set -eu; \
 	  work=$$(mktemp -d /tmp/herbert-source-check.XXXXXXXX); \
@@ -395,38 +343,6 @@ compiler-source: compiler-source-membership
 	  else printf 'Assembled new compiler source; no previous file existed.\n'; fi; \
 	  printf 'Qualify and reseed after substantive changes.\n'
 
-oracle-source-membership:
-	@set -eu; \
-	  work=$$(mktemp -d /tmp/herbert-oracle-check.XXXXXXXX); \
-	  printf '%s\n' $(ORACLE_UNITS) | LC_ALL=C sort > "$$work/declared"; \
-	  find stack/i386_oracle \( -name '*.herb' -o -type l \) | LC_ALL=C sort > "$$work/present"; \
-	  if ! cmp -s "$$work/declared" "$$work/present"; then \
-	    printf 'Oracle unit membership differs (missing, duplicate or unlisted unit); inspect: %s\n' "$$work" >&2; exit 1; \
-	  fi; \
-	  for unit in $(ORACLE_UNITS); do \
-	    if test ! -f "$$unit" || test -L "$$unit"; then \
-	      printf 'Oracle unit must be a regular non-symlink file: %s; evidence: %s\n' "$$unit" "$$work" >&2; exit 1; \
-	    fi; \
-	  done; \
-	  rm -- "$$work/declared" "$$work/present"; rmdir "$$work"
-
-oracle-source-check: oracle-source-membership compiler-source-membership
-	@set -eu; \
-	  combined=$$(mktemp /tmp/herbert-oracle-check.XXXXXXXX); \
-	  cat $(ORACLE_SOURCES) > "$$combined"; \
-	  if ! cmp -s "$$combined" stack/i386_oracle_fragment.herb; then \
-	    printf 'Oracle composition differs from its units; run make oracle-source. Candidate: %s\n' "$$combined" >&2; exit 1; \
-	  fi; \
-	  rm -- "$$combined"; \
-	  printf 'PASS: i386 oracle source composition is byte-exact\n'
-
-oracle-source: oracle-source-membership compiler-source-membership
-	@set -eu; \
-	  cat $(ORACLE_SOURCES) > stack/.i386_oracle_fragment.tmp; \
-	  chmod 644 stack/.i386_oracle_fragment.tmp; \
-	  mv -T -- stack/.i386_oracle_fragment.tmp stack/i386_oracle_fragment.herb; \
-	  printf 'Assembled stack/i386_oracle_fragment.herb.\n'
-
 compiler-metadata:
 	@python3 bootstrap/tests/check_compiler_metadata.py
 
@@ -435,15 +351,14 @@ compiler-metadata:
 # ONLY when stack/native_compile_fragment.herb legitimately changes (the michoi seed
 # gate goes RED). Checks the existing pin and both invocation envelopes, then
 # qualifies a changed fixpoint with hosted conformance before publication.
-# Full verify-local and applicable target qualification still follow. No C
-# interpreter is involved.
+# Full verify-local still follows. No C interpreter is involved.
 reseed: compiler-source-check
 	@bash bootstrap/tests/reseed_gen1.sh
 
 # make test already dispatches the six fragment/mutation pairs, the closed-loop
 # memory diet and the error-vocab gate. Their standalone targets above remain for
 # diagnosis; error-vocab-native also runs that gate's mutation proof.
-verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync native-codegen-diagnostics compiler-cli-contract check-desktop check-app-support check-hosted-apps
+verify-local: compiler-metadata check verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
 
 clean:
 	rm -rf $(BUILD)

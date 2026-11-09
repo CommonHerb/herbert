@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The make test harness: the emulator-free gates that grade the committed gen-1
+# The make test harness: the gates that grade the committed gen-1
 # seed and the programs it compiles. It runs the six metacircular-fragment native
 # gates and their mutation proofs, the aggregate-render gate and its mutation
 # proof, hosted native-codegen links 1-16 and the reject battery against the
@@ -59,8 +59,8 @@ total=0
 # Every gate/proof script named here is REQUIRED: missing or non-executable = a FAILED test, never a
 # silent skip. Before R1 each was guarded by `[[ -x ... ]]`, so `chmod -x` on ONE mutation proof dropped
 # it from the dynamically computed denominator and the suite still printed `42 of 42 test(s) passed.`
-# rc 0 (two cross-family blind readers + the parent reproduced it). The suite TOTAL is pinned too
-# (kernel_verify.sh's `ran == exp` house style): adding a test is a deliberate bump of
+# rc 0 (two cross-family blind readers + the parent reproduced it). The suite TOTAL is pinned too:
+# adding a test is a deliberate bump of
 # EXPECTED_SUITE_TOTAL, never an accident, and losing one is RED. `make check` runs
 # `run_tests.sh --check-pinned` to catch execute-bit drift on this set without running the suite.
 PINNED_PROOFS=(
@@ -98,34 +98,24 @@ if [[ "${1:-}" == "--check-pinned" ]]; then
     done
     [[ "$pinned_bad" -eq 0 ]] && echo "OK: ${#PINNED_PROOFS[@]} pinned proof scripts present + executable"
     # Every run_*.sh here must be run by something: a pinned proof above, the hosted
-    # links 1-16 and the rejects battery (run by this script), a kernel link gate or
-    # mutation proof inside kernel_verify.sh's range (make kernel-verify and the
-    # kernel CI matrix, which check_verification_helpers.py holds equal to it), or a
+    # links 1-16 and the rejects battery (run by this script), or a
     # make target whose recipe calls it by name. A gate script wired into nothing
     # fails make check instead of sitting unrun.
-    read -r gate_lo gate_hi < <(sed -nE 's/^GATE_LO=([0-9]+); GATE_HI=([0-9]+)$/\1 \2/p' kernel_verify.sh)
     unwired=""
     for s in run_*.sh; do
         case " run_tests.sh run_native_codegen_rejects.sh ${PINNED_PROOFS[*]} " in *" $s "*) continue ;; esac
         if [[ "$s" =~ ^run_native_codegen_link([1-9][0-9]*)(_mutation)?\.sh$ ]]; then
             n="${BASH_REMATCH[1]}"
             [[ -z "${BASH_REMATCH[2]}" ]] && (( n <= 16 )) && continue
-            # Mutation proofs start one link above GATE_LO: link 17 has none, and
-            # neither kernel_verify.sh (mutation_expected) nor the CI runs one.
-            lo="${gate_lo:-1000}"; [[ -n "${BASH_REMATCH[2]}" ]] && lo=$((lo + 1))
-            (( n >= lo && n <= ${gate_hi:-0} )) && continue
         fi
         grep -qxF $'\t'"@bash bootstrap/tests/$s" ../../Makefile && continue
         unwired="$unwired $s"
     done
-    if [[ -z "${gate_hi:-}" ]]; then
-        echo "FAIL: could not read the kernel link range from bootstrap/tests/kernel_verify.sh"
-        pinned_bad=1
-    elif [[ -n "$unwired" ]]; then
-        echo "FAIL: gate scripts that nothing runs:$unwired -- pin each in PINNED_PROOFS, bring it inside kernel_verify.sh's range, or call it from a make target"
+    if [[ -n "$unwired" ]]; then
+        echo "FAIL: gate scripts that nothing runs:$unwired -- pin each in PINNED_PROOFS or call it from a make target"
         pinned_bad=1
     else
-        echo "OK: every run_*.sh is run by make test, by make kernel-verify and the kernel CI (links $gate_lo-$gate_hi), or by its own make target"
+        echo "OK: every run_*.sh is run by make test or by its own make target"
     fi
     exit "$pinned_bad"
 fi
