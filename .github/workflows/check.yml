@@ -36,6 +36,8 @@ jobs:
         run: make check
       - name: the checks written in Herbert
         run: make answers
+      - name: the window checks written in Herbert
+        run: make hands
       - name: verification helpers
         run: make verification-helpers
       - name: developer program build contract
@@ -77,6 +79,7 @@ jobs:
         run: |
           shopt -s nullglob
           evidence=(
+            /tmp/herbert-hands-*
             /tmp/herbert-hosted-apps-*
             /tmp/herbert-notes-support-*
             /tmp/herbert-x11-text-check-*

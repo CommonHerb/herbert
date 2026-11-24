@@ -1,0 +1,91 @@
+-- The stand-in for the window checks (checks/hands.herb): a small window
+-- program that can fail on purpose, so the checks can be shown to catch each
+-- way a real program might fail its owner. Needs lib/linux.herb and
+-- lib/x11.herb in front.
+--
+--   stand-in MODE FILE
+--
+-- It opens a window and keeps what is typed, at most 64 bytes of plain
+-- letters, digits, signs and Enter. Ctrl+S writes that to FILE and Ctrl+Q
+-- closes it with status 0. MODE says what it does instead:
+--   good    nothing else: it does everything right
+--   quiet   opens no window; it sleeps a minute and ends
+--   deaf    opens the window and takes no key
+--   wrong   FILE never holds what was typed: it holds "no" from the start,
+--           before the window opens, and Ctrl+S leaves it so
+--   crash   at its first key, is stopped by a signal (as a program that ran
+--           out of stack is)
+--   fault   at its first key, reads past the end of its storage: Herbert's
+--           own located fault and exit status 1
+--   stay    saves rightly and does not close on Ctrl+Q
+--   early   saves rightly and closes at once, with status 0, before any
+--           Ctrl+Q (as a program that stops when it has saved would)
+
+-- The first n bytes of typed into a new file at file.
+func stand_in_save(file, typed, n):
+    let fd = linux_open(file, 524865, 384)
+    if linux_error(fd): return 0 end
+    do linux_write(fd, typed, 0, n)
+    do linux_close(fd)
+    return 0
+end
+
+func main():
+    let args = linux_arguments()
+    let mode = linux_argument(args, 1)
+    let file = linux_cstring(linux_argument(args, 2))
+    let quiet = equal(mode, "quiet")
+    let deaf = equal(mode, "deaf")
+    let wrong = equal(mode, "wrong")
+    let crash = equal(mode, "crash")
+    let fault = equal(mode, "fault")
+    let stay = equal(mode, "stay")
+    let early = equal(mode, "early")
+    if linux_argument_count(args) != 3 or not (quiet or deaf or wrong or crash or fault or stay or early or equal(mode, "good")):
+        return linux_die("usage: stand-in good|quiet|deaf|wrong|crash|fault|stay|early FILE\n")
+    end
+    if quiet:
+        let nap = linux_buffer(16)
+        do linux_put64(nap, 0, 60)
+        do linux_sleep(nap)
+        do process_exit(0)
+    end
+    let typed = linux_buffer(64)
+    let n = 0
+    if wrong:
+        do buffer_set(typed, 0, 110)
+        do buffer_set(typed, 1, 111)
+        do buffer_set(typed, 2, 10)
+        do stand_in_save(file, typed, 3)
+    end
+    let c = x11_open(320, 120, "Herbert - stand-in")
+    do x11_enable_text(c)
+    let event = linux_buffer(16)
+    while true:
+        do x11_events(c)
+        while x11_next_key(c, event):
+            let key = linux_u32(event, 0)
+            let control = (linux_u32(event, 4) & 4) != 0
+            if deaf:
+                key = 0
+            elif crash:
+                do linux_syscall6(62, linux_syscall6(39, 0, 0, 0, 0, 0, 0), 11, 0, 0, 0, 0)
+            elif fault:
+                do buffer_get(typed, 64 + n)
+            elif control and key == 115:
+                if not wrong: do stand_in_save(file, typed, n) end
+                if early: do process_exit(0) end
+            elif control and key == 113:
+                if not stay: do process_exit(0) end
+            elif key == 65293 and n < 64:
+                do buffer_set(typed, n, 10)
+                n = n + 1
+            elif key >= 32 and key <= 126 and not control and n < 64:
+                do buffer_set(typed, n, key)
+                n = n + 1
+            end
+        end
+        do linux_poll(c.state.fd, c.poll, 1, 500)
+    end
+    return 0
+end

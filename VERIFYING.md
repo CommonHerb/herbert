@@ -61,6 +61,77 @@ that does not match the cases it held. `make verify-local` and CI run it.
 What it does not check: the planted cases cannot plant a broken compiler, so the findings about a compiler that
 writes no program, a wrong marker or a program that cannot be started are exercised by hand, not by a case.
 
+## make hands (about 12 seconds): the window checks written in Herbert
+
+`checks/hands.herb` plays the user's hands. The committed seed builds it, Notes, Scope and a stand-in
+(`checks/stand_in.herb`). It starts a display nobody sees (Xvfb, on a display number Xvfb picks), opens each program
+there, gives its window the keyboard and presses keys through the display's XTEST extension, which the display treats
+as presses of its own keyboard. It reads nothing back from the screen: what a person sees with their own eyes is not
+checked here. What they would lose is: the bytes on disk, and a program that stops, faults or will not close.
+
+- **Notes**, on a file that is not there yet.
+  - First run. Two lines typed (capitals, digits and colons, so Shift too) must be in the recovery copy Notes keeps
+    beside the file before anything is saved, and on disk after Ctrl+S, byte for byte. A line typed at the top
+    (Ctrl+Home) and Ctrl+S must leave it there with the rest unchanged. Two characters typed must reach the recovery
+    copy, and one then deleted with Backspace, sent by itself, must reach it too. Ctrl+Q with that edit not saved must
+    ask, and Ctrl+S at its question must save. Ctrl+Shift+S must then write a rescue copy of the text, a `.txt` beside
+    the file (so Notes is still running after its last save). Ctrl+Q must close Notes with status 0.
+  - Second run, the file opened again. A line typed at the end (Ctrl+End) and not saved must be in this run's recovery
+    copy. Each of the three ways to close must ask first while that edit is not saved: Ctrl+Q, Escape, and the window's
+    close button (the message a desktop sends for it). At the question a character typed must not be taken into the
+    text, and Escape must go back to the text: each time the recovery copy must gain the character typed after Escape
+    and not the one typed before it. After the close button's question one more character, typed by itself, must
+    reach the copy: the question must not come back. Ctrl+Q and Y must close Notes with status 0, leave the file as it
+    was saved and the recovery copy in place.
+  - Twice more the file is opened and closed with nothing typed, with Escape and with the close button: each must
+    close it with status 0, the file unchanged. Last, the folder must hold the file, the two rescue copies and the two
+    runs' recovery folders, each with its one copy, and nothing else.
+- **Scope**, as its owner starts it: no arguments, this machine's real figures, and one other computer in its list
+  (127.0.0.1, port 9, so the knock stays on this machine). It must stay up for six seconds, through its first readings
+  and its second knock, and close with status 0 on Escape.
+- **The stand-in doing everything right** must pass the stand-in's steps: open, type, save with Ctrl+S, close with
+  Ctrl+Q.
+- **Seven planted failures**, the stand-in failing on purpose: no window, keys unheard, a file that is not what was
+  typed, a signal at its first key, a Herbert fault at its first key, a window that will not close, and closing right
+  after it saves, before it is asked. Each names the exact finding the check must give and passes only on that
+  finding, as the runner's planted cases do.
+- **Nothing left behind**: the check's folder must hold only what the run made, and the programs' home only Scope's
+  list, by its name and with its bytes. And one more planted failure: a file the check puts in that home must be
+  found.
+
+A step's keys go to the display together, and the check then waits for the thing itself (the window, the file's bytes,
+a name, the program's end) for at most 20 seconds. A program that ends while a file is waited for is the finding at
+once, whatever the file holds. The four planted failures that end at a time limit (no window, keys unheard, a wrong
+file, will not close) get one second there. Scope's six seconds are the one pause. Two things are not left to timing:
+
+- A click on the close button is not a key, and Notes, handed a click and keys together, takes the keys first, so
+  that a key already typed is never read as the answer to a question the click only then asks. So after the click the
+  check asks for a rescue copy (Ctrl+Shift+S works at the question too) and goes on when that copy is on disk, which
+  says Notes has dealt with the click.
+- Before a program is asked to close it is watched for a tenth of a second, so one already on its way out is not taken
+  for one that closed when asked. That watch is a guard, not a proof; what catches a Notes that stops after a save is
+  the step that needs it again, and after its last save that step is the rescue copy.
+
+The programs get the hidden display and a home of the check's own, never the owner's display, display permission file
+or home. The check works in a folder it makes, `herbert-hands-NUMBER` under `$TMPDIR` (or `/tmp`). A run in which
+every check passed removes what it made there, each file and folder by its name, and that folder last; a run with a
+failure removes nothing, leaves the folder with what the programs and the display wrote (`programs.log`,
+`display.log`), and says where it is. The display and the programs are started so that Linux stops them when the check
+ends, however it ends, and leave no core files.
+
+It prints one `FAIL` line for each check that did not give its answer, then the count. Its exit status is 0 when every
+check passed, 1 when one did not, and 2, with its reason on standard error (and where its folder is, once it has
+one), when it could not do its own work: a program that is not there, a display server that cannot be started, stops
+answering or stops during the run (a display that refuses the check's connection at the start ends it with
+`lib/x11.herb`'s message and status 1). It needs Xvfb at `/usr/bin/Xvfb`, or its path as a fifth argument.
+`make verify-local` and CI run it.
+
+What it does not check: anything drawn, the mouse, the clipboard, Find, undo, Delete, opening another file, files that
+are not new plain-text ones, a save that must be refused (another program's change, a read-only file, a full disk),
+whether a save reaches the disk before a power cut (that needs the system calls watched), Scope's figures, its helper
+and its other keys, and either program for longer than these seconds. The library cases of `make answers` hold the text
+buffer, saving and recovery and Scope's arithmetic; the Python checks below still cover the rest.
+
 ## make test (about 45 seconds)
 
 `bootstrap/tests/run_tests.sh` runs a pinned number of tests (37) with the committed seed; a test silently dropped or
@@ -108,9 +179,9 @@ keep successful ones with `--keep-work`.
 
 ## make verify-local (the full local set)
 
-It runs `compiler-metadata`, `check`, `answers`, `verification-helpers`, `program-contract`, `test-timeout`, `test`,
-`error-vocab-native`, `lexer-copy-sync`, `compiler-cli-contract`, `check-desktop`, `check-app-support` and
-`check-hosted-apps`. Beyond `make check` and `make test`:
+It runs `compiler-metadata`, `check`, `answers`, `hands`, `verification-helpers`, `program-contract`, `test-timeout`,
+`test`, `error-vocab-native`, `lexer-copy-sync`, `compiler-cli-contract`, `check-desktop`, `check-app-support` and
+`check-hosted-apps`. Beyond `make check`, `make answers`, `make hands` and `make test`:
 
 - `make compiler-metadata`: compiles and runs 2,000-operation call, tuple and heap programs and 200- and 500-local
   programs with as many conditionals, checking their values and the compiler's peak memory (128 MiB; 64 MiB for the
@@ -255,11 +326,11 @@ A check that cannot fail proves nothing, so the important gates carry a proof th
 ## CI
 
 - `.github/workflows/check.yml` runs on every push and pull request, on `ubuntu-26.04`. It installs the test tools,
-  logs the actual OS and tool versions, then runs `make check`, `answers`, `verification-helpers`, `program-contract`,
-  `test-timeout`, `test`, `compiler-metadata`, `check-desktop`, `check-app-support`, `check-hosted-apps`,
-  `compiler-cli-contract`, `error-vocab-native` and `lexer-copy-sync`: all of `verify-local`. The runner image is
-  not a lock on every package; the logged versions identify each run's environment. Test evidence from `/tmp` is
-  packed and uploaded as `hosted-application-evidence`, also when the run fails.
+  logs the actual OS and tool versions, then runs `make check`, `answers`, `hands`, `verification-helpers`,
+  `program-contract`, `test-timeout`, `test`, `compiler-metadata`, `check-desktop`, `check-app-support`,
+  `check-hosted-apps`, `compiler-cli-contract`, `error-vocab-native` and `lexer-copy-sync`: all of `verify-local`.
+  The runner image is not a lock on every package; the logged versions identify each run's environment. Test
+  evidence from `/tmp` is packed and uploaded as `hosted-application-evidence`, also when the run fails.
 
 ## What these commands do not prove
 

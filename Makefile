@@ -35,6 +35,16 @@ answers:
 	  "$$work/build/a.out" "$${COMPILER:-$$work/build/seed}" "$$work/run" "$(CURDIR)" $(addprefix $(CURDIR)/,$(ANSWERS)) && \
 	  rm -rf "$${work:?}" || { echo "answers: FAILED; what it left is in $$work" >&2; exit 1; }
 
+# The window checks, written in Herbert (checks/hands.herb). The committed seed
+# builds Notes, Scope, the check and its stand-in; the check starts a display
+# nobody sees (Xvfb, a host tool as the desktop's own display server is), opens
+# the programs on it and presses their keys. It makes its own folder under the
+# one given here and, when every check passes, removes from it what it made,
+# name by name. VERIFYING.md says what it holds the programs to.
+.PHONY: hands
+hands: notes scope $(BUILD)/hands $(BUILD)/stand-in
+	@$(BUILD)/hands "$(CURDIR)/$(BUILD)/notes" "$(CURDIR)/$(BUILD)/scope" "$(CURDIR)/$(BUILD)/stand-in" "$${TMPDIR:-/tmp}"
+
 test:
 	@bash tools/check_full_test_host.sh
 	@PATH="$(abspath tools):$$PATH" bash bootstrap/tests/run_tests.sh
@@ -180,6 +190,8 @@ notes_SOURCES := $(DESKTOP_LIBS) lib/x11_clipboard.herb lib/utf8.herb lib/unicod
 scope_SOURCES := $(DESKTOP_LIBS) lib/text.herb lib/net.herb lib/figures.herb examples/scope.herb
 scope-helper_SOURCES := lib/linux.herb lib/text.herb lib/net.herb lib/figures.herb examples/scope_helper.herb
 knock_SOURCES := lib/linux.herb lib/text.herb lib/net.herb examples/knock.herb
+hands_SOURCES := lib/linux.herb lib/text.herb lib/x11.herb checks/hands.herb
+stand-in_SOURCES := lib/linux.herb lib/x11.herb checks/stand_in.herb
 .PHONY: first-steps maze notes scope scope-helper knock hosted-apps hosted-memory-io check-desktop check-hosted-apps check-scope check-scope-helper check-net
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze
@@ -195,8 +207,10 @@ $(BUILD)/notes: $(notes_SOURCES)
 $(BUILD)/scope: $(scope_SOURCES)
 $(BUILD)/scope-helper: $(scope-helper_SOURCES)
 $(BUILD)/knock: $(knock_SOURCES)
+$(BUILD)/hands: $(hands_SOURCES)
+$(BUILD)/stand-in: $(stand-in_SOURCES)
 $(SCANNER): $(scan_SOURCES)
-$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/scope-helper $(BUILD)/knock $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/scope-helper $(BUILD)/knock $(BUILD)/hands $(BUILD)/stand-in $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
 	@set -eu; \
 	  mkdir -p $@-work; \
@@ -373,7 +387,7 @@ reseed: compiler-source-check
 # make test already dispatches the six fragment/mutation pairs, the closed-loop
 # memory diet and the error-vocab gate. Their standalone targets above remain for
 # diagnosis; error-vocab-native also runs that gate's mutation proof.
-verify-local: compiler-metadata check answers verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
+verify-local: compiler-metadata check answers hands verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
 
 clean:
 	rm -rf $(BUILD)
