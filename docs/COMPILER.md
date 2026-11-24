@@ -45,14 +45,22 @@ do not regenerate frozen C-derived goldens from the seed as a new oracle.
 Mutation harnesses may deliberately alter a disposable assembled compiler;
 that is a test artifact, not a second authoring location.
 
-`make reseed` checks the previous seed's exact checksum pin before executing it,
-requires both generations' complete success envelopes and matching executable
-bytes, and runs hosted conformance before publishing a changed candidate. It
-retains failed work and refuses inputs changed during qualification. Publication
-replaces the seed and checksum separately; an interruption between replacements
-can leave a detectable mismatch, with the previous pair retained in the failed
-work directory. Use one writer. This does not replace full hosted
-qualification or establish independent seed provenance.
+`make reseed` runs the seed maker, the Herbert program `tools/reseed.herb`, which
+the committed seed builds. It checks the seed against its checksum before running
+it, has the seed compile the source and the new compiler compile it again,
+requires both compiles to end cleanly (status 0, the `0` marker, nothing on
+standard error, a Linux x86-64 program) and to give the same bytes, the new
+compiler's within 128 MiB, and holds a changed compiler to every case of
+`make answers` outside `checks/rebuild.cases` (whose one case, building the
+committed seed, a new compiler cannot pass) before it replaces anything. It refuses when the seed,
+its checksum or the source changed while it ran; after a refusal it keeps its
+work folder and says where it is. The seed and its checksum are replaced one
+after the other; a run cut off between the two leaves a mismatch every build
+detects, with the new checksum in `bootstrap/seed/.reseed.new-*` and the old pair
+in the work folder. Use one writer. This does not replace `make verify-local` or
+establish independent seed provenance. `make seeds` checks the seed maker itself
+([VERIFYING.md](../VERIFYING.md)). The steps are set out at the top of
+`tools/reseed.herb`.
 
 ## Metadata stage contract
 

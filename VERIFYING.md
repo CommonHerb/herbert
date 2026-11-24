@@ -33,15 +33,33 @@ for a candidate) to every case in five files:
 - `checks/rebuild.cases`: the compiler compiles its own source and what it writes must be the committed seed, byte for
   byte, using at most 128 MiB.
 - `checks/first.cases`: twelve small programs covering the basics, each with the output it must print.
-- `checks/language.cases`: 588 cases of what the compiler accepts and refuses: a program with the output, error output
-  and exit status it must give, or the exact words the compiler must refuse it in. They came from the conformance
-  corpus below, which they will replace.
-- `checks/libraries.cases`: 147 cases for the support libraries, each written from the library's documented contract
+- `checks/language.cases`: 666 cases of what the compiler accepts and refuses: a program with the output, error output
+  and exit status it must give, or the exact words the compiler must refuse it in. 588 came from the conformance
+  corpus below, which they will replace. 78 were written by hand from [the language guide](docs/LANGUAGE.md) for what
+  three other Python checks below held and these did not: the out-of-memory message where a fill's count wraps and
+  where input is larger than the heap left (with input that still fits beside it), the heap that cannot be reserved
+  under an address-space limit, a result that cannot be written (a full device, a closed output, and a reader gone
+  with the pipe signal left to end the program and with it ignored; a number and a string), Linux's sixth argument
+  (a file mapped at an offset), its raw errors, and Linux reading into a buffer and writing from inside it; a copy
+  whose destination is checked first and whose start or count wraps, and a position or a byte written `0 - 1` in
+  each builtin that takes one (`buffer_get`, `buffer_set`, `buffer_fill`, `append`, an array's `get`, a string's
+  `index`); a fill and appends that leave a neighbouring buffer whole, bytes shared through an alias beside a frozen
+  string that keeps its own, and two million updates of a buffer that take no heap; each of the seven byte and Linux
+  builtins refused with an argument short, an argument over, `true` in each argument's place, and as a function's
+  name (43 refusals); 300 sums nested to the right and 300 nested calls; input from a closed descriptor and 3 MiB of
+  input through a pipe; and the word counter's counts on seven inputs. Several of these programs run themselves a
+  second time, to give that run a closed input, a pipe or a limit.
+- `checks/libraries.cases`: 157 cases for the support libraries, each written from the library's documented contract
   before it was run: the text buffer behind Notes (53: edits, the cursor, selection, undo and redo, find, word-wrap
   rows), saving, rescuing and recovering files (31), text and numbers (15), UTF-8, graphemes and what can be drawn
-  (26), Scope's figures (8), network addresses, maps, lettering and the Linux helpers (14). A case's program runs
-  in the runner's scratch folder and may make files there; nothing in these cases opens a window or a connection.
-  They expect an ordinary umask (022, 002 or 077).
+  (26), Scope's figures (8), network addresses, maps, lettering and the Linux helpers (14), and what the seed maker
+  stands on (10): SHA-256 checksums against the standard's own examples and against `sha256sum` at each side of a
+  block's edge; a folder of the program's own, also under a folder reached through a link, and removing a folder
+  with everything under it while what its links point at stays; and running another program to its end, with its
+  status, a signal, the time limit and its peak memory, also for a caller whose own input and output are closed.
+  No case can mount a disk, so `folder_remove` stopping at one is not held by a case. A case's program runs in the
+  runner's scratch folder and may make files there; nothing in these cases opens a window or a connection. They
+  expect an ordinary umask (022, 002 or 077).
 - `checks/planted.cases`: two cases that must pass and thirteen failures planted on purpose (a wrong answer, an answer
   one byte short, a wrong status, a fault, a signal, a program that never ends, a refusal in other words, a compiler
   that writes something else, a compiler held to 10 MiB). Each planted case names the exact finding the runner must
@@ -59,7 +77,13 @@ follow, a file a case names that is not there, a compiler that cannot be started
 that does not match the cases it held. `make verify-local` and CI run it.
 
 What it does not check: the planted cases cannot plant a broken compiler, so the findings about a compiler that
-writes no program, a wrong marker or a program that cannot be started are exercised by hand, not by a case.
+writes no program, a wrong marker or a program that cannot be started are exercised by hand, not by a case. The
+runner gives a compiler and a program the stack limit it was started with, 8 MiB as a rule, and no case sets one: the
+cases at the nesting limit (2,000 terms, 1,999 nested ifs) hold the compiler's use of the stack only where that limit
+is 8 MiB. A program is also started with signals ignored or not as the runner was; the cases that depend on the pipe
+signal set it themselves. The word counter is held on small inputs (3 MiB of input is read by another case), and its
+own message for input it cannot read is not held. The language guide's promise that a call under `do` compiles to
+the same bytes as that call bound to a name nothing reads is not held either: the cases hold what such calls do.
 
 ## make hands (about 12 seconds): the window checks written in Herbert
 
@@ -132,6 +156,61 @@ whether a save reaches the disk before a power cut (that needs the system calls 
 and its other keys, and either program for longer than these seconds. The library cases of `make answers` hold the text
 buffer, saving and recovery and Scope's arithmetic; the Python checks below still cover the rest.
 
+## make seeds (about 6 seconds): the seed maker's checks, written in Herbert
+
+`make reseed` runs the seed maker, `tools/reseed.herb`: the one program that replaces the compiler's seed
+([the seed guide](bootstrap/seed/README.md)). `checks/seeds.herb` holds it to this: it writes a new seed only when
+the old seed builds a new compiler that rebuilds itself and gives every answer, and refuses everything else with the
+seed and its checksum left as they were. The committed seed builds the seed maker, the check runner, the check and a
+stand-in compiler (`checks/seed_stand_in.herb`), a program that copies itself where a compiler would compile and
+fails on purpose as its one-line source asks. Each check runs the seed maker on a small checkout of its own (a seed,
+its checksum, a compiler's source) and judges how it ended, its words, what the three files hold afterwards and what
+it left behind: after a refusal that came once it had made its folder, that folder, a line saying where it is, and
+in it the seed and checksum as they were; otherwise nothing. Nothing is written in the real checkout. 60 checks:
+
+- **A seed that is current**: a seed that builds its source into itself is left alone, the stand-in and the real
+  seed with the compiler's real source alike.
+- **Refused before any compiler runs** (17): a checksum that is another seed's, one with a second line, one without
+  its newline and one naming another file; a seed that is a script, and four that are not Linux x86-64 programs by
+  one byte (another processor, the processor's number right in its low byte only, 32-bit, high byte first), each
+  under its right checksum; a seed, a checksum or a source that is a link, a seed that is a pipe, and the folder
+  `bootstrap/seed`, `bootstrap` or `stack` a link to another; a file of cases whose path does not start at the root.
+  Where the seed could run at all, a mark it would leave if it were ever started shows that it was not (the
+  stand-in is asked for the mark by its source; the script leaves it itself).
+- **A compile that is not clean** (8): a seed that ends with an error status, says something on standard error,
+  prints more than its marker, writes no program, writes a script, or is stopped by a signal after writing its
+  program; a new compiler that fails where the seed did not, and one that needs more than 128 MiB.
+- **A new compiler that does not rebuild itself**, one that does not give every answer, cases that cannot be run,
+  and the real compiler failing a case in the fourth file of cases.
+- **The cases are given the new compiler, not the seed**: a case only the new compiler answers must pass, and the
+  new seed is written. With the seed's folder closed to writing the same run must refuse and leave the old pair
+  (not checked when the check is run by the administrator, whom Linux lets write anywhere; it says so).
+- **The checkout changed during the run** (8): the seed, its checksum and the source, each while the compilers ran
+  and each while the cases ran; and the seed's folder made a link to where it was moved, the same files to be found
+  through it, while the compilers ran and while the cases ran.
+- **A new seed**: the compiler's real source with a line added on top (which moves every line down, and so changes the
+  line numbers the compiler keeps for its own fault messages) must give a new seed that is, byte for byte, what the
+  check has the real seed build from that source by itself, with its right checksum, both files readable by all
+  (0644), nothing else beside them and nothing left behind.
+- **Eighteen planted failures**: a finished run is judged again with one thing wrong on purpose, in the answer
+  expected or in what the run left, once for each thing the judge can find (twice for the folder left: its seed and
+  its checksum), and passes only on exactly that finding.
+
+The check works in a folder it makes, `herbert-seeds-NUMBER` under `$TMPDIR` (or `/tmp`); a run in which every check
+passed removes it, and a run with a failure leaves it, each check's small checkout and output in a numbered folder,
+and says where. `$TMPDIR` may be a link and may hold spaces; a line break in its name ends the check at once with
+status 2. It prints one `FAIL` line for each check that did not give its answer, then the count; status 0, 1, or 2
+when it could not do its own work. `make verify-local` and CI run it.
+
+What it does not check, because no check here can make it happen: a write, a sync or a rename that fails while the
+new seed is put in place, and a run cut off between the two renames (those need the system calls watched; the state
+such a cut leaves, a seed under another seed's checksum, is the first refusal above); the order of the two renames;
+that the seed maker's own writes refuse a link or a file already there (they go into folders it has just made); a
+compile that runs past its two minutes; a file that grows while it is read, and one over 64 MiB; the seed maker
+started with its own standard input, output or error closed; and anything changed between its last look at the
+checkout and the two renames, which is why it wants to be the only writer. A seed maker stopped from outside leaves its folder
+without a word, and a program the check runner had started may run on until its own time limit.
+
 ## make test (about 45 seconds)
 
 `bootstrap/tests/run_tests.sh` runs a pinned number of tests (37) with the committed seed; a test silently dropped or
@@ -179,16 +258,18 @@ keep successful ones with `--keep-work`.
 
 ## make verify-local (the full local set)
 
-It runs `compiler-metadata`, `check`, `answers`, `hands`, `verification-helpers`, `program-contract`, `test-timeout`,
-`test`, `error-vocab-native`, `lexer-copy-sync`, `compiler-cli-contract`, `check-desktop`, `check-app-support` and
-`check-hosted-apps`. Beyond `make check`, `make answers`, `make hands` and `make test`:
+It runs `compiler-metadata`, `check`, `answers`, `hands`, `seeds`, `verification-helpers`, `program-contract`,
+`test-timeout`, `test`, `error-vocab-native`, `lexer-copy-sync`, `compiler-cli-contract`, `check-desktop`,
+`check-app-support` and `check-hosted-apps`. Beyond `make check`, `make answers`, `make hands`, `make seeds` and
+`make test`:
 
 - `make compiler-metadata`: compiles and runs 2,000-operation call, tuple and heap programs and 200- and 500-local
   programs with as many conditionals, checking their values and the compiler's peak memory (128 MiB; 64 MiB for the
   500 case) with GNU time. It catches the known quadratic copying regressions; it is not a general linearity claim.
 - `make verification-helpers`: tests of the test tooling. `check_verification_helpers.py` checks
   complete compiler and program transcripts, that gates reject failing or noisy compilers even when they emit a valid
-  image, that `run_tests.sh` refuses ambient overrides before grading, the reseed's refusals and recovery, and that
+  image, that `run_tests.sh` refuses ambient overrides before grading, the refusals and recovery of the shell script
+  that made the seed before the seed maker did (`make reseed-shell`, which leaves with the Python checks), and that
   verifiers relying on Python `assert` refuse to run under `-O`, `-OO` or `PYTHONOPTIMIZE`.
 - `make program-contract`: the [`make program` build](docs/BUILDING.md) with the real seed: source locations, retained
   evidence, path and overwrite protection, bad compiler envelopes and a failed publication.
@@ -326,7 +407,7 @@ A check that cannot fail proves nothing, so the important gates carry a proof th
 ## CI
 
 - `.github/workflows/check.yml` runs on every push and pull request, on `ubuntu-26.04`. It installs the test tools,
-  logs the actual OS and tool versions, then runs `make check`, `answers`, `hands`, `verification-helpers`,
+  logs the actual OS and tool versions, then runs `make check`, `answers`, `hands`, `seeds`, `verification-helpers`,
   `program-contract`, `test-timeout`, `test`, `compiler-metadata`, `check-desktop`, `check-app-support`,
   `check-hosted-apps`, `compiler-cli-contract`, `error-vocab-native` and `lexer-copy-sync`: all of `verify-local`.
   The runner image is not a lock on every package; the logged versions identify each run's environment. Test

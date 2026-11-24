@@ -19,6 +19,7 @@ not count as Herbert-native progress.
 | `stack/*.herb` and `stack/compiler/*.herb` | Herbert-owned lexer, parser, evaluator, VM, compiler, and probes | Native core | Expand only with executable proof |
 | `bootstrap/tests/*.sh` | Existing host harnesses for C-free proofs, goldens, mutation gates, and CI-local coordination | Required substrate | Replace gradually with Herbert-owned manifests and native runners after parity |
 | `tools/scan.herb` | Governance scanner for `BOOTSTRAP-ALLOWLIST`, built by the seed | Native core | Replaced the C scanner after a differential against it; checked by `bootstrap/tests/check_scan.py` |
+| `tools/reseed.herb` | The seed maker behind `make reseed`, built by the seed | Native core | Took over from the shell script `bootstrap/tests/reseed_gen1.sh` after both gave the same seeds; checked by `checks/seeds.herb` |
 | `BOOTSTRAP-ALLOWLIST` | Explicit non-`.herb` boundary | Intentionally external for now | Keep strict; shrink only when replacements are verified |
 | `.github/workflows/*` | CI substrate | Required external substrate | Keep as public evidence, not Herbert-native code |
 | committed `.expected` and golden artifacts | Regression or oracle data | Required evidence | Keep until Herbert-native generation and checking can prove parity |

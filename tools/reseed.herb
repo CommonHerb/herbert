@@ -1,0 +1,426 @@
+-- The seed maker. The compiler is written in Herbert, so a compiler that
+-- already runs has to build it. That one is the seed: the compiler as a
+-- finished program, kept in the checkout (bootstrap/seed/gen1.seed) with its
+-- checksum beside it (gen1.seed.sha256). When the compiler's source changes,
+-- the seed has to be made again from that source, and this program makes it:
+-- it has the old seed build the new compiler, holds the new compiler to the
+-- checks, and only then puts it in the old seed's place. Needs lib/linux.herb,
+-- lib/text.herb, lib/sha256.herb, lib/folder.herb and lib/child.herb in front.
+--
+--   reseed ROOT RUNNER UNDER CASES...
+--
+-- ROOT is the checkout, RUNNER the check runner (checks/run.herb, built by
+-- the seed), UNDER a folder to work under and each CASES a file of cases the
+-- new compiler must answer. All are absolute paths. The run makes its own
+-- folder, UNDER/herbert-reseed-NUMBER (called WORK below).
+--
+-- What it does, in order. Anything that fails ends it there, with status 1
+-- and one line of why on standard error, and nothing in ROOT is written
+-- before step 7:
+--   1. The seed, its checksum and the compiler's source
+--      (stack/native_compile_fragment.herb) must each be a plain file, not a
+--      link, and the folders they are in (bootstrap, bootstrap/seed and
+--      stack) folders of the checkout's own, not links to others. Each file
+--      is read once, and what was read is what is used from then on. Copies
+--      go into WORK (previous.seed, previous.sha256, source.herb).
+--   2. The seed must match its checksum, and be a Linux x86-64 program, before
+--      it is run. The checksum file is the 64 hex digits of the seed's
+--      SHA-256, two spaces, "gen1.seed" and a newline, and nothing else.
+--   3. The seed compiles the source: that is the new compiler. The new
+--      compiler compiles the source again and must write itself, byte for
+--      byte: a compiler that cannot rebuild itself is never made the seed.
+--      Each compile gets two minutes and must end with status 0, print the
+--      marker "0", say nothing on standard error and leave a Linux x86-64
+--      program. The new compiler's compile may have 128 MiB in use at its
+--      peak and no more: the ceiling checks/rebuild.cases holds the seed to.
+--      (Linux's figure for a program also covers what its starter held when
+--      it started it: this program, with the seed and the source in memory,
+--      a few MiB today.)
+--   4. The three files are read again and must be as they were, and the three
+--      folders must still be folders of the checkout's own.
+--   5. If the new compiler is the seed, byte for byte, the seed is current:
+--      nothing is written, WORK is removed and the status is 0.
+--   6. Otherwise RUNNER holds the new compiler to every case in CASES, and
+--      every case must give its answer. Then the three files are read once
+--      more and must still be as they were.
+--   7. The new seed and its checksum are written into a new folder beside the
+--      old ones (bootstrap/seed/.reseed.new-NUMBER), then each is put in its
+--      place by a rename, which replaces a file whole or not at all: the seed
+--      first, then its checksum. WORK is removed and the status is 0.
+-- After a failure WORK stays as it is, and a last line says where it is.
+--
+-- A run stopped from outside (Ctrl+C, a signal) says nothing more and leaves
+-- WORK. The compiler or the check runner it was waiting for is stopped with
+-- it; a program the check runner had started itself may run on until its own
+-- time limit, a minute at most. The seed and its checksum are as they were,
+-- unless the stop fell between step 7's two renames. Then the new seed is in
+-- place under the old checksum. Nothing can use that pair by mistake: every
+-- build checks the seed against its checksum first, and so does step 2 here.
+-- The new checksum is then still in the folder step 7 made, and the old seed
+-- and checksum are in WORK. The same holds when the second rename fails, and
+-- the last line then says so.
+--
+-- The cases should be every file of cases the checkout has for a compiler
+-- except checks/rebuild.cases, whose one case holds a compiler to building
+-- the seed that is in the checkout: step 3 asks that of the new compiler
+-- against itself instead, under the same ceiling on memory.
+
+-- What a run needs. work is WORK's path, leaf its name in UNDER and under_fd
+-- UNDER itself, open (as lib/folder.herb's folder_own gives them); work and
+-- leaf are empty until WORK is made. seed, pin and source are the three files
+-- as first read, seed_count, pin_count and source_count bytes of them.
+ref record Reseed:
+    child: Child
+    root: string
+    under: string
+    under_fd: int
+    work: string
+    leaf: string
+    seed: buffer
+    seed_count: int
+    pin: buffer
+    pin_count: int
+    source: buffer
+    source_count: int
+end
+
+func reseed_say(message):
+    do flogger("reseed: ")
+    do flogger(message)
+    do flogger("\n")
+    return 0
+end
+
+-- End the run with status 1 and the reason, and where WORK is if it was made.
+func reseed_refuse(r, message):
+    do stderr_write("reseed: ")
+    do stderr_write(message)
+    do stderr_write("\n")
+    if length(r.work) != 0:
+        do stderr_write("reseed: what the run left is in ")
+        do stderr_write(r.work)
+        do stderr_write("\n")
+    end
+    do process_exit(1)
+    return 0
+end
+
+-- a/b as a path Linux can take (NUL-terminated).
+func reseed_path(a, b):
+    let p = new_buffer()
+    do text_add(p, a)
+    do text_add(p, "/")
+    do text_add(p, b)
+    do append(p, 0)
+    return p
+end
+
+-- a and then b, as one string.
+func reseed_join(a, b):
+    let out = new_buffer()
+    do text_add(out, a)
+    do text_add(out, b)
+    return freeze(out)
+end
+
+-- The file at path, which must be a plain file and not a link, of 64 MiB at
+-- most: (true, its bytes, how many). (false, an empty buffer, 0) when it is
+-- anything else, is not there or cannot be read. The file is opened without
+-- following a link and without waiting, and what was opened is what is
+-- judged and read.
+func reseed_plain(path):
+    let fd = linux_open(path, 657408, 0)
+    if linux_error(fd): return (false, new_buffer(), 0) end
+    let stat = linux_buffer(144)
+    let size = 0
+    let fine = not linux_error(linux_fstat(fd, stat)) and (linux_u32(stat, 24) & linux_s_ifmt()) == linux_s_ifreg()
+    if fine:
+        size = linux_u64(stat, 48)
+        fine = size <= 67108864
+    end
+    if not fine:
+        do linux_close(fd)
+        return (false, new_buffer(), 0)
+    end
+    -- One byte more than the size Linux gave is asked for, so a file that grew
+    -- meanwhile is seen and refused.
+    let b = linux_buffer(size + 1)
+    let used = 0
+    let more = true
+    while more:
+        let n = linux_read(fd, b, used, size + 1 - used)
+        if linux_error(n):
+            if n != 0 - 4:
+                fine = false
+                more = false
+            end
+        elif n == 0:
+            more = false
+        else:
+            used = used + n
+            if used > size:
+                fine = false
+                more = false
+            end
+        end
+    end
+    do linux_close(fd)
+    if not fine: return (false, new_buffer(), 0) end
+    return (true, b, used)
+end
+
+-- Whether the first n bytes of a and of b are the same.
+func reseed_same(a, b, n):
+    let i = 0
+    while i < n:
+        if buffer_get(a, i) != buffer_get(b, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- Whether the plain file at path holds exactly the count bytes of b.
+func reseed_holds(path, b, count):
+    let f = reseed_plain(path)
+    return f.0 and f.2 == count and reseed_same(f.1, b, count)
+end
+
+-- Whether the plain file at path holds exactly the text s.
+func reseed_holds_text(path, s):
+    return reseed_holds(path, linux_cstring(s), length(s))
+end
+
+-- A new file at path holding the count bytes of b, with the permissions mode
+-- whatever the caller's umask; an old file of that name is removed first.
+-- With sync, Linux is also asked to put it on the disk before this returns.
+-- Whether all of that worked.
+func reseed_write(path, b, count, mode, sync):
+    do linux_syscall6(87, buffer_address(path), 0, 0, 0, 0, 0)
+    let fd = linux_open(path, 655553, mode)
+    if linux_error(fd): return false end
+    let fine = true
+    let done = 0
+    while fine and done < count:
+        let n = linux_write(fd, b, done, count - done)
+        if linux_error(n):
+            if n != 0 - 4: fine = false end
+        else:
+            done = done + n
+        end
+    end
+    if fine and linux_error(linux_syscall6(91, fd, mode, 0, 0, 0, 0)): fine = false end
+    if fine and sync and linux_error(linux_syscall6(74, fd, 0, 0, 0, 0, 0)): fine = false end
+    if linux_error(linux_close(fd)): fine = false end
+    return fine
+end
+
+-- Whether the count bytes of b start as a Linux x86-64 program does: the ELF
+-- mark, 64-bit, low byte first, and the machine number 62. A script with an
+-- interpreter line is not one, so nothing here ever starts an interpreter.
+func reseed_program(b, count):
+    if count < 20: return false end
+    return buffer_get(b, 0) == 127 and buffer_get(b, 1) == 69 and buffer_get(b, 2) == 76 and buffer_get(b, 3) == 70 and buffer_get(b, 4) == 2 and buffer_get(b, 5) == 1 and buffer_get(b, 18) == 62 and buffer_get(b, 19) == 0
+end
+
+-- What the checksum file of the count bytes of b must hold.
+func reseed_pin(b, count):
+    let s = sha256_new()
+    do sha256_of(s, b, 0, count)
+    let line = linux_buffer(76)
+    do text_put(line, text_put(line, sha256_put_hex(s, line, 0), "  gen1.seed"), "\n")
+    return line
+end
+
+-- Whether ROOT/tail is a folder of the checkout's own: there, and not a link.
+func reseed_folder(r, tail):
+    let fd = folder_open(reseed_path(r.root, tail))
+    if linux_error(fd): return false end
+    do linux_close(fd)
+    return true
+end
+
+-- Whether the three folders are folders of the checkout's own.
+func reseed_folders(r):
+    return reseed_folder(r, "bootstrap") and reseed_folder(r, "bootstrap/seed") and reseed_folder(r, "stack")
+end
+
+-- The three files read again: whether each is still a plain file holding what
+-- was read at the start, in folders that are still the checkout's own.
+func reseed_unchanged(r):
+    if not reseed_folders(r): return false end
+    if not reseed_holds(reseed_path(r.root, "bootstrap/seed/gen1.seed"), r.seed, r.seed_count): return false end
+    if not reseed_holds(reseed_path(r.root, "bootstrap/seed/gen1.seed.sha256"), r.pin, r.pin_count): return false end
+    return reseed_holds(reseed_path(r.root, "stack/native_compile_fragment.herb"), r.source, r.source_count)
+end
+
+-- One compile, in the new folder WORK/name: the compiler, count bytes of b,
+-- is written there and run on WORK/source.herb. ("", the program it wrote, its
+-- size) when the compile did all that step 3 asks, or (what it did not do, an
+-- empty buffer, 0). ceiling is the most memory it may have in use, in KiB, or
+-- 0 for no ceiling. The compiler, what it printed (compiler.stdout,
+-- compiler.stderr) and what it wrote (a.out) stay in the folder.
+func reseed_compile(r, name, b, count, ceiling):
+    let none = new_buffer()
+    let folder = reseed_path(r.work, name)
+    if linux_error(linux_syscall6(83, buffer_address(folder), 448, 0, 0, 0, 0)): return ("its folder could not be made", none, 0) end
+    let compiler = linux_cstring("./compiler")
+    if not reseed_write(reseed_path(r.work, reseed_join(name, "/compiler")), b, count, 448, false): return ("the compiler could not be written into its folder", none, 0) end
+    let argv = child_arguments(1)
+    do child_argument(argv, 0, compiler)
+    let ran = child_run(r.child, folder, compiler, argv, linux_cstring("../source.herb"), linux_cstring("compiler.stdout"), linux_cstring("compiler.stderr"), 120)
+    if ran.0 == 1 and ran.1 == 14: return ("the compiler ran past its two minutes", none, 0) end
+    if ran.0 == 1: return ("the compiler was stopped by a signal", none, 0) end
+    if ran.0 != 0: return ("the compiler could not be started", none, 0) end
+    if not reseed_holds_text(reseed_path(r.work, reseed_join(name, "/compiler.stderr")), ""): return ("the compiler complained", none, 0) end
+    if ran.1 != 0: return ("the compiler ended with an error status", none, 0) end
+    if not reseed_holds_text(reseed_path(r.work, reseed_join(name, "/compiler.stdout")), "0\n"): return ("the compiler did not print its marker 0", none, 0) end
+    let made = reseed_plain(reseed_path(r.work, reseed_join(name, "/a.out")))
+    if not made.0: return ("the compiler wrote no program", none, 0) end
+    if not reseed_program(made.1, made.2): return ("what the compiler wrote is not a Linux x86-64 program", none, 0) end
+    if ceiling != 0 and r.child.peak > ceiling: return ("the compiler had more than 128 MiB in use", none, 0) end
+    return ("", made.1, made.2)
+end
+
+-- Step 6: RUNNER holds the compiler at WORK/gen2/compiler, which is the new
+-- compiler as this run holds it, to the cases. Its lines go where this
+-- program's own go. "" when every case gave its answer.
+func reseed_checks(r, args, given):
+    if linux_error(linux_syscall6(83, buffer_address(reseed_path(r.work, "checks")), 448, 0, 0, 0, 0)): return "the checks' folder could not be made" end
+    let runner = linux_cstring(linux_argument(args, 2))
+    let argv = child_arguments(given)
+    do child_argument(argv, 0, runner)
+    do child_argument(argv, 1, reseed_path(r.work, "gen2/compiler"))
+    do child_argument(argv, 2, reseed_path(r.work, "checks"))
+    do child_argument(argv, 3, linux_cstring(r.root))
+    let k = 4
+    while k < given:
+        do child_argument(argv, k, linux_cstring(linux_argument(args, k)))
+        k = k + 1
+    end
+    let none = r.child.none
+    let ran = child_run(r.child, none, runner, argv, none, none, none, 3600)
+    if ran.0 == 0 and ran.1 == 0: return "" end
+    if ran.0 == 0 and ran.1 == 1: return "the new compiler did not give every answer" end
+    return "the checks could not be run"
+end
+
+-- Step 7. b is the new seed, count bytes, and pin its checksum file.
+func reseed_publish(r, b, count, pin):
+    let home = reseed_join(r.root, "/bootstrap/seed")
+    let stage = folder_own(home, ".reseed.new")
+    if stage.0 != 0: do reseed_refuse(r, "no folder could be made beside the seed; the seed and its checksum are as they were") end
+    let new_seed = reseed_path(stage.1, "gen1.seed")
+    let new_pin = reseed_path(stage.1, "gen1.seed.sha256")
+    if not reseed_write(new_seed, b, count, 420, true) or not reseed_write(new_pin, pin, 76, 420, true):
+        do reseed_refuse(r, reseed_join("the new seed could not be written beside the old one; the seed and its checksum are as they were, and what was written is in ", stage.1))
+    end
+    if linux_error(linux_syscall6(82, buffer_address(new_seed), buffer_address(reseed_path(home, "gen1.seed")), 0, 0, 0, 0)):
+        do reseed_refuse(r, reseed_join("the new seed could not be put in place; the seed and its checksum are as they were, and the new pair is in ", stage.1))
+    end
+    if linux_error(linux_syscall6(82, buffer_address(new_pin), buffer_address(reseed_path(home, "gen1.seed.sha256")), 0, 0, 0, 0)):
+        do reseed_refuse(r, reseed_join(reseed_join("the new seed is in place and its checksum is not: put ", stage.1), "/gen1.seed.sha256 in its place by hand, or put the old pair back (previous.seed and previous.sha256, below)"))
+    end
+    do linux_syscall6(84, buffer_address(linux_cstring(stage.1)), 0, 0, 0, 0, 0)
+    -- Ask Linux to put the folder's new names on the disk too, through the
+    -- descriptor of the seed's folder that folder_own kept. The renames are
+    -- done; a refusal here changes nothing a later run could see.
+    do linux_syscall6(74, stage.3, 0, 0, 0, 0, 0)
+    do linux_close(stage.3)
+    return 0
+end
+
+-- Remove WORK after a run that did everything, and end with status 0. WORK
+-- was made new and empty by this run, through the descriptor of UNDER that
+-- is used here again, and only it is removed.
+func reseed_done(r):
+    if folder_remove(r.under_fd, linux_cstring(r.leaf)) != 0:
+        do stderr_write("reseed: the run's own folder could not be removed: ")
+        do stderr_write(r.work)
+        do stderr_write("\n")
+    end
+    do process_exit(0)
+    return 0
+end
+
+-- An argument that must be an absolute path.
+func reseed_argument(r, args, k):
+    let s = linux_argument(args, k)
+    if length(s) == 0 or index(s, 0) != 47: do reseed_refuse(r, "usage: reseed ROOT RUNNER UNDER CASES... (absolute paths)") end
+    return s
+end
+
+func main():
+    -- Standard input, output and error must be open: a file opened later would
+    -- otherwise be given one of their numbers and be taken for it.
+    let low = linux_open(linux_cstring("/dev/null"), 2, 0)
+    while low < 3: low = linux_open(linux_cstring("/dev/null"), 2, 0) end
+    do linux_close(low)
+    let r = Reseed(child_new(), "", "", 0, "", "", new_buffer(), 0, new_buffer(), 0, new_buffer(), 0)
+    let args = linux_arguments()
+    let given = linux_argument_count(args)
+    if given < 5: do reseed_refuse(r, "usage: reseed ROOT RUNNER UNDER CASES... (absolute paths)") end
+    let k = 1
+    while k < given:
+        do reseed_argument(r, args, k)
+        k = k + 1
+    end
+    r.root = linux_argument(args, 1)
+    r.under = linux_argument(args, 3)
+
+    -- Step 1.
+    if not reseed_folders(r): do reseed_refuse(r, "bootstrap, bootstrap/seed or stack in the checkout is not a folder of its own (a link, or not there); no compiler was run") end
+    let seed = reseed_plain(reseed_path(r.root, "bootstrap/seed/gen1.seed"))
+    if not seed.0: do reseed_refuse(r, "the seed (bootstrap/seed/gen1.seed) is not a plain file that can be read; no compiler was run") end
+    let pin = reseed_plain(reseed_path(r.root, "bootstrap/seed/gen1.seed.sha256"))
+    if not pin.0: do reseed_refuse(r, "the seed's checksum (bootstrap/seed/gen1.seed.sha256) is not a plain file that can be read; no compiler was run") end
+    let source = reseed_plain(reseed_path(r.root, "stack/native_compile_fragment.herb"))
+    if not source.0: do reseed_refuse(r, "the compiler's source (stack/native_compile_fragment.herb) is not a plain file that can be read; no compiler was run") end
+    r.seed = seed.1
+    r.seed_count = seed.2
+    r.pin = pin.1
+    r.pin_count = pin.2
+    r.source = source.1
+    r.source_count = source.2
+
+    -- Step 2.
+    if r.pin_count != 76 or not reseed_same(r.pin, reseed_pin(r.seed, r.seed_count), 76): do reseed_refuse(r, "the seed does not match its checksum; no compiler was run") end
+    if not reseed_program(r.seed, r.seed_count): do reseed_refuse(r, "the seed is not a Linux x86-64 program; no compiler was run") end
+
+    let own = folder_own(r.under, "herbert-reseed")
+    if own.0 != 0: do reseed_refuse(r, "the run's own folder could not be made under the folder given; no compiler was run") end
+    r.work = own.1
+    r.leaf = own.2
+    r.under_fd = own.3
+    if not reseed_write(reseed_path(r.work, "previous.seed"), r.seed, r.seed_count, 420, false) or not reseed_write(reseed_path(r.work, "previous.sha256"), r.pin, r.pin_count, 420, false) or not reseed_write(reseed_path(r.work, "source.herb"), r.source, r.source_count, 420, false):
+        do reseed_refuse(r, "the run's own folder cannot be written in; no compiler was run")
+    end
+
+    -- Step 3.
+    let first = reseed_compile(r, "gen1", r.seed, r.seed_count, 0)
+    if length(first.0) != 0: do reseed_refuse(r, reseed_join(reseed_join("the seed compiling the compiler's source: ", first.0), "; the seed is unchanged")) end
+    let second = reseed_compile(r, "gen2", first.1, first.2, 131072)
+    if length(second.0) != 0: do reseed_refuse(r, reseed_join(reseed_join("the new compiler compiling its own source: ", second.0), "; the seed is unchanged")) end
+    if first.2 != second.2 or not reseed_same(first.1, second.1, first.2): do reseed_refuse(r, "the new compiler does not rebuild itself byte for byte; the seed is unchanged") end
+
+    -- Steps 4 and 5.
+    if not reseed_unchanged(r): do reseed_refuse(r, "the seed, its checksum or the compiler's source changed during the run; nothing was written") end
+    if first.2 == r.seed_count and reseed_same(first.1, r.seed, first.2):
+        do reseed_say("the seed is current: it builds the compiler's source into itself, byte for byte. Nothing was written.")
+        do reseed_done(r)
+    end
+
+    -- Step 6.
+    do reseed_say("the compiler's source builds a new compiler, which rebuilds itself byte for byte; holding it to the checks")
+    let why = reseed_checks(r, args, given)
+    if length(why) != 0: do reseed_refuse(r, reseed_join(why, "; the seed is unchanged")) end
+    if not reseed_unchanged(r): do reseed_refuse(r, "the seed, its checksum or the compiler's source changed during the run; nothing was written") end
+
+    -- Step 7.
+    let new_pin = reseed_pin(first.1, first.2)
+    do reseed_publish(r, first.1, first.2, new_pin)
+    do reseed_say("new seed written: bootstrap/seed/gen1.seed, with its checksum:")
+    do flogger(text_string(new_pin, 0, 76))
+    do reseed_say("now run make verify-local, which holds the new seed to everything")
+    do reseed_done(r)
+    return 0
+end

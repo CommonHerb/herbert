@@ -1,0 +1,191 @@
+-- SHA-256, the checksum that pins the compiler's seed: 32 bytes worked out
+-- from any bytes, written as 64 hex digits, as the standard FIPS 180-4 sets
+-- it out and as the tool sha256sum prints it. Requires lib/linux.herb; no
+-- main. A Sha256 (sha256_new(), once) holds the standard's tables and the
+-- room one checksum needs, so working one out allocates nothing; only
+-- sha256_hex, which gives a string, allocates.
+--
+--   let s = sha256_new()
+--   do sha256_of(s, data, 0, buffer_length(data))
+--   let hex = sha256_hex(s)
+--
+-- Numbers here are 64 bits wide and the standard's are 32, so every sum is
+-- cut back to its low 32 bits (& 4294967295).
+
+-- k: the standard's 64 round numbers. w: the 64 words one block is spread
+-- into. h: the checksum so far, eight words, and when sha256_of returns, the
+-- checksum. tail: the last, padded block or two.
+ref record Sha256:
+    k: array(int)
+    w: array(int)
+    h: array(int)
+    tail: buffer
+end
+
+func sha256_four(a, n0, n1, n2, n3):
+    do add(a, n0)
+    do add(a, n1)
+    do add(a, n2)
+    do add(a, n3)
+    return 0
+end
+
+func sha256_new():
+    let k = new_array(int)
+    do sha256_four(k, 1116352408, 1899447441, 3049323471, 3921009573)
+    do sha256_four(k, 961987163, 1508970993, 2453635748, 2870763221)
+    do sha256_four(k, 3624381080, 310598401, 607225278, 1426881987)
+    do sha256_four(k, 1925078388, 2162078206, 2614888103, 3248222580)
+    do sha256_four(k, 3835390401, 4022224774, 264347078, 604807628)
+    do sha256_four(k, 770255983, 1249150122, 1555081692, 1996064986)
+    do sha256_four(k, 2554220882, 2821834349, 2952996808, 3210313671)
+    do sha256_four(k, 3336571891, 3584528711, 113926993, 338241895)
+    do sha256_four(k, 666307205, 773529912, 1294757372, 1396182291)
+    do sha256_four(k, 1695183700, 1986661051, 2177026350, 2456956037)
+    do sha256_four(k, 2730485921, 2820302411, 3259730800, 3345764771)
+    do sha256_four(k, 3516065817, 3600352804, 4094571909, 275423344)
+    do sha256_four(k, 430227734, 506948616, 659060556, 883997877)
+    do sha256_four(k, 958139571, 1322822218, 1537002063, 1747873779)
+    do sha256_four(k, 1955562222, 2024104815, 2227730452, 2361852424)
+    do sha256_four(k, 2428436474, 2756734187, 3204031479, 3329325298)
+    let w = new_array(int)
+    let i = 0
+    while i < 64:
+        do add(w, 0)
+        i = i + 1
+    end
+    let h = new_array(int)
+    do sha256_four(h, 0, 0, 0, 0)
+    do sha256_four(h, 0, 0, 0, 0)
+    return Sha256(k, w, h, linux_buffer(128))
+end
+
+-- The low 32 bits of x turned right by n places, n from 1 to 31.
+func sha256_turn(x, n):
+    return ((x >> n) | (x << (32 - n))) & 4294967295
+end
+
+-- Take in the 64 bytes of data at at.
+func sha256_block(s, data, at):
+    let k = s.k
+    let w = s.w
+    let h = s.h
+    let i = 0
+    while i < 16:
+        let p = at + i * 4
+        do set(w, i, (buffer_get(data, p) << 24) | (buffer_get(data, p + 1) << 16) | (buffer_get(data, p + 2) << 8) | buffer_get(data, p + 3))
+        i = i + 1
+    end
+    while i < 64:
+        let x = get(w, i - 15)
+        let y = get(w, i - 2)
+        let small0 = sha256_turn(x, 7) ^ sha256_turn(x, 18) ^ (x >> 3)
+        let small1 = sha256_turn(y, 17) ^ sha256_turn(y, 19) ^ (y >> 10)
+        do set(w, i, (get(w, i - 16) + small0 + get(w, i - 7) + small1) & 4294967295)
+        i = i + 1
+    end
+    let a = get(h, 0)
+    let b = get(h, 1)
+    let c = get(h, 2)
+    let d = get(h, 3)
+    let e = get(h, 4)
+    let f = get(h, 5)
+    let g = get(h, 6)
+    let last = get(h, 7)
+    i = 0
+    while i < 64:
+        let big1 = sha256_turn(e, 6) ^ sha256_turn(e, 11) ^ sha256_turn(e, 25)
+        let choice = (e & f) ^ ((~e) & g)
+        let t1 = (last + big1 + choice + get(k, i) + get(w, i)) & 4294967295
+        let big0 = sha256_turn(a, 2) ^ sha256_turn(a, 13) ^ sha256_turn(a, 22)
+        let most = (a & b) ^ (a & c) ^ (b & c)
+        last = g
+        g = f
+        f = e
+        e = (d + t1) & 4294967295
+        d = c
+        c = b
+        b = a
+        a = (t1 + big0 + most) & 4294967295
+        i = i + 1
+    end
+    do set(h, 0, (get(h, 0) + a) & 4294967295)
+    do set(h, 1, (get(h, 1) + b) & 4294967295)
+    do set(h, 2, (get(h, 2) + c) & 4294967295)
+    do set(h, 3, (get(h, 3) + d) & 4294967295)
+    do set(h, 4, (get(h, 4) + e) & 4294967295)
+    do set(h, 5, (get(h, 5) + f) & 4294967295)
+    do set(h, 6, (get(h, 6) + g) & 4294967295)
+    do set(h, 7, (get(h, 7) + last) & 4294967295)
+    return 0
+end
+
+-- Work out the checksum of the count bytes of data from from, which must lie
+-- inside data (a span that does not stops the program with the language's own
+-- located fault). It is then in s, for sha256_put_hex, sha256_hex and
+-- sha256_byte to give. count is below 2^61. Returns 0.
+func sha256_of(s, data, from, count):
+    let h = s.h
+    do set(h, 0, 1779033703)
+    do set(h, 1, 3144134277)
+    do set(h, 2, 1013904242)
+    do set(h, 3, 2773480762)
+    do set(h, 4, 1359893119)
+    do set(h, 5, 2600822924)
+    do set(h, 6, 528734635)
+    do set(h, 7, 1541459225)
+    let done = 0
+    while count - done >= 64:
+        do sha256_block(s, data, from + done)
+        done = done + 64
+    end
+    -- The standard's ending: the bytes left over, one byte 128, zeros, and the
+    -- count of bits in eight bytes, high byte first, to fill a block (or two,
+    -- when the bytes left over leave no room for the nine more).
+    let rest = count - done
+    let tail = s.tail
+    do buffer_copy(tail, 0, data, from + done, rest)
+    do buffer_set(tail, rest, 128)
+    let size = 64
+    if rest >= 56: size = 128 end
+    let i = rest + 1
+    while i < size - 8:
+        do buffer_set(tail, i, 0)
+        i = i + 1
+    end
+    i = 0
+    while i < 8:
+        do buffer_set(tail, size - 1 - i, ((count * 8) >> (8 * i)) & 255)
+        i = i + 1
+    end
+    do sha256_block(s, tail, 0)
+    if size == 128: do sha256_block(s, tail, 64) end
+    return 0
+end
+
+-- Byte i, 0 to 31, of the checksum last worked out.
+func sha256_byte(s, i):
+    return (get(s.h, i / 4) >> (24 - 8 * (i % 4))) & 255
+end
+
+-- The checksum last worked out as 64 hex digits (0-9, a-f) into out at at:
+-- the offset after them. No allocation.
+func sha256_put_hex(s, out, at):
+    do linux_require_range(out, at, 64)
+    let digits = "0123456789abcdef"
+    let i = 0
+    while i < 32:
+        let byte = sha256_byte(s, i)
+        do buffer_set(out, at + 2 * i, index(digits, byte >> 4))
+        do buffer_set(out, at + 2 * i + 1, index(digits, byte & 15))
+        i = i + 1
+    end
+    return at + 64
+end
+
+-- The same as a string (allocates).
+func sha256_hex(s):
+    let out = linux_buffer(64)
+    do sha256_put_hex(s, out, 0)
+    return freeze(out)
+end

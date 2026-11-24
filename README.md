@@ -71,7 +71,8 @@ people hit first. The editor's own limits are in [the Notes guide](examples/note
   and the older interpreter and VM fragments the tests run.
 - `lib/` and `examples/`: the support libraries and the programs.
 - `bootstrap/seed/`: the committed compiler and its checksum. `bootstrap/tests/`: the test harnesses and goldens.
-- `tools/`: `scan.herb`, the allowlist scanner, plus test helpers. No C source is left.
+- `tools/`: `scan.herb`, the allowlist scanner, and `reseed.herb`, the seed maker, plus test helpers. No C source is
+  left.
 - `BOOTSTRAP-ALLOWLIST`: every tracked file that is not `.herb`, checked by `make check`.
 
 A claim about Herbert counts when a test, a golden file or a runner shows it; start with

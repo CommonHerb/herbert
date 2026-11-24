@@ -1,0 +1,165 @@
+-- A folder a program makes for its own work, and the removing of it. Requires
+-- lib/linux.herb and lib/text.herb; no main. For work done once (a check, a
+-- build): each call allocates.
+
+-- A new folder of this program's own under the folder at under: its name is
+-- stem-NUMBER, the number being this process's, or that with -2, -3 and so on
+-- up to -20 when a folder of the name is there already. Only its owner may
+-- look in it. (0, its path, its name, the folder it is in) when it is made,
+-- and the folder is then new and empty: Linux makes it or refuses, and never
+-- hands over one that was there. The last of the four is a descriptor of the
+-- folder at under, kept open: the new folder was made through it, and
+-- folder_remove(that descriptor, linux_cstring(its name)) takes it away again
+-- whatever has become of the path since. under may be reached through a link; the new
+-- folder is never one. Otherwise (raw -errno, "", "", the same -errno):
+-- Linux's error, or -EEXIST (17) when twenty folders of the name are in the
+-- way.
+func folder_own(under, stem):
+    let dirfd = linux_open(linux_cstring(under), 589824, 0)
+    if linux_error(dirfd): return (dirfd, "", "", dirfd) end
+    let me = linux_syscall6(39, 0, 0, 0, 0, 0, 0)
+    let k = 1
+    while k <= 20:
+        let name = new_buffer()
+        do text_add(name, stem)
+        do text_add(name, "-")
+        do text_add_whole(name, me)
+        if k > 1:
+            do text_add(name, "-")
+            do text_add_whole(name, k)
+        end
+        let leaf = freeze(name)
+        let place = new_buffer()
+        do text_add(place, under)
+        do text_add(place, "/")
+        do text_add(place, leaf)
+        let path = freeze(place)
+        let made = linux_syscall6(258, dirfd, buffer_address(linux_cstring(leaf)), 448, 0, 0, 0)
+        if made == 0: return (0, path, leaf, dirfd) end
+        if made != 0 - 17:
+            do linux_close(dirfd)
+            return (made, "", "", made)
+        end
+        k = k + 1
+    end
+    do linux_close(dirfd)
+    return (0 - 17, "", "", 0 - 17)
+end
+
+-- Open the folder at path (a NUL-terminated buffer) to look in it: a
+-- descriptor, or raw -errno. A link is not followed: a link, even one to a
+-- folder, is refused as anything that is not a folder is (-ENOTDIR, 20).
+func folder_open(path):
+    return linux_open(path, 720896, 0)
+end
+
+-- Whether the name that starts at at in b, and ends with a NUL, is one of the
+-- two every folder holds for itself and its parent: "." and "..".
+func folder_dots(b, at):
+    if buffer_get(b, at) != 46: return false end
+    if buffer_get(b, at + 1) == 0: return true end
+    return buffer_get(b, at + 1) == 46 and buffer_get(b, at + 2) == 0
+end
+
+-- folder_remove's work. name is the address of a NUL-terminated name inside
+-- the open folder dirfd, and device the number of the file system dirfd is
+-- on. Linux is first asked to remove it as a file; only when Linux answers
+-- that it is a folder (-EISDIR, 21) is it opened, without following a link,
+-- and then, unless something is mounted there, emptied name by name through
+-- its own descriptor and removed. Something is mounted there when the folder
+-- is on another file system than dirfd, or when Linux marks it as the top of
+-- a mount (statx's mount-root mark, which also shows a folder of the same
+-- file system mounted a second time). Removing names while reading them can
+-- make Linux pass one over, so a folder that turns out not to be empty is
+-- read again, eight times at most.
+func folder_remove_at(dirfd, name, device, depth):
+    let r = linux_syscall6(263, dirfd, name, 0, 0, 0, 0)
+    if r != 0 - 21: return r end
+    if depth >= 100: return 0 - 40 end
+    let fd = linux_syscall6(257, dirfd, name, 720896, 0, 0, 0)
+    if linux_error(fd): return fd end
+    let entries = linux_buffer(32768)
+    -- The folder's own status, read into the room its names will be read into:
+    -- first its file system's number, then statx's answer, whose marks are
+    -- the eight bytes at 8 and the marks this Linux can give the eight at 56
+    -- (8192 is the mount-root mark). statx is asked about fd itself, by an
+    -- empty name, which the zero byte at 1024 is. A Linux too old for statx
+    -- or for the mark is judged by the file system's number alone.
+    let known = linux_syscall6(5, fd, buffer_address(entries), 0, 0, 0, 0)
+    let mounted = not linux_error(known) and linux_u64(entries, 0) != device
+    if not linux_error(known) and not mounted:
+        let marks = linux_syscall6(332, fd, buffer_address(entries) + 1024, 4096, 0, buffer_address(entries), 0)
+        if not linux_error(marks) and (linux_u64(entries, 56) & 8192) != 0: mounted = (linux_u64(entries, 8) & 8192) != 0 end
+    end
+    if linux_error(known) or mounted:
+        do linux_close(fd)
+        if linux_error(known): return known end
+        return 0 - 18
+    end
+    let result = 0
+    let passes = 0
+    let again = true
+    while again:
+        again = false
+        let more = true
+        while more:
+            let n = linux_syscall6(217, fd, buffer_address(entries), 32768, 0, 0, 0)
+            if linux_error(n):
+                result = n
+                more = false
+            elif n == 0:
+                more = false
+            else:
+                let at = 0
+                while at < n and result == 0:
+                    if not folder_dots(entries, at + 19): result = folder_remove_at(fd, buffer_address(entries) + at + 19, device, depth + 1) end
+                    at = at + linux_u16(entries, at + 16)
+                end
+                if result != 0: more = false end
+            end
+        end
+        if result == 0:
+            result = linux_syscall6(263, dirfd, name, 512, 0, 0, 0)
+            if result == 0 - 39 and passes < 8:
+                passes = passes + 1
+                result = 0
+                again = true
+                do linux_syscall6(8, fd, 0, 0, 0, 0, 0)
+            end
+        end
+    end
+    do linux_close(fd)
+    return result
+end
+
+-- Remove what is called name (a NUL-terminated buffer) inside the open folder
+-- dirfd (from folder_own or folder_open): a file, a link, or a folder with
+-- everything under it. 0 when it is gone, or raw -errno, some of it perhaps
+-- removed by then.
+--
+-- It cannot reach outside what it is given. name is one name, never a path:
+-- an empty name, ".", ".." and a name with a slash are refused (-EINVAL, 22),
+-- and so is a dirfd that is not a descriptor (-EBADF, 9), before anything is
+-- touched. Everything below is reached through descriptors of the folders
+-- themselves, opened without following a link, so a link found on the way is
+-- removed as the link it is and what it points at is left alone, and a folder
+-- swapped for a link while this runs is refused. A folder where something is
+-- mounted (a disk, a share, or another folder shown there a second time) is
+-- not entered: it and what is in it stay, and the answer is -EXDEV (18).
+-- Folders nested more than 100 deep are refused (-ELOOP, 40). A name that is
+-- not there is -ENOENT (2).
+func folder_remove(dirfd, name):
+    if dirfd > 2147483647: return 0 - 9 end
+    let status = linux_buffer(144)
+    let known = linux_fstat(dirfd, status)
+    if linux_error(known): return known end
+    let size = buffer_length(name)
+    let stop = linux_nul_end(name, 0, size)
+    if stop == 0 or stop == size or folder_dots(name, 0): return 0 - 22 end
+    let i = 0
+    while i < stop:
+        if buffer_get(name, i) == 47: return 0 - 22 end
+        i = i + 1
+    end
+    return folder_remove_at(dirfd, buffer_address(name), linux_u64(status, 0), 0)
+end

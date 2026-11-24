@@ -46,11 +46,12 @@ compiler embeds source line numbers — makes this seed stale and the michoi see
 gate goes **RED**. That RED means *re-seed*, not *regression*:
 
 ```
-make reseed          # re-mints gen-1 C-FREE: the committed seed recompiles the
-                     # backend to its own fixpoint, checks it self-reproduces,
-                     # runs hosted conformance, memory/I/O, wordcount and stack
-                     # headroom on the candidate, then rewrites gen1.seed + .sha256
-                     # (no C interpreter involved)
+make reseed          # the seed maker (tools/reseed.herb, a Herbert program the
+                     # committed seed builds): the seed compiles the new source,
+                     # the new compiler must rebuild itself byte for byte, within
+                     # 128 MiB, and give its answer to every case of make answers
+                     # (but checks/rebuild.cases, which asks for the old seed);
+                     # only then are gen1.seed and gen1.seed.sha256 replaced
 git add stack/compiler/*.herb stack/native_compile_fragment.herb \
         bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 make check && make test
@@ -69,3 +70,17 @@ byte-identical consecutive generations, then run the ordinary strict reseed
 and behavioral gates. Never remove the fixpoint check to advance a bootstrap.
 A newly introduced builtin also needs a capability stage before the compiler
 source can adopt it; the checked-stdin landing followed that order.
+
+The committed seed also builds the seed maker and the check runner, from the
+libraries as they stand, and the new compiler then has to give every answer
+with those same libraries. So a change to the language that the libraries or
+the checks' own programs must follow goes in stages too: first a compiler that
+takes both the old form and the new (reseed), then the libraries and programs
+moved to the new form, then a compiler that drops the old one (reseed again).
+
+The steps the seed maker takes, and what it leaves after a refusal or a run cut
+off, are set out at the top of `tools/reseed.herb`; `make seeds` checks it
+([VERIFYING.md](../../VERIFYING.md)). Until the Python and shell checks leave,
+`make reseed-shell` still runs the shell script that made the seed before
+(`bootstrap/tests/reseed_gen1.sh`), which holds a new compiler to the Python
+conformance run instead.

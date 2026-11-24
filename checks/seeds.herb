@@ -1,0 +1,784 @@
+-- The seed maker's checks. The seed maker (tools/reseed.herb) is the one
+-- program that may replace the compiler's seed, so it is held to this: it
+-- must write a new seed only when the old seed builds a new compiler that
+-- rebuilds itself and gives every answer, and must refuse everything else
+-- with the seed and its checksum left as they were. Needs lib/linux.herb,
+-- lib/text.herb, lib/sha256.herb, lib/folder.herb and lib/child.herb in front.
+--
+--   seeds RESEED RUNNER STAND-IN ROOT UNDER
+--
+-- RESEED, RUNNER and STAND-IN are the built programs (tools/reseed.herb,
+-- checks/run.herb and checks/seed_stand_in.herb), ROOT the checkout, whose
+-- seed and compiler source are read and never written, and UNDER a folder to
+-- work under. All are absolute paths, and UNDER's may hold no line break (the
+-- stand-in's one-line source could not carry it). The check makes its own
+-- folder, UNDER/herbert-seeds-NUMBER (called WORK below). When every check
+-- passes it removes WORK; after any failure WORK stays and the check says
+-- where it is.
+--
+-- Exit status 0 when every check gave its answer, 1 when one did not, 2 when
+-- the check could not do its own work.
+--
+-- Each check gets a folder of its own, WORK/1, WORK/2 and so on, holding a
+-- checkout in small (tree: a seed, its checksum and a compiler's source, the
+-- three files the seed maker reads), a copy of the seed and checksum as they
+-- were put there (placed.seed, placed.sha256), the folder the seed maker
+-- works under (under) and what it printed (out, err). The seed maker is run
+-- on that tree and judged by seeds_judge: how it ended, what it said, what
+-- the three files hold afterwards, and what it left behind.
+--
+-- Most checks use the stand-in for a seed: a program that copies itself where
+-- a compiler would compile, and whose source is one line saying how to fail.
+-- Three use the real seed and the compiler's real source: one unchanged,
+-- which must be found current, and two with a line added on top, which moves
+-- every line of the compiler down by one and so changes the numbers it keeps
+-- for its own fault messages: a new compiler, different in its bytes and the
+-- same in what it does. The new seed written from that is compared with what
+-- this check has the real seed build from the same source by itself.
+--
+-- The last checks are planted, as the check runner's planted cases are: a
+-- finished run is judged again against an answer that is wrong on purpose, or
+-- after what it left was changed on purpose, once for each thing seeds_judge
+-- can find, and the check passes only when exactly that is found. A judge
+-- that passed everything would fail them all.
+
+-- What a run needs. count is how many checks have their folder; how and value
+-- are how the seed maker last ended, as lib/child.herb gives it.
+ref record Seeds:
+    child: Child
+    tool: buffer
+    runner: buffer
+    work: string
+    count: int
+    how: int
+    value: int
+    passed: int
+    failed: int
+end
+
+func seeds_die(message):
+    do stderr_write("seed checks: ")
+    do stderr_write(message)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- The same once WORK is made: it says where WORK is, since it stays.
+func seeds_lost(s, message):
+    do stderr_write("seed checks: ")
+    do stderr_write(message)
+    do stderr_write("\nseed checks: what the run left is in ")
+    do stderr_write(s.work)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- a and then b, as one string.
+func seeds_join(a, b):
+    let out = new_buffer()
+    do text_add(out, a)
+    do text_add(out, b)
+    return freeze(out)
+end
+
+-- s as a path Linux can take (NUL-terminated).
+func seeds_path(s): return linux_cstring(s) end
+
+-- A file's bytes are passed around as (the bytes, how many). These make one
+-- from a text, from bytes and then a text, from a text and then bytes, and
+-- from bytes with the one at at changed to value.
+func seeds_text(t): return (linux_cstring(t), length(t)) end
+
+func seeds_then(f, t):
+    let b = linux_buffer(f.1 + length(t))
+    do buffer_copy(b, 0, f.0, 0, f.1)
+    do linux_text(b, f.1, t)
+    return (b, f.1 + length(t))
+end
+
+func seeds_after(t, f):
+    let b = linux_buffer(length(t) + f.1)
+    do linux_text(b, 0, t)
+    do buffer_copy(b, length(t), f.0, 0, f.1)
+    return (b, length(t) + f.1)
+end
+
+func seeds_with_byte(f, at, value):
+    let b = linux_buffer(f.1)
+    do buffer_copy(b, 0, f.0, 0, f.1)
+    do buffer_set(b, at, value)
+    return (b, f.1)
+end
+
+-- The file at path, of 64 MiB at most: (true, its bytes, how many), or
+-- (false, an empty buffer, 0) when it is not there or cannot be read. A link
+-- is followed, and nothing is waited for: a pipe nobody writes to reads as
+-- an empty file.
+func seeds_file(path):
+    let fd = linux_open(path, 526336, 0)
+    if linux_error(fd): return (false, new_buffer(), 0) end
+    let stat = linux_buffer(144)
+    if linux_error(linux_fstat(fd, stat)) or linux_u64(stat, 48) > 67108864:
+        do linux_close(fd)
+        return (false, new_buffer(), 0)
+    end
+    let size = linux_u64(stat, 48)
+    let b = linux_buffer(size + 1)
+    let used = 0
+    let fine = true
+    let more = true
+    while more:
+        let n = linux_read(fd, b, used, size + 1 - used)
+        if linux_error(n):
+            if n != 0 - 4:
+                fine = false
+                more = false
+            end
+        elif n == 0 or used + n > size:
+            used = used + n
+            more = false
+        else:
+            used = used + n
+        end
+    end
+    do linux_close(fd)
+    if not fine or used > size: return (false, new_buffer(), 0) end
+    return (true, b, used)
+end
+
+-- Whether the file at path holds exactly the bytes f.
+func seeds_holds(path, f):
+    let got = seeds_file(path)
+    if not got.0 or got.2 != f.1: return false end
+    let i = 0
+    while i < f.1:
+        if buffer_get(got.1, i) != buffer_get(f.0, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- Whether the files at a and at b hold the same bytes; both must be there.
+func seeds_alike(a, b):
+    let got = seeds_file(a)
+    return got.0 and seeds_holds(b, (got.1, got.2))
+end
+
+-- A new file at path holding the bytes f, with the permissions mode. What is
+-- at path now, a file or a link, is removed first.
+func seeds_put(s, path, f, mode):
+    do linux_syscall6(87, buffer_address(path), 0, 0, 0, 0, 0)
+    let fd = linux_open(path, 655553, mode)
+    if linux_error(fd): do seeds_lost(s, "the check's own folder cannot be written in") end
+    let done = 0
+    while done < f.1:
+        let n = linux_write(fd, f.0, done, f.1 - done)
+        if linux_error(n):
+            if n != 0 - 4: do seeds_lost(s, "the check's own folder cannot be written in") end
+        else:
+            done = done + n
+        end
+    end
+    do linux_syscall6(91, fd, mode, 0, 0, 0, 0)
+    do linux_close(fd)
+    return 0
+end
+
+-- A new folder at path.
+func seeds_folder(s, path):
+    if linux_error(linux_syscall6(83, buffer_address(seeds_path(path)), 448, 0, 0, 0, 0)): do seeds_lost(s, "the check's own folder cannot be written in") end
+    return 0
+end
+
+-- The names the folder at path holds besides its own two (. and ..): (how
+-- many, the first of them), or (0 - 1, "") when it cannot be read. A link to
+-- a folder is followed.
+func seeds_names(path):
+    let fd = linux_open(seeds_path(path), 589824, 0)
+    if linux_error(fd): return (0 - 1, "") end
+    let names = linux_buffer(32768)
+    let total = 0
+    let first = ""
+    let more = true
+    while more:
+        let r = linux_syscall6(217, fd, buffer_address(names), 32768, 0, 0, 0)
+        if linux_error(r):
+            total = 0 - 1
+            more = false
+        elif r == 0:
+            more = false
+        else:
+            let at = 0
+            while at < r:
+                if not folder_dots(names, at + 19):
+                    if total == 0: first = text_string(names, at + 19, linux_nul_end(names, at + 19, r)) end
+                    total = total + 1
+                end
+                at = at + linux_u16(names, at + 16)
+            end
+        end
+    end
+    do linux_close(fd)
+    return (total, first)
+end
+
+-- What the checksum file of the seed f must hold: the 64 hex digits of its
+-- SHA-256, two spaces, name and a newline. name is "gen1.seed" in a right one.
+func seeds_pin(f, name):
+    let h = sha256_new()
+    do sha256_of(h, f.0, 0, f.1)
+    return seeds_text(seeds_join(seeds_join(sha256_hex(h), "  "), seeds_join(name, "\n")))
+end
+
+-- The folder of the next check, made new: WORK/N, with the folders of its
+-- small checkout and the folder its seed maker works under. Its path.
+func seeds_stage(s):
+    s.count = s.count + 1
+    let b = new_buffer()
+    do text_add(b, s.work)
+    do text_add(b, "/")
+    do text_add_whole(b, s.count)
+    let d = freeze(b)
+    do seeds_folder(s, d)
+    do seeds_folder(s, seeds_join(d, "/tree"))
+    do seeds_folder(s, seeds_join(d, "/tree/bootstrap"))
+    do seeds_folder(s, seeds_join(d, "/tree/bootstrap/seed"))
+    do seeds_folder(s, seeds_join(d, "/tree/stack"))
+    do seeds_folder(s, seeds_join(d, "/under"))
+    return d
+end
+
+-- Where the three files are in the check's folder d.
+func seeds_seed_path(d): return seeds_path(seeds_join(d, "/tree/bootstrap/seed/gen1.seed")) end
+func seeds_pin_path(d): return seeds_path(seeds_join(d, "/tree/bootstrap/seed/gen1.seed.sha256")) end
+func seeds_source_path(d): return seeds_path(seeds_join(d, "/tree/stack/native_compile_fragment.herb")) end
+
+-- Put the three files into the small checkout of d, and beside it a copy of
+-- the seed and the checksum as they are put there, which is what the seed
+-- maker's folder must hold after a refusal, whatever became of the two since.
+func seeds_tree(s, d, seed, pin, source):
+    do seeds_put(s, seeds_seed_path(d), seed, 420)
+    do seeds_put(s, seeds_pin_path(d), pin, 420)
+    do seeds_put(s, seeds_source_path(d), source, 420)
+    do seeds_put(s, seeds_path(seeds_join(d, "/placed.seed")), seed, 420)
+    do seeds_put(s, seeds_path(seeds_join(d, "/placed.sha256")), pin, 420)
+    return 0
+end
+
+-- Make what is at path, a file or a folder, a link: the thing itself moves
+-- to d/aside, outside the small checkout, and a link to it takes its place.
+func seeds_link(s, d, path):
+    let aside = seeds_path(seeds_join(d, "/aside"))
+    if linux_error(linux_syscall6(82, buffer_address(path), buffer_address(aside), 0, 0, 0, 0)): do seeds_lost(s, "the check's own folder cannot be written in") end
+    if linux_error(linux_syscall6(88, buffer_address(aside), buffer_address(path), 0, 0, 0, 0)): do seeds_lost(s, "the check's own folder cannot be written in") end
+    return 0
+end
+
+-- Run the seed maker on the small checkout of d, with one to four files of
+-- cases (s.child.none for one not given; the given ones come first). What it
+-- prints goes to d/out and d/err, and how it ended is kept in s.
+func seeds_run(s, d, c1, c2, c3, c4):
+    let none = s.child.none
+    let argv = child_arguments(8)
+    do child_argument(argv, 0, s.tool)
+    do child_argument(argv, 1, seeds_path(seeds_join(d, "/tree")))
+    do child_argument(argv, 2, s.runner)
+    do child_argument(argv, 3, seeds_path(seeds_join(d, "/under")))
+    do child_argument(argv, 4, c1)
+    if buffer_get(c2, 0) != 0: do child_argument(argv, 5, c2) end
+    if buffer_get(c3, 0) != 0: do child_argument(argv, 6, c3) end
+    if buffer_get(c4, 0) != 0: do child_argument(argv, 7, c4) end
+    let ran = child_run(s.child, none, s.tool, argv, none, seeds_path(seeds_join(d, "/out")), seeds_path(seeds_join(d, "/err")), 300)
+    s.how = ran.0
+    s.value = ran.1
+    return 0
+end
+
+-- Where the line that starts at at in f ends: its newline, or the end.
+func seeds_line_end(f, at):
+    while at < f.1 and buffer_get(f.0, at) != 10: at = at + 1 end
+    return at
+end
+
+-- Whether the file at path holds the line given, as a whole line.
+func seeds_has_line(path, line):
+    let got = seeds_file(path)
+    if not got.0: return false end
+    let f = (got.1, got.2)
+    let at = 0
+    while at < f.1:
+        let stop = seeds_line_end(f, at)
+        if text_is(f.0, at, stop, line): return true end
+        at = stop + 1
+    end
+    return false
+end
+
+-- Whether a line of the file at path starts with the words given.
+func seeds_has_start(path, words):
+    let got = seeds_file(path)
+    if not got.0: return false end
+    let f = (got.1, got.2)
+    let at = 0
+    while at < f.1:
+        let stop = seeds_line_end(f, at)
+        if text_starts(f.0, at, stop, words): return true end
+        at = stop + 1
+    end
+    return false
+end
+
+-- Whether the seed maker's own words on standard error (the file at path)
+-- are the ones expected. With said empty the file must be empty. Otherwise
+-- its first line that starts "reseed: " must be said, exactly; lines before
+-- it are the check runner's, whose standard error is the seed maker's too.
+func seeds_said(path, said):
+    let got = seeds_file(path)
+    if not got.0: return false end
+    if length(said) == 0: return got.2 == 0 end
+    let f = (got.1, got.2)
+    let at = 0
+    while at < f.1:
+        let stop = seeds_line_end(f, at)
+        if text_starts(f.0, at, stop, "reseed: "): return text_is(f.0, at, stop, said) end
+        at = stop + 1
+    end
+    return false
+end
+
+-- Judge the seed maker's run in d: "" when everything is as expected, or the
+-- first thing that is not. status is the exit status expected, said its
+-- first words on standard error ("" for none) and line a line its standard
+-- output must hold ("" for none asked). seed, pin and source are what the
+-- three files must hold afterwards. kept says whether it must have left its
+-- own folder under d/under (after a refusal that came once that folder was
+-- made): then that folder must be the one thing there, a line on standard
+-- error must say where it is, and it must hold the seed and the checksum as
+-- they were put into the checkout. Otherwise it must have left nothing there
+-- and spoken of no folder. unrun says that no compiler may have run: the
+-- check's seed or source then leaves the file d/ran if it is ever started,
+-- and that file must not be there.
+func seeds_judge(s, d, status, said, line, seed, pin, source, kept, unrun):
+    if s.how == 1: return "the seed maker was stopped by a signal" end
+    if s.how != 0: return "the seed maker could not be started" end
+    let err = seeds_path(seeds_join(d, "/err"))
+    if not seeds_said(err, said): return "the seed maker's words on standard error are not the ones expected" end
+    if s.value != status: return "the seed maker's exit status is wrong" end
+    if length(line) != 0 and not seeds_has_line(seeds_path(seeds_join(d, "/out")), line): return "the seed maker did not say what it did" end
+    if not seeds_holds(seeds_seed_path(d), seed): return "the seed is not the one expected" end
+    if not seeds_holds(seeds_pin_path(d), pin): return "the seed's checksum is not the one expected" end
+    if not seeds_holds(seeds_source_path(d), source): return "the compiler's source is not as it was" end
+    if seeds_names(seeds_join(d, "/tree/bootstrap/seed")).0 != 2: return "the seed's folder holds more than the seed and its checksum" end
+    let left = seeds_names(seeds_join(d, "/under"))
+    if kept and left.0 != 1: return "the seed maker left no folder after its refusal" end
+    if not kept and left.0 != 0: return "the seed maker left its folder behind" end
+    if kept:
+        let folder = seeds_join(seeds_join(d, "/under/"), left.1)
+        if not seeds_has_line(err, seeds_join("reseed: what the run left is in ", folder)): return "the seed maker did not say where it left its folder" end
+        if not seeds_alike(seeds_path(seeds_join(d, "/placed.seed")), seeds_path(seeds_join(folder, "/previous.seed"))): return "the folder left does not hold the seed and its checksum as they were" end
+        if not seeds_alike(seeds_path(seeds_join(d, "/placed.sha256")), seeds_path(seeds_join(folder, "/previous.sha256"))): return "the folder left does not hold the seed and its checksum as they were" end
+    elif seeds_has_start(err, "reseed: what the run left is in "):
+        return "the seed maker spoke of a folder it did not leave"
+    end
+    if unrun and seeds_file(seeds_path(seeds_join(d, "/ran"))).0: return "a compiler was run" end
+    return ""
+end
+
+-- Count one check and say so when it did not give its answer. planted is ""
+-- for a check that must pass, and otherwise what seeds_judge must find; that
+-- check passes only on exactly that finding.
+func seeds_tally(s, name, why, planted):
+    if equal(why, planted):
+        s.passed = s.passed + 1
+        return 0
+    end
+    s.failed = s.failed + 1
+    let line = new_buffer()
+    do text_add(line, "FAIL ")
+    do text_add(line, name)
+    do text_add(line, ": ")
+    if length(planted) == 0:
+        do text_add(line, why)
+    elif length(why) == 0:
+        do text_add(line, "this failure was planted and the check did not catch it")
+    else:
+        do text_add(line, "this failure was planted and the check found something else: ")
+        do text_add(line, why)
+    end
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+-- The source that asks the stand-in for word.
+func seeds_ask(word): return seeds_text(seeds_join(seeds_join("-- stand-in ", word), "\n")) end
+
+-- The source that asks the stand-in to add its line to the file at path.
+func seeds_ask_edit(path): return seeds_text(seeds_join(seeds_join("-- stand-in edit ", path), "\n")) end
+
+-- One check of a refusal: the three files given go into a new checkout, the
+-- seed maker is run, and it must end with status 1, say said and leave the
+-- three files as they were given. Its folder, for a planted check to judge
+-- again.
+--   twist   what is done to the checkout first: 0 nothing; 1, 2, 3 the seed,
+--           its checksum or the source is made a link; 4 the seed's folder is
+--           made a link; 5 the seed is made a pipe (and then reads as empty);
+--           6, 7 the folder bootstrap or the folder stack is made a link
+--   cases   the file of cases, and last a second file given after it (given
+--           fourth, with cases repeated between), or s.child.none
+--   marked  the refusal must come before any compiler runs: the source given
+--           is set aside for one that has the stand-in leave the file d/ran
+func seeds_refusal(s, name, seed, pin, source, twist, cases, last, said, kept, marked):
+    let d = seeds_stage(s)
+    if marked: source = seeds_ask_edit(seeds_join(d, "/ran")) end
+    do seeds_tree(s, d, seed, pin, source)
+    if twist == 1: do seeds_link(s, d, seeds_seed_path(d)) end
+    if twist == 2: do seeds_link(s, d, seeds_pin_path(d)) end
+    if twist == 3: do seeds_link(s, d, seeds_source_path(d)) end
+    if twist == 4: do seeds_link(s, d, seeds_path(seeds_join(d, "/tree/bootstrap/seed"))) end
+    if twist == 6: do seeds_link(s, d, seeds_path(seeds_join(d, "/tree/bootstrap"))) end
+    if twist == 7: do seeds_link(s, d, seeds_path(seeds_join(d, "/tree/stack"))) end
+    if twist == 5:
+        do linux_syscall6(87, buffer_address(seeds_seed_path(d)), 0, 0, 0, 0, 0)
+        if linux_error(linux_syscall6(133, buffer_address(seeds_seed_path(d)), 4516, 0, 0, 0, 0)): do seeds_lost(s, "the check's own folder cannot be written in") end
+        seed = seeds_text("")
+    end
+    let none = s.child.none
+    if buffer_get(last, 0) != 0:
+        do seeds_run(s, d, cases, cases, cases, last)
+    else:
+        do seeds_run(s, d, cases, none, none, none)
+    end
+    do seeds_tally(s, name, seeds_judge(s, d, 1, said, "", seed, pin, source, kept, marked), "")
+    return d
+end
+
+-- What this check has the compiler at seed build from source by itself, in
+-- the new folder WORK/own: the program's bytes.
+func seeds_build(s, seed, source):
+    let own = seeds_join(s.work, "/own")
+    do seeds_folder(s, own)
+    do seeds_put(s, seeds_path(seeds_join(own, "/compiler")), seed, 448)
+    do seeds_put(s, seeds_path(seeds_join(own, "/source.herb")), source, 420)
+    let compiler = seeds_path("./compiler")
+    let argv = child_arguments(1)
+    do child_argument(argv, 0, compiler)
+    let ran = child_run(s.child, seeds_path(own), compiler, argv, seeds_path("source.herb"), seeds_path("compiler.stdout"), seeds_path("compiler.stderr"), 120)
+    let made = seeds_file(seeds_path(seeds_join(own, "/a.out")))
+    if ran.0 != 0 or ran.1 != 0 or not made.0: do seeds_lost(s, "the real seed could not build the compiler's source with a line added") end
+    return (made.1, made.2)
+end
+
+-- A file of one case for the stand-in when it is the new compiler: the
+-- case's source asks it for word with path (edit: add its line to the file
+-- there; relink: make the folder there a link), which it does while the
+-- cases run, and what it builds must be the file "expected" in the checkout,
+-- which a copy of itself is. So the case passes and the checkout has changed.
+func seeds_asking_case(word, path):
+    return seeds_text(seeds_join(seeds_join(seeds_join(seeds_join("case the new compiler changes the checkout while the cases run\nsource until ----\n-- stand-in ", word), " "), path), "\n----\nbuilds expected\nend\ncases 1\n"))
+end
+
+-- An argument that must be an absolute path.
+func seeds_argument(args, k):
+    let a = linux_argument(args, k)
+    if length(a) == 0 or index(a, 0) != 47: do seeds_die("usage: seeds RESEED RUNNER STAND-IN ROOT UNDER (absolute paths)") end
+    return a
+end
+
+-- A program this check starts, as a path Linux can take: it must be there and
+-- may be run.
+func seeds_program(a):
+    let path = linux_cstring(a)
+    if linux_error(linux_syscall6(21, buffer_address(path), 1, 0, 0, 0, 0)): do seeds_die("a program the check starts is not there, or may not be run") end
+    return path
+end
+
+func main():
+    -- Standard input, output and error must be open: a file opened later would
+    -- otherwise be given one of their numbers and be taken for it.
+    let low = linux_open(linux_cstring("/dev/null"), 2, 0)
+    while low < 3: low = linux_open(linux_cstring("/dev/null"), 2, 0) end
+    do linux_close(low)
+    let args = linux_arguments()
+    if linux_argument_count(args) != 6: do seeds_die("usage: seeds RESEED RUNNER STAND-IN ROOT UNDER (absolute paths)") end
+    let tool = seeds_program(seeds_argument(args, 1))
+    let runner = seeds_program(seeds_argument(args, 2))
+    let stand_in = seeds_argument(args, 3)
+    let root = seeds_argument(args, 4)
+    let under = seeds_argument(args, 5)
+    let k = 0
+    while k < length(under):
+        if index(under, k) == 10: do seeds_die("the folder to work under has a line break in its name") end
+        k = k + 1
+    end
+    -- Ten minutes for everything; Linux then stops this check, and with it
+    -- every program it started.
+    do linux_syscall6(37, 600, 0, 0, 0, 0, 0)
+    let got = seeds_file(seeds_path(stand_in))
+    if not got.0: do seeds_die("the stand-in compiler cannot be read") end
+    let stand = (got.1, got.2)
+    got = seeds_file(seeds_path(seeds_join(root, "/bootstrap/seed/gen1.seed")))
+    if not got.0: do seeds_die("ROOT's seed cannot be read") end
+    let real = (got.1, got.2)
+    got = seeds_file(seeds_path(seeds_join(root, "/stack/native_compile_fragment.herb")))
+    if not got.0: do seeds_die("ROOT's compiler source cannot be read") end
+    let real_source = (got.1, got.2)
+    let own = folder_own(under, "herbert-seeds")
+    if own.0 != 0: do seeds_die("the check's own folder cannot be made under the folder given") end
+    let s = Seeds(child_new(), tool, runner, own.1, 0, 0, 0, 0, 0)
+    let none = s.child.none
+
+    -- The files of cases the seed maker is given: one case any compiler
+    -- answers and a refusal only the real one words rightly; one case whose
+    -- answer is wrong; a name with no file; and a case that asks only that
+    -- what the compiler builds be the file "expected" in the checkout, which
+    -- the stand-in grown by its line "settled" passes and the stand-in itself
+    -- does not, since each writes a copy of itself.
+    let passing = seeds_path(seeds_join(s.work, "/passing.cases"))
+    do seeds_put(s, passing, seeds_text("case a sum\nsource until ----\nfunc main():\n    return 40 + 2\nend\n----\nstdout until ----\n42\n----\nend\ncase a call of nothing is refused\nsource until ----\nfunc main():\n    return nope()\nend\n----\nrefused until ----\nline 2: native-subset: unknown callee 'nope' (ERR 419)\n----\nend\ncases 2\n"), 420)
+    let failing = seeds_path(seeds_join(s.work, "/failing.cases"))
+    do seeds_put(s, failing, seeds_text("case a sum with the wrong answer\nsource until ----\nfunc main():\n    return 40 + 2\nend\n----\nstdout until ----\n43\n----\nend\ncases 1\n"), 420)
+    let missing = seeds_path(seeds_join(s.work, "/no-such.cases"))
+    let itself = seeds_path(seeds_join(s.work, "/itself.cases"))
+    do seeds_put(s, itself, seeds_text("case the compiler under check is the new one\nsource until ----\n-- any source: the stand-in copies itself\n----\nbuilds expected\nend\ncases 1\n"), 420)
+
+    let pin = seeds_pin(stand, "gen1.seed")
+    let same = seeds_ask("same")
+    let settle = seeds_ask("settle")
+    let grown = seeds_then(stand, "settled\n")
+    let grown_pin = seeds_pin(grown, "gen1.seed")
+    let current = "reseed: the seed is current: it builds the compiler's source into itself, byte for byte. Nothing was written."
+    let written = "reseed: new seed written: bootstrap/seed/gen1.seed, with its checksum:"
+    let no_match = "reseed: the seed does not match its checksum; no compiler was run"
+    let no_program = "reseed: the seed is not a Linux x86-64 program; no compiler was run"
+    let no_seed = "reseed: the seed (bootstrap/seed/gen1.seed) is not a plain file that can be read; no compiler was run"
+    let changed = "reseed: the seed, its checksum or the compiler's source changed during the run; nothing was written"
+    let no_rebuild = "reseed: the new compiler does not rebuild itself byte for byte; the seed is unchanged"
+    let late = "reseed: the new compiler compiling its own source: the compiler ended with an error status; the seed is unchanged"
+
+    -- A seed that is current.
+    let d = seeds_stage(s)
+    do seeds_tree(s, d, stand, pin, same)
+    do seeds_run(s, d, passing, none, none, none)
+    do seeds_tally(s, "a seed that builds itself is current, and nothing is written", seeds_judge(s, d, 0, "", current, stand, pin, same, false, false), "")
+    let d_current = d
+
+    -- Refused before any compiler is run. The source asks the stand-in to
+    -- leave a mark if it is ever started; the script and the two seeds for
+    -- other machines could not read it, and the script leaves the mark itself
+    -- (the seed maker runs a compiler three folders below the check's own).
+    let zeros = seeds_text("0000000000000000000000000000000000000000000000000000000000000000  gen1.seed\n")
+    let d_unrun = seeds_refusal(s, "a checksum that is another seed's", stand, zeros, same, 0, passing, none, no_match, false, true)
+    let d_second = seeds_refusal(s, "a checksum file with a second line", stand, seeds_then(pin, "and a second line\n"), same, 0, passing, none, no_match, false, true)
+    do seeds_refusal(s, "a checksum file that ends without its newline", stand, (pin.0, 75), same, 0, passing, none, no_match, false, true)
+    do seeds_refusal(s, "a checksum file that names another file", stand, seeds_pin(stand, "gen2.seed"), same, 0, passing, none, no_match, false, true)
+    let script = seeds_text("#!/bin/sh\n: > ../../../ran\necho 0\n")
+    do seeds_refusal(s, "a seed that is a script, under its right checksum", script, seeds_pin(script, "gen1.seed"), same, 0, passing, none, no_program, false, true)
+    let other = seeds_with_byte(stand, 18, 183)
+    do seeds_refusal(s, "a seed for another kind of processor, under its right checksum", other, seeds_pin(other, "gen1.seed"), same, 0, passing, none, no_program, false, true)
+    other = seeds_with_byte(stand, 19, 1)
+    do seeds_refusal(s, "a seed whose processor number is right in its low byte only, under its right checksum", other, seeds_pin(other, "gen1.seed"), same, 0, passing, none, no_program, false, true)
+    other = seeds_with_byte(stand, 4, 1)
+    do seeds_refusal(s, "a seed that is a 32-bit program, under its right checksum", other, seeds_pin(other, "gen1.seed"), same, 0, passing, none, no_program, false, true)
+    other = seeds_with_byte(stand, 5, 2)
+    do seeds_refusal(s, "a seed marked high byte first, under its right checksum", other, seeds_pin(other, "gen1.seed"), same, 0, passing, none, no_program, false, true)
+    do seeds_refusal(s, "a seed that is a link", stand, pin, same, 1, passing, none, no_seed, false, true)
+    do seeds_refusal(s, "a checksum that is a link", stand, pin, same, 2, passing, none, "reseed: the seed's checksum (bootstrap/seed/gen1.seed.sha256) is not a plain file that can be read; no compiler was run", false, true)
+    do seeds_refusal(s, "a compiler's source that is a link", stand, pin, same, 3, passing, none, "reseed: the compiler's source (stack/native_compile_fragment.herb) is not a plain file that can be read; no compiler was run", false, true)
+    do seeds_refusal(s, "a seed that is a pipe", stand, pin, same, 5, passing, none, no_seed, false, true)
+    let no_folder = "reseed: bootstrap, bootstrap/seed or stack in the checkout is not a folder of its own (a link, or not there); no compiler was run"
+    do seeds_refusal(s, "a seed's folder that is a link to another", stand, pin, same, 4, passing, none, no_folder, false, true)
+    do seeds_refusal(s, "a folder bootstrap that is a link to another", stand, pin, same, 6, passing, none, no_folder, false, true)
+    do seeds_refusal(s, "a folder stack that is a link to another", stand, pin, same, 7, passing, none, no_folder, false, true)
+    do seeds_refusal(s, "a file of cases whose path does not start at the root", stand, pin, same, 0, seeds_path("passing.cases"), none, "reseed: usage: reseed ROOT RUNNER UNDER CASES... (absolute paths)", false, true)
+
+    -- A compile that does not do all a compile must. From here on the seed
+    -- maker has made its folder, and must leave it after a refusal.
+    let ends_badly = "reseed: the seed compiling the compiler's source: the compiler ended with an error status; the seed is unchanged"
+    let d_status = seeds_refusal(s, "a seed that ends with an error status", stand, pin, seeds_ask("status"), 0, passing, none, ends_badly, true, false)
+    do seeds_refusal(s, "a seed that says something on standard error", stand, pin, seeds_ask("noisy"), 0, passing, none, "reseed: the seed compiling the compiler's source: the compiler complained; the seed is unchanged", true, false)
+    do seeds_refusal(s, "a seed that prints more than its marker", stand, pin, seeds_ask("marker"), 0, passing, none, "reseed: the seed compiling the compiler's source: the compiler did not print its marker 0; the seed is unchanged", true, false)
+    do seeds_refusal(s, "a seed that writes no program", stand, pin, seeds_ask("nothing"), 0, passing, none, "reseed: the seed compiling the compiler's source: the compiler wrote no program; the seed is unchanged", true, false)
+    do seeds_refusal(s, "a seed that writes a script", stand, pin, seeds_ask("text"), 0, passing, none, "reseed: the seed compiling the compiler's source: what the compiler wrote is not a Linux x86-64 program; the seed is unchanged", true, false)
+    do seeds_refusal(s, "a seed stopped by a signal after it wrote its program", stand, pin, seeds_ask("crash"), 0, passing, none, "reseed: the seed compiling the compiler's source: the compiler was stopped by a signal; the seed is unchanged", true, false)
+    let d_late = seeds_refusal(s, "a new compiler that fails where the seed did not", stand, pin, seeds_ask("late"), 0, passing, none, late, true, false)
+    do seeds_refusal(s, "a new compiler that needs more than 128 MiB", stand, pin, seeds_ask("heavy"), 0, passing, none, "reseed: the new compiler compiling its own source: the compiler had more than 128 MiB in use; the seed is unchanged", true, false)
+    let d_kept = seeds_refusal(s, "a new compiler that does not rebuild itself", stand, pin, seeds_ask("drift"), 0, passing, none, no_rebuild, true, false)
+
+    -- A new compiler that rebuilds itself and fails the cases, or whose cases
+    -- cannot be run.
+    do seeds_refusal(s, "a new compiler that does not give every answer", stand, pin, settle, 0, failing, none, "reseed: the new compiler did not give every answer; the seed is unchanged", true, false)
+    do seeds_refusal(s, "cases that cannot be run", stand, pin, settle, 0, missing, none, "reseed: the checks could not be run; the seed is unchanged", true, false)
+
+    -- The cases must be given the new compiler, not the seed: the one case
+    -- of itself.cases is answered by the new compiler alone. So the seed
+    -- maker must write the new seed here, the stand-in grown by its line.
+    d = seeds_stage(s)
+    do seeds_tree(s, d, stand, pin, settle)
+    do seeds_put(s, seeds_path(seeds_join(d, "/tree/expected")), grown, 420)
+    do seeds_run(s, d, itself, none, none, none)
+    do seeds_tally(s, "the cases are given the new compiler, and a new seed that passes them is written", seeds_judge(s, d, 0, "", written, grown, grown_pin, settle, false, false), "")
+
+    -- The same, with the seed's folder closed to writing: the new seed cannot
+    -- be put beside the old one, and the old pair must stay. Linux lets its
+    -- administrator write anywhere, so there this cannot be checked.
+    if linux_syscall6(102, 0, 0, 0, 0, 0, 0) == 0:
+        do flogger("seed checks: run by the administrator, so a seed's folder that cannot be written in is not checked\n")
+    else:
+        d = seeds_stage(s)
+        do seeds_tree(s, d, stand, pin, settle)
+        do seeds_put(s, seeds_path(seeds_join(d, "/tree/expected")), grown, 420)
+        let closed = seeds_path(seeds_join(d, "/tree/bootstrap/seed"))
+        do linux_syscall6(90, buffer_address(closed), 320, 0, 0, 0, 0)
+        do seeds_run(s, d, itself, none, none, none)
+        do linux_syscall6(90, buffer_address(closed), 448, 0, 0, 0, 0)
+        do seeds_tally(s, "a seed's folder that cannot be written in", seeds_judge(s, d, 1, "reseed: no folder could be made beside the seed; the seed and its checksum are as they were", "", stand, pin, settle, true, false), "")
+    end
+
+    -- One of the three files changed while the compilers ran. The stand-in
+    -- adds its line each time it runs, and it runs twice.
+    let once = "changed by the stand-in\n"
+    let twice = "changed by the stand-in\nchanged by the stand-in\n"
+    d = seeds_stage(s)
+    let edit = seeds_ask_edit(seeds_join(d, "/tree/bootstrap/seed/gen1.seed"))
+    do seeds_tree(s, d, stand, pin, edit)
+    do seeds_run(s, d, passing, none, none, none)
+    do seeds_tally(s, "the seed changed while the compilers ran", seeds_judge(s, d, 1, changed, "", seeds_then(stand, twice), pin, edit, true, false), "")
+    d = seeds_stage(s)
+    edit = seeds_ask_edit(seeds_join(d, "/tree/bootstrap/seed/gen1.seed.sha256"))
+    do seeds_tree(s, d, stand, pin, edit)
+    do seeds_run(s, d, passing, none, none, none)
+    do seeds_tally(s, "the seed's checksum changed while the compilers ran", seeds_judge(s, d, 1, changed, "", stand, seeds_then(pin, twice), edit, true, false), "")
+    d = seeds_stage(s)
+    edit = seeds_ask_edit(seeds_join(d, "/tree/stack/native_compile_fragment.herb"))
+    do seeds_tree(s, d, stand, pin, edit)
+    do seeds_run(s, d, passing, none, none, none)
+    do seeds_tally(s, "the compiler's source changed while the compilers ran", seeds_judge(s, d, 1, changed, "", stand, pin, seeds_then(edit, twice), true, false), "")
+
+    -- One of the three files changed while the cases ran: the new compiler
+    -- is the stand-in, and the one case's source asks it to add its line.
+    d = seeds_stage(s)
+    let editing = seeds_path(seeds_join(d, "/editing.cases"))
+    do seeds_put(s, editing, seeds_asking_case("edit", seeds_join(d, "/tree/bootstrap/seed/gen1.seed")), 420)
+    do seeds_tree(s, d, stand, pin, settle)
+    do seeds_put(s, seeds_path(seeds_join(d, "/tree/expected")), grown, 420)
+    do seeds_run(s, d, editing, none, none, none)
+    do seeds_tally(s, "the seed changed while the cases ran", seeds_judge(s, d, 1, changed, "", seeds_then(stand, once), pin, settle, true, false), "")
+    d = seeds_stage(s)
+    editing = seeds_path(seeds_join(d, "/editing.cases"))
+    do seeds_put(s, editing, seeds_asking_case("edit", seeds_join(d, "/tree/bootstrap/seed/gen1.seed.sha256")), 420)
+    do seeds_tree(s, d, stand, pin, settle)
+    do seeds_put(s, seeds_path(seeds_join(d, "/tree/expected")), grown, 420)
+    do seeds_run(s, d, editing, none, none, none)
+    do seeds_tally(s, "the seed's checksum changed while the cases ran", seeds_judge(s, d, 1, changed, "", stand, seeds_then(pin, once), settle, true, false), "")
+    d = seeds_stage(s)
+    editing = seeds_path(seeds_join(d, "/editing.cases"))
+    do seeds_put(s, editing, seeds_asking_case("edit", seeds_join(d, "/tree/stack/native_compile_fragment.herb")), 420)
+    do seeds_tree(s, d, stand, pin, settle)
+    do seeds_put(s, seeds_path(seeds_join(d, "/tree/expected")), grown, 420)
+    do seeds_run(s, d, editing, none, none, none)
+    do seeds_tally(s, "the compiler's source changed while the cases ran", seeds_judge(s, d, 1, changed, "", stand, pin, seeds_then(settle, once), true, false), "")
+
+    -- The seed's folder made a link while the run was under way, the same
+    -- files to be found through it: by the seed as it compiles (it compiles
+    -- into itself, and without the link the seed would be current), and by
+    -- the new compiler as the cases run (without it, a new seed would be
+    -- written through the link).
+    d = seeds_stage(s)
+    edit = seeds_text(seeds_join(seeds_join("-- stand-in relink ", seeds_join(d, "/tree/bootstrap/seed")), "\n"))
+    do seeds_tree(s, d, stand, pin, edit)
+    do seeds_run(s, d, passing, none, none, none)
+    do seeds_tally(s, "the seed's folder made a link while the compilers ran", seeds_judge(s, d, 1, changed, "", stand, pin, edit, true, false), "")
+    d = seeds_stage(s)
+    editing = seeds_path(seeds_join(d, "/editing.cases"))
+    do seeds_put(s, editing, seeds_asking_case("relink", seeds_join(d, "/tree/bootstrap/seed")), 420)
+    do seeds_tree(s, d, stand, pin, settle)
+    do seeds_put(s, seeds_path(seeds_join(d, "/tree/expected")), grown, 420)
+    do seeds_run(s, d, editing, none, none, none)
+    do seeds_tally(s, "the seed's folder made a link while the cases ran", seeds_judge(s, d, 1, changed, "", stand, pin, settle, true, false), "")
+
+    -- The real seed and the compiler's real source.
+    let real_pin = seeds_pin(real, "gen1.seed")
+    d = seeds_stage(s)
+    do seeds_tree(s, d, real, real_pin, real_source)
+    do seeds_run(s, d, passing, none, none, none)
+    do seeds_tally(s, "the real seed is current for the compiler's real source", seeds_judge(s, d, 0, "", current, real, real_pin, real_source, false, false), "")
+    let moved = seeds_after("-- A line on top, which moves every line of the compiler down by one.\n", real_source)
+    let next = seeds_build(s, real, moved)
+    let next_pin = seeds_pin(next, "gen1.seed")
+    d = seeds_stage(s)
+    do seeds_tree(s, d, real, real_pin, moved)
+    do seeds_run(s, d, passing, none, none, none)
+    let why = seeds_judge(s, d, 0, "", written, next, next_pin, moved, false, false)
+    if length(why) == 0 and seeds_holds(seeds_seed_path(d), real): why = "the new seed is the old seed: the line added changed nothing" end
+    if length(why) == 0 and not seeds_has_line(seeds_path(seeds_join(d, "/out")), text_string(next_pin.0, 0, 75)): why = "the seed maker did not print the new checksum" end
+    let stat = linux_buffer(144)
+    if length(why) == 0 and (linux_error(linux_syscall6(4, buffer_address(seeds_seed_path(d)), buffer_address(stat), 0, 0, 0, 0)) or (linux_u32(stat, 24) & 4095) != 420): why = "the new seed's permissions are not 0644" end
+    if length(why) == 0 and (linux_error(linux_syscall6(4, buffer_address(seeds_pin_path(d)), buffer_address(stat), 0, 0, 0, 0)) or (linux_u32(stat, 24) & 4095) != 420): why = "the new checksum's permissions are not 0644" end
+    do seeds_tally(s, "a line added to the compiler's source makes a new seed, the one the old seed builds from it", why, "")
+    let d_new = d
+    do seeds_refusal(s, "a new compiler that fails a case in the fourth file of cases", real, real_pin, moved, 0, passing, failing, "reseed: the new compiler did not give every answer; the seed is unchanged", true, false)
+
+    -- Planted. Each judges a finished run again with one thing wrong on
+    -- purpose, in the answer expected or in what the run left, and all else as
+    -- it was; how the run ended is set by hand to what it really was, or to
+    -- what is planted.
+    s.how = 1
+    s.value = 0
+    do seeds_tally(s, "planted: a seed maker stopped by a signal", seeds_judge(s, d_current, 0, "", current, stand, pin, same, false, false), "the seed maker was stopped by a signal")
+    s.how = 2
+    do seeds_tally(s, "planted: a seed maker that could not be started", seeds_judge(s, d_current, 0, "", current, stand, pin, same, false, false), "the seed maker could not be started")
+    s.how = 0
+    let mark = seeds_ask_edit(seeds_join(d_unrun, "/ran"))
+    do seeds_tally(s, "planted: no refusal where one is expected", seeds_judge(s, d_current, 0, no_match, current, stand, pin, same, false, false), "the seed maker's words on standard error are not the ones expected")
+    do seeds_tally(s, "planted: a run that does not say what it did", seeds_judge(s, d_current, 0, "", written, stand, pin, same, false, false), "the seed maker did not say what it did")
+    do seeds_tally(s, "planted: a refusal that ends with status 0", seeds_judge(s, d_unrun, 1, no_match, "", stand, zeros, mark, false, true), "the seed maker's exit status is wrong")
+    do seeds_tally(s, "planted: a new seed where the old one is expected", seeds_judge(s, d_new, 0, "", written, real, next_pin, moved, false, false), "the seed is not the one expected")
+    do seeds_tally(s, "planted: a new checksum where the old one is expected", seeds_judge(s, d_new, 0, "", written, next, real_pin, moved, false, false), "the seed's checksum is not the one expected")
+    do seeds_tally(s, "planted: a source that is not as it was", seeds_judge(s, d_new, 0, "", written, next, next_pin, real_source, false, false), "the compiler's source is not as it was")
+    do seeds_tally(s, "planted: no folder left after a refusal", seeds_judge(s, d_new, 0, "", written, next, next_pin, moved, true, false), "the seed maker left no folder after its refusal")
+    do seeds_put(s, seeds_path(seeds_join(d_current, "/tree/bootstrap/seed/planted.left")), seeds_text(""), 420)
+    do seeds_tally(s, "planted: something left beside the seed", seeds_judge(s, d_current, 0, "", current, stand, pin, same, false, false), "the seed's folder holds more than the seed and its checksum")
+    s.value = 1
+    do seeds_tally(s, "planted: a refusal where none is expected", seeds_judge(s, d_unrun, 1, "", "", stand, zeros, mark, false, true), "the seed maker's words on standard error are not the ones expected")
+    do seeds_tally(s, "planted: a refusal in other words", seeds_judge(s, d_unrun, 1, changed, "", stand, zeros, mark, false, true), "the seed maker's words on standard error are not the ones expected")
+    let kept_err = seeds_path(seeds_join(d_kept, "/err"))
+    do seeds_put(s, kept_err, seeds_text(seeds_join(no_rebuild, "\n")), 420)
+    do seeds_tally(s, "planted: a refusal that does not say where its folder is", seeds_judge(s, d_kept, 1, no_rebuild, "", stand, pin, seeds_ask("drift"), true, false), "the seed maker did not say where it left its folder")
+    do seeds_tally(s, "planted: a folder left behind and not spoken of", seeds_judge(s, d_kept, 1, no_rebuild, "", stand, pin, seeds_ask("drift"), false, false), "the seed maker left its folder behind")
+    let late_left = seeds_names(seeds_join(d_late, "/under"))
+    do seeds_put(s, seeds_path(seeds_join(seeds_join(seeds_join(d_late, "/under/"), late_left.1), "/previous.seed")), grown, 420)
+    do seeds_tally(s, "planted: a folder left without the seed as it was", seeds_judge(s, d_late, 1, late, "", stand, pin, seeds_ask("late"), true, false), "the folder left does not hold the seed and its checksum as they were")
+    let status_left = seeds_names(seeds_join(d_status, "/under"))
+    do seeds_put(s, seeds_path(seeds_join(seeds_join(seeds_join(d_status, "/under/"), status_left.1), "/previous.sha256")), grown_pin, 420)
+    do seeds_tally(s, "planted: a folder left without the checksum as it was", seeds_judge(s, d_status, 1, ends_badly, "", stand, pin, seeds_ask("status"), true, false), "the folder left does not hold the seed and its checksum as they were")
+    let second_err = seeds_file(seeds_path(seeds_join(d_second, "/err")))
+    do seeds_put(s, seeds_path(seeds_join(d_second, "/err")), seeds_then((second_err.1, second_err.2), "reseed: what the run left is in a folder that is not there\n"), 420)
+    do seeds_tally(s, "planted: a folder spoken of that was not left", seeds_judge(s, d_second, 1, no_match, "", stand, seeds_then(pin, "and a second line\n"), seeds_ask_edit(seeds_join(d_second, "/ran")), false, true), "the seed maker spoke of a folder it did not leave")
+    do seeds_put(s, seeds_path(seeds_join(d_unrun, "/ran")), seeds_text(""), 420)
+    do seeds_tally(s, "planted: a compiler that was run", seeds_judge(s, d_unrun, 1, no_match, "", stand, zeros, mark, false, true), "a compiler was run")
+
+    let line = new_buffer()
+    do text_add_whole(line, s.passed + s.failed)
+    do text_add(line, " seed checks, ")
+    do text_add_whole(line, s.passed)
+    do text_add(line, " gave their answers")
+    if s.failed != 0:
+        do text_add(line, ", ")
+        do text_add_whole(line, s.failed)
+        do text_add(line, " did not")
+    end
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    if s.failed == 0:
+        if folder_remove(own.3, seeds_path(own.2)) == 0: do process_exit(0) end
+        do stderr_write("seed checks: every check passed, and the check's own folder could not be removed\n")
+    end
+    do stderr_write("seed checks: what the run left is in ")
+    do stderr_write(s.work)
+    do stderr_write("\n")
+    do process_exit(1)
+    return 0
+end

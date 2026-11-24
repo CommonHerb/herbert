@@ -7265,4 +7265,609 @@ EMPTY []
 MISSING []
 ----
 end
-cases 147
+case sha256: the standard's own examples: three bytes, none, two blocks' worth and a million
+libs linux sha256
+source until ----
+func show(s, data, count):
+    do sha256_of(s, data, 0, count)
+    do flogger(sha256_hex(s))
+    do flogger("\n")
+    return 0
+end
+
+func main():
+    let s = sha256_new()
+    do show(s, linux_cstring("abc"), 3)
+    do show(s, linux_cstring(""), 0)
+    do show(s, linux_cstring("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), 56)
+    let million = new_buffer()
+    do buffer_fill(million, 1000000, 97)
+    do show(s, million, 1000000)
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0
+----
+end
+case sha256: lengths on each side of a block's edge, and 100,000 bytes, as the tool sha256sum gives them
+libs linux sha256
+source until ----
+func show(s, data, count):
+    do sha256_of(s, data, 0, count)
+    do flogger(sha256_hex(s))
+    do flogger("\n")
+    return 0
+end
+
+func main():
+    let s = sha256_new()
+    let data = linux_buffer(100000)
+    let i = 0
+    while i < 100000:
+        do buffer_set(data, i, i % 251)
+        i = i + 1
+    end
+    do show(s, data, 55)
+    do show(s, data, 56)
+    do show(s, data, 63)
+    do show(s, data, 64)
+    do show(s, data, 65)
+    do show(s, data, 119)
+    do show(s, data, 120)
+    do show(s, data, 100000)
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+463eb28e72f82e0a96c0a4cc53690c571281131f672aa229e0d45ae59b598b59
+da2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562
+29af2686fd53374a36b0846694cc342177e428d1647515f078784d69cdb9e488
+fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+4bfd2c8b6f1eec7a2afeb48b934ee4b2694182027e6d0fc075074f2fabb31781
+da18797ed7c3a777f0847f429724a2d8cd5138e6ed2895c3fa1a6d39d18f7ec6
+f52b23db1fbb6ded89ef42a23ce0c8922c45f25c50b568a93bf1c075420bbb7c
+cd2df694e424bc7968cc37f47751019e5ca0cd1bdf2e479ea537c3a1c32ee1aa
+----
+end
+case sha256: a span inside a buffer is taken alone, the hex goes where it is asked for, and one Sha256 serves again
+libs linux text sha256
+source until ----
+func main():
+    let s = sha256_new()
+    let data = linux_cstring("xyzabcxyz")
+    do sha256_of(s, data, 3, 3)
+    let out = new_buffer()
+    do buffer_fill(out, 70, 46)
+    let next = sha256_put_hex(s, out, 3)
+    do flogger(text_string(out, 0, 70))
+    do flogger("\n")
+    let line = new_buffer()
+    do text_add_whole(line, next)
+    do text_add(line, " ")
+    do text_add_whole(line, sha256_byte(s, 0))
+    do text_add(line, " ")
+    do text_add_whole(line, sha256_byte(s, 31))
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    do sha256_of(s, data, 9, 0)
+    do flogger(sha256_hex(s))
+    do flogger("\n")
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+...ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad...
+67 186 173
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+----
+end
+case folder: a folder of the program's own is new, private and named for the process, and a second one takes the next name
+libs linux text folder
+source until ----
+func yes(b):
+    if b: return "yes\n" end
+    return "no\n"
+end
+
+func join(a, b):
+    let out = new_buffer()
+    do text_add(out, a)
+    do text_add(out, b)
+    return freeze(out)
+end
+
+-- Whether s is "probe-" and then digits only, at least one.
+func named(s):
+    let front = "probe-"
+    if length(s) <= length(front): return false end
+    let i = 0
+    while i < length(front):
+        if index(s, i) != index(front, i): return false end
+        i = i + 1
+    end
+    while i < length(s):
+        if not text_digit(index(s, i)): return false end
+        i = i + 1
+    end
+    return true
+end
+
+func main():
+    let a = folder_own(".", "probe")
+    let b = folder_own(".", "probe")
+    let line = new_buffer()
+    do text_add(line, "made: ")
+    do text_add_whole(line, a.0)
+    do text_add(line, " ")
+    do text_add_whole(line, b.0)
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    do flogger("its path is the folder given, a slash and its name: ")
+    do flogger(yes(equal(a.1, join("./", a.2))))
+    do flogger("its name is the stem, a dash and a number: ")
+    do flogger(yes(named(a.2)))
+    do flogger("the second has the first's name and -2: ")
+    do flogger(yes(equal(b.2, join(a.2, "-2"))))
+    let stat = linux_buffer(144)
+    let found = linux_syscall6(4, buffer_address(linux_cstring(a.1)), buffer_address(stat), 0, 0, 0, 0)
+    do flogger("it is a folder only its owner may look in: ")
+    do flogger(yes(found == 0 and linux_u32(stat, 24) == 16384 + 448))
+    let c = folder_own("./no-such-folder", "probe")
+    do flogger("under a folder that is not there, error 2 and no path: ")
+    do flogger(yes(c.0 == 0 - 2 and length(c.1) == 0 and length(c.2) == 0))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+made: 0 0
+its path is the folder given, a slash and its name: yes
+its name is the stem, a dash and a number: yes
+the second has the first's name and -2: yes
+it is a folder only its owner may look in: yes
+under a folder that is not there, error 2 and no path: yes
+----
+end
+case folder: removing takes a folder with every folder, file and link under it, and leaves alone what its links point at
+libs linux text folder
+source until ----
+func yes(b):
+    if b: return "yes" end
+    return "no"
+end
+
+func folder(path):
+    return linux_syscall6(83, buffer_address(linux_cstring(path)), 448, 0, 0, 0, 0)
+end
+
+func file(path):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring("kept"), 0, 4)
+    return linux_close(fd)
+end
+
+func link(target, path):
+    return linux_syscall6(88, buffer_address(linux_cstring(target)), buffer_address(linux_cstring(path)), 0, 0, 0, 0)
+end
+
+func there(path):
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    if linux_error(fd): return false end
+    do linux_close(fd)
+    return true
+end
+
+func say(what, result, more):
+    let line = new_buffer()
+    do text_add(line, what)
+    do text_add_whole(line, 0 - result)
+    do text_add(line, more)
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+func main():
+    do folder("fr-out")
+    do file("fr-out/keep")
+    do folder("fr-out/kept-folder")
+    do file("fr-out/kept-folder/inside")
+    do folder("fr-in")
+    do folder("fr-in/top")
+    do folder("fr-in/top/empty")
+    do folder("fr-in/top/a")
+    do folder("fr-in/top/a/b")
+    do file("fr-in/top/one")
+    do file("fr-in/top/a/two")
+    do file("fr-in/top/a/b/three")
+    -- Enough names in one folder that Linux hands them over in several goes.
+    let i = 0
+    while i < 900:
+        let name = new_buffer()
+        do text_add(name, "fr-in/top/a/a-long-name-so-that-the-names-do-not-fit-in-one-go-")
+        do text_add_whole(name, i)
+        do file(freeze(name))
+        i = i + 1
+    end
+    do link("../../fr-out/keep", "fr-in/top/to-a-file")
+    do link("../../../fr-out/kept-folder", "fr-in/top/a/to-a-folder")
+    do link("nowhere", "fr-in/top/to-nothing")
+    let fd = folder_open(linux_cstring("fr-in"))
+    do say("a folder with folders, files and links under it: ", folder_remove(fd, linux_cstring("top")), "")
+    do say("the folder it was in is empty and can be removed: ", linux_syscall6(84, buffer_address(linux_cstring("fr-in")), 0, 0, 0, 0, 0), "")
+    do flogger("what its links pointed at is still there: ")
+    do flogger(yes(there("fr-out/keep")))
+    do flogger(" ")
+    do flogger(yes(there("fr-out/kept-folder/inside")))
+    do flogger("\n")
+    let here = folder_open(linux_cstring("."))
+    do file("fr-single")
+    do say("a file by itself: ", folder_remove(here, linux_cstring("fr-single")), "")
+    do flogger("it is gone: ")
+    do flogger(yes(not there("fr-single")))
+    do flogger("\n")
+    do link("fr-out", "fr-link")
+    do say("a link to a folder: ", folder_remove(here, linux_cstring("fr-link")), "")
+    do flogger("the link is gone and the folder it pointed at is not: ")
+    do flogger(yes(not there("fr-link")))
+    do flogger(" ")
+    do flogger(yes(there("fr-out/keep")))
+    do flogger("\n")
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+a folder with folders, files and links under it: 0
+the folder it was in is empty and can be removed: 0
+what its links pointed at is still there: yes yes
+a file by itself: 0
+it is gone: yes
+a link to a folder: 0
+the link is gone and the folder it pointed at is not: yes yes
+----
+end
+case folder: a name that is not one name inside the folder is refused before anything is touched, and so is a descriptor that is not one
+libs linux text folder
+source until ----
+func say(what, result):
+    let line = new_buffer()
+    do text_add(line, what)
+    do text_add_whole(line, 0 - result)
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+func there(path):
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    if linux_error(fd): return false end
+    do linux_close(fd)
+    return true
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fn-folder")), 448, 0, 0, 0, 0)
+    do linux_close(linux_open(linux_cstring("fn-folder/file"), 577, 420))
+    do linux_syscall6(88, buffer_address(linux_cstring("fn-folder")), buffer_address(linux_cstring("fn-link")), 0, 0, 0, 0)
+    let here = folder_open(linux_cstring("."))
+    do say("an empty name: ", folder_remove(here, linux_cstring("")))
+    do say("the folder's own name, a dot: ", folder_remove(here, linux_cstring(".")))
+    do say("its parent's, two dots: ", folder_remove(here, linux_cstring("..")))
+    do say("a name with a slash: ", folder_remove(here, linux_cstring("fn-folder/file")))
+    do say("a path from the root: ", folder_remove(here, linux_cstring("/fn-folder")))
+    do say("a name that ends with a slash: ", folder_remove(here, linux_cstring("fn-folder/")))
+    do say("a descriptor that is not one: ", folder_remove(0 - 100, linux_cstring("fn-folder")))
+    do say("a name that is not there: ", folder_remove(here, linux_cstring("fn-nothing")))
+    if there("fn-folder/file"):
+        do flogger("the folder and its file are still there\n")
+    end
+    do say("opening a file as a folder: ", folder_open(linux_cstring("fn-folder/file")))
+    do say("opening a link to a folder: ", folder_open(linux_cstring("fn-link")))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+an empty name: 22
+the folder's own name, a dot: 22
+its parent's, two dots: 22
+a name with a slash: 22
+a path from the root: 22
+a name that ends with a slash: 22
+a descriptor that is not one: 9
+a name that is not there: 2
+the folder and its file are still there
+opening a file as a folder: 20
+opening a link to a folder: 20
+----
+end
+case child: a program is run to its end in the folder given, with its arguments, its input from a file and no environment; its status, its output and its peak memory come back
+libs linux text child
+source until ----
+-- This program runs itself: with an argument it is the program being run.
+func say_ran(ran):
+    let line = new_buffer()
+    do text_add(line, "how it ended: ")
+    do text_add_whole(line, ran.0)
+    do text_add(line, " ")
+    do text_add_whole(line, ran.1)
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+func show(path):
+    let f = linux_read_file(path, 4096)
+    do flogger(text_string(f.1, 0, f.2))
+    return 0
+end
+
+-- What the program being run reports, for the one that runs it to print.
+func report(args, input):
+    let line = new_buffer()
+    do text_add(line, "arguments: ")
+    do text_add_whole(line, linux_argument_count(args))
+    do text_add(line, " [")
+    do text_add(line, linux_argument(args, 1))
+    do text_add(line, "] [")
+    do text_add(line, linux_argument(args, 2))
+    do text_add(line, "]\ninput: ")
+    do text_add(line, input)
+    do text_add(line, "environment bytes: ")
+    do text_add_whole(line, linux_read_file("/proc/self/environ", 4096).2)
+    let where = linux_buffer(4096)
+    let n = linux_syscall6(79, buffer_address(where), 4096, 0, 0, 0, 0)
+    do text_add(line, "\nits folder's name: ")
+    let from = n - 1
+    while from > 0 and buffer_get(where, from - 1) != 47: from = from - 1 end
+    do text_add_span(line, where, from, n - 1 - from)
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+func main():
+    let input = stdin_read()
+    let args = linux_arguments()
+    let role = linux_argument(args, 1)
+    if equal(role, "report"):
+        do report(args, input.1)
+        do process_exit(5)
+    end
+    if equal(role, "fill"):
+        let big = new_buffer()
+        do buffer_fill(big, 67108864, 1)
+        do process_exit(0)
+    end
+    if equal(role, "say"):
+        do flogger("said by the program being run\n")
+        do stderr_write("and this to its error output\n")
+        do process_exit(0)
+    end
+    do linux_syscall6(83, buffer_address(linux_cstring("ch-folder")), 448, 0, 0, 0, 0)
+    let fd = linux_open(linux_cstring("ch-folder/in.txt"), 577, 420)
+    do linux_write(fd, linux_cstring("from a file\n"), 0, 12)
+    do linux_close(fd)
+    let c = child_new()
+    let program = linux_cstring("../a.out")
+    let argv = child_arguments(3)
+    do child_argument(argv, 0, program)
+    do child_argument(argv, 1, linux_cstring("report"))
+    do child_argument(argv, 2, linux_cstring("two words"))
+    do say_ran(child_run(c, linux_cstring("ch-folder"), program, argv, linux_cstring("in.txt"), linux_cstring("out.txt"), c.none, 20))
+    do show("ch-folder/out.txt")
+    let here = linux_cstring("./a.out")
+    let filling = child_arguments(2)
+    do child_argument(filling, 0, here)
+    do child_argument(filling, 1, linux_cstring("fill"))
+    do say_ran(child_run(c, c.none, here, filling, c.none, c.none, c.none, 20))
+    if c.peak >= 61440 and c.peak < 131072:
+        do flogger("a program that fills 64 MiB had between 60 and 128 MiB in use at its peak\n")
+    end
+    do flogger("with no file given for its output:\n")
+    let again = child_arguments(2)
+    do child_argument(again, 0, here)
+    do child_argument(again, 1, linux_cstring("say"))
+    do say_ran(child_run(c, c.none, here, again, c.none, c.none, linux_cstring("ch-errors.txt"), 20))
+    do show("ch-errors.txt")
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+how it ended: 0 5
+arguments: 3 [report] [two words]
+input: from a file
+environment bytes: 0
+its folder's name: ch-folder
+how it ended: 0 0
+a program that fills 64 MiB had between 60 and 128 MiB in use at its peak
+with no file given for its output:
+said by the program being run
+how it ended: 0 0
+and this to its error output
+----
+end
+case child: a signal, the time limit, a program that is not there and a folder or an input that is not there each have their own answer
+libs linux text child
+source until ----
+func say(what, ran):
+    let line = new_buffer()
+    do text_add(line, what)
+    do text_add_whole(line, ran.0)
+    do text_add(line, " ")
+    do text_add_whole(line, ran.1)
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+func forever():
+    let i = 0
+    while i < 1:
+        i = 0
+    end
+    return i
+end
+
+func main():
+    let args = linux_arguments()
+    let role = linux_argument(args, 1)
+    if equal(role, "signal"):
+        do linux_syscall6(62, linux_syscall6(39, 0, 0, 0, 0, 0, 0), 15, 0, 0, 0, 0)
+    end
+    if equal(role, "forever"):
+        do forever()
+    end
+    let c = child_new()
+    let here = linux_cstring("./a.out")
+    let argv = child_arguments(2)
+    do child_argument(argv, 0, here)
+    do child_argument(argv, 1, linux_cstring("signal"))
+    do say("stopped by a signal: ", child_run(c, c.none, here, argv, c.none, c.none, c.none, 20))
+    do child_argument(argv, 1, linux_cstring("forever"))
+    do say("past its time limit of a second: ", child_run(c, c.none, here, argv, c.none, c.none, c.none, 1))
+    let missing = linux_cstring("./ch-no-such-program")
+    do child_argument(argv, 0, missing)
+    do say("a program that is not there: ", child_run(c, c.none, missing, argv, c.none, c.none, c.none, 20))
+    do child_argument(argv, 0, here)
+    do child_argument(argv, 1, linux_cstring("signal"))
+    do say("a folder that is not there: ", child_run(c, linux_cstring("ch-no-such-folder"), here, argv, c.none, c.none, c.none, 20))
+    do say("an input file that is not there: ", child_run(c, c.none, here, argv, linux_cstring("ch-no-such-input"), c.none, c.none, 20))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+stopped by a signal: 1 15
+past its time limit of a second: 1 14
+a program that is not there: 2 0
+a folder that is not there: 3 0
+an input file that is not there: 3 0
+----
+end
+case folder: a folder given through a link is worked in all the same, and the new folder is taken away through the descriptor kept
+libs linux text folder
+source until ----
+func yes(b):
+    if b: return "yes\n" end
+    return "no\n"
+end
+
+func join(a, b):
+    let out = new_buffer()
+    do text_add(out, a)
+    do text_add(out, b)
+    return freeze(out)
+end
+
+func there(path):
+    let stat = linux_buffer(144)
+    return linux_syscall6(4, buffer_address(linux_cstring(path)), buffer_address(stat), 0, 0, 0, 0) == 0
+end
+
+func say(what, result):
+    let line = new_buffer()
+    do text_add(line, what)
+    do text_add_whole(line, 0 - result)
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fl-real")), 448, 0, 0, 0, 0)
+    do linux_syscall6(88, buffer_address(linux_cstring("fl-real")), buffer_address(linux_cstring("fl-link")), 0, 0, 0, 0)
+    let a = folder_own("fl-link", "probe")
+    do say("made under a link: ", a.0)
+    do flogger("the new folder is in the folder the link points at: ")
+    do flogger(yes(there(join("fl-real/", a.2))))
+    do linux_close(linux_open(linux_cstring(join(a.1, "/inside")), 577, 420))
+    do linux_syscall6(87, buffer_address(linux_cstring("fl-link")), 0, 0, 0, 0, 0)
+    do flogger("its path is no use once the link is gone: ")
+    do flogger(yes(not there(a.1)))
+    do say("taken away through the descriptor kept: ", folder_remove(a.3, linux_cstring(a.2)))
+    do flogger("nothing of it is left: ")
+    do flogger(yes(not there(join("fl-real/", a.2))))
+    let none = folder_own("fl-nowhere", "probe")
+    do say("under a folder that is not there: ", none.0)
+    do say("and what comes in the descriptor's place is refused: ", folder_remove(none.3, linux_cstring("probe")))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+made under a link: 0
+the new folder is in the folder the link points at: yes
+its path is no use once the link is gone: yes
+taken away through the descriptor kept: 0
+nothing of it is left: yes
+under a folder that is not there: 2
+and what comes in the descriptor's place is refused: 9
+----
+end
+case child: a caller whose own standard input and output are closed still gets the right answers, and the program's output goes to its file
+libs linux text child
+source until ----
+-- This program runs itself: as "say" it is the program being run.
+func say(what, ran):
+    let line = new_buffer()
+    do text_add(line, what)
+    do text_add_whole(line, ran.0)
+    do text_add(line, " ")
+    do text_add_whole(line, ran.1)
+    do text_add(line, "\n")
+    return freeze(line)
+end
+
+func main():
+    let args = linux_arguments()
+    if equal(linux_argument(args, 1), "say"):
+        do flogger("said by the program being run\n")
+        do process_exit(0)
+    end
+    let c = child_new()
+    let here = linux_cstring("./a.out")
+    let missing = linux_cstring("./cc-no-such-program")
+    let argv = child_arguments(2)
+    do child_argument(argv, 0, here)
+    do child_argument(argv, 1, linux_cstring("say"))
+    let keep_in = linux_syscall6(72, 0, 0, 10, 0, 0, 0)
+    let keep_out = linux_syscall6(72, 1, 0, 11, 0, 0, 0)
+    do linux_close(0)
+    do linux_close(1)
+    let first = say("a program that is not there: ", child_run(c, c.none, missing, argv, c.none, linux_cstring("cc-missing.out"), c.none, 20))
+    let second = say("a program that is: ", child_run(c, c.none, here, argv, c.none, linux_cstring("cc.out"), c.none, 20))
+    do linux_syscall6(33, keep_in, 0, 0, 0, 0, 0)
+    do linux_syscall6(33, keep_out, 1, 0, 0, 0, 0)
+    do linux_close(keep_in)
+    do linux_close(keep_out)
+    do flogger(first)
+    do flogger(second)
+    let nothing = linux_read_file("cc-missing.out", 4096)
+    let said = linux_read_file("cc.out", 4096)
+    let line = new_buffer()
+    do text_add(line, "the first wrote ")
+    do text_add_whole(line, nothing.2)
+    do text_add(line, " bytes to its file, and the second: ")
+    do text_add_span(line, said.1, 0, said.2)
+    do flogger(freeze(line))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+a program that is not there: 2 0
+a program that is: 0 0
+the first wrote 0 bytes to its file, and the second: said by the program being run
+----
+end
+cases 157

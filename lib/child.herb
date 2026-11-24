@@ -1,0 +1,152 @@
+-- Running another program to its end. Requires lib/linux.herb; no main. A
+-- Child (child_new(), once) holds the room Linux answers in, so a run
+-- allocates nothing.
+--
+--   let c = child_new()
+--   let argv = child_arguments(2)
+--   do child_argument(argv, 0, program)
+--   do child_argument(argv, 1, linux_cstring("--version"))
+--   let ran = child_run(c, c.none, program, argv, c.none, c.none, c.none, 60)
+
+-- none is the empty path: what to pass for a folder or a file not given. peak
+-- is the most memory the last program run had in use at once, in KiB, as
+-- Linux reports it (ru_maxrss). Linux counts in batches of pages, so the
+-- figure can be a few MiB under on a machine with many processors, and is
+-- often 0 for a program that used very little: it is for holding a program
+-- to a ceiling of tens of MiB or more, not for telling small programs apart.
+-- It also covers what this program itself held when it started the other
+-- (the new process begins as a copy of it), so a starter that holds more than
+-- the ceiling it sets finds every program over it.
+ref record Child:
+    status: buffer
+    usage: buffer
+    zero: buffer
+    pipe: buffer
+    null: buffer
+    none: buffer
+    peak: int
+end
+
+func child_new():
+    return Child(linux_buffer(8), linux_buffer(144), linux_buffer(16), linux_buffer(8), linux_cstring("/dev/null"), linux_cstring(""), 0)
+end
+
+-- Room for the count arguments of a program to start, its own name the first
+-- of them: a list of count addresses and the 0 that ends it.
+func child_arguments(count): return linux_buffer(count * 8 + 8) end
+
+-- Make value (a NUL-terminated buffer) argument i of argv. The list keeps
+-- value's address, so value must not be appended to afterwards.
+func child_argument(argv, i, value):
+    do linux_require_range(value, 0, 1)
+    do linux_put64(argv, i * 8, buffer_address(value))
+    return 0
+end
+
+-- The descriptor fd, moved out of the first three numbers if it is one of
+-- them: those are the standard input, output and error of the program run,
+-- and are pointed at its files. The new number, or raw -errno.
+func child_high(fd):
+    if fd > 2: return fd end
+    let up = linux_syscall6(72, fd, 1030, 3, 0, 0, 0)
+    do linux_close(fd)
+    return up
+end
+
+-- In the new process: open path and make it descriptor number.
+func child_point(path, flags, number):
+    let fd = linux_open(path, flags, 384)
+    if linux_error(fd): return false end
+    if fd != number:
+        do linux_syscall6(33, fd, number, 0, 0, 0, 0)
+        do linux_close(fd)
+    end
+    return true
+end
+
+-- Start the program at path with the arguments argv (from child_arguments)
+-- and wait until it ends. folder, input, output and errors are NUL-terminated
+-- paths, each one given or empty (c.none):
+--   folder  the folder the program starts in, entered before anything else,
+--           so the other paths, when they do not start with /, are looked up
+--           from there; this program's own folder when empty
+--   input   the file it reads as standard input; nothing to read when empty
+--   output  a file made new for its standard output (an old one of the name
+--           is emptied; only its owner may read it); this program's own
+--           standard output when empty
+--   errors  the same for its standard error
+-- The caller's own standard input, output and error may be closed; a program
+-- whose output or errors is not given then has none either.
+-- The program gets no environment and leaves no core file. A signal this
+-- program has ignored stays ignored in it, as Linux hands that on. Linux stops it
+-- with its alarm signal after seconds (no limit when 0), and with a signal
+-- nothing can ignore if this program ends first, so it never outlives its
+-- starter. The answer is one of:
+--   (0, status)  it ended by itself, with that exit status
+--   (1, signal)  a signal ended it; 14 is the alarm, the time limit
+--   (2, 0)       the program at path could not be started
+--   (3, 0)       its folder could not be entered, or one of its files opened
+--   (4, 0)       Linux made no new process
+-- After 0 and 1, c.peak is the most memory it had in use (see Child).
+func child_run(c, folder, path, argv, input, output, errors, seconds):
+    do linux_require_range(folder, 0, 1)
+    do linux_require_range(path, 0, 1)
+    do linux_require_range(input, 0, 1)
+    do linux_require_range(output, 0, 1)
+    do linux_require_range(errors, 0, 1)
+    if linux_error(linux_syscall6(293, buffer_address(c.pipe), 524288, 0, 0, 0, 0)): return (4, 0) end
+    -- The pipe's two ends are kept clear of the first three numbers, which a
+    -- caller may have closed and which Linux would then hand out here.
+    let reader = child_high(linux_u32(c.pipe, 0))
+    let writer = child_high(linux_u32(c.pipe, 4))
+    if linux_error(reader) or linux_error(writer):
+        if not linux_error(reader): do linux_close(reader) end
+        if not linux_error(writer): do linux_close(writer) end
+        return (4, 0)
+    end
+    let me = linux_syscall6(39, 0, 0, 0, 0, 0, 0)
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if linux_error(pid):
+        do linux_close(reader)
+        do linux_close(writer)
+        return (4, 0)
+    end
+    if pid == 0:
+        -- The new process. It tells its starter what stopped it through the
+        -- pipe, one byte, 3 or 2; when the program does start, Linux closes
+        -- the pipe and the starter reads nothing.
+        do buffer_set(c.pipe, 0, 3)
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        let ready = linux_syscall6(110, 0, 0, 0, 0, 0, 0) == me
+        if ready and buffer_get(folder, 0) != 0: ready = not linux_error(linux_syscall6(80, buffer_address(folder), 0, 0, 0, 0, 0)) end
+        if ready and buffer_get(input, 0) != 0: ready = child_point(input, 0, 0) end
+        if ready and buffer_get(input, 0) == 0: ready = child_point(c.null, 0, 0) end
+        if ready and buffer_get(output, 0) != 0: ready = child_point(output, 577, 1) end
+        if ready and buffer_get(errors, 0) != 0: ready = child_point(errors, 577, 2) end
+        if ready:
+            do linux_syscall6(160, 4, buffer_address(c.zero), 0, 0, 0, 0)
+            if seconds != 0: do linux_syscall6(37, seconds, 0, 0, 0, 0, 0) end
+            do linux_syscall6(59, buffer_address(path), buffer_address(argv), 0, 0, 0, 0)
+            do buffer_set(c.pipe, 0, 2)
+        end
+        do linux_syscall6(1, writer, buffer_address(c.pipe), 1, 0, 0, 0)
+        do process_exit(127)
+        return (4, 0)
+    end
+    do linux_close(writer)
+    let told = linux_syscall6(0, reader, buffer_address(c.pipe), 1, 0, 0, 0)
+    while told == 0 - 4:
+        told = linux_syscall6(0, reader, buffer_address(c.pipe), 1, 0, 0, 0)
+    end
+    do linux_close(reader)
+    let w = linux_syscall6(61, pid, buffer_address(c.status), 0, buffer_address(c.usage), 0, 0)
+    while w == 0 - 4:
+        w = linux_syscall6(61, pid, buffer_address(c.status), 0, buffer_address(c.usage), 0, 0)
+    end
+    if linux_error(w): return (4, 0) end
+    if told == 1: return (buffer_get(c.pipe, 0), 0) end
+    c.peak = linux_u64(c.usage, 32)
+    let st = linux_u32(c.status, 0)
+    if (st & 127) != 0: return (1, (st & 127)) end
+    return (0, ((st >> 8) & 255))
+end

@@ -8,7 +8,7 @@ SCANNER := $(BUILD)/scan
 TRACKED := $(BUILD)/tracked.txt
 scan_SOURCES := lib/linux.herb tools/scan.herb
 
-.PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync closed-loop-memory-diet reseed verify-local clean
+.PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync closed-loop-memory-diet reseed reseed-shell verify-local clean
 
 all: $(SCANNER)
 
@@ -44,6 +44,16 @@ answers:
 .PHONY: hands
 hands: notes scope $(BUILD)/hands $(BUILD)/stand-in
 	@$(BUILD)/hands "$(CURDIR)/$(BUILD)/notes" "$(CURDIR)/$(BUILD)/scope" "$(CURDIR)/$(BUILD)/stand-in" "$${TMPDIR:-/tmp}"
+
+# The seed maker's checks, written in Herbert (checks/seeds.herb). The committed
+# seed builds the seed maker, the check runner, the check and a stand-in
+# compiler; the check runs the seed maker on small checkouts of its own, in a
+# folder it makes under the one given here and takes away again when every
+# check passes, and never writes in this checkout. VERIFYING.md says what it
+# holds the seed maker to.
+.PHONY: seeds
+seeds: $(BUILD)/seeds $(BUILD)/reseed $(BUILD)/run $(BUILD)/seed-stand-in
+	@$(BUILD)/seeds "$(CURDIR)/$(BUILD)/reseed" "$(CURDIR)/$(BUILD)/run" "$(CURDIR)/$(BUILD)/seed-stand-in" "$(CURDIR)" "$${TMPDIR:-/tmp}"
 
 test:
 	@bash tools/check_full_test_host.sh
@@ -192,6 +202,11 @@ scope-helper_SOURCES := lib/linux.herb lib/text.herb lib/net.herb lib/figures.he
 knock_SOURCES := lib/linux.herb lib/text.herb lib/net.herb examples/knock.herb
 hands_SOURCES := lib/linux.herb lib/text.herb lib/x11.herb checks/hands.herb
 stand-in_SOURCES := lib/linux.herb lib/x11.herb checks/stand_in.herb
+SEED_LIBS := lib/linux.herb lib/text.herb lib/sha256.herb lib/folder.herb lib/child.herb
+run_SOURCES := lib/linux.herb lib/text.herb checks/run.herb
+reseed_SOURCES := $(SEED_LIBS) tools/reseed.herb
+seeds_SOURCES := $(SEED_LIBS) checks/seeds.herb
+seed-stand-in_SOURCES := lib/linux.herb checks/seed_stand_in.herb
 .PHONY: first-steps maze notes scope scope-helper knock hosted-apps hosted-memory-io check-desktop check-hosted-apps check-scope check-scope-helper check-net
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze
@@ -209,8 +224,12 @@ $(BUILD)/scope-helper: $(scope-helper_SOURCES)
 $(BUILD)/knock: $(knock_SOURCES)
 $(BUILD)/hands: $(hands_SOURCES)
 $(BUILD)/stand-in: $(stand-in_SOURCES)
+$(BUILD)/run: $(run_SOURCES)
+$(BUILD)/reseed: $(reseed_SOURCES)
+$(BUILD)/seeds: $(seeds_SOURCES)
+$(BUILD)/seed-stand-in: $(seed-stand-in_SOURCES)
 $(SCANNER): $(scan_SOURCES)
-$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/scope-helper $(BUILD)/knock $(BUILD)/hands $(BUILD)/stand-in $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/scope-helper $(BUILD)/knock $(BUILD)/hands $(BUILD)/stand-in $(BUILD)/run $(BUILD)/reseed $(BUILD)/seeds $(BUILD)/seed-stand-in $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
 	@set -eu; \
 	  mkdir -p $@-work; \
@@ -375,19 +394,26 @@ compiler-source: compiler-source-membership
 compiler-metadata:
 	@python3 bootstrap/tests/check_compiler_metadata.py
 
-# reseed: re-mint the gen-1 seed C-FREE (the committed seed recompiles the backend
-# to its own fixpoint). Post-switchover this replaces the old C-mint reseed; run it
-# ONLY when stack/native_compile_fragment.herb legitimately changes (the michoi seed
-# gate goes RED). Checks the existing pin and both invocation envelopes, then
-# qualifies a changed fixpoint with hosted conformance before publication.
-# Full verify-local still follows. No C interpreter is involved.
-reseed: compiler-source-check
+# reseed: make the seed again after the compiler's source changed. The seed maker
+# is the Herbert program tools/reseed.herb, built like the check runner by the
+# committed seed. It has that seed build the new compiler, requires the new
+# compiler to rebuild itself byte for byte and to give its answer to every case
+# of make answers outside checks/rebuild.cases (whose one case, building the
+# committed seed, a new compiler cannot pass), and only then replaces the seed
+# and its checksum.
+# bootstrap/seed/README.md says when to run it; make verify-local follows it.
+reseed: compiler-source-check $(BUILD)/reseed $(BUILD)/run
+	@$(BUILD)/reseed "$(CURDIR)" "$(CURDIR)/$(BUILD)/run" "$${TMPDIR:-/tmp}" $(addprefix $(CURDIR)/,$(filter-out checks/rebuild.cases,$(ANSWERS)))
+
+# The shell script that made the seed before the seed maker did, which holds a
+# new compiler to the Python checks instead. It leaves with those checks.
+reseed-shell: compiler-source-check
 	@bash bootstrap/tests/reseed_gen1.sh
 
 # make test already dispatches the six fragment/mutation pairs, the closed-loop
 # memory diet and the error-vocab gate. Their standalone targets above remain for
 # diagnosis; error-vocab-native also runs that gate's mutation proof.
-verify-local: compiler-metadata check answers hands verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
+verify-local: compiler-metadata check answers hands seeds verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
 
 clean:
 	rm -rf $(BUILD)

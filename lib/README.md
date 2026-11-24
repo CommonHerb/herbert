@@ -22,6 +22,21 @@ source; the retained source map identifies its original units.
   zeros and tenths written into a fixed buffer at an offset, each writer returning the offset after it. None of
   these allocates; the four growing writers at its end (`text_add`, ...) do, for output made once. Requires
   `linux.herb`. Used by knock, Scope and Scope's helper, and by `net.herb` and `figures.herb`, which need it.
+- `sha256.herb`: SHA-256 (FIPS 180-4), the checksum that pins the compiler's seed, [tabled below](#sha256herb):
+  the 32 bytes worked out from any span of a buffer, and their 64 hex digits as the tool `sha256sum` prints them. A
+  `Sha256` record (`sha256_new()`, once) holds the standard's tables and the room one checksum needs, so working
+  one out allocates nothing. Requires `linux.herb`. Used by the seed maker (`tools/reseed.herb`) and its checks.
+- `folder.herb`: a folder a program makes for its own work, and the removing of it, [tabled below](#folderherb).
+  `folder_own` makes a new folder, named for the process, that only its owner may look in, and keeps open the folder
+  it made it in. `folder_remove` removes one name inside an open folder with everything under it and reaches nothing
+  outside: it takes one name, never a path, works through the folders' own descriptors and never follows a link, so
+  a link found on the way is removed as the link it is, and it does not enter a folder where something is mounted
+  (a disk, a share, or another folder shown there a second time). Requires `text.herb`. Used by the seed maker and its checks.
+- `child.herb`: running another program to its end, [tabled below](#childherb): in a folder, with arguments, its
+  input from a file, its output and error output to files or to this program's own, a time limit, no environment
+  and no core file. It answers how the program ended (an exit status, a signal, the time limit, or that it could
+  not be started) and its peak memory. Requires `linux.herb`. Used by the seed maker and its checks; the check
+  runner and the window checks carry their own, older forms of it.
 - `net.herb`: strict dotted IPv4, port and time-limit parsing, and a TCP knock:
   answered, refused, no answer, unreachable or a named error, within a time
   limit, never sending a byte, the socket closed on every path. A `Net` record
@@ -322,6 +337,54 @@ end
 ```
 
 prints `up 2 days, 6:05` and then `main`'s `0` (built with `SUPPORT="linux text"`).
+
+### sha256.herb
+
+| Function | Gives |
+| --- | --- |
+| `sha256_new()` | a `Sha256`: the standard's tables and the room one checksum needs; *allocates* |
+| `sha256_of(s, data, from, count)` | 0; works out the checksum of the `count` bytes of `data` from `from` (which must lie inside `data`) and keeps it in `s` |
+| `sha256_hex(s)` | the checksum last worked out, as a string of 64 hex digits (`0`-`9`, `a`-`f`); *allocates* |
+| `sha256_put_hex(s, out, at)` | the offset after those 64 digits, written into `out` at `at` |
+| `sha256_byte(s, i)` | byte `i`, 0 to 31, of the checksum last worked out |
+
+`sha256_four`, `sha256_turn` and `sha256_block` are its internal steps. The checksum of a file read with
+`linux_read_file` (built with `SUPPORT="linux sha256"`):
+
+```herbert
+func main():
+    let file = linux_read_file("bootstrap/seed/gen1.seed", 16777216)
+    if file.0 != 0: return linux_die("cannot read the file\n") end
+    let s = sha256_new()
+    do sha256_of(s, file.1, 0, file.2)
+    do flogger(sha256_hex(s))
+    do flogger("\n")
+    do process_exit(0)
+    return 0
+end
+```
+
+### folder.herb
+
+| Function | Gives |
+| --- | --- |
+| `folder_own(under, stem)` | (status, path, name, dirfd): a new folder `under/stem-NUMBER` (strings) that only its owner may look in, NUMBER being the process's, then with `-2` to `-20` after it when the name is taken. `dirfd` is the folder at `under`, open (it may be reached through a link): `folder_remove(dirfd, linux_cstring(name))` takes the new folder away again. Status 0, or -errno with both strings empty and the same -errno for `dirfd` (-17 when twenty are in the way); *allocates* |
+| `folder_open(path)` | a descriptor for the folder at `path`, or -errno; a link, even to a folder, and anything that is not a folder are -20 |
+| `folder_remove(dirfd, name)` | 0 once what is called `name` inside the open folder `dirfd` is gone, a folder with everything under it, or -errno, some of it perhaps removed by then. `name` is a path of one name: an empty name, `.`, `..` and a name with a slash are -22, a `dirfd` that is not a descriptor -9, a name that is not there -2, folders more than 100 deep -40, and a folder where something is mounted is left with all that is in it, -18; *allocates* |
+| `folder_dots(b, at)` | true when the NUL-terminated name at `at` in `b` is `.` or `..` |
+
+`folder_remove_at` is its internal step.
+
+### child.herb
+
+| Function | Gives |
+| --- | --- |
+| `child_new()` | a `Child`: the room Linux answers in. `c.none` is the empty path, for a folder or a file not given; `c.peak` is the last program's peak memory in KiB as Linux reports it, which is for holding a program to a ceiling of tens of MiB or more: it is often 0 for a very small program; *allocates* |
+| `child_arguments(count)` | room for `count` arguments, the program's own name the first; *allocates* |
+| `child_argument(argv, i, value)` | 0; makes the path `value` argument `i` of `argv` (`value` must not be appended to afterwards) |
+| `child_run(c, folder, path, argv, input, output, errors, seconds)` | (how, value) once the program at `path` has ended: (0, its exit status), (1, the signal that ended it; 14 is the time limit of `seconds`, 0 for none), (2, 0) when it could not be started, (3, 0) when its folder could not be entered or a file opened, (4, 0) when Linux made no new process. `folder`, `input`, `output` and `errors` are paths or `c.none`; `folder` is entered first, so the others are looked up from there. The caller's own standard input, output and error may be closed |
+
+`child_point` and `child_high` are its internal steps.
 
 ### figures.herb
 

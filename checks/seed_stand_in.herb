@@ -1,0 +1,161 @@
+-- The stand-in compiler for the seed maker's checks (checks/seeds.herb): a
+-- small program that takes the compiler's place and can fail on purpose, so
+-- the checks can show the seed maker refusing each way a compiler can fail
+-- it. Needs lib/linux.herb in front.
+--
+-- Like the compiler it takes no arguments, reads a source from standard
+-- input, writes a program to a.out in the folder it runs in, prints the
+-- marker "0" and ends with status 0. The program it writes is a copy of
+-- itself: a compiler that rebuilds itself. The source's first line says what
+-- it does instead, "-- stand-in WORD":
+--   same       nothing else
+--   drift      the copy is one byte longer than itself, every time: a
+--              compiler that never rebuilds itself
+--   settle     the copy is longer by the line "settled", and a copy that ends
+--              so writes itself unchanged: a new compiler, different from
+--              the seed, that rebuilds itself (and can compile nothing)
+--   late       the copy is longer by the line "later", and a copy that ends
+--              so writes itself and ends with status 7: a new compiler that
+--              fails where the seed did not
+--   heavy      the copy is longer by the line "heavy", and a copy that ends
+--              so fills 200 MiB before it writes itself: a new compiler
+--              that needs more memory than a compiler may
+--   status     ends with status 7
+--   crash      writes its copy and the marker, then is stopped by a signal
+--   noisy      says a line on standard error
+--   marker     prints a second line after the marker
+--   nothing    writes no program
+--   text       writes a script, not a Linux program
+--   edit PATH  first adds a line to the end of the file at PATH (the rest of
+--              the line), making the file if it is not there: a file changed
+--              while the seed maker runs, or the mark that a compiler ran
+--   relink PATH  first moves the folder at PATH to PATH.moved and puts a link
+--              to it at PATH: a folder that is a link since the seed maker
+--              looked, with the same files to be found through it
+-- Any other source, a case's program among them, is taken as same.
+
+-- Whether the count bytes of b end with s.
+func stand_in_ends(b, count, s):
+    if count < length(s): return false end
+    let i = 0
+    while i < length(s):
+        if buffer_get(b, count - length(s) + i) != index(s, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- Whether source starts with the stand-in's line for word: "-- stand-in ",
+-- the word, and then a space or the end of the line.
+func stand_in_asks(source, word):
+    let want = "-- stand-in "
+    let n = length(want) + length(word)
+    if length(source) <= n: return false end
+    let i = 0
+    while i < length(want):
+        if index(source, i) != index(want, i): return false end
+        i = i + 1
+    end
+    i = 0
+    while i < length(word):
+        if index(source, length(want) + i) != index(word, i): return false end
+        i = i + 1
+    end
+    return index(source, n) == 32 or index(source, n) == 10
+end
+
+-- Write a.out, as the compiler does: the count bytes of own and then more.
+func stand_in_write(own, count, more):
+    let out = linux_buffer(count + length(more))
+    do buffer_copy(out, 0, own, 0, count)
+    do linux_text(out, count, more)
+    do fwriter(freeze(out))
+    return 0
+end
+
+-- Add a line to the end of the file the source's first line names after
+-- "-- stand-in edit ".
+func stand_in_edit(source):
+    let path = new_buffer()
+    let i = 17
+    while i < length(source) and index(source, i) != 10:
+        do append(path, index(source, i))
+        i = i + 1
+    end
+    do append(path, 0)
+    let fd = linux_open(path, 525377, 420)
+    if linux_error(fd): return 0 end
+    let line = linux_cstring("changed by the stand-in\n")
+    do linux_write(fd, line, 0, 24)
+    do linux_close(fd)
+    return 0
+end
+
+-- Move the folder the source's first line names after "-- stand-in relink "
+-- and put a link to it in its place. A second time nothing happens: the link
+-- cannot be moved onto the folder.
+func stand_in_relink(source):
+    let path = new_buffer()
+    let moved = new_buffer()
+    let i = 19
+    while i < length(source) and index(source, i) != 10:
+        do append(path, index(source, i))
+        do append(moved, index(source, i))
+        i = i + 1
+    end
+    do append(path, 0)
+    let tail = ".moved"
+    i = 0
+    while i < length(tail):
+        do append(moved, index(tail, i))
+        i = i + 1
+    end
+    do append(moved, 0)
+    if linux_error(linux_syscall6(82, buffer_address(path), buffer_address(moved), 0, 0, 0, 0)): return 0 end
+    do linux_syscall6(88, buffer_address(moved), buffer_address(path), 0, 0, 0, 0)
+    return 0
+end
+
+func main():
+    let input = stdin_read()
+    if input.0 != 0:
+        do linux_die("stand-in compiler: cannot read standard input\n")
+    end
+    let source = input.1
+    let self = linux_read_file("/proc/self/exe", 4194304)
+    if self.0 != 0:
+        do linux_die("stand-in compiler: cannot read its own program\n")
+    end
+    let own = self.1
+    let count = self.2
+    let status = 0
+    if stand_in_asks(source, "nothing"):
+        do flogger("0\n")
+        do process_exit(0)
+    elif stand_in_asks(source, "text"):
+        do fwriter("#!/bin/sh\nexit 0\n")
+    elif stand_in_asks(source, "drift"):
+        do stand_in_write(own, count, "+")
+    elif stand_in_asks(source, "settle") and not stand_in_ends(own, count, "settled\n"):
+        do stand_in_write(own, count, "settled\n")
+    elif stand_in_asks(source, "late") and not stand_in_ends(own, count, "later\n"):
+        do stand_in_write(own, count, "later\n")
+    elif stand_in_asks(source, "heavy") and not stand_in_ends(own, count, "heavy\n"):
+        do stand_in_write(own, count, "heavy\n")
+    else:
+        if stand_in_asks(source, "edit"): do stand_in_edit(source) end
+        if stand_in_asks(source, "relink"): do stand_in_relink(source) end
+        if stand_in_asks(source, "heavy"):
+            let big = new_buffer()
+            do buffer_fill(big, 209715200, 1)
+        end
+        do stand_in_write(own, count, "")
+        if stand_in_asks(source, "status") or stand_in_asks(source, "late"): status = 7 end
+        if stand_in_asks(source, "noisy"): do stderr_write("stand-in compiler: a line nobody asked for\n") end
+    end
+    do flogger("0\n")
+    if stand_in_asks(source, "marker"): do flogger("and a second line\n") end
+    if stand_in_asks(source, "crash"): do linux_syscall6(62, linux_syscall6(39, 0, 0, 0, 0, 0, 0), 15, 0, 0, 0, 0) end
+    do process_exit(status)
+    return 0
+end
