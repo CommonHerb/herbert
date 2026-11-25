@@ -29560,4 +29560,227 @@ refused until ----
 line 2: native-subset: forbidden construct 'undefined-name' (ERR 404)
 ----
 end
-cases 931
+case refused-a-record-of-the-wrong-kind-in-the-string-slice-cuts
+source until ----
+record A:
+    x: int
+    y: int
+end
+record B:
+    x: int
+    y: int
+end
+record W:
+    a: A
+    k: int
+end
+func main():
+    return slice(("abcd", W(B(1, 2), 1)).0, 1, 3)
+end
+----
+refused until ----
+line 14: native-subset: structural type conflict (ERR 430)
+----
+end
+case refused-a-record-of-the-wrong-kind-beside-slice-from
+source until ----
+record A:
+    x: int
+    y: int
+end
+record B:
+    x: int
+    y: int
+end
+record W:
+    a: A
+    k: int
+end
+func main():
+    return slice("abcd", (1, W(B(1, 2), 1)).0, 3)
+end
+----
+refused until ----
+line 14: native-subset: structural type conflict (ERR 430)
+----
+end
+case refused-a-record-of-the-wrong-kind-beside-slice-to
+source until ----
+record A:
+    x: int
+    y: int
+end
+record B:
+    x: int
+    y: int
+end
+record W:
+    a: A
+    k: int
+end
+func main():
+    return slice("abcd", 1, (3, W(B(1, 2), 1)).0)
+end
+----
+refused until ----
+line 14: native-subset: structural type conflict (ERR 430)
+----
+end
+case slice-types-a-local-a-helper-never-gives-before-a-call-reads-it-as-the-string
+source until ----
+func boom():
+    let a = new_array(int)
+    return get(a, 0)
+end
+func str_pos(s):
+    return length(s)
+end
+func main():
+    if false:
+        let x = boom()
+        return slice(x, str_pos(x), 1)
+    end
+    return "ok"
+end
+----
+stdout until ----
+"ok"
+----
+end
+case slice-types-a-local-a-helper-never-gives-before-a-call-reads-it-as-from
+source until ----
+func boom():
+    let a = new_array(int)
+    return get(a, 0)
+end
+func next_pos(k):
+    return k + 1
+end
+func main():
+    if false:
+        let x = boom()
+        return length(slice("abcd", x, next_pos(x)))
+    end
+    return 0
+end
+----
+stdout until ----
+0
+----
+end
+case slice-types-a-local-a-helper-never-gives-before-a-call-reads-it-as-to
+source until ----
+func boom():
+    let a = new_array(int)
+    return get(a, 0)
+end
+func use_int(k):
+    return k + 1
+end
+func main():
+    if false:
+        let x = boom()
+        let u = slice("abcd", 0, x)
+        return use_int(x)
+    end
+    return 0
+end
+----
+stdout until ----
+0
+----
+end
+case slice-of-a-recursive-helper-s-string-types-it-over-several-passes
+source until ----
+func delay():
+    return true
+end
+func box(x):
+    return x
+end
+func box2(x):
+    return x
+end
+func loop_str(flag):
+    if flag:
+        return loop_str(false)
+    end
+    return loop_str(true)
+end
+func main():
+    let d = delay()
+    if false:
+        let a = box2(box(loop_str(true)))
+        let u = slice(loop_str(d), 0, 2)
+        return u
+    end
+    return "ok"
+end
+----
+stdout until ----
+"ok"
+----
+end
+case slice-from-a-recursive-helper-s-number-types-it-over-several-passes
+source until ----
+func delay():
+    return true
+end
+func box(x):
+    return x
+end
+func box2(x):
+    return x
+end
+func loop_pos(flag):
+    if flag:
+        return loop_pos(false)
+    end
+    return loop_pos(true)
+end
+func main():
+    let d = delay()
+    if false:
+        let a = box2(box(loop_pos(true)))
+        let u = slice("abcd", loop_pos(d), 2)
+        return u
+    end
+    return "ok"
+end
+----
+stdout until ----
+"ok"
+----
+end
+case slice-to-a-recursive-helper-s-number-types-it-over-several-passes
+source until ----
+func delay():
+    return true
+end
+func box(x):
+    return x
+end
+func box2(x):
+    return x
+end
+func loop_pos(flag):
+    if flag:
+        return loop_pos(false)
+    end
+    return loop_pos(true)
+end
+func main():
+    let d = delay()
+    if false:
+        let a = box2(box(loop_pos(true)))
+        let u = slice("abcd", 0, loop_pos(d))
+        return u
+    end
+    return "ok"
+end
+----
+stdout until ----
+"ok"
+----
+end
+cases 940

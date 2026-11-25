@@ -570,11 +570,11 @@ A2   WEATHER          LIVE    BOB    10:00  19:15:05  19:20:00
 TOTAL 85:05  PLANNED 90:00  UNDER 4:55
 ----
 end
-case the rundown sheet example: a start of 25:00:00 is refused, since a start is a time of day
+case the rundown sheet example: a start of 24:00:00 is refused, since a start is a time of day
 libs linux text
 source-file examples/rundown_sheet.herb
 stdin until ----
-25:00:00|10:00
+24:00:00|10:00
 A1|top story|PKG|lee|1:00
 ----
 stdout 0
@@ -612,4 +612,64 @@ rundown_sheet: line 2: a story must be page|slug|format|talent|estimate
 ----
 status 1
 end
-cases 29
+case the rundown sheet example: a show from 09:00:00 with a 1:09 story and a two-hour one (120:00, wider than its column); a page number kept small; À typed as a capital, its second byte 128, counted as one letter
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+09:00:00|2:30:00
+a1|À la mode|VO|lee|1:09
+a2|marathon|PKG|ann|2:00:00
+----
+stdout until ----
+PG   SLUG             FMT     TAL      EST  FRONT     BACK
+a1   À LA MODE        VO      LEE     1:09  09:00:00  09:28:51
+a2   MARATHON         PKG     ANN    120:00  09:01:09  09:30:00
+TOTAL 121:09  PLANNED 150:00  UNDER 28:51
+----
+end
+case the rundown sheet example: a show of more than a day from 00:01:00, its back times taken modulo a day
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+00:01:00|5:00
+A1|part one|LIVE|ann|20:00:00
+A2|part two|LIVE|bob|20:00:00
+----
+stdout until ----
+PG   SLUG             FMT     TAL      EST  FRONT     BACK
+A1   PART ONE         LIVE    ANN    1200:00  00:01:00  08:06:00
+A2   PART TWO         LIVE    BOB    1200:00  20:01:00  04:06:00
+TOTAL 2400:00  PLANNED 5:00  OVER 2395:00
+----
+end
+case the rundown sheet example: an estimate of 1.30 after a blank line is refused at its own line, 3
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|10:00
+
+A1|top story|PKG|lee|1.30
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 3: an estimate must be :ss, m:ss or h:mm:ss, under a day
+----
+status 1
+end
+case the rundown sheet example: a blank first line is refused as line 1
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+
+18:00:00|10:00
+A1|top story|PKG|lee|1:00
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 1: the first line must be start|planned, such as 18:00:00|28:30
+----
+status 1
+end
+cases 33

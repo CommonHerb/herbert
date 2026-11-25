@@ -35,13 +35,13 @@ the one byte can then not be set.
 
 - `checks/rebuild.cases`: the compiler compiles its own source and what it writes must be the committed seed, byte for
   byte, using at most 128 MiB.
-- `checks/first.cases`: twenty-nine small programs covering the basics, each with the output it must print (three of
-  them the native-today examples in `examples/`, and fourteen the rundown sheet, `examples/rundown_sheet.herb`: five
-  shows it times and nine it must refuse).
-- `checks/language.cases`: 931 cases of what the compiler accepts and refuses: a program with the output, error output
+- `checks/first.cases`: thirty-three small programs covering the basics, each with the output it must print (three of
+  them the native-today examples in `examples/`, and eighteen the rundown sheet, `examples/rundown_sheet.herb`: seven
+  shows it times and eleven it must refuse).
+- `checks/language.cases`: 940 cases of what the compiler accepts and refuses: a program with the output, error output
   and exit status it must give, or the exact words the compiler must refuse it in. 588 came from the Python checks'
-  conformance corpus. The other 343 were written by hand from [the language guide](docs/LANGUAGE.md): 316 for what
-  the Python and shell checks held and these did not, and 27 for `slice`:
+  conformance corpus. The other 352 were written by hand from [the language guide](docs/LANGUAGE.md): 316 for what
+  the Python and shell checks held and these did not, and 36 for `slice`:
   - **Memory, output and Linux** (78): the out-of-memory message where a fill's count wraps and where input is larger
     than the heap left (with input that still fits beside it), the heap that cannot be reserved under an
     address-space limit, a result that cannot be written (a full device, a closed output, and a reader gone with the
@@ -86,18 +86,19 @@ the one byte can then not be set.
     it cannot read or write in, past a file-size limit and from eight processes at once; a new file has mode 0644 and
     no execute bits. `stdin_read` of a folder (21), of an empty nonblocking pipe still open (11) or closed (end of
     input), and 65,537 bytes through a pipe.
-  - **Cutting strings with `slice`** (24): 21 written before the compiler could cut, and 3 after a review found
-    changes to its code that the 21 let through. Cuts at a string's middle, whole and end, of a cut, of `""` and of
-    standard input; a cut written out, kept in an array, compared, in a record, passed through a helper and rendered; a
-    cut at the length that is empty, and `do slice` run with its result dropped. Its two faults in `index`'s words,
-    `0 - 1` as each position, each position checked on all 64 bits (`to` at 2^32 + 2 and `from` at 2^32, whose low 32
-    bits would pass), and `to` checked before `from`. Twenty million cuts of 1,000 bytes that a copy each time could not
-    fit in the heap, and a tail call a million deep on a cut under a 1 MiB stack the program sets itself. A program
-    that only cuts reserves no heap: it lowers its own address-space limit to 1 GiB, reading the limit from its input
-    into a page it maps itself (a buffer would reserve the heap), and still gets a second page. Its refusals: four
-    arguments (420), a buffer (438), `true` in each place (430) and a function named `slice` (429). A call's arguments
-    worked out left to right, and the guide's Example 6. The corpus case that refused `slice()` as deferred now
-    refuses it for its count (420).
+  - **Cutting strings with `slice`** (36): 21 written before the compiler could cut, and 15 after reviews found changes
+    to its code that the 21 let through (positions from calls and undefined names; a record of the wrong kind beside
+    each argument, which must be refused; locals and recursive helpers typed only through a cut). Cuts at a string's
+    middle, whole and end, of a cut, of `""` and of standard input; a cut written out, kept in an array, compared, in a
+    record, passed through a helper and rendered; a cut at the length that is empty, and `do slice` run with its result
+    dropped. Its two faults in `index`'s words, `0 - 1` as each position, each position checked on all 64 bits (`to` at
+    2^32 + 2 and `from` at 2^32, whose low 32 bits would pass), and `to` checked before `from`. Twenty million cuts of
+    1,000 bytes that a copy each time could not fit in the heap, and a tail call a million deep on a cut under a 1 MiB
+    stack the program sets itself. A program that only cuts reserves no heap: it lowers its own address-space limit to 1
+    GiB, reading the limit from its input into a page it maps itself (a buffer would reserve the heap), and still gets a
+    second page. Its refusals: four arguments (420), a buffer (438), `true` in each place (430) and a function named
+    `slice` (429). A call's arguments worked out left to right, and the guide's Example 6. The corpus case that refused
+    `slice()` as deferred now refuses it for its count (420).
 
   Several of these programs run themselves a second time, to give that run a closed input, a pipe or a limit. They
   need `/dev/full`, a pipe with a name made in the runner's folder, stop and continue signals and a hard stack limit
