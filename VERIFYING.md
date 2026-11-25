@@ -35,13 +35,13 @@ the one byte can then not be set.
 
 - `checks/rebuild.cases`: the compiler compiles its own source and what it writes must be the committed seed, byte for
   byte, using at most 128 MiB.
-- `checks/first.cases`: twenty-five small programs covering the basics, each with the output it must print (three of
-  them the native-today examples in `examples/`, and ten the rundown sheet, `examples/rundown_sheet.herb`: four shows
-  it times and six it must refuse).
-- `checks/language.cases`: 928 cases of what the compiler accepts and refuses: a program with the output, error output
+- `checks/first.cases`: twenty-nine small programs covering the basics, each with the output it must print (three of
+  them the native-today examples in `examples/`, and fourteen the rundown sheet, `examples/rundown_sheet.herb`: five
+  shows it times and nine it must refuse).
+- `checks/language.cases`: 931 cases of what the compiler accepts and refuses: a program with the output, error output
   and exit status it must give, or the exact words the compiler must refuse it in. 588 came from the Python checks'
-  conformance corpus. The other 340 were written by hand from [the language guide](docs/LANGUAGE.md): 316 for what
-  the Python and shell checks held and these did not, and 24 for `slice`:
+  conformance corpus. The other 343 were written by hand from [the language guide](docs/LANGUAGE.md): 316 for what
+  the Python and shell checks held and these did not, and 27 for `slice`:
   - **Memory, output and Linux** (78): the out-of-memory message where a fill's count wraps and where input is larger
     than the heap left (with input that still fits beside it), the heap that cannot be reserved under an
     address-space limit, a result that cannot be written (a full device, a closed output, and a reader gone with the

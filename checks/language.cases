@@ -29524,4 +29524,40 @@ stdout until ----
 (16, 0, true, "hello", "world")
 ----
 end
-cases 928
+case slice-takes-its-positions-from-calls
+source until ----
+func start_pos():
+    return 1
+end
+func end_pos():
+    return 3
+end
+func main():
+    return slice("abcd", start_pos(), end_pos())
+end
+----
+stdout until ----
+"bc"
+----
+end
+case refused-slice-from-an-undefined-name
+source until ----
+func main():
+    return slice("abcd", nope, 2)
+end
+----
+refused until ----
+line 2: native-subset: forbidden construct 'undefined-name' (ERR 404)
+----
+end
+case refused-slice-to-an-undefined-name
+source until ----
+func main():
+    return slice("abcd", 0, nope)
+end
+----
+refused until ----
+line 2: native-subset: forbidden construct 'undefined-name' (ERR 404)
+----
+end
+cases 931

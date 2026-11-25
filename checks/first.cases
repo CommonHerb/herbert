@@ -513,12 +513,12 @@ rundown_sheet: line 1: the first line must be start|planned, such as 18:00:00|28
 ----
 status 1
 end
-case the rundown sheet example: an estimate of 0:75 is refused, since seconds stop at 59
+case the rundown sheet example: an estimate of 0:60 is refused, since seconds stop at 59
 libs linux text
 source-file examples/rundown_sheet.herb
 stdin until ----
 18:00:00|10:00
-A1|top story|PKG|lee|0:75
+A1|top story|PKG|lee|0:60
 ----
 stdout 0
 
@@ -555,4 +555,61 @@ rundown_sheet: line 2: an estimate must be :ss, m:ss or h:mm:ss, under a day
 ----
 status 1
 end
-cases 25
+case the rundown sheet example: a show over an hour long, its lengths in minutes past 60 (75:05, 90:00)
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|1:30:00
+A1|special report|PKG|ann|1:15:05
+A2|weather|LIVE|bob|10:00
+----
+stdout until ----
+PG   SLUG             FMT     TAL      EST  FRONT     BACK
+A1   SPECIAL REPORT   PKG     ANN    75:05  18:00:00  18:04:55
+A2   WEATHER          LIVE    BOB    10:00  19:15:05  19:20:00
+TOTAL 85:05  PLANNED 90:00  UNDER 4:55
+----
+end
+case the rundown sheet example: a start of 25:00:00 is refused, since a start is a time of day
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+25:00:00|10:00
+A1|top story|PKG|lee|1:00
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 1: the first line must be start|planned, such as 18:00:00|28:30
+----
+status 1
+end
+case the rundown sheet example: an estimate of :05:00 is refused, since :ss has no minutes
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|10:00
+A1|top story|PKG|lee|:05:00
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 2: an estimate must be :ss, m:ss or h:mm:ss, under a day
+----
+status 1
+end
+case the rundown sheet example: a story with four fields is refused as a story
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|10:00
+A1|top story|PKG|1:00
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 2: a story must be page|slug|format|talent|estimate
+----
+status 1
+end
+cases 29
