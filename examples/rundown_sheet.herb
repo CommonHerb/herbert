@@ -1,0 +1,254 @@
+-- The rundown sheet: the first piece of its owner's rundown, a timing sheet
+-- for a show (so far made-up ones). It reads the show on standard input and
+-- prints its page.
+--
+-- Input. The first line is start|planned: when the show starts, a time of day
+-- h:mm:ss under 24:00:00, and how long it is planned to run. Every line after
+-- it is one story, page|slug|format|talent|estimate, exactly five fields. A
+-- length (planned, an estimate) is :ss, m:ss or h:mm:ss: mm and ss are two
+-- digits under 60, m and h one digit or more, and the whole is under a day. A
+-- carriage return just before a newline is dropped, the last line may end
+-- without a newline, and an empty line after the first is skipped.
+--
+-- Output. A line per story: page, slug, format, talent, estimate, front time
+-- (when it starts as timed) and back time (when it must start for the show to
+-- end on time), then TOTAL, PLANNED and OVER, UNDER or ON TIME with the
+-- difference. Cells are cut and padded by letters (UTF-8 code points), so é is
+-- never split. Slugs and talent are upper-cased: a to z, and à to þ except ÷;
+-- other letters (š, ł) are left as they are. A wide letter, such as an emoji,
+-- fills one letter of a cell but two columns of a screen. Times of day go on
+-- past midnight (23:59:50, then 00:00:05).
+--
+-- A malformed show is refused with status 1 and one line on standard error:
+--   rundown_sheet: line 1: the first line must be start|planned, such as 18:00:00|28:30
+--   rundown_sheet: line N: a story must be page|slug|format|talent|estimate
+--   rundown_sheet: line N: an estimate must be :ss, m:ss or h:mm:ss, under a day
+--   rundown_sheet: cannot read standard input
+--
+-- It is written byte by byte on purpose, with only today's builtins. It is the
+-- baseline that the work on real text (cutting, joining and formatting it)
+-- will shorten, and that work must leave the page the same, byte for byte.
+-- Build and run, from the checkout:
+--   make program SOURCE=examples/rundown_sheet.herb SUPPORT="linux text"
+--   ./build/program < show.txt
+
+-- One story of the show, as read; estimate is in seconds.
+record Story:
+    page: string
+    slug: string
+    format: string
+    talent: string
+    estimate: int
+end
+
+-- The line of s from at: (stop, next). stop is where its text ends, before
+-- the newline and a carriage return just before it; next is where the next
+-- line starts. The last line may have no newline.
+func line_end(s, at):
+    let e = at
+    while e < length(s) and index(s, e) != '\n': e = e + 1 end
+    if e < length(s) and e > at and index(s, e - 1) == '\r': return (e - 1, e + 1) end
+    return (e, e + 1)
+end
+
+-- Where the field of s from at ends: the next | before stop, or stop.
+func field_end(s, at, stop):
+    while at < stop and index(s, at) != '|': at = at + 1 end
+    return at
+end
+
+-- How many | there are in s from at up to stop.
+func bars(s, at, stop):
+    let n = 0
+    while at < stop:
+        if index(s, at) == '|': n = n + 1 end
+        at = at + 1
+    end
+    return n
+end
+
+-- A time in s from at up to stop, written :ss, m:ss or h:mm:ss: (ok, seconds,
+-- parts). mm and ss are two digits under 60, m or h one digit or more, and
+-- only :ss leaves out the number before its colon. A time of a day or more is
+-- refused, which also keeps the sums below from wrapping. An empty span (at
+-- at or past stop) is refused.
+func read_time(s, at, stop):
+    let lead = text_string_whole(s, at, stop)
+    let seconds = lead.1
+    let parts = 1
+    let i = lead.2
+    while i < stop:
+        if index(s, i) != ':' or seconds >= 86400: return (false, 0, 0) end
+        let two = text_string_whole(s, i + 1, stop)
+        if not two.0 or two.2 != i + 3 or two.1 >= 60: return (false, 0, 0) end
+        seconds = seconds * 60 + two.1
+        parts = parts + 1
+        i = i + 3
+    end
+    let ok = parts >= 2 and parts <= 3 and seconds < 86400 and (lead.0 or parts == 2)
+    return (ok, seconds, parts)
+end
+
+-- The bytes of s from from up to stop as a new string. With capitals true, a
+-- to z and the small letters à to þ (not ÷) become capitals. In UTF-8 those
+-- are 195 then 160 to 190, and each capital is 195 then 32 less (é is 195
+-- 169, É is 195 137), so the string keeps its length.
+func piece(s, from, stop, capitals):
+    let b = new_buffer()
+    let i = from
+    while i < stop:
+        let c = index(s, i)
+        let plain = c >= 'a' and c <= 'z'
+        let accented = i > from and index(s, i - 1) == 195 and c >= 160 and c <= 190 and c != 183
+        if capitals and (plain or accented): c = c - 32 end
+        do append(b, c)
+        i = i + 1
+    end
+    return freeze(b)
+end
+
+-- Whether the byte b continues a UTF-8 letter (128 to 191) rather than
+-- starting one.
+func continues(b): return b >= 128 and b < 192 end
+
+-- s added to out, cut or padded with spaces to width letters, then a space. A
+-- letter is one UTF-8 code point, a byte that starts it and the bytes that
+-- continue it, so a cut never splits é.
+func add_cell(out, s, width):
+    let shown = 0
+    let i = 0
+    while i < length(s) and (shown < width or continues(index(s, i))):
+        if not continues(index(s, i)): shown = shown + 1 end
+        do append(out, index(s, i))
+        i = i + 1
+    end
+    while shown <= width:
+        do append(out, ' ')
+        shown = shown + 1
+    end
+    return 0
+end
+
+-- n added to out in decimal, with a zero in front when it is under 10.
+func add_two(out, n):
+    if n < 10: do append(out, '0') end
+    return text_add_whole(out, n)
+end
+
+-- The time of day t seconds after a midnight, hh:mm:ss, added to out.
+func add_clock(out, t):
+    let d = t % 86400
+    do add_two(out, d / 3600)
+    do append(out, ':')
+    do add_two(out, d / 60 % 60)
+    do append(out, ':')
+    return add_two(out, d % 60)
+end
+
+-- A length as m:ss, the minutes as many as there are (75:00).
+func length_text(seconds):
+    let b = new_buffer()
+    do text_add_whole(b, seconds / 60)
+    do append(b, ':')
+    do add_two(b, seconds % 60)
+    return freeze(b)
+end
+
+-- Stops the program with status 1, saying on standard error what is wrong
+-- with line n of the show.
+func refuse(n, what):
+    let b = new_buffer()
+    do text_add(b, "rundown_sheet: line ")
+    do text_add_whole(b, n)
+    do text_add(b, ": ")
+    do text_add(b, what)
+    do text_add(b, "\n")
+    return linux_die(freeze(b))
+end
+
+func main():
+    let input = stdin_read()
+    if input.0 != 0: return linux_die("rundown_sheet: cannot read standard input\n") end
+    let s = input.1
+    let first = line_end(s, 0)
+    let bar = field_end(s, 0, first.0)
+    let start = read_time(s, 0, bar)
+    let planned = read_time(s, bar + 1, first.0)
+    if bar == first.0 or not start.0 or start.2 != 3 or not planned.0:
+        return refuse(1, "the first line must be start|planned, such as 18:00:00|28:30")
+    end
+    let stories = new_array(Story)
+    let total = 0
+    let line = 1
+    let at = first.1
+    while at < length(s):
+        line = line + 1
+        let bounds = line_end(s, at)
+        let stop = bounds.0
+        if stop > at:
+            if bars(s, at, stop) != 4: return refuse(line, "a story must be page|slug|format|talent|estimate") end
+            let f1 = field_end(s, at, stop)
+            let f2 = field_end(s, f1 + 1, stop)
+            let f3 = field_end(s, f2 + 1, stop)
+            let f4 = field_end(s, f3 + 1, stop)
+            let estimate = read_time(s, f4 + 1, stop)
+            if not estimate.0: return refuse(line, "an estimate must be :ss, m:ss or h:mm:ss, under a day") end
+            let page = piece(s, at, f1, false)
+            let slug = piece(s, f1 + 1, f2, true)
+            let format = piece(s, f2 + 1, f3, false)
+            let talent = piece(s, f3 + 1, f4, true)
+            do add(stories, Story(page, slug, format, talent, estimate.1))
+            total = total + estimate.1
+        end
+        at = bounds.1
+    end
+    -- The first back time is when the first story must start for the show to
+    -- end planned after its start. A day is added before the total is taken
+    -- away, so a show that starts just after midnight and runs over goes back
+    -- into the evening before; the total is taken modulo a day for the same
+    -- reason, since many stories can add up to more than one.
+    let front = start.1
+    let back = start.1 + planned.1 + 86400 - total % 86400
+    let out = new_buffer()
+    do text_add(out, "PG   SLUG             FMT     TAL      EST  FRONT     BACK\n")
+    let i = 0
+    while i < count(stories):
+        let story = get(stories, i)
+        do add_cell(out, story.page, 4)
+        do add_cell(out, story.slug, 16)
+        do add_cell(out, story.format, 7)
+        do add_cell(out, story.talent, 6)
+        let estimate = length_text(story.estimate)
+        let pad = length(estimate)
+        while pad < 5:
+            do append(out, ' ')
+            pad = pad + 1
+        end
+        do text_add(out, estimate)
+        do text_add(out, "  ")
+        do add_clock(out, front)
+        do text_add(out, "  ")
+        do add_clock(out, back)
+        do text_add(out, "\n")
+        front = front + story.estimate
+        back = back + story.estimate
+        i = i + 1
+    end
+    do text_add(out, "TOTAL ")
+    do text_add(out, length_text(total))
+    do text_add(out, "  PLANNED ")
+    do text_add(out, length_text(planned.1))
+    if total > planned.1:
+        do text_add(out, "  OVER ")
+        do text_add(out, length_text(total - planned.1))
+    elif total < planned.1:
+        do text_add(out, "  UNDER ")
+        do text_add(out, length_text(planned.1 - total))
+    else:
+        do text_add(out, "  ON TIME")
+    end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end

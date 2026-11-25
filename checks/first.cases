@@ -404,4 +404,155 @@ HERBERT-NATIVE-TODAY
 5
 ----
 end
-cases 15
+case the rundown sheet example: an accented show that runs over, its page pinned
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+23:50:00|28:30
+A1|café owner honored|PKG|josé|1:45
+A2|école board|VO|jane|0:40
+A3|long slug cut right here|VO|jane|26:30
+----
+stdout until ----
+PG   SLUG             FMT     TAL      EST  FRONT     BACK
+A1   CAFÉ OWNER HONOR PKG     JOSÉ    1:45  23:50:00  23:49:35
+A2   ÉCOLE BOARD      VO      JANE    0:40  23:51:45  23:51:20
+A3   LONG SLUG CUT RI VO      JANE   26:30  23:52:25  23:52:00
+TOTAL 28:55  PLANNED 28:30  OVER 0:25
+----
+end
+case the rundown sheet example: runs under, back times past midnight; :15, CRLF, a blank line, no final newline; accents made capitals, capitals kept, letters past Latin-1 left small
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin 179
+23:55:00|10:00
+A1|cold open à Évry|VO|zoë|:15
+
+A2|abcdefghijklmnoé more|VO/SOT|þóra|1:10
+A3|÷ half and ÿ|PKG|tomáš|0:01:45
+B1|rain at the old école|LIVE|marisol|3:00
+stdout until ----
+PG   SLUG             FMT     TAL      EST  FRONT     BACK
+A1   COLD OPEN À ÉVRY VO      ZOË     0:15  23:55:00  23:58:50
+A2   ABCDEFGHIJKLMNOÉ VO/SOT  ÞÓRA    1:10  23:55:15  23:59:05
+A3   ÷ HALF AND ÿ     PKG     TOMÁš   1:45  23:56:25  00:00:15
+B1   RAIN AT THE OLD  LIVE    MARISO  3:00  23:58:10  00:02:00
+TOTAL 6:10  PLANNED 10:00  UNDER 3:50
+----
+end
+case the rundown sheet example: a show that starts just after midnight and runs over, its first back time the evening before; a format kept as typed
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+00:01:00|5:00
+N1|late news|VO|ann|3:00
+N2|weather|sot|ann|4:00
+----
+stdout until ----
+PG   SLUG             FMT     TAL      EST  FRONT     BACK
+N1   LATE NEWS        VO      ANN     3:00  00:01:00  23:59:00
+N2   WEATHER          sot     ANN     4:00  00:04:00  00:02:00
+TOTAL 7:00  PLANNED 5:00  OVER 2:00
+----
+end
+case the rundown sheet example: a show that runs exactly as planned is ON TIME
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|5:00
+A1|top story|PKG|lee|2:30
+A2|kicker|VO|lee|2:30
+----
+stdout until ----
+PG   SLUG             FMT     TAL      EST  FRONT     BACK
+A1   TOP STORY        PKG     LEE     2:30  18:00:00  18:00:00
+A2   KICKER           VO      LEE     2:30  18:02:30  18:02:30
+TOTAL 5:00  PLANNED 5:00  ON TIME
+----
+end
+case the rundown sheet example: a start of 18:00 is refused, since a start is h:mm:ss
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00|28:30
+A1|top story|PKG|lee|28:30
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 1: the first line must be start|planned, such as 18:00:00|28:30
+----
+status 1
+end
+case the rundown sheet example: an estimate of 1:5 is refused at its line, after a good story
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|10:00
+A1|top story|PKG|lee|8:55
+A2|kicker|VO|lee|1:5
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 3: an estimate must be :ss, m:ss or h:mm:ss, under a day
+----
+status 1
+end
+case the rundown sheet example: a planned length that is a bare number, 30, is refused
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|30
+A1|top story|PKG|lee|30:00
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 1: the first line must be start|planned, such as 18:00:00|28:30
+----
+status 1
+end
+case the rundown sheet example: an estimate of 0:75 is refused, since seconds stop at 59
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|10:00
+A1|top story|PKG|lee|0:75
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 2: an estimate must be :ss, m:ss or h:mm:ss, under a day
+----
+status 1
+end
+case the rundown sheet example: a story with a sixth field (a | in its slug) is refused as a story
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|10:00
+A1|rock|roll story|PKG|lee|1:00
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 2: a story must be page|slug|format|talent|estimate
+----
+status 1
+end
+case the rundown sheet example: a timecode with frames, 00:01:30:15, is refused as an estimate
+libs linux text
+source-file examples/rundown_sheet.herb
+stdin until ----
+18:00:00|10:00
+A1|top story|PKG|lee|00:01:30:15
+----
+stdout 0
+
+stderr until ----
+rundown_sheet: line 2: an estimate must be :ss, m:ss or h:mm:ss, under a day
+----
+status 1
+end
+cases 25

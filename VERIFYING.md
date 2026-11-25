@@ -35,8 +35,9 @@ the one byte can then not be set.
 
 - `checks/rebuild.cases`: the compiler compiles its own source and what it writes must be the committed seed, byte for
   byte, using at most 128 MiB.
-- `checks/first.cases`: fifteen small programs covering the basics, each with the output it must print (three of them
-  the native-today examples in `examples/`).
+- `checks/first.cases`: twenty-five small programs covering the basics, each with the output it must print (three of
+  them the native-today examples in `examples/`, and ten the rundown sheet, `examples/rundown_sheet.herb`: four shows
+  it times and six it must refuse).
 - `checks/language.cases`: 904 cases of what the compiler accepts and refuses: a program with the output, error output
   and exit status it must give, or the exact words the compiler must refuse it in. 588 came from the Python checks'
   conformance corpus. The other 316 were written by hand from [the language guide](docs/LANGUAGE.md)

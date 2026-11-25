@@ -30,6 +30,7 @@ make scope && ./build/scope
 - [The word counter](examples/wordcount.md) counts lines, words and bytes on standard input, and is a good first
   program to read.
 - [Knock](examples/knock.md) asks whether a computer answers at an IPv4 address and port (`./build/knock 127.0.0.1 22`).
+- [The rundown sheet](examples/rundown_sheet.herb) times a show, story by story; its first comment says how to run it.
 
 To build your own program:
 
