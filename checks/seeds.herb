@@ -766,13 +766,7 @@ end
 
 -- Whether the text t starts with the text w.
 func seeds_begins(t, w):
-    if length(t) < length(w): return false end
-    let i = 0
-    while i < length(w):
-        if index(t, i) != index(w, i): return false end
-        i = i + 1
-    end
-    return true
+    return length(t) >= length(w) and equal(slice(t, 0, length(w)), w)
 end
 
 -- Count one check and say so when it did not give its answer. planted is ""

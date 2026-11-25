@@ -2,8 +2,9 @@
 -- Every hosted program carries the fault-helper block (K4). Each one writes
 -- main's result through the fd1 write helper, whose failed write is reported
 -- through the block ("herbert: cannot write output (error N)"); every heap
--- allocation reports a used-up heap through it; div/mod and the index, get,
--- append and buffer_* ops report their located faults through it. Before K4 the
+-- allocation reports a used-up heap through it; div/mod and the index, slice,
+-- get, append and buffer_* ops report their located faults through it (slice
+-- through index's helper). Before K4 the
 -- block was emitted only for a program with one of the located-fault ops
 -- (23/29/31/43/44/60/61/66/67), and any other program ended silently on a full
 -- heap or a failed write. nc_drive appends the fault rodata when this is 1.
@@ -572,6 +573,9 @@ func nc_group_single_len(op):
     end
     if op == 23:
         return 27
+    end
+    if op == 24:
+        return 52
     end
     if op == 25:
         return 50
@@ -2773,6 +2777,48 @@ func nc_emit_index(buf, line, diag_index_off, instr_off):
     do append(buf, 14)
     do append(buf, 65)
     do append(buf, 80)
+    return buf
+end
+
+-- slice(s, from, to): a cut that shares s's bytes, copying nothing. It checks
+-- to against the length, then from against to, and faults through diag_index
+-- (P in rcx, L in rdx, the line in r10), so a bad to names the length and a
+-- bad from names to. 52 bytes (nc_group_single_len(24)):
+--   pop rcx (to); pop rdx (from); pop rax (length); pop rsi (address)
+--   cmp rcx, rax; jbe +15; mov rdx, rax; route    (to past the end)
+--   cmp rdx, rcx; jbe +15; xchg rcx, rdx; route   (from past to)
+--   add rsi, rdx; push rsi; sub rcx, rdx; push rcx
+func nc_emit_slice(buf, line, diag_index_off, instr_off):
+    do append(buf, 89)
+    do append(buf, 90)
+    do append(buf, 88)
+    do append(buf, 94)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 193)
+    do append(buf, 118)
+    do append(buf, nc_fault_route_len() + 3)
+    do append(buf, 72)
+    do append(buf, 137)
+    do append(buf, 194)
+    buf = nc_emit_fault_route(buf, line, diag_index_off, instr_off + 24)
+    do append(buf, 72)
+    do append(buf, 57)
+    do append(buf, 202)
+    do append(buf, 118)
+    do append(buf, nc_fault_route_len() + 3)
+    do append(buf, 72)
+    do append(buf, 135)
+    do append(buf, 209)
+    buf = nc_emit_fault_route(buf, line, diag_index_off, instr_off + 44)
+    do append(buf, 72)
+    do append(buf, 1)
+    do append(buf, 214)
+    do append(buf, 86)
+    do append(buf, 72)
+    do append(buf, 41)
+    do append(buf, 209)
+    do append(buf, 81)
     return buf
 end
 
@@ -5040,6 +5086,8 @@ func nc_lower_loop(fn, funcs, meta, metas, layout, layouts, strings, code_len, d
             buf = nc_emit_length(buf)
         elif op == 23:
             buf = nc_emit_index(buf, get(fn.6, i), diag_base + nc_fault_diag_index_rel(), instr_off)
+        elif op == 24:
+            buf = nc_emit_slice(buf, get(fn.6, i), diag_base + nc_fault_diag_index_rel(), instr_off)
         elif op == 25:
             buf = nc_emit_equal(buf)
         elif op == 26:

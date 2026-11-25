@@ -2266,7 +2266,10 @@ func nc_has_value_arity_guard(name):
     if equal(name, "length") or equal(name, "freeze") or equal(name, "count"):
         return true
     end
-    return equal(name, "index") or equal(name, "equal") or equal(name, "get")
+    if equal(name, "index") or equal(name, "slice"):
+        return true
+    end
+    return equal(name, "equal") or equal(name, "get")
 end
 
 -- All six hosted calls return int. Buffer calls constrain their first argument
@@ -2459,7 +2462,21 @@ func nc_infer_expr(pool, nodes, prog_idx, idx, env, sig, fn_idx, funcs, n_params
             return (0, nc_type_bool(), r.1, r.2, nc_or_changed(l.3, r.3))
         end
         if equal(name, "slice"):
-            return (nc_infer_fail(pool, 438, node.3, ""), 0, env, sig, 0)
+            -- A cut (string, int, int) -> string: index's arm with a second
+            -- position. The string is checked first (438 for a buffer).
+            let s = nc_constrain_string_value(pool, nodes, prog_idx, get(kids, 0), env, sig, fn_idx, funcs, n_params, node.3)
+            if s.0 != 0:
+                return (s.0, 0, s.1, s.2, s.3)
+            end
+            let f = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 1), s.1, nc_type_int(), s.2, fn_idx, funcs, n_params)
+            if f.0 != 0:
+                return (f.0, 0, f.1, f.2, nc_or_changed(s.3, f.3))
+            end
+            let t = nc_constrain_expr(pool, nodes, prog_idx, get(kids, 2), f.1, nc_type_int(), f.2, fn_idx, funcs, n_params)
+            if t.0 != 0:
+                return (t.0, 0, t.1, t.2, nc_or_changed(nc_or_changed(s.3, f.3), t.3))
+            end
+            return (0, nc_type_string(), t.1, t.2, nc_or_changed(nc_or_changed(s.3, f.3), t.3))
         end
         if equal(name, "new_buffer"):
             return (0, nc_type_buffer(), env, sig, 0)

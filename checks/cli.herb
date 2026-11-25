@@ -999,13 +999,7 @@ end
 func cli_asks(source, word):
     let line = cli_join("-- stand-in ", word)
     let n = length(line)
-    if length(source) < n: return false end
-    let i = 0
-    while i < n:
-        if index(source, i) != index(line, i): return false end
-        i = i + 1
-    end
-    return length(source) == n or index(source, n) == 10
+    return length(source) >= n and equal(slice(source, 0, n), line) and (length(source) == n or index(source, n) == 10)
 end
 
 -- The stand-in words that write itself with one byte of its ELF header

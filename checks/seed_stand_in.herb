@@ -77,18 +77,17 @@ end
 func stand_in_asks(source, word):
     let want = "-- stand-in "
     let n = length(want) + length(word)
-    if length(source) <= n: return false end
-    let i = 0
-    while i < length(want):
-        if index(source, i) != index(want, i): return false end
+    if length(source) <= n or not equal(slice(source, 0, length(want)), want): return false end
+    return equal(slice(source, length(want), n), word) and (index(source, n) == 32 or index(source, n) == 10)
+end
+
+-- The rest of the source's first line from at: the name after the word.
+func stand_in_name(source, at):
+    let i = at
+    while i < length(source) and index(source, i) != 10:
         i = i + 1
     end
-    i = 0
-    while i < length(word):
-        if index(source, length(want) + i) != index(word, i): return false end
-        i = i + 1
-    end
-    return index(source, n) == 32 or index(source, n) == 10
+    return slice(source, at, i)
 end
 
 -- Write a.out, as the compiler does: the count bytes of own and then more.
@@ -103,13 +102,7 @@ end
 -- Add a line to the end of the file the source's first line names after
 -- "-- stand-in edit ".
 func stand_in_edit(source):
-    let path = new_buffer()
-    let i = 17
-    while i < length(source) and index(source, i) != 10:
-        do append(path, index(source, i))
-        i = i + 1
-    end
-    do append(path, 0)
+    let path = linux_cstring(stand_in_name(source, 17))
     let fd = linux_open(path, 525377, 420)
     if linux_error(fd): return 0 end
     let line = linux_cstring("changed by the stand-in\n")
@@ -121,13 +114,7 @@ end
 -- Write the byte X over the first byte of the file the source's first line
 -- names after "-- stand-in flip ". A second time changes nothing more.
 func stand_in_flip(source):
-    let path = new_buffer()
-    let i = 17
-    while i < length(source) and index(source, i) != 10:
-        do append(path, index(source, i))
-        i = i + 1
-    end
-    do append(path, 0)
+    let path = linux_cstring(stand_in_name(source, 17))
     let fd = linux_open(path, 524289, 0)
     if linux_error(fd): return 0 end
     do linux_write(fd, linux_cstring("X"), 0, 1)
@@ -139,22 +126,11 @@ end
 -- and put a link to it in its place. A second time nothing happens: the link
 -- cannot be moved onto the folder.
 func stand_in_relink(source):
-    let path = new_buffer()
-    let moved = new_buffer()
-    let i = 19
-    while i < length(source) and index(source, i) != 10:
-        do append(path, index(source, i))
-        do append(moved, index(source, i))
-        i = i + 1
-    end
-    do append(path, 0)
-    let tail = ".moved"
-    i = 0
-    while i < length(tail):
-        do append(moved, index(tail, i))
-        i = i + 1
-    end
-    do append(moved, 0)
+    let name = stand_in_name(source, 19)
+    let path = linux_cstring(name)
+    let moved = linux_buffer(length(name) + 7)
+    do linux_text(moved, 0, name)
+    do linux_text(moved, length(name), ".moved")
     if linux_error(linux_syscall6(82, buffer_address(path), buffer_address(moved), 0, 0, 0, 0)): return 0 end
     do linux_syscall6(88, buffer_address(moved), buffer_address(path), 0, 0, 0, 0)
     return 0
@@ -205,13 +181,7 @@ end
 -- line names after "-- stand-in stop ", stop the program that started it
 -- with the signal TERM, and wait 30 seconds.
 func stand_in_stop(source):
-    let path = new_buffer()
-    let i = 17
-    while i < length(source) and index(source, i) != 10:
-        do append(path, index(source, i))
-        i = i + 1
-    end
-    do append(path, 0)
+    let path = linux_cstring(stand_in_name(source, 17))
     let digits = linux_buffer(24)
     let n = linux_decimal(digits, 0, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
     do buffer_set(digits, n, 10)

@@ -815,7 +815,21 @@ func nc_meta_process_loop(pool, funcs, sig, fn_idx, main_idx, strings_count, cod
             end
             stack = nc_stack_push(l.1, nc_type_bool())
         elif op == 24:
-            return MetaScan(nc_fail(438, line, ""), new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            -- SLICE: pops to, from and the string; pushes the cut, a string
+            -- that shares the bytes. It takes no heap (not on the heap list).
+            let cut_to = nc_meta_pop_expect(pool, stack, nc_type_int(), line)
+            if cut_to.0 != 0:
+                return MetaScan(cut_to.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            let cut_from = nc_meta_pop_expect(pool, cut_to.1, nc_type_int(), line)
+            if cut_from.0 != 0:
+                return MetaScan(cut_from.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            let cut_s = nc_meta_pop_expect(pool, cut_from.1, nc_type_string(), line)
+            if cut_s.0 != 0:
+                return MetaScan(cut_s.0, new_array(int), stacks, tuple_meta, call_meta, max_stack, max_sret, has_clogger, heap_meta, has_heap)
+            end
+            stack = nc_stack_push(cut_s.1, nc_type_string())
         elif op == 26:
             heap_entry = (4, 0, 0)
             stack = nc_stack_push(stack, nc_type_buffer())

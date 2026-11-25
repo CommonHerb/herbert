@@ -3394,6 +3394,9 @@ func err_value_builtin_arity(name):
     if equal(name, "index"):
         return 2
     end
+    if equal(name, "slice"):
+        return 3
+    end
     if equal(name, "equal"):
         return 2
     end

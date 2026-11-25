@@ -38,10 +38,10 @@ the one byte can then not be set.
 - `checks/first.cases`: twenty-five small programs covering the basics, each with the output it must print (three of
   them the native-today examples in `examples/`, and ten the rundown sheet, `examples/rundown_sheet.herb`: four shows
   it times and six it must refuse).
-- `checks/language.cases`: 904 cases of what the compiler accepts and refuses: a program with the output, error output
+- `checks/language.cases`: 928 cases of what the compiler accepts and refuses: a program with the output, error output
   and exit status it must give, or the exact words the compiler must refuse it in. 588 came from the Python checks'
-  conformance corpus. The other 316 were written by hand from [the language guide](docs/LANGUAGE.md)
-  for what the Python and shell checks held and these did not:
+  conformance corpus. The other 340 were written by hand from [the language guide](docs/LANGUAGE.md): 316 for what
+  the Python and shell checks held and these did not, and 24 for `slice`:
   - **Memory, output and Linux** (78): the out-of-memory message where a fill's count wraps and where input is larger
     than the heap left (with input that still fits beside it), the heap that cannot be reserved under an
     address-space limit, a result that cannot be written (a full device, a closed output, and a reader gone with the
@@ -74,8 +74,9 @@ the one byte can then not be set.
     65,537 and 16,777,216 from a file and 16,777,217 through a pipe, each whole. Bounds checked on all 64 bits: each
     builtin at a position or byte of 2^32 stops with the located message, and division by 2^32 is not division by zero.
     Operators on input (a page-table entry, Adler-32, a product past 2^64, `&` and `^` above 2^32), class mixes of
-    operators, `~` on a bool and `not` on an int, builtins refused with three arguments, as values or with the wrong
-    types, array element types on rebinding, a refusal's line past 1,000, and 49 more refusals in their exact words. The
+    operators, `~` on a bool and `not` on an int, `slice` with three arguments (refused until it could cut, now `"a"`),
+    builtins refused as values or with the wrong types, array element types on rebinding, a refusal's line past 1,000,
+    48 more refusals in their exact words and a second three-argument `slice` that now cuts. The
     back end's own guards on hand-built code (ERR 416, 418, and ERR 439 for missing NEW_ARRAY metadata), by compiling
     the compiler's stage files (`libs ../stack/compiler/NAME`) in front of a `main` of the case's own: these hold the
     stage files of the checkout the cases are run against, as `make answers` and `make reseed` do.
@@ -85,6 +86,18 @@ the one byte can then not be set.
     it cannot read or write in, past a file-size limit and from eight processes at once; a new file has mode 0644 and
     no execute bits. `stdin_read` of a folder (21), of an empty nonblocking pipe still open (11) or closed (end of
     input), and 65,537 bytes through a pipe.
+  - **Cutting strings with `slice`** (24): 21 written before the compiler could cut, and 3 after a review found
+    changes to its code that the 21 let through. Cuts at a string's middle, whole and end, of a cut, of `""` and of
+    standard input; a cut written out, kept in an array, compared, in a record, passed through a helper and rendered; a
+    cut at the length that is empty, and `do slice` run with its result dropped. Its two faults in `index`'s words,
+    `0 - 1` as each position, each position checked on all 64 bits (`to` at 2^32 + 2 and `from` at 2^32, whose low 32
+    bits would pass), and `to` checked before `from`. Twenty million cuts of 1,000 bytes that a copy each time could not
+    fit in the heap, and a tail call a million deep on a cut under a 1 MiB stack the program sets itself. A program
+    that only cuts reserves no heap: it lowers its own address-space limit to 1 GiB, reading the limit from its input
+    into a page it maps itself (a buffer would reserve the heap), and still gets a second page. Its refusals: four
+    arguments (420), a buffer (438), `true` in each place (430) and a function named `slice` (429). A call's arguments
+    worked out left to right, and the guide's Example 6. The corpus case that refused `slice()` as deferred now
+    refuses it for its count (420).
 
   Several of these programs run themselves a second time, to give that run a closed input, a pipe or a limit. They
   need `/dev/full`, a pipe with a name made in the runner's folder, stop and continue signals and a hard stack limit
