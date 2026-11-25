@@ -20,7 +20,7 @@
 ref record Child:
     status: buffer
     usage: buffer
-    zero: buffer
+    core: buffer
     pipe: buffer
     null: buffer
     none: buffer
@@ -28,7 +28,10 @@ ref record Child:
 end
 
 func child_new():
-    return Child(linux_buffer(8), linux_buffer(144), linux_buffer(16), linux_buffer(8), linux_cstring("/dev/null"), linux_cstring(""), 0)
+    let c = Child(linux_buffer(8), linux_buffer(144), linux_buffer(16), linux_buffer(8), linux_cstring("/dev/null"), linux_cstring(""), 0)
+    do linux_put64(c.core, 0, 1)
+    do linux_put64(c.core, 8, 1)
+    return c
 end
 
 -- Room for the count arguments of a program to start, its own name the first
@@ -77,7 +80,9 @@ end
 --   errors  the same for its standard error
 -- The caller's own standard input, output and error may be closed; a program
 -- whose output or errors is not given then has none either.
--- The program gets no environment and leaves no core file. A signal this
+-- The program gets no environment and a core limit of one byte: no core
+-- file, and Linux then hands a crash to no crash reporter (under a limit of 0
+-- it still does, and one may send the report off). A signal this
 -- program has ignored stays ignored in it, as Linux hands that on. Linux stops it
 -- with its alarm signal after seconds (no limit when 0), and with a signal
 -- nothing can ignore if this program ends first, so it never outlives its
@@ -124,7 +129,7 @@ func child_run(c, folder, path, argv, input, output, errors, seconds):
         if ready and buffer_get(output, 0) != 0: ready = child_point(output, 577, 1) end
         if ready and buffer_get(errors, 0) != 0: ready = child_point(errors, 577, 2) end
         if ready:
-            do linux_syscall6(160, 4, buffer_address(c.zero), 0, 0, 0, 0)
+            do linux_syscall6(160, 4, buffer_address(c.core), 0, 0, 0, 0)
             if seconds != 0: do linux_syscall6(37, seconds, 0, 0, 0, 0, 0) end
             do linux_syscall6(59, buffer_address(path), buffer_address(argv), 0, 0, 0, 0)
             do buffer_set(c.pipe, 0, 2)

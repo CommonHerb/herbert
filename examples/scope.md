@@ -158,7 +158,7 @@ as before.
   `/`; another disk, or a part of this one mounted elsewhere, is not shown. One temperature each for the drive and the
   processor, and none for other parts (the graphics, the board).
 - No degree sign: Scope's letters (`lib/pixel_text.herb`) have none, and adding one would change what Notes draws for
-  that byte in its status line, which its checks hold fixed, so the line says `35 C`.
+  that byte in its status line, so the line says `35 C`.
 - Only the first 64 hwmon devices are looked at, and only when Scope starts: a drive added later is not shown until
   Scope is started again. A reading is up to 31 bytes of plain decimal; anything else is `n/a`.
 - Reading the drive's temperature makes Linux ask the drive itself, which takes about 3 ms on the owner's computer,

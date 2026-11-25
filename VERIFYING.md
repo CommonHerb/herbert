@@ -6,7 +6,11 @@ Python and shell checks that came before them left on 2026-11-25; they are in gi
 
 Everything here builds and runs Linux programs, so it needs Linux/x86-64. QEMU-emulated x86-64 Linux (on Apple
 Silicon, say) can reproduce a failure but may be too slow for the time limits; CI or real Linux/x86-64 hardware is the
-authority. Beyond make, git and coreutils, only `make hands` needs a host tool: Xvfb, the display server.
+authority. Beyond make, git and coreutils, only `make hands` needs a host tool: Xvfb, the display server. `$TMPDIR`,
+when set, must be an absolute path. Every program a check starts gets a core limit of one byte: no core file, and
+Linux then hands a crash to no crash reporter (under a limit of 0 it still does, and Ubuntu's may send the report
+off). Run the checks under a soft core limit of 0 if you like, not a hard one: a plain `ulimit -c 0` sets both, and
+the one byte can then not be set.
 
 ## make check (seconds)
 
@@ -139,7 +143,7 @@ authority. Beyond make, git and coreutils, only `make hands` needs a host tool: 
 - `checks/fragments.cases`: 99 cases in two parts. The first holds the compiler to the large programs written in Herbert
   in `stack/`: the lexer, parser, evaluator and bytecode-machine fragments, each printing its probe's answer as its key
   says; the emitter returning its 482-line bytecode listing as `main`'s string (shown in double quotes, each newline,
-  double quote and backslash as an escape: the guide does not say so, the case holds it as the compiler does it); and
+  double quote and backslash as an escape, as the guide's G10 says); and
   Klondike, the older front end with its own lowerer and bytecode machine, given the compute probe on 5 and on 8 and the
   io probe on `hello`, and reporting each of the 54 malformed programs in `stack/error_probes` with its line and its
   `ERR` code in its own words (five of them a second time with the offending name renamed, so the name in the report is
@@ -464,10 +468,13 @@ What it does not check, because it needs the system calls watched: that a call i
 taken once, is tried again and the publication still ends with the whole program; writes or getrandom reads cut short
 that still end in a whole `a.out`; that the temporary's descriptor is closed exactly once; the temporary's exact open
 flags and mode; and that `fwriter` gives back rbx, r12 and r13 as it found them (no compiled code uses them today).
-Nor is `fwriter`'s code compared with the readable reference the Python check kept (at the tag): a slip that changes
-what no case can see, such as a test made against the wrong register, shows only if it changes what a case does. The
-compiler carries the same routine, so such a slip also changes the compiler's own bytes, and `make reseed` refuses a
-compiler that does not rebuild itself.
+Nor is `fwriter`'s code compared with the readable reference the Python check kept (at the tag). A slip there shows
+only if it changes what a case does: one that tests a write's result against the wrong register fails only a write
+Linux cuts short, which no check here can make happen, and Gemini's review showed such a slip, and a temporary closed
+twice and a temporary opened without O_EXCL, passing every check. The compiler carries the same routine, so a slip
+changes the compiler's own bytes and an ordinary `make reseed` refuses it, but a change to `fwriter` made on purpose
+comes in by the staged bootstrap the seed guide describes, and then nothing here holds it: before `fwriter`'s code
+changes, a check that cuts its writes short is to be written first.
 
 ## make helper (about 9 seconds): Scope's helper's checks, written in Herbert
 

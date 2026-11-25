@@ -134,7 +134,8 @@ end
 -- input from /dev/null and no environment. files, when not 0, is its limit of
 -- open files (its hard limit then 64). filter, when not 0, is a filter made
 -- by lib/fault.herb (fault_ready), put on it just before it starts, so that
--- Linux fails the calls the filter names. It leaves no core file; Linux stops
+-- Linux fails the calls the filter names. Its core limit is one byte (no core
+-- file, and no crash reporter, which Linux calls under a limit of 0); Linux stops
 -- it (signal 9) when this check ends, however this check ends; and its pipe
 -- and termination signals (13, 15) are Linux's own, whatever this check was
 -- given, since a signal ignored here would stay ignored in it.
@@ -175,6 +176,10 @@ func chk_start(c, name, args, files, filter):
             do linux_close(fi)
             do linux_close(fo)
             do linux_close(fe)
+            -- No descriptor past standard error goes on to the helper, so one
+            -- that whatever started this check left open is never counted as
+            -- the helper's, nor fills its files limit.
+            do linux_syscall6(436, 3, 4294967295, 0, 0, 0, 0)
             if files == 0 or linux_syscall6(160, 7, buffer_address(c.limits), 0, 0, 0, 0) == 0:
                 if filter == 0 or fault_start(filter) == 0:
                     do linux_syscall6(59, buffer_address(c.helper), buffer_address(c.argv), buffer_address(c.envp), 0, 0, 0)
@@ -448,17 +453,23 @@ func chk_fds(c, sockets):
     return total
 end
 
--- The first port from 47700 to 47799 that can be bound at address now: a
--- port the helper may take. (A listener there, or a connection lingering on
--- it, moves the search on.)
+-- Whether port can be bound at address now.
+func chk_bindable(c, address, port):
+    let fd = linux_socket(2, 1 | 524288, 6)
+    do net_sockaddr(c.sa, address, port)
+    let bound = linux_bind(fd, c.sa, 16)
+    do linux_close(fd)
+    return bound == 0
+end
+
+-- The first port from 47700 to 47799 that can be bound at address now, and at
+-- 127.77.0.1 and 127.77.0.10, where chk_where expects it refused: a port the
+-- helper may take. (A listener there, or a connection lingering on it, moves
+-- the search on.)
 func chk_free_port(c, address):
     let port = 47700
     while port < 47800:
-        let fd = linux_socket(2, 1 | 524288, 6)
-        do net_sockaddr(c.sa, address, port)
-        let bound = linux_bind(fd, c.sa, 16)
-        do linux_close(fd)
-        if bound == 0: return port end
+        if chk_bindable(c, address, port) and chk_bindable(c, chk_ip("127.77.0.1"), port) and chk_bindable(c, chk_ip("127.77.0.10"), port): return port end
         port = port + 1
     end
     do chk_lost(c, "no port from 47700 to 47799 is free on this computer")
@@ -906,6 +917,8 @@ func main():
                 linux_buffer(16), linux_buffer(8), linux_buffer(8), linux_buffer(16), linux_buffer(16), linux_buffer(32),
                 linux_buffer(64), linux_buffer(65536), linux_cstring("/dev/null"), figures_reply_new(), 0, 0, 0, 0, 0,
                 false, 0, 0)
+    do linux_put64(c.core, 0, 1)
+    do linux_put64(c.core, 8, 1)
     do chk_folder(c, "hwmon")
     do chk_folder(c, "hwmon/hwmon0")
     do chk_put(c, "hwmon/hwmon0/name", "nvme\n")

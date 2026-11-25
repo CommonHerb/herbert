@@ -375,17 +375,18 @@ func cli_rlimit(k, resource, value):
     return linux_syscall6(160, resource, buffer_address(k.limit), 0, 0, 0, 0)
 end
 
--- Start the program at path, with the arguments argv (addresses, ending in
--- 0), in the folder folder (a path), and do not wait for it. Its standard
--- input, output and error are the descriptors input, output and errors (each
--- above 2, opened by the caller with O_CLOEXEC, or cli_none() for closed); its
--- umask is mask; it gets no environment, no core file, Linux's own way for the
--- pipe signal (it ends the program), and, when not 0, a file-size limit of
+-- Start the program at path, with the arguments argv (addresses, ending in 0),
+-- in the folder folder (a path), and do not wait for it. Its standard input,
+-- output and error are the descriptors input, output and errors (each above 2,
+-- opened by the caller with O_CLOEXEC, or cli_none() for closed); its umask is
+-- mask; it gets no environment, a core limit of one byte (no core file, and no
+-- crash reporter, which Linux calls under a limit of 0), Linux's own way for
+-- the pipe signal (it ends the program), and, when not 0, a file-size limit of
 -- fsize bytes (with the file-size signal ignored, so a write past it fails
--- instead), an address-space limit of space bytes and a limit of cpu seconds
--- of processor time. Linux stops it with its alarm after seconds, and at once
--- if this program ends first. The three descriptors given are closed here
--- once the new process has them. Its process number.
+-- instead), an address-space limit of space bytes and a limit of cpu seconds of
+-- processor time. Linux stops it with its alarm after seconds, and at once if
+-- this program ends first. The three descriptors given are closed here once the
+-- new process has them. Its process number.
 func cli_start(k, folder, path, argv, input, output, errors, mask, fsize, space, cpu, seconds):
     let me = linux_syscall6(39, 0, 0, 0, 0, 0, 0)
     let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
@@ -398,7 +399,7 @@ func cli_start(k, folder, path, argv, input, output, errors, mask, fsize, space,
         do cli_point(output, 1)
         do cli_point(errors, 2)
         do linux_syscall6(95, mask, 0, 0, 0, 0, 0)
-        do cli_rlimit(k, 4, 0)
+        do cli_rlimit(k, 4, 1)
         if fsize != 0:
             do cli_rlimit(k, 1, fsize)
             do linux_put64(k.way, 0, 1)
@@ -808,7 +809,6 @@ func cli_from_pipe(k, image):
     let argv = linux_buffer(16)
     do linux_put64(argv, 0, buffer_address(program))
     let pid = cli_start(k, cli_join(d, "/w"), program, argv, linux_u32(ends, 0), cli_writing(k, cli_join(d, "/run.out")), cli_writing(k, cli_join(d, "/run.err")), 18, 0, 0, 0, 20)
-    do linux_close(linux_u32(ends, 0))
     let done = cli_wait(k, pid)
     if done.0 != 0 or done.1 != 0: return "the program built from a pipe did not end with status 0" end
     if not cli_holds(cli_join(d, "/run.out"), cli_text("42\n")) or not cli_holds(cli_join(d, "/run.err"), cli_text("")): return "the program built from a pipe did not print 42 alone" end

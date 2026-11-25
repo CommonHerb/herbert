@@ -31,14 +31,16 @@ source; the retained source map identifies its original units.
   it made it in. `folder_remove` removes one name inside an open folder with everything under it and reaches nothing
   outside: it takes one name, never a path, works through the folders' own descriptors and never follows a link, so
   a link found on the way is removed as the link it is, and it does not enter a folder where something is mounted
-  (a disk, a share, or another folder shown there a second time). Requires `text.herb`. Used by the seed maker and its checks.
+  (a disk, a share, or another folder shown there a second time). Requires `text.herb`. Used by the seed maker and
+  the checks `checks/seeds.herb`, `checks/scans.herb` and `checks/cli.herb`.
 - `child.herb`: running another program to its end, [tabled below](#childherb): in a folder, with arguments, its
   input from a file, its output and error output to files or to this program's own, a time limit, no environment
-  and no core file. It answers how the program ended (an exit status, a signal, the time limit, or that it could
-  not be started) and its peak memory. Requires `linux.herb`. Used by the seed maker and its checks; the check
-  runner and the window checks carry their own, older forms of it.
+  and a core limit of one byte (no core file, and no crash reporter). It answers how the program ended (an exit
+  status, a signal, the time limit, or that it could not be started) and its peak memory. Requires `linux.herb`. Used
+  by the seed maker and the checks `checks/seeds.herb` and `checks/scans.herb`; the check runner and the other checks
+  carry their own forms of it.
 - `fault.herb`: making chosen system calls fail on purpose, for checks, [tabled below](#faultherb). Requires
-  `linux.herb`. Used only by cases.
+  `linux.herb`. Used only by checks: cases and `checks/helper.herb`.
 - `net.herb`: strict dotted IPv4, port and time-limit parsing, and a TCP knock:
   answered, refused, no answer, unreachable or a named error, within a time
   limit, never sending a byte, the socket closed on every path. A `Net` record
@@ -393,8 +395,8 @@ end
 Makes chosen system calls fail on purpose, for checks, with a Linux seccomp filter: a short list of instructions
 Linux runs at every system call, answering "give this error instead" or "go on". Its header says what it assumes and
 what it cannot do (no "only the second time", no record of the calls made). Requires `linux.herb`. Used by the cases
-in `checks/libraries.cases` that make a save, a rescue copy, a checkpoint and the compiler's `fwriter` meet a failed
-call.
+in `checks/libraries.cases` that make a save, a rescue copy, a checkpoint, the compiler's `fwriter` and a knock meet a
+failed call, and by `checks/helper.herb`, which fails the helper's accepts.
 
 | Function | Gives |
 | --- | --- |

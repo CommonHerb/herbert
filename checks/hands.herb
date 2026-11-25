@@ -2660,7 +2660,7 @@ func hands_scope_knocks(h, scope, limit):
     if length(why) != 0: return why end
     if widest.count != 2 or long.count < 2 or banner.count < 2 or drip.count < 2: return "Scope did not knock on each computer twice" end
     if widest.got + long.got + banner.got + drip.got + silent.got != 0: return "Scope sent bytes on a knock" end
-    if shortest < 1700 or longest > 3500: return "Scope did not give up the silent computer at its limit of two seconds" end
+    if longest == 0 or shortest < 1700 or longest > 3500: return "Scope did not give up the silent computer at its limit of two seconds" end
     return ""
 end
 

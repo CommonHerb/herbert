@@ -1066,7 +1066,7 @@ func main():
     -- The same, with the seed's folder closed to writing: the new seed cannot
     -- be put beside the old one, and the old pair must stay. Linux lets its
     -- administrator write anywhere, so there this cannot be checked.
-    if linux_syscall6(102, 0, 0, 0, 0, 0, 0) == 0:
+    if linux_syscall6(107, 0, 0, 0, 0, 0, 0) == 0:
         do flogger("seed checks: run by the administrator, so a seed's folder that cannot be written in is not checked\n")
     else:
         d = seeds_stage(s)

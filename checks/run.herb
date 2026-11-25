@@ -59,7 +59,8 @@
 -- first keeps the start of the last result file compared, count bytes of it,
 -- to show when show is true: the last comparison failed on that file's text.
 -- usage is where Linux reports what a finished program used, and peak its
--- peak memory in KiB; zero is sixteen zero bytes and pipe two descriptors.
+-- peak memory in KiB; core is the core limit each program gets (one byte,
+-- soft and hard) and pipe two descriptors.
 -- stat is where Linux describes a name in WORK (its struct stat).
 -- The eight paths are NUL-terminated names inside WORK.
 ref record Check:
@@ -76,7 +77,7 @@ ref record Check:
     argv: buffer
     status: buffer
     usage: buffer
-    zero: buffer
+    core: buffer
     pipe: buffer
     stat: buffer
     peak: int
@@ -257,7 +258,9 @@ func check_files_same(c, made, named):
 end
 
 -- Run the program at path inside WORK: standard input from in_path, output
--- into out_path and error output into err_path, with no core file, stopped by
+-- into out_path and error output into err_path, with a core limit of one
+-- byte (no core file, and Linux then hands a crash to no crash reporter: under
+-- a limit of 0 it still does, and one may send the report off), stopped by
 -- Linux's alarm after limit seconds (an alarm set before the program starts
 -- stays set in it). (0, status) when it ended by itself; (1, signal) when a
 -- signal ended it, 14 being the alarm; (2, 0) when it could not be started.
@@ -288,7 +291,7 @@ func check_spawn(c, path, in_path, out_path, err_path, limit):
             do linux_close(i)
             do linux_close(o)
             do linux_close(e)
-            do linux_syscall6(160, 4, buffer_address(c.zero), 0, 0, 0, 0)
+            do linux_syscall6(160, 4, buffer_address(c.core), 0, 0, 0, 0)
             do linux_syscall6(37, limit, 0, 0, 0, 0, 0)
             do linux_syscall6(59, buffer_address(path), buffer_address(c.argv), 0, 0, 0, 0)
             do buffer_set(c.pipe, 0, 2)
@@ -572,6 +575,8 @@ func main():
                   linux_cstring("in.herb"), linux_cstring("compile.out"), linux_cstring("compile.err"),
                   linux_cstring("a.out"), linux_cstring("./a.out"), linux_cstring("program.in"),
                   linux_cstring("program.out"), linux_cstring("program.err"))
+    do linux_put64(c.core, 0, 1)
+    do linux_put64(c.core, 8, 1)
     let work = linux_cstring(check_path(args, 2))
     if linux_error(linux_syscall6(80, buffer_address(work), 0, 0, 0, 0, 0)): do check_die("cannot enter WORK") end
     let k = 4
