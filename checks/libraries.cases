@@ -10552,9 +10552,11 @@ record Look:
     fd_path: buffer
 end
 
--- How many descriptors this program has open: the names in /proc/self/fd (getdents64, 217).
+-- How many descriptors this program has open: the names in /proc/self/fd (getdents64, 217). A folder that cannot
+-- be opened ends the case with a message, so no count is ever taken for 0.
 func descriptors(k):
     let fd = linux_syscall6(2, buffer_address(k.fd_path), 589824, 0, 0, 0, 0)
+    if linux_error(fd): return linux_die("the case could not list its descriptors in /proc/self/fd\n") end
     let count = 0
     let got = linux_syscall6(217, fd, buffer_address(k.dents), buffer_length(k.dents), 0, 0, 0)
     while got > 0 and not linux_error(got):
@@ -11690,10 +11692,11 @@ func lowest(lab):
     return fd
 end
 
--- The number after name at the start of a line of the file at path (a size in KiB); 0 when there is none.
+-- The number after name at the start of a line of the file at path (a size in KiB). A file that cannot be read,
+-- or has no such line, ends the case with a message, so no figure is ever taken for 0.
 func number(lab, path, name):
     let fd = linux_open(path, 0, 0)
-    if linux_error(fd): return 0 end
+    if linux_error(fd): return linux_die("the case could not read its memory in /proc/self\n") end
     let n = 0
     let more = true
     while more and n < buffer_length(lab.got):
@@ -11707,7 +11710,7 @@ func number(lab, path, name):
         while at < n and buffer_get(lab.got, at) != 10: at = at + 1 end
         at = at + 1
     end
-    return 0
+    return linux_die("the case found no memory figure in /proc/self\n")
 end
 
 -- What the looks at the long run found: the lowest free descriptor before it, the size and the least and

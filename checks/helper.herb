@@ -381,8 +381,18 @@ func chk_read(c, tail):
     return n
 end
 
+-- A look at the helper in /proc that could not be made (what): 0 - 1 when
+-- the helper has ended, so its caller reports that end; otherwise the check
+-- cannot do its own work, and ends with status 2. No figure is ever taken for
+-- 0 because it could not be read.
+func chk_unread(c, what):
+    if chk_gone(c): return 0 - 1 end
+    do chk_lost(c, what)
+    return 0 - 1
+end
+
 -- The number after name at the start of a line of /proc/PID/tail (a size in
--- KiB in status and smaps_rollup), or 0 when there is none.
+-- KiB in status and smaps_rollup); see chk_unread when there is none.
 func chk_number(c, tail, name):
     let n = chk_read(c, tail)
     let at = 0
@@ -391,7 +401,7 @@ func chk_number(c, tail, name):
         while at < n and buffer_get(c.got, at) != 10: at = at + 1 end
         at = at + 1
     end
-    return 0
+    return chk_unread(c, "the check could not read the helper's figures in /proc")
 end
 
 -- From /proc/PID/stat: the field number k (counted from 1), where the fields
@@ -411,7 +421,7 @@ func chk_stat(c, k):
             return text_whole(c.got, f.0, f.1).1
         end
     end
-    return 0
+    return chk_unread(c, "the check could not read the helper's state in /proc")
 end
 
 -- Whether the helper's descriptor whose name (NUL-terminated) is at c.got
@@ -434,7 +444,7 @@ end
 -- when sockets is true, how many of them are sockets.
 func chk_fds(c, sockets):
     let fd = linux_open(chk_proc(c, "fd"), 589824, 0)
-    if linux_error(fd): return 0 - 1 end
+    if linux_error(fd): return chk_unread(c, "the check could not list the helper's descriptors in /proc") end
     let total = 0
     let more = true
     while more:
@@ -548,6 +558,7 @@ func chk_where(c):
         i = i + 1
     end
     let sockets = chk_fds(c, true)
+    if chk_gone(c): return chk_how(c) end
     if sockets != 1:
         let b = new_buffer()
         do text_add(b, "it holds ")

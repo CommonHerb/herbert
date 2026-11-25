@@ -508,7 +508,8 @@ it is held to what would cost him something:
 
 The check works in a folder it makes, `herbert-helper-NUMBER` under `$TMPDIR` (or `/tmp`). A pass removes it; a
 failure leaves it, with what each start of the helper wrote, and says where it is. It prints one `FAIL` line for each
-check that did not give its answer, then the count; status 0, 1, or 2 when it could not do its own work.
+check that did not give its answer, then the count; status 0, 1, or 2 when it could not do its own work (a helper
+whose memory, state or descriptors cannot be read in `/proc` among them: no figure is ever taken for 0).
 `make verify-local` and CI run it.
 
 What it does not check: the flags of each accept and send (non-blocking, close-on-exec, no wait, no pipe signal), and
