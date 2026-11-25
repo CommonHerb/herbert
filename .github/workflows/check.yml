@@ -32,6 +32,14 @@ jobs:
           strace --version
           as --version
           ld --version
+      # Two seed maker checks (make seeds) and knock's unreachable, error and firewall cases run in private
+      # namespaces of their own, which Ubuntu's AppArmor keeps unprivileged users from making; this throwaway
+      # runner allows them, before the first check that needs them.
+      - name: allow private namespaces for the checks that make them
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: make check
         run: make check
       - name: the checks written in Herbert
@@ -40,6 +48,10 @@ jobs:
         run: make hands
       - name: the seed maker's checks written in Herbert
         run: make seeds
+      - name: the compiler's command-line checks written in Herbert
+        run: make cli
+      - name: Scope's helper's checks written in Herbert
+        run: make helper
       - name: verification helpers
         run: make verification-helpers
       - name: developer program build contract
@@ -54,13 +66,6 @@ jobs:
         run: make check-desktop
       - name: Herbert reusable map, text and atomic-file support
         run: make check-app-support
-      # knock's unreachable, error and firewall cases run in a private network namespace (unshare -rn), which
-      # Ubuntu's AppArmor keeps unprivileged users from making; this throwaway runner allows it.
-      - name: allow private network namespaces for knock's checks
-        run: |
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
       - name: Herbert maze, notes, scope and knock interaction and sustained memory
         env:
           HERBERT_NET_REQUIRE_ALL: "1"
@@ -83,6 +88,9 @@ jobs:
           evidence=(
             /tmp/herbert-hands-*
             /tmp/herbert-seeds-*
+            /tmp/herbert-cli-*
+            /tmp/herbert-helper-*
+            /tmp/herbert-scans-*
             /tmp/herbert-hosted-apps-*
             /tmp/herbert-notes-support-*
             /tmp/herbert-x11-text-check-*

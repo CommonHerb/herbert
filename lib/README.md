@@ -37,6 +37,8 @@ source; the retained source map identifies its original units.
   and no core file. It answers how the program ended (an exit status, a signal, the time limit, or that it could
   not be started) and its peak memory. Requires `linux.herb`. Used by the seed maker and its checks; the check
   runner and the window checks carry their own, older forms of it.
+- `fault.herb`: making chosen system calls fail on purpose, for checks, [tabled below](#faultherb). Requires
+  `linux.herb`. Used only by cases.
 - `net.herb`: strict dotted IPv4, port and time-limit parsing, and a TCP knock:
   answered, refused, no answer, unreachable or a named error, within a time
   limit, never sending a byte, the socket closed on every path. A `Net` record
@@ -385,6 +387,27 @@ end
 | `child_run(c, folder, path, argv, input, output, errors, seconds)` | (how, value) once the program at `path` has ended: (0, its exit status), (1, the signal that ended it; 14 is the time limit of `seconds`, 0 for none), (2, 0) when it could not be started, (3, 0) when its folder could not be entered or a file opened, (4, 0) when Linux made no new process. `folder`, `input`, `output` and `errors` are paths or `c.none`; `folder` is entered first, so the others are looked up from there. The caller's own standard input, output and error may be closed |
 
 `child_point` and `child_high` are its internal steps.
+
+### fault.herb
+
+Makes chosen system calls fail on purpose, for checks, with a Linux seccomp filter: a short list of instructions
+Linux runs at every system call, answering "give this error instead" or "go on". Its header says what it assumes and
+what it cannot do (no "only the second time", no record of the calls made). Requires `linux.herb`. Used by the cases
+in `checks/libraries.cases` that make a save, a rescue copy, a checkpoint and the compiler's `fwriter` meet a failed
+call.
+
+| Function | Gives |
+| --- | --- |
+| `fault_new()` | a `Fault` that fails nothing yet (it stops a program that calls Linux the 32-bit way); *allocates* |
+| `fault_fail(f, number, error)` | 0, or 0 - 22 when `error` is past 4095 or `f` is full: every call `number` gives `error` and is not done (error 0: gives 0, not done) |
+| `fault_fail_equal(f, number, error, arg, value)` | the same, only when argument `arg` (0 to 5) is exactly `value`, all 64 bits |
+| `fault_fail_above(f, number, error, arg, value)` | the same, only when argument `arg` is above `value`, unsigned (a descriptor above 2: any but the first three) |
+| `fault_ready(f)` | the address of the finished filter; rules may be added after and it called again |
+| `fault_start(program)` | 0 or -errno: the filter is on this program, for good, and for everything it starts |
+
+`fault_put` and `fault_room` are its internal steps. A filter sees an argument's whole 64-bit register, while Linux
+reads an `int` argument from its low half only: a call made with a 32-bit move (such as `AT_FDCWD`, -100, in
+`fwriter`) shows the filter 4294967196, so an equal test on `0 - 100` does not match it.
 
 ### figures.herb
 

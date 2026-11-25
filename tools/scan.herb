@@ -5,7 +5,7 @@
 -- repository-relative path per line, as `git ls-files` writes them; the scanner
 -- also reads BOOTSTRAP-ALLOWLIST from the current directory. Every tracked path
 -- that does not end in `.herb` must be listed there, and every listed path must
--- be tracked:
+-- be a tracked path that does not end in `.herb`:
 --   - a tracked non-.herb path that is not listed   -> "unlisted: PATH"
 --   - a listed path that is not tracked              -> "stale: PATH"
 --   - a perfect match -> one "OK: N tracked non-.herb file(s) ..." line, status 0

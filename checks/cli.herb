@@ -1,0 +1,1335 @@
+-- The compiler's command-line checks: how the compiler takes its source and
+-- publishes a.out, held by starting the compiler itself in each state the
+-- check runner (checks/run.herb) never sets up, since the runner always gives
+-- the compiler its source in a file, an empty folder and files for its
+-- output. Needs lib/linux.herb, lib/text.herb and lib/folder.herb in front.
+--
+--   cli COMPILER RUNNER ROOT UNDER
+--
+-- COMPILER is the compiler to check, RUNNER the built check runner, ROOT the
+-- checkout, whose compiler source (stack/native_compile_fragment.herb) is read
+-- and never written, and UNDER a folder to work under. All are absolute
+-- paths. The check makes its own folder, UNDER/herbert-cli-NUMBER (called WORK
+-- below), and removes it when every check passes; after any failure it stays
+-- and the check says where it is. Exit status 0 when every check gave its
+-- answer, 1 when one did not, 2 when the check could not do its own work.
+--
+-- Each check gets a folder of its own, WORK/1, WORK/2 and so on (d below).
+-- The compiler runs in d/w, where it writes a.out; its source is d/source.herb
+-- and its output and error output go to d/out and d/err, unless the check
+-- gives it something else. A check passes when the compiler ends as expected
+-- (not by a signal, with the status expected), its output and error output are
+-- exactly what is expected, no temporary file of its (a name that starts
+-- ".herbert" and ends ".tmp") is left in d/w, and what the check names about
+-- a.out holds. The checks, by what they hold:
+--   - a good compile writes a plain-file Linux x86-64 program to a.out, mode
+--     0644 under umask 022 and 0600 under 077, over an a.out that is a plain
+--     file (its old mode reset), a link (replaced; what it pointed at is
+--     untouched) or a second hard link (the other link keeps its bytes);
+--   - a refusal (lexical, structural, native), an input that cannot be read
+--     (standard input closed, a folder, an empty pipe that does not wait and is
+--     still open for writing) and a publication that fails (a.out a folder; a
+--     folder the compiler cannot read or cannot write in; a file-size limit
+--     below the program's size) each leave a.out as it was, or absent, with
+--     its exact words and status 1; an input failure leaves a link named a.out,
+--     the file it points at and that file's second hard link the same, down
+--     to their times;
+--   - a compile whose success marker cannot be written (standard output
+--     closed, a full device, a pipe whose reader has gone, with the pipe
+--     signal at Linux's own way) still publishes the whole program, says so
+--     and ends with status 1;
+--   - 32 compiles of two programs, 8 at a time, in one folder: every look at
+--     a.out finds it there, the old file or one whole program;
+--   - the source read from a pipe that does not wait, and from a pipe fed in
+--     pieces of 4,096 bytes, gives the same program or refusal as from a file;
+--   - the ast-dump route (docs/LANGUAGE.md section 8);
+--   - the five memory shapes the compiler was once too greedy on, each
+--     compiled within its ceiling under a 4 GiB address-space limit, 20
+--     seconds of processor time and 30 seconds in all, and each program run
+--     the same way, giving its answer within 128 MiB;
+--   - the check runner itself: given a stand-in compiler that breaks the
+--     compiler's contract one way at a time, it must find each (see below).
+--
+-- Run with no arguments, this program is that stand-in compiler: it reads a
+-- source on standard input, and the source's first line, "-- stand-in WORD",
+-- says which way it fails. Otherwise it writes a copy of itself to a.out and
+-- prints the marker "0", as a compiler that rebuilds itself would. The words:
+--   status     ends with status 7
+--   noisy      says a line on standard error
+--   bare       prints its marker without the newline
+--   crlf       prints its marker with a carriage return before the newline
+--   silent     prints no marker
+--   nothing    writes no program
+--   script     writes a script, not a Linux program
+--   link       makes a.out a link to the program it wrote
+--   mark1 mark2 mark3 class32 highfirst machine3 machinehigh
+--              writes itself with one byte of its ELF header wrong: the
+--              mark, the class, the byte order or the processor (see
+--              cli_header_word)
+--   unstartable  writes itself with no program headers, which Linux will not
+--              start
+--   crash      is stopped by a signal after it wrote its program and marker
+--   sleep      waits 70 seconds, past the runner's 60 for a compile
+--   dangling   refuses the source in its own words, and leaves a link named
+--              a.out that leads nowhere
+-- The check writes a file of planted cases, one for each word, and has RUNNER
+-- run them with the stand-in as the compiler: each case names the finding
+-- the runner must report, and the runner must pass every one. The "sleep"
+-- case takes a minute, so that run starts first and is judged last.
+--
+-- The last checks are planted, as the runner's are: a finished check's folder
+-- is judged again against an answer that is wrong on purpose, once for each
+-- thing the judge can find, and passes only on exactly that finding.
+
+ref record Cli:
+    compiler: buffer
+    runner: buffer
+    root: string
+    work: string
+    count: int
+    passed: int
+    failed: int
+    argv: buffer
+    status: buffer
+    usage: buffer
+    limit: buffer
+    way: buffer
+    stat: buffer
+    names: buffer
+    room: buffer
+    peak: int
+end
+
+-- A file's bytes, (the bytes, how many), and a file's state, as lstat and
+-- its bytes (or a link's text) show it.
+ref record Snap:
+    there: bool
+    device: int
+    inode: int
+    mode: int
+    links: int
+    size: int
+    modified: int
+    modified_ns: int
+    changed: int
+    changed_ns: int
+    bytes: buffer
+    count: int
+end
+
+func cli_die(message):
+    do stderr_write("compiler checks: ")
+    do stderr_write(message)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- The same once WORK is made: it says where WORK is, since it stays.
+func cli_lost(k, message):
+    do stderr_write("compiler checks: ")
+    do stderr_write(message)
+    do stderr_write("\ncompiler checks: what the run left is in ")
+    do stderr_write(k.work)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- The descriptor that stands for none: a standard descriptor to be closed.
+func cli_none(): return 0 - 1 end
+
+func cli_close(fd):
+    if fd != cli_none(): do linux_close(fd) end
+    return 0
+end
+
+-- a and then b, as one string.
+func cli_join(a, b):
+    let out = new_buffer()
+    do text_add(out, a)
+    do text_add(out, b)
+    return freeze(out)
+end
+
+func cli_path(s): return linux_cstring(s) end
+
+-- Bytes from a text, and from bytes and then a text.
+func cli_text(t): return (linux_cstring(t), length(t)) end
+
+-- The bytes f and then the bytes g.
+func cli_glue(f, g):
+    let b = linux_buffer(f.1 + g.1)
+    do buffer_copy(b, 0, f.0, 0, f.1)
+    do buffer_copy(b, f.1, g.0, 0, g.1)
+    return (b, f.1 + g.1)
+end
+
+func cli_then(f, t):
+    let b = linux_buffer(f.1 + length(t))
+    do buffer_copy(b, 0, f.0, 0, f.1)
+    do linux_text(b, f.1, t)
+    return (b, f.1 + length(t))
+end
+
+-- The old a.out the checks put in place: text, a NUL, a byte 255, a newline.
+func cli_old():
+    let b = new_buffer()
+    do text_add(b, "previous complete artifact")
+    do append(b, 0)
+    do append(b, 255)
+    do append(b, 10)
+    return (b, buffer_length(b))
+end
+
+-- The file at path (a string), of 64 MiB at most: (true, its bytes, how
+-- many), or (false, an empty buffer, 0). A link is followed.
+func cli_file(path):
+    let fd = linux_open(cli_path(path), 526336, 0)
+    if linux_error(fd): return (false, new_buffer(), 0) end
+    let stat = linux_buffer(144)
+    if linux_error(linux_fstat(fd, stat)) or linux_u64(stat, 48) > 67108864:
+        do linux_close(fd)
+        return (false, new_buffer(), 0)
+    end
+    let size = linux_u64(stat, 48)
+    let b = linux_buffer(size + 1)
+    let used = 0
+    let fine = true
+    let more = true
+    while more:
+        let n = linux_read(fd, b, used, size + 1 - used)
+        if linux_error(n):
+            if n != 0 - 4:
+                fine = false
+                more = false
+            end
+        elif n == 0 or used + n > size:
+            used = used + n
+            more = false
+        else:
+            used = used + n
+        end
+    end
+    do linux_close(fd)
+    if not fine or used > size: return (false, new_buffer(), 0) end
+    return (true, b, used)
+end
+
+-- Whether the bytes f and g are the same.
+func cli_alike(f, g):
+    if f.1 != g.1: return false end
+    let i = 0
+    while i < f.1:
+        if buffer_get(f.0, i) != buffer_get(g.0, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- Whether the file at path holds exactly the bytes f.
+func cli_holds(path, f):
+    let got = cli_file(path)
+    return got.0 and cli_alike((got.1, got.2), f)
+end
+
+-- A new file at path holding the bytes f, with the permissions mode. What is
+-- at path now, a file or a link, is removed first.
+func cli_put(k, path, f, mode):
+    let p = cli_path(path)
+    do linux_syscall6(87, buffer_address(p), 0, 0, 0, 0, 0)
+    let fd = linux_open(p, 655553, mode)
+    if linux_error(fd): do cli_lost(k, "the check's own folder cannot be written in") end
+    let done = 0
+    while done < f.1:
+        let n = linux_write(fd, f.0, done, f.1 - done)
+        if linux_error(n):
+            if n != 0 - 4: do cli_lost(k, "the check's own folder cannot be written in") end
+        else:
+            done = done + n
+        end
+    end
+    do linux_syscall6(91, fd, mode, 0, 0, 0, 0)
+    do linux_close(fd)
+    return 0
+end
+
+func cli_folder(k, path):
+    if linux_error(linux_syscall6(83, buffer_address(cli_path(path)), 448, 0, 0, 0, 0)): do cli_lost(k, "the check's own folder cannot be written in") end
+    return 0
+end
+
+-- A link at path whose text is target.
+func cli_link(k, target, path):
+    if linux_error(linux_syscall6(88, buffer_address(cli_path(target)), buffer_address(cli_path(path)), 0, 0, 0, 0)): do cli_lost(k, "the check's own folder cannot be written in") end
+    return 0
+end
+
+-- A second hard link at path to the file at from.
+func cli_hard(k, from, path):
+    if linux_error(linux_syscall6(86, buffer_address(cli_path(from)), buffer_address(cli_path(path)), 0, 0, 0, 0)): do cli_lost(k, "the check's own folder cannot be written in") end
+    return 0
+end
+
+-- What kind of thing has the name path, by lstat (the name itself, never what
+-- a link leads to): 32768 a plain file, 40960 a link, 16384 a folder and so
+-- on; 0 when nothing has the name.
+func cli_kind(k, path):
+    if linux_error(linux_syscall6(6, buffer_address(cli_path(path)), buffer_address(k.stat), 0, 0, 0, 0)): return 0 end
+    return linux_u32(k.stat, 24) & 61440
+end
+
+-- The permission bits of what has the name path.
+func cli_mode(k, path):
+    if cli_kind(k, path) == 0: return 99999 end
+    return linux_u32(k.stat, 24) & 4095
+end
+
+-- How many names in the folder at path start ".herbert" and end ".tmp": the
+-- temporaries a writer of a.out makes there. 99 when it cannot be read.
+func cli_temporaries(k, path):
+    let fd = linux_open(cli_path(path), 589824, 0)
+    if linux_error(fd): return 99 end
+    let total = 0
+    let more = true
+    while more:
+        let r = linux_syscall6(217, fd, buffer_address(k.names), buffer_length(k.names), 0, 0, 0)
+        if linux_error(r):
+            total = 99
+            more = false
+        elif r == 0:
+            more = false
+        else:
+            let at = 0
+            while at < r:
+                let size = linux_u16(k.names, at + 16)
+                let stop = linux_nul_end(k.names, at + 19, at + size)
+                if text_starts(k.names, at + 19, stop, ".herbert") and stop - (at + 19) >= 12 and text_is(k.names, stop - 4, stop, ".tmp"): total = total + 1 end
+                at = at + size
+            end
+        end
+    end
+    do linux_close(fd)
+    return total
+end
+
+-- The state of what has the name path: lstat's fields, and its bytes (a plain
+-- file) or its text (a link).
+func cli_snap(k, path):
+    let st = linux_buffer(144)
+    let p = cli_path(path)
+    if linux_error(linux_syscall6(6, buffer_address(p), buffer_address(st), 0, 0, 0, 0)):
+        return Snap(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, new_buffer(), 0)
+    end
+    let mode = linux_u32(st, 24)
+    let bytes = new_buffer()
+    let count = 0
+    if (mode & 61440) == 40960:
+        bytes = linux_buffer(4096)
+        count = linux_syscall6(89, buffer_address(p), buffer_address(bytes), 4096, 0, 0, 0)
+    elif (mode & 61440) == 32768:
+        let got = cli_file(path)
+        bytes = got.1
+        count = got.2
+    end
+    return Snap(true, linux_u64(st, 0), linux_u64(st, 8), mode, linux_u64(st, 16), linux_u64(st, 48), linux_u64(st, 88), linux_u64(st, 96), linux_u64(st, 104), linux_u64(st, 112), bytes, count)
+end
+
+-- Whether two states are the same in every field and byte.
+func cli_same(a, b):
+    if (a.there and not b.there) or (b.there and not a.there): return false end
+    if a.device != b.device or a.inode != b.inode or a.mode != b.mode or a.links != b.links or a.size != b.size: return false end
+    if a.modified != b.modified or a.modified_ns != b.modified_ns or a.changed != b.changed or a.changed_ns != b.changed_ns: return false end
+    return cli_alike((a.bytes, a.count), (b.bytes, b.count))
+end
+
+-- Whether path names a plain file, not a link, that starts as a Linux x86-64
+-- program does: the ELF mark, 64-bit, low byte first (bytes 0 to 5: 127 69 76
+-- 70 2 1) and processor 62, x86-64 (bytes 18 and 19: 62 0).
+func cli_program(k, path):
+    if cli_kind(k, path) != 32768: return false end
+    let got = cli_file(path)
+    if not got.0 or got.2 < 20: return false end
+    let b = got.1
+    if buffer_get(b, 0) != 127 or buffer_get(b, 1) != 69 or buffer_get(b, 2) != 76: return false end
+    if buffer_get(b, 3) != 70 or buffer_get(b, 4) != 2 or buffer_get(b, 5) != 1: return false end
+    return buffer_get(b, 18) == 62 and buffer_get(b, 19) == 0
+end
+
+-- In the new process: make descriptor fd number number, or close number when
+-- fd is none.
+func cli_point(fd, number):
+    if fd == cli_none():
+        do linux_close(number)
+    else:
+        do linux_syscall6(33, fd, number, 0, 0, 0, 0)
+    end
+    return 0
+end
+
+-- A limit for the new process: resource number (Linux's) set to value, both
+-- its soft and its hard limit.
+func cli_rlimit(k, resource, value):
+    do linux_put64(k.limit, 0, value)
+    do linux_put64(k.limit, 8, value)
+    return linux_syscall6(160, resource, buffer_address(k.limit), 0, 0, 0, 0)
+end
+
+-- Start the program at path, with the arguments argv (addresses, ending in
+-- 0), in the folder folder (a path), and do not wait for it. Its standard
+-- input, output and error are the descriptors input, output and errors (each
+-- above 2, opened by the caller with O_CLOEXEC, or cli_none() for closed); its
+-- umask is mask; it gets no environment, no core file, Linux's own way for the
+-- pipe signal (it ends the program), and, when not 0, a file-size limit of
+-- fsize bytes (with the file-size signal ignored, so a write past it fails
+-- instead), an address-space limit of space bytes and a limit of cpu seconds
+-- of processor time. Linux stops it with its alarm after seconds, and at once
+-- if this program ends first. The three descriptors given are closed here
+-- once the new process has them. Its process number.
+func cli_start(k, folder, path, argv, input, output, errors, mask, fsize, space, cpu, seconds):
+    let me = linux_syscall6(39, 0, 0, 0, 0, 0, 0)
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if linux_error(pid): do cli_lost(k, "Linux started no new process") end
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        if linux_syscall6(110, 0, 0, 0, 0, 0, 0) != me: do process_exit(127) end
+        if linux_error(linux_syscall6(80, buffer_address(cli_path(folder)), 0, 0, 0, 0, 0)): do process_exit(126) end
+        do cli_point(input, 0)
+        do cli_point(output, 1)
+        do cli_point(errors, 2)
+        do linux_syscall6(95, mask, 0, 0, 0, 0, 0)
+        do cli_rlimit(k, 4, 0)
+        if fsize != 0:
+            do cli_rlimit(k, 1, fsize)
+            do linux_put64(k.way, 0, 1)
+            do linux_syscall6(13, 25, buffer_address(k.way), 0, 8, 0, 0)
+        end
+        if space != 0: do cli_rlimit(k, 9, space) end
+        if cpu != 0: do cli_rlimit(k, 0, cpu) end
+        do linux_put64(k.way, 0, 0)
+        do linux_syscall6(13, 13, buffer_address(k.way), 0, 8, 0, 0)
+        do linux_syscall6(37, seconds, 0, 0, 0, 0, 0)
+        do linux_syscall6(59, buffer_address(path), buffer_address(argv), 0, 0, 0, 0)
+        do process_exit(127)
+    end
+    do cli_close(input)
+    do cli_close(output)
+    do cli_close(errors)
+    return pid
+end
+
+-- Wait for the process pid: (0, its exit status) or (1, the signal that
+-- ended it, 14 being the alarm). k.peak is then the most memory it had in
+-- use, in KiB (it counts what this program held when it started it).
+func cli_wait(k, pid):
+    let w = linux_syscall6(61, pid, buffer_address(k.status), 0, buffer_address(k.usage), 0, 0)
+    while w == 0 - 4:
+        w = linux_syscall6(61, pid, buffer_address(k.status), 0, buffer_address(k.usage), 0, 0)
+    end
+    if linux_error(w): do cli_lost(k, "Linux lost a process the check started") end
+    k.peak = linux_u64(k.usage, 32)
+    let st = linux_u32(k.status, 0)
+    if (st & 127) != 0: return (1, st & 127) end
+    return (0, (st >> 8) & 255)
+end
+
+-- Descriptors for the new process: the file at path to read, a new file at
+-- path to write (only its owner may read it), and /dev/full.
+func cli_reading(k, path):
+    let fd = linux_open(cli_path(path), 524288, 0)
+    if linux_error(fd): do cli_lost(k, "a file the check made cannot be opened") end
+    return fd
+end
+
+func cli_writing(k, path):
+    let fd = linux_open(cli_path(path), 524865, 384)
+    if linux_error(fd): do cli_lost(k, "the check's own folder cannot be written in") end
+    return fd
+end
+
+-- Run the compiler in d/w and wait for it, with the descriptors and the
+-- limits of cli_start. How it ended, as cli_wait gives it.
+func cli_run(k, d, input, output, errors, mask, fsize, space, cpu, seconds):
+    let pid = cli_start(k, cli_join(d, "/w"), k.compiler, k.argv, input, output, errors, mask, fsize, space, cpu, seconds)
+    return cli_wait(k, pid)
+end
+
+-- The common run: the source d/source.herb, output d/out, errors d/err,
+-- umask 022, no limits but 60 seconds.
+func cli_compile(k, d):
+    return cli_run(k, d, cli_reading(k, cli_join(d, "/source.herb")), cli_writing(k, cli_join(d, "/out")), cli_writing(k, cli_join(d, "/err")), 18, 0, 0, 0, 60)
+end
+
+-- The folder of the next check, made new, with the folder w in it, and the
+-- source f put in it. Its path.
+func cli_stage(k, f):
+    k.count = k.count + 1
+    let b = new_buffer()
+    do text_add(b, k.work)
+    do text_add(b, "/")
+    do text_add_whole(b, k.count)
+    let d = freeze(b)
+    do cli_folder(k, d)
+    do cli_folder(k, cli_join(d, "/w"))
+    do cli_put(k, cli_join(d, "/source.herb"), f, 420)
+    return d
+end
+
+func cli_aout(d): return cli_join(d, "/w/a.out") end
+
+-- How the compiler ended, against the status expected: "" or what is wrong.
+func cli_ended(ran, status):
+    if ran.0 == 1 and ran.1 == 14: return "the compiler ran past its time limit" end
+    if ran.0 == 1: return "the compiler was stopped by a signal" end
+    if ran.1 != status: return "the compiler's exit status is wrong" end
+    return ""
+end
+
+-- What the compiler said on standard error (d/err) and left in d/w: "" when
+-- d/err holds exactly err and d/w holds temps temporaries, or what is wrong.
+func cli_said(k, d, err, temps):
+    if not cli_holds(cli_join(d, "/err"), cli_text(err)): return "the compiler's standard error is wrong" end
+    if cli_temporaries(k, cli_join(d, "/w")) != temps: return "a temporary file was left behind" end
+    return ""
+end
+
+-- The whole judgement of a run whose output went to d/out: it ended with
+-- status, wrote out to standard output and err to standard error, and left no
+-- temporary. "" or the first thing that is not so.
+func cli_judge(k, d, ran, status, out, err):
+    let why = cli_ended(ran, status)
+    if length(why) == 0 and not cli_holds(cli_join(d, "/out"), out): why = "the compiler's standard output is wrong" end
+    if length(why) == 0: why = cli_said(k, d, err, 0) end
+    return why
+end
+
+-- "" when a.out in d/w is a plain file holding exactly f, or what is wrong.
+func cli_aout_holds(k, d, f):
+    let kind = cli_kind(k, cli_aout(d))
+    if kind == 0: return "a.out is not there" end
+    if kind != 32768: return "a.out is not a plain file" end
+    if not cli_holds(cli_aout(d), f): return "a.out does not hold what it should" end
+    return ""
+end
+
+-- Count one check and say so when it did not give its answer. planted is ""
+-- for a check that must pass, and otherwise what the judge must find; that
+-- check passes only on exactly that finding.
+func cli_tally(k, name, why, planted):
+    if equal(why, planted):
+        k.passed = k.passed + 1
+        return 0
+    end
+    k.failed = k.failed + 1
+    let line = new_buffer()
+    do text_add(line, "FAIL ")
+    do text_add(line, name)
+    do text_add(line, ": ")
+    if length(planted) == 0:
+        do text_add(line, why)
+    elif length(why) == 0:
+        do text_add(line, "this failure was planted and the check did not catch it")
+    else:
+        do text_add(line, "this failure was planted and the check found something else: ")
+        do text_add(line, why)
+    end
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+-- The sources the checks compile.
+func cli_good(): return cli_text("func main():\n    return 42\nend\n") end
+
+func cli_publication_failed(): return "compiler: output publication failed\n" end
+
+func cli_marker_lost(): return "compiler: output published, but the success marker could not be written\n" end
+
+-- A good compile over an a.out set up by how: 0 none, 1 a plain file holding
+-- the old bytes with mode 0755, 2 a link to the file victim, 3 a second hard
+-- link to the file victim. It must succeed and leave image in a plain a.out
+-- of mode 0644, and victim as it was.
+func cli_replace(k, image, how):
+    let old = cli_old()
+    let d = cli_stage(k, cli_good())
+    let victim = cli_join(d, "/w/victim")
+    if how == 1: do cli_put(k, cli_aout(d), old, 493) end
+    if how == 2:
+        do cli_put(k, victim, old, 420)
+        do cli_link(k, "victim", cli_aout(d))
+    end
+    if how == 3:
+        do cli_put(k, victim, old, 420)
+        do cli_hard(k, victim, cli_aout(d))
+    end
+    let ran = cli_compile(k, d)
+    let why = cli_judge(k, d, ran, 0, cli_text("0\n"), "")
+    if length(why) == 0: why = cli_aout_holds(k, d, image) end
+    if length(why) == 0 and cli_mode(k, cli_aout(d)) != 420: why = "a.out's permissions are not 0644" end
+    if length(why) == 0 and how >= 2 and not cli_holds(victim, old): why = "the file a.out was a link to has changed" end
+    if length(why) == 0 and how == 3 and cli_snap(k, victim).links != 1: why = "the file a.out was a link to has changed" end
+    return why
+end
+
+-- A source the compiler refuses, over an old a.out: it must say exactly
+-- words, end with status 1 and leave a.out as it was.
+func cli_refusal(k, source, words):
+    let d = cli_stage(k, cli_text(source))
+    do cli_put(k, cli_aout(d), cli_old(), 420)
+    let before = cli_snap(k, cli_aout(d))
+    let why = cli_judge(k, d, cli_compile(k, d), 1, cli_text(""), words)
+    if length(why) == 0 and not cli_same(before, cli_snap(k, cli_aout(d))): why = "a.out is not as it was" end
+    return why
+end
+
+-- A good compile over an old a.out whose standard output is how: 1 closed,
+-- 2 /dev/full, 3 a pipe whose reader has gone. It must publish image whole,
+-- say that the marker could not be written and end with status 1.
+func cli_unmarked(k, image, how):
+    let d = cli_stage(k, cli_good())
+    do cli_put(k, cli_aout(d), cli_old(), 420)
+    let output = cli_none()
+    if how == 2:
+        output = linux_open(cli_path("/dev/full"), 524289, 0)
+        if linux_error(output): do cli_lost(k, "/dev/full cannot be opened") end
+    end
+    if how == 3:
+        let ends = linux_buffer(8)
+        if linux_error(linux_syscall6(293, buffer_address(ends), 524288, 0, 0, 0, 0)): do cli_lost(k, "Linux gave no pipe") end
+        do linux_close(linux_u32(ends, 0))
+        output = linux_u32(ends, 4)
+    end
+    let ran = cli_run(k, d, cli_reading(k, cli_join(d, "/source.herb")), output, cli_writing(k, cli_join(d, "/err")), 18, 0, 0, 0, 60)
+    let why = cli_ended(ran, 1)
+    if length(why) == 0: why = cli_said(k, d, cli_marker_lost(), 0) end
+    if length(why) == 0: why = cli_aout_holds(k, d, image) end
+    return why
+end
+
+-- A good compile over an old a.out that cannot be published: how is 1, the
+-- compiler's folder made 0300 (it cannot be read); 2, made 0500 (it cannot be
+-- written in); 3, a file-size limit of 1,024 bytes; 4, a.out a folder holding
+-- the file keep, beside a file named as another writer's temporary. It must
+-- say so, end with status 1 and leave a.out (and keep, and the other writer's
+-- file) as it was.
+func cli_unpublished(k, how):
+    let d = cli_stage(k, cli_good())
+    let w = cli_join(d, "/w")
+    let keep = cli_join(d, "/w/a.out/keep")
+    let theirs = cli_join(d, "/w/.herbert-another-writer.tmp")
+    if how == 4:
+        do cli_folder(k, cli_aout(d))
+        do cli_put(k, keep, cli_old(), 420)
+        do cli_put(k, theirs, cli_text("theirs"), 420)
+    else:
+        do cli_put(k, cli_aout(d), cli_old(), 420)
+    end
+    let before = cli_snap(k, cli_aout(d))
+    if how == 1: do linux_syscall6(90, buffer_address(cli_path(w)), 192, 0, 0, 0, 0) end
+    if how == 2: do linux_syscall6(90, buffer_address(cli_path(w)), 320, 0, 0, 0, 0) end
+    let fsize = 0
+    if how == 3: fsize = 1024 end
+    let ran = cli_run(k, d, cli_reading(k, cli_join(d, "/source.herb")), cli_writing(k, cli_join(d, "/out")), cli_writing(k, cli_join(d, "/err")), 18, fsize, 0, 0, 60)
+    do linux_syscall6(90, buffer_address(cli_path(w)), 448, 0, 0, 0, 0)
+    let why = cli_ended(ran, 1)
+    if length(why) == 0 and not cli_holds(cli_join(d, "/out"), cli_text("")): why = "the compiler's standard output is wrong" end
+    let temps = 0
+    if how == 4: temps = 1 end
+    if length(why) == 0: why = cli_said(k, d, cli_publication_failed(), temps) end
+    if length(why) == 0 and how == 4:
+        if cli_kind(k, cli_aout(d)) != 16384 or not cli_holds(keep, cli_old()): why = "the folder named a.out is not as it was" end
+        if length(why) == 0 and not cli_holds(theirs, cli_text("theirs")): why = "another writer's temporary was touched" end
+    end
+    if length(why) == 0 and how != 4 and not cli_same(before, cli_snap(k, cli_aout(d))): why = "a.out is not as it was" end
+    return why
+end
+
+-- 32 compiles, 8 at a time, in one folder holding an old a.out, of the
+-- sources for 42 and 43 by turns. While they run a.out is read over and over
+-- and must be there, and be the old file or one of the two programs, whole:
+-- the rename puts the new file in the old one's place in one step, so there
+-- is no moment with no a.out. All must succeed, and a.out must end as one of
+-- the two.
+func cli_together(k, image42, image43):
+    let old = cli_old()
+    let d = cli_stage(k, cli_good())
+    do cli_put(k, cli_join(d, "/other.herb"), cli_text("func main():\n    return 43\nend\n"), 420)
+    do cli_put(k, cli_aout(d), old, 420)
+    let aout = cli_path(cli_aout(d))
+    let pids = new_array(int)
+    let started = 0
+    let running = 0
+    let ended = 0
+    let looks = 0
+    let wrong = 0
+    let missing = 0
+    let failed = 0
+    while ended < 32:
+        while running < 8 and started < 32:
+            let source = "/source.herb"
+            if started % 2 == 1: source = "/other.herb" end
+            let n = new_buffer()
+            do text_add_whole(n, started)
+            let number = freeze(n)
+            let pid = cli_start(k, cli_join(d, "/w"), k.compiler, k.argv, cli_reading(k, cli_join(d, source)), cli_writing(k, cli_join(cli_join(d, "/out."), number)), cli_writing(k, cli_join(cli_join(d, "/err."), number)), 18, 0, 0, 0, 60)
+            do add(pids, pid)
+            started = started + 1
+            running = running + 1
+        end
+        let fd2 = linux_open(aout, 524288, 0)
+        looks = looks + 1
+        if linux_error(fd2):
+            missing = missing + 1
+        else:
+            let r = cli_room(k, fd2)
+            do linux_close(fd2)
+            let seen = (k.room, r)
+            if not cli_alike(seen, old) and not cli_alike(seen, image42) and not cli_alike(seen, image43): wrong = wrong + 1 end
+        end
+        -- Collect any of these compiles that has ended, without waiting
+        -- (only these: the runner started first is a child of this check too).
+        -- A compile collected is marked 0 in pids.
+        let i = 0
+        while i < count(pids):
+            if get(pids, i) != 0:
+                let w = linux_syscall6(61, get(pids, i), buffer_address(k.status), 1, 0, 0, 0)
+                if w == get(pids, i):
+                    do set(pids, i, 0)
+                    running = running - 1
+                    ended = ended + 1
+                    if linux_u32(k.status, 0) != 0: failed = failed + 1 end
+                end
+            end
+            i = i + 1
+        end
+    end
+    if missing != 0: return "a.out was seen missing, or could not be opened, while the compiles ran" end
+    if wrong != 0: return "a.out was seen holding something other than the old file or a whole program" end
+    if failed != 0: return "a compile did not succeed" end
+    if looks == 0: return "a.out was never looked at while the compiles ran" end
+    let k2 = 0
+    while k2 < 32:
+        let n = new_buffer()
+        do text_add_whole(n, k2)
+        let number = freeze(n)
+        if not cli_holds(cli_join(cli_join(d, "/out."), number), cli_text("0\n")): return "the compiler's standard output is wrong" end
+        if not cli_holds(cli_join(cli_join(d, "/err."), number), cli_text("")): return "the compiler's standard error is wrong" end
+        k2 = k2 + 1
+    end
+    if cli_temporaries(k, cli_join(d, "/w")) != 0: return "a temporary file was left behind" end
+    let last = cli_file(cli_aout(d))
+    if cli_kind(k, cli_aout(d)) != 32768 or not (cli_alike((last.1, last.2), image42) or cli_alike((last.1, last.2), image43)): return "a.out does not end as one of the two programs" end
+    return ""
+end
+
+-- All of fd into k.room, up to its size: how many bytes were read.
+func cli_room(k, fd):
+    let used = 0
+    let more = true
+    while more and used < buffer_length(k.room):
+        let n = linux_read(fd, k.room, used, buffer_length(k.room) - used)
+        if linux_error(n):
+            if n != 0 - 4: more = false end
+        elif n == 0:
+            more = false
+        else:
+            used = used + n
+        end
+    end
+    return used
+end
+
+-- An input the compiler cannot read: how is 1, standard input closed; 2, a
+-- folder; 3, an empty pipe that does not wait, still open for writing (this
+-- program holds its writing end). The folder w is set up by state first: 0
+-- nothing named a.out; 1 a plain a.out with a second hard link, held-hardlink;
+-- 2 a.out a link to prior.elf, which has a second hard link, held-hardlink.
+-- The compiler must say stdin read failed with errno, end with status 1 and
+-- leave all three names as they were, down to their times.
+func cli_unread(k, image, how, state, errno):
+    let d = cli_stage(k, cli_good())
+    let w = cli_join(d, "/w")
+    let prior = cli_join(w, "/prior.elf")
+    let held = cli_join(w, "/held-hardlink")
+    if state == 1:
+        do cli_put(k, cli_aout(d), image, 448)
+        do cli_hard(k, cli_aout(d), held)
+    end
+    if state == 2:
+        do cli_put(k, prior, image, 448)
+        do cli_hard(k, prior, held)
+        do cli_link(k, "prior.elf", cli_aout(d))
+    end
+    let a = cli_snap(k, cli_aout(d))
+    let p = cli_snap(k, prior)
+    let h = cli_snap(k, held)
+    let input = cli_none()
+    let writer = cli_none()
+    if how == 2:
+        input = linux_open(cli_path(w), 589824, 0)
+        if linux_error(input): do cli_lost(k, "a folder the check made cannot be opened") end
+    end
+    if how == 3:
+        let ends = linux_buffer(8)
+        if linux_error(linux_syscall6(293, buffer_address(ends), 526336, 0, 0, 0, 0)): do cli_lost(k, "Linux gave no pipe") end
+        input = linux_u32(ends, 0)
+        writer = linux_u32(ends, 4)
+    end
+    let ran = cli_run(k, d, input, cli_writing(k, cli_join(d, "/out")), cli_writing(k, cli_join(d, "/err")), 18, 0, 0, 0, 60)
+    do cli_close(writer)
+    let words = new_buffer()
+    do text_add(words, "compiler: stdin read failed (errno ")
+    do text_add_whole(words, errno)
+    do text_add(words, ")\n")
+    let why = cli_judge(k, d, ran, 1, cli_text(""), freeze(words))
+    if length(why) == 0 and not (cli_same(a, cli_snap(k, cli_aout(d))) and cli_same(p, cli_snap(k, prior)) and cli_same(h, cli_snap(k, held))): why = "a.out, the file it is a link to or the second hard link is not as it was" end
+    return why
+end
+
+-- The source f from a pipe that does not wait, whose writing end was closed
+-- before the compiler started: it must build image, and image, run with such
+-- a pipe empty as its own input, must print 42.
+func cli_from_pipe(k, image):
+    let d = cli_stage(k, cli_good())
+    let f = cli_good()
+    let ends = linux_buffer(8)
+    if linux_error(linux_syscall6(293, buffer_address(ends), 526336, 0, 0, 0, 0)): do cli_lost(k, "Linux gave no pipe") end
+    if linux_write(linux_u32(ends, 4), f.0, 0, f.1) != f.1: do cli_lost(k, "a pipe would not take a short source") end
+    do linux_close(linux_u32(ends, 4))
+    let ran = cli_run(k, d, linux_u32(ends, 0), cli_writing(k, cli_join(d, "/out")), cli_writing(k, cli_join(d, "/err")), 18, 0, 0, 0, 60)
+    let why = cli_judge(k, d, ran, 0, cli_text("0\n"), "")
+    if length(why) == 0 and not cli_program(k, cli_aout(d)): why = "what the compiler wrote is not a plain file holding a Linux x86-64 program" end
+    if length(why) == 0: why = cli_aout_holds(k, d, image) end
+    if length(why) != 0: return why end
+    do linux_syscall6(90, buffer_address(cli_path(cli_aout(d))), 448, 0, 0, 0, 0)
+    if linux_error(linux_syscall6(293, buffer_address(ends), 526336, 0, 0, 0, 0)): do cli_lost(k, "Linux gave no pipe") end
+    do linux_close(linux_u32(ends, 4))
+    let program = cli_path(cli_aout(d))
+    let argv = linux_buffer(16)
+    do linux_put64(argv, 0, buffer_address(program))
+    let pid = cli_start(k, cli_join(d, "/w"), program, argv, linux_u32(ends, 0), cli_writing(k, cli_join(d, "/run.out")), cli_writing(k, cli_join(d, "/run.err")), 18, 0, 0, 0, 20)
+    do linux_close(linux_u32(ends, 0))
+    let done = cli_wait(k, pid)
+    if done.0 != 0 or done.1 != 0: return "the program built from a pipe did not end with status 0" end
+    if not cli_holds(cli_join(d, "/run.out"), cli_text("42\n")) or not cli_holds(cli_join(d, "/run.err"), cli_text("")): return "the program built from a pipe did not print 42 alone" end
+    return ""
+end
+
+-- The source f through a pipe in pieces of 4,096 bytes, a millisecond apart,
+-- from a second process of this program. From a file and through the pipe
+-- alike, the compiler must end with status, print out and say err, and the
+-- two must leave the same a.out, byte for byte, or none.
+func cli_pieces(k, f, status, out, err):
+    let file = cli_stage(k, f)
+    let why = cli_judge(k, file, cli_compile(k, file), status, cli_text(out), err)
+    if length(why) != 0: return cli_join("from a file: ", why) end
+    let d = cli_stage(k, f)
+    let ends = linux_buffer(8)
+    if linux_error(linux_syscall6(293, buffer_address(ends), 524288, 0, 0, 0, 0)): do cli_lost(k, "Linux gave no pipe") end
+    let writer = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if linux_error(writer): do cli_lost(k, "Linux started no new process") end
+    if writer == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        do linux_close(linux_u32(ends, 0))
+        let pause = linux_buffer(16)
+        do linux_put64(pause, 8, 1000000)
+        let done = 0
+        while done < f.1:
+            let piece = f.1 - done
+            if piece > 4096: piece = 4096 end
+            let n = linux_write(linux_u32(ends, 4), f.0, done, piece)
+            if linux_error(n):
+                if n != 0 - 4: do process_exit(3) end
+            else:
+                done = done + n
+            end
+            do linux_sleep(pause)
+        end
+        do process_exit(0)
+    end
+    do linux_close(linux_u32(ends, 4))
+    let piped = cli_run(k, d, linux_u32(ends, 0), cli_writing(k, cli_join(d, "/out")), cli_writing(k, cli_join(d, "/err")), 18, 0, 0, 0, 60)
+    let fed = cli_wait(k, writer)
+    why = cli_judge(k, d, piped, status, cli_text(out), err)
+    if length(why) != 0: return cli_join("through a pipe: ", why) end
+    if fed.0 != 0 or fed.1 != 0: return "the compiler did not read all of its source from the pipe" end
+    let made = cli_file(cli_aout(file))
+    let there = cli_file(cli_aout(d)).0
+    if (made.0 and not there) or (there and not made.0): return "a.out is not what it is from a file" end
+    if made.0 and not cli_holds(cli_aout(d), (made.1, made.2)): return "a.out is not what it is from a file" end
+    return ""
+end
+
+-- The source f, compiled with an address-space limit of 4 GiB, 20 seconds
+-- of processor time and 30 in all: the compiler must succeed within ceiling
+-- KiB, and the program, run the same way, must print answer (and a newline)
+-- within 131,072 KiB.
+func cli_ceiling(k, f, ceiling, answer):
+    let d = cli_stage(k, f)
+    let ran = cli_run(k, d, cli_reading(k, cli_join(d, "/source.herb")), cli_writing(k, cli_join(d, "/out")), cli_writing(k, cli_join(d, "/err")), 18, 0, 4294967296, 20, 30)
+    let why = cli_judge(k, d, ran, 0, cli_text("0\n"), "")
+    if length(why) == 0 and k.peak > ceiling: why = "the compiler used more memory than the check allows" end
+    if length(why) == 0 and not cli_program(k, cli_aout(d)): why = "what the compiler wrote is not a plain file holding a Linux x86-64 program" end
+    if length(why) != 0: return why end
+    do linux_syscall6(90, buffer_address(cli_path(cli_aout(d))), 448, 0, 0, 0, 0)
+    let program = cli_path(cli_aout(d))
+    let argv = linux_buffer(16)
+    do linux_put64(argv, 0, buffer_address(program))
+    let pid = cli_start(k, cli_join(d, "/w"), program, argv, cli_reading(k, "/dev/null"), cli_writing(k, cli_join(d, "/run.out")), cli_writing(k, cli_join(d, "/run.err")), 18, 0, 4294967296, 20, 30)
+    let done = cli_wait(k, pid)
+    if done.0 == 1 and done.1 == 14: return "the program ran past its time limit" end
+    if done.0 != 0 or done.1 != 0: return "the program did not end with status 0" end
+    if not cli_holds(cli_join(d, "/run.out"), cli_text(cli_join(answer, "\n"))): return "the program's output is wrong" end
+    if not cli_holds(cli_join(d, "/run.err"), cli_text("")): return "the program's error output is wrong" end
+    if k.peak > 131072: return "the program used more memory than the check allows" end
+    return ""
+end
+
+-- The five sources of the memory checks. Each answer is arithmetic: 2,000
+-- steps of one; the sum of 1 to 2,000 plus get(a, 0).1 (1), get(a, 1).0 (1)
+-- and a buffer's length (1); and for branch_dense(n), all locals kept,
+-- n(n+1)/2 + 7n, one +3 instead of +7 (4 less), and an early return at n/2,
+-- (n/2+1)(n/2+2)/2 + 7(n/2).
+func cli_calls():
+    let b = new_buffer()
+    do text_add(b, "func f(x): return x + 1 end\nfunc main():\nlet x = 0\n")
+    let i = 0
+    while i < 2000:
+        do text_add(b, "x = f(x)\n")
+        i = i + 1
+    end
+    do text_add(b, "return x\nend\n")
+    return (b, buffer_length(b))
+end
+
+func cli_tuples():
+    let b = new_buffer()
+    do text_add(b, "func main():\nlet x = 0\n")
+    let i = 0
+    while i < 2000:
+        do text_add(b, "x = (x + 1, (2, 3)).0\n")
+        i = i + 1
+    end
+    do text_add(b, "return x\nend\n")
+    return (b, buffer_length(b))
+end
+
+func cli_heap():
+    let b = new_buffer()
+    do text_add(b, "func main():\nlet a = new_array((int, int))\nlet x = 0\n")
+    let i = 0
+    while i < 2000:
+        do text_add(b, "do add(a, (")
+        do text_add_whole(b, i)
+        do text_add(b, ", ")
+        do text_add_whole(b, i + 1)
+        do text_add(b, "))\nx = x + get(a, ")
+        do text_add_whole(b, i)
+        do text_add(b, ").1\n")
+        i = i + 1
+    end
+    do text_add(b, "let b = new_buffer()\ndo append(b, 65)\nreturn x + get(a, 0).1 + get(a, 1).0 + length(freeze(b))\nend\n")
+    return (b, buffer_length(b))
+end
+
+func cli_branches(n):
+    let b = new_buffer()
+    do text_add(b, "func branch_dense(mode):\nlet total = 0\n")
+    let i = 0
+    while i < n:
+        do text_add(b, "let v")
+        do text_add_whole(b, i)
+        do text_add(b, " = ")
+        do text_add_whole(b, i + 1)
+        do text_add(b, "\n")
+        i = i + 1
+    end
+    i = 0
+    while i < n:
+        do text_add(b, "if mode == ")
+        do text_add_whole(b, i)
+        do text_add(b, ":\nreturn total + v")
+        do text_add_whole(b, i)
+        do text_add(b, "\nelif mode == ")
+        do text_add_whole(b, n + i)
+        do text_add(b, ":\nv")
+        do text_add_whole(b, i)
+        do text_add(b, " = v")
+        do text_add_whole(b, i)
+        do text_add(b, " + 3\nelse:\nv")
+        do text_add_whole(b, i)
+        do text_add(b, " = v")
+        do text_add_whole(b, i)
+        do text_add(b, " + 7\nend\ntotal = total + v")
+        do text_add_whole(b, i)
+        do text_add(b, "\n")
+        i = i + 1
+    end
+    do text_add(b, "return total\nend\nfunc main():\nreturn (branch_dense(")
+    do text_add_whole(b, 2 * n)
+    do text_add(b, "), branch_dense(")
+    do text_add_whole(b, n + n / 2)
+    do text_add(b, "), branch_dense(")
+    do text_add_whole(b, n / 2)
+    do text_add(b, "))\nend\n")
+    return (b, buffer_length(b))
+end
+
+-- The ast-dump route over source f, over an old a.out: it must print out
+-- exactly (the tree, then the marker), say nothing on standard error and
+-- leave a.out as it was. With out empty, the output need only start with
+-- "(program " and end with ")" and a newline before the marker.
+func cli_dump(k, f, out):
+    let d = cli_stage(k, f)
+    do cli_put(k, cli_aout(d), cli_old(), 420)
+    let before = cli_snap(k, cli_aout(d))
+    let ran = cli_compile(k, d)
+    let why = cli_ended(ran, 0)
+    if length(why) == 0 and out.1 != 0 and not cli_holds(cli_join(d, "/out"), out): why = "the compiler's standard output is wrong" end
+    if length(why) == 0 and out.1 == 0:
+        let got = cli_file(cli_join(d, "/out"))
+        if not got.0 or got.2 < 14 or not text_starts(got.1, 0, got.2, "(program ") or not text_is(got.1, got.2 - 4, got.2, ")\n0\n"): why = "the compiler's standard output is wrong" end
+    end
+    if length(why) == 0: why = cli_said(k, d, "", 0) end
+    if length(why) == 0 and not cli_same(before, cli_snap(k, cli_aout(d))): why = "a.out is not as it was" end
+    return why
+end
+
+-- The stand-in compiler (see the top). input is what stdin_read gave.
+func cli_asks(source, word):
+    let line = cli_join("-- stand-in ", word)
+    let n = length(line)
+    if length(source) < n: return false end
+    let i = 0
+    while i < n:
+        if index(source, i) != index(line, i): return false end
+        i = i + 1
+    end
+    return length(source) == n or index(source, n) == 10
+end
+
+-- The stand-in words that write itself with one byte of its ELF header
+-- changed, each to a value no Linux x86-64 program has there: (the byte, its
+-- new value), or (0, 0) for any other word, since none changes byte 0.
+-- Bytes 1 to 3 are the rest of the ELF mark after 127 (69 76 70, "ELF"),
+-- byte 4 the class (2, 64-bit), byte 5 the byte order (1, low byte first)
+-- and bytes 18 and 19 the processor (62 0, x86-64): mark1 mark2 mark3 put 0
+-- there, class32 puts 1 (32-bit), highfirst 2 (high byte first, which Linux
+-- still starts), machine3 3 (an Intel 386) and machinehigh 1 at byte 19.
+-- One word for each byte the runner reads, so that a runner that stops
+-- reading any one of them fails its planted case.
+func cli_header_word(source):
+    if cli_asks(source, "mark1"): return (1, 0) end
+    if cli_asks(source, "mark2"): return (2, 0) end
+    if cli_asks(source, "mark3"): return (3, 0) end
+    if cli_asks(source, "class32"): return (4, 1) end
+    if cli_asks(source, "highfirst"): return (5, 2) end
+    if cli_asks(source, "machine3"): return (18, 3) end
+    if cli_asks(source, "machinehigh"): return (19, 1) end
+    return (0, 0)
+end
+
+func cli_stand_in(input):
+    if input.0 != 0: do linux_die("stand-in compiler: cannot read standard input\n") end
+    let source = input.1
+    let self = cli_file("/proc/self/exe")
+    if not self.0: do linux_die("stand-in compiler: cannot read its own program\n") end
+    if cli_asks(source, "sleep"):
+        let wait = linux_buffer(16)
+        do linux_put64(wait, 0, 70)
+        while linux_sleep(wait) == 0 - 4:
+            do linux_put64(wait, 0, 70)
+        end
+        do process_exit(0)
+    end
+    if cli_asks(source, "dangling"):
+        do linux_syscall6(88, buffer_address(cli_path("nowhere")), buffer_address(cli_path("a.out")), 0, 0, 0, 0)
+        do stderr_write("line 1: refused by the stand-in (ERR 1)\n")
+        do process_exit(1)
+    end
+    if cli_asks(source, "nothing"):
+        do flogger("0\n")
+        do process_exit(0)
+    end
+    let header = cli_header_word(source)
+    if cli_asks(source, "script"):
+        do fwriter("#!/bin/sh\nexit 0\n")
+    elif cli_asks(source, "unstartable"):
+        do buffer_set(self.1, 56, 0)
+        do buffer_set(self.1, 57, 0)
+        do fwriter(text_string(self.1, 0, self.2))
+    elif header.0 != 0:
+        do buffer_set(self.1, header.0, header.1)
+        do fwriter(text_string(self.1, 0, self.2))
+    else:
+        do fwriter(text_string(self.1, 0, self.2))
+    end
+    if cli_asks(source, "link"):
+        do linux_syscall6(82, buffer_address(cli_path("a.out")), buffer_address(cli_path("image.elf")), 0, 0, 0, 0)
+        do linux_syscall6(88, buffer_address(cli_path("image.elf")), buffer_address(cli_path("a.out")), 0, 0, 0, 0)
+    end
+    if cli_asks(source, "noisy"): do stderr_write("stand-in compiler: a line nobody asked for\n") end
+    if cli_asks(source, "bare"):
+        do flogger("0")
+    elif cli_asks(source, "crlf"):
+        do flogger("0\r\n")
+    elif not cli_asks(source, "silent"):
+        do flogger("0\n")
+    end
+    if cli_asks(source, "crash"): do linux_syscall6(62, linux_syscall6(39, 0, 0, 0, 0, 0, 0), 15, 0, 0, 0, 0) end
+    if cli_asks(source, "status"): do process_exit(7) end
+    do process_exit(0)
+    return 0
+end
+
+-- One planted case for the stand-in asked for word: a case whose program
+-- would print nothing, or (refused true) a refusal in the stand-in's words,
+-- that the runner must fail with exactly finding.
+func cli_planted_case(b, name, word, finding, refused):
+    do text_add(b, "case planted: ")
+    do text_add(b, name)
+    do text_add(b, "\nplanted ")
+    do text_add(b, finding)
+    do text_add(b, "\nsource until ----\n-- stand-in ")
+    do text_add(b, word)
+    if refused:
+        do text_add(b, "\n----\nrefused until ----\nline 1: refused by the stand-in (ERR 1)\n----\nend\n")
+    else:
+        do text_add(b, "\n----\nstdout until ----\n----\nend\n")
+    end
+    return 0
+end
+
+-- The planted cases for the runner, and how many.
+func cli_planted_cases():
+    let b = new_buffer()
+    do cli_planted_case(b, "a compiler that waits past the time a compile gets", "sleep", "the compiler ran past its time limit", false)
+    do cli_planted_case(b, "a compiler that ends with an error status", "status", "the compiler ended with an error status", false)
+    do cli_planted_case(b, "a compiler that says something on standard error", "noisy", "the compiler refused it or complained", false)
+    do cli_planted_case(b, "a marker without its newline", "bare", "the compiler did not print its marker 0", false)
+    do cli_planted_case(b, "a marker with a carriage return before its newline", "crlf", "the compiler did not print its marker 0", false)
+    do cli_planted_case(b, "no marker at all", "silent", "the compiler did not print its marker 0", false)
+    do cli_planted_case(b, "a compiler that writes no program", "nothing", "the compiler wrote no program", false)
+    do cli_planted_case(b, "a compiler that writes a script", "script", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a compiler that leaves a.out a link to the program it wrote", "link", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a program whose ELF mark is wrong at its second byte", "mark1", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a program whose ELF mark is wrong at its third byte", "mark2", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a program whose ELF mark is wrong at its fourth byte", "mark3", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a program marked 32-bit", "class32", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a program marked high byte first, which Linux still starts", "highfirst", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a program marked for another processor, an Intel 386", "machine3", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a program whose processor number has a high byte", "machinehigh", "what the compiler wrote is not a plain file holding a Linux x86-64 program", false)
+    do cli_planted_case(b, "a program Linux will not start", "unstartable", "the program the compiler wrote cannot be started", false)
+    do cli_planted_case(b, "a compiler stopped by a signal after it wrote its program", "crash", "the compiler was stopped by a signal", false)
+    do cli_planted_case(b, "a refusal that leaves a link named a.out that leads nowhere", "dangling", "the compiler refused it and still wrote a program", true)
+    do text_add(b, "cases 19\n")
+    return ((b, buffer_length(b)), 19)
+end
+
+-- An argument that must be an absolute path.
+func cli_argument(args, k):
+    let a = linux_argument(args, k)
+    if length(a) == 0 or index(a, 0) != 47: do cli_die("usage: cli COMPILER RUNNER ROOT UNDER (absolute paths)") end
+    return a
+end
+
+-- A program this check starts: it must be there and may be run.
+func cli_program_path(a):
+    let path = linux_cstring(a)
+    if linux_error(linux_syscall6(21, buffer_address(path), 1, 0, 0, 0, 0)): do cli_die("a program the check starts is not there, or may not be run") end
+    return path
+end
+
+func main():
+    let args = linux_arguments()
+    if linux_argument_count(args) == 1:
+        let input = stdin_read()
+        return cli_stand_in(input)
+    end
+    -- Standard input, output and error must be open: a file opened later would
+    -- otherwise be given one of their numbers and be taken for it.
+    let low = linux_open(linux_cstring("/dev/null"), 2, 0)
+    while low < 3: low = linux_open(linux_cstring("/dev/null"), 2, 0) end
+    do linux_close(low)
+    if linux_argument_count(args) != 5: do cli_die("usage: cli COMPILER RUNNER ROOT UNDER (absolute paths)") end
+    let compiler = cli_program_path(cli_argument(args, 1))
+    let runner = cli_program_path(cli_argument(args, 2))
+    let root = cli_argument(args, 3)
+    let under = cli_argument(args, 4)
+    -- Ten minutes for everything; Linux then stops this check, and with it
+    -- every program it started.
+    do linux_syscall6(37, 600, 0, 0, 0, 0, 0)
+    let got = cli_file(cli_join(root, "/stack/native_compile_fragment.herb"))
+    if not got.0: do cli_die("ROOT's compiler source cannot be read") end
+    let own_source = (got.1, got.2)
+    -- Read at their own size (not into a buffer of a fixed 16 MiB), so this
+    -- check holds little when the memory checks start their programs.
+    let me = cli_file("/proc/self/exe")
+    if not me.0: do cli_die("this check cannot read its own program") end
+    let own = folder_own(under, "herbert-cli")
+    if own.0 != 0: do cli_die("the check's own folder cannot be made under the folder given") end
+    let k = Cli(compiler, runner, root, own.1, 0, 0, 0, linux_buffer(16), linux_buffer(8), linux_buffer(144), linux_buffer(16), linux_buffer(32), linux_buffer(144), linux_buffer(32768), linux_buffer(65536), 0)
+    do linux_put64(k.argv, 0, buffer_address(k.compiler))
+
+    -- The runner and the stand-in, started first: its "sleep" case takes a
+    -- minute, and is judged last.
+    let stand = cli_join(k.work, "/stand-in")
+    do cli_put(k, stand, (me.1, me.2), 448)
+    let planted = cli_planted_cases()
+    let cases_path = cli_join(k.work, "/planted.cases")
+    do cli_put(k, cases_path, planted.0, 420)
+    do cli_folder(k, cli_join(k.work, "/runner"))
+    do cli_folder(k, cli_join(k.work, "/runner/work"))
+    let r_stand = cli_path(stand)
+    let r_work = cli_path(cli_join(k.work, "/runner/work"))
+    let r_root = cli_path(root)
+    let r_cases = cli_path(cases_path)
+    let r_argv = linux_buffer(48)
+    do linux_put64(r_argv, 0, buffer_address(k.runner))
+    do linux_put64(r_argv, 8, buffer_address(r_stand))
+    do linux_put64(r_argv, 16, buffer_address(r_work))
+    do linux_put64(r_argv, 24, buffer_address(r_root))
+    do linux_put64(r_argv, 32, buffer_address(r_cases))
+    let runner_pid = cli_start(k, cli_join(k.work, "/runner"), k.runner, r_argv, cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/runner/out")), cli_writing(k, cli_join(k.work, "/runner/err")), 18, 0, 0, 0, 300)
+
+    -- Memory, first, while this check holds little: what a compile's peak
+    -- counts includes what this program held when it started it.
+    do cli_tally(k, "2,000 calls compile within 128 MiB and run within 128 MiB, under a 4 GiB address-space limit", cli_ceiling(k, cli_calls(), 131072, "2000"), "")
+    do cli_tally(k, "2,000 tuple projections compile within 128 MiB and run within 128 MiB, under a 4 GiB address-space limit", cli_ceiling(k, cli_tuples(), 131072, "2000"), "")
+    do cli_tally(k, "2,000 array adds and reads and a buffer compile within 128 MiB, and the program reserves its heap and runs within 128 MiB, under a 4 GiB address-space limit", cli_ceiling(k, cli_heap(), 131072, "2001003"), "")
+    do cli_tally(k, "200 locals kept across 200 branches compile within 128 MiB and run within 128 MiB, under a 4 GiB address-space limit", cli_ceiling(k, cli_branches(200), 131072, "(21500, 21496, 5851)"), "")
+    do cli_tally(k, "500 locals kept across 500 branches compile within 64 MiB and run within 128 MiB, under a 4 GiB address-space limit", cli_ceiling(k, cli_branches(500), 65536, "(128750, 128746, 33376)"), "")
+
+    -- The program the compiler writes for "return 42" in an empty folder,
+    -- and for "return 43": the images the later checks expect.
+    let d = cli_stage(k, cli_good())
+    let ran = cli_compile(k, d)
+    let why = cli_judge(k, d, ran, 0, cli_text("0\n"), "")
+    if length(why) == 0 and not cli_program(k, cli_aout(d)): why = "what the compiler wrote is not a plain file holding a Linux x86-64 program" end
+    if length(why) == 0 and cli_mode(k, cli_aout(d)) != 420: why = "a.out's permissions are not 0644" end
+    do cli_tally(k, "a good compile in an empty folder writes a Linux x86-64 program to a.out, a plain file of mode 0644 under umask 022, prints 0 and says nothing else", why, "")
+    if not cli_program(k, cli_aout(d)): do cli_lost(k, "the compiler does not compile a program that returns 42, which every later check needs") end
+    let made = cli_file(cli_aout(d))
+    let image42 = (made.1, made.2)
+    let d42 = d
+    d = cli_stage(k, cli_text("func main():\n    return 43\nend\n"))
+    if length(cli_judge(k, d, cli_compile(k, d), 0, cli_text("0\n"), "")) != 0: do cli_lost(k, "the compiler does not compile a program that returns 43, which a later check needs") end
+    made = cli_file(cli_aout(d))
+    let image43 = (made.1, made.2)
+
+    -- Publication.
+    do cli_tally(k, "a good compile replaces a plain a.out whole and resets its mode from 0755 to 0644", cli_replace(k, image42, 1), "")
+    do cli_tally(k, "a good compile replaces a link named a.out with the program, and leaves the file it pointed at as it was", cli_replace(k, image42, 2), "")
+    do cli_tally(k, "a good compile gives a.out a file of its own, and a second hard link to the old file keeps the old bytes", cli_replace(k, image42, 3), "")
+    d = cli_stage(k, cli_good())
+    ran = cli_run(k, d, cli_reading(k, cli_join(d, "/source.herb")), cli_writing(k, cli_join(d, "/out")), cli_writing(k, cli_join(d, "/err")), 63, 0, 0, 0, 60)
+    why = cli_judge(k, d, ran, 0, cli_text("0\n"), "")
+    if length(why) == 0: why = cli_aout_holds(k, d, image42) end
+    if length(why) == 0 and cli_mode(k, cli_aout(d)) != 384: why = "a.out's permissions are not 0600" end
+    do cli_tally(k, "under umask 077 a.out is made readable and writable by its owner alone (0600)", why, "")
+    do cli_tally(k, "a lexical refusal leaves an old a.out as it was", cli_refusal(k, "func main():\n    return $\nend\n", "line 2: unexpected character (ERR 101)\n"), "")
+    do cli_tally(k, "a structural refusal leaves an old a.out as it was", cli_refusal(k, "func main():\n    return 42\n", "line 3: expected end (ERR 203)\n"), "")
+    do cli_tally(k, "a native refusal (a name bound nowhere) leaves an old a.out as it was", cli_refusal(k, "func main():\n    return unknown\nend\n", "line 2: native-subset: forbidden construct 'undefined-name' (ERR 404)\n"), "")
+    do cli_tally(k, "with its standard output closed, a good compile publishes the whole program, says the marker could not be written and ends with status 1", cli_unmarked(k, image42, 1), "")
+    do cli_tally(k, "with its standard output a full device, a good compile publishes the whole program, says the marker could not be written and ends with status 1", cli_unmarked(k, image42, 2), "")
+    do cli_tally(k, "with its standard output a pipe whose reader has gone, and the pipe signal at Linux's own way, a good compile publishes the whole program, says the marker could not be written and ends with status 1, not by the signal", cli_unmarked(k, image42, 3), "")
+    do cli_tally(k, "a folder named a.out: publication fails with its message and status 1, and the folder, its file and another writer's temporary are left as they were", cli_unpublished(k, 4), "")
+    do cli_tally(k, "a file-size limit below the program's size: publication fails with its message and status 1, its temporary is removed and the old a.out stays", cli_unpublished(k, 3), "")
+    if linux_syscall6(107, 0, 0, 0, 0, 0, 0) == 0:
+        do flogger("compiler checks: run by the administrator, so a folder the compiler cannot read or write in is not checked\n")
+    else:
+        do cli_tally(k, "a folder the compiler cannot read: publication fails with its message and status 1, and the old a.out stays", cli_unpublished(k, 1), "")
+        do cli_tally(k, "a folder the compiler cannot write in: publication fails with its message and status 1, and the old a.out stays", cli_unpublished(k, 2), "")
+    end
+    do cli_tally(k, "32 compiles of two programs, 8 at a time, in one folder: a.out is always there, only ever the old file or one whole program, and every compile succeeds", cli_together(k, image42, image43), "")
+
+    -- Input.
+    do cli_tally(k, "the source from a pipe that does not wait, its writer closed: the same program, which prints 42 with such a pipe for its input", cli_from_pipe(k, image42), "")
+    let ways = 1
+    while ways <= 3:
+        let errno = 9
+        let way = "standard input closed"
+        if ways == 2:
+            errno = 21
+            way = "standard input a folder"
+        end
+        if ways == 3:
+            errno = 11
+            way = "standard input an empty pipe that does not wait, still open for writing"
+        end
+        let states = 0
+        while states <= 2:
+            let state = ": refused with its errno, and a.out still not there"
+            if states == 1: state = ": refused with its errno, and a plain a.out and its second hard link as they were" end
+            if states == 2: state = ": refused with its errno, and a link named a.out, the file it points at and that file's second hard link as they were" end
+            do cli_tally(k, cli_join(way, state), cli_unread(k, image42, ways, states, errno), "")
+            states = states + 1
+        end
+        ways = ways + 1
+    end
+    do cli_tally(k, "the compiler's own source through a pipe in pieces of 4,096 bytes builds the same program as from a file", cli_pieces(k, own_source, 0, "0\n", ""), "")
+    let padded = new_buffer()
+    let line = 0
+    while line < 5000:
+        do text_add(padded, "-- a line to make the source longer than a pipe holds\n")
+        line = line + 1
+    end
+    do text_add(padded, "func main():\n    return $\nend\n")
+    let late = (padded, buffer_length(padded))
+    do cli_tally(k, "a source of 5,003 lines, over 64 KiB, through a pipe in pieces, with a fault on line 5,002, is refused at that line as from a file", cli_pieces(k, late, 1, "", "line 5002: unexpected character (ERR 101)\n"), "")
+
+    -- The ast-dump route.
+    do cli_tally(k, "-- emit: ast-dump alone prints (program) and the marker, and leaves an old a.out as it was", cli_dump(k, cli_text("-- emit: ast-dump\n"), cli_text("(program)\n0\n")), "")
+    let tree = "(program (record P x y (type int) (type int)) (func id (params v) (body (return (name v)))) (func main (params) (body (do (call id (int 7))) (let p (record-new P (int 4) (int 5))) (return (dot (name p) x)))))\n0\n"
+    do cli_tally(k, "the ast-dump route prints a statement call as the do it was written as and a record construction as record-new", cli_dump(k, cli_text("-- emit: ast-dump\nrecord P:\n    x: int\n    y: int\nend\n\nfunc id(v):\n    return v\nend\n\nfunc main():\n    do id(7)\n    let p = P(4, 5)\n    return p.x\nend\n"), cli_text(tree)), "")
+    do cli_tally(k, "the ast-dump route over the compiler's own source ends with status 0, the tree and then the marker, and publishes nothing", cli_dump(k, cli_glue(cli_text("-- emit: ast-dump\n"), own_source), cli_text("")), "")
+
+    -- Planted: the stage of the first compile judged again, wrong on purpose.
+    do cli_tally(k, "planted: a status that is not the one expected", cli_judge(k, d42, (0, 0), 1, cli_text("0\n"), ""), "the compiler's exit status is wrong")
+    do cli_tally(k, "planted: a signal where an ending is expected", cli_judge(k, d42, (1, 15), 0, cli_text("0\n"), ""), "the compiler was stopped by a signal")
+    do cli_tally(k, "planted: output that is not the one expected", cli_judge(k, d42, (0, 0), 0, cli_text("0"), ""), "the compiler's standard output is wrong")
+    do cli_tally(k, "planted: error output that is not the one expected", cli_judge(k, d42, (0, 0), 0, cli_text("0\n"), "x"), "the compiler's standard error is wrong")
+    do cli_tally(k, "planted: a program that is not the one expected", cli_aout_holds(k, d42, image43), "a.out does not hold what it should")
+    do cli_put(k, cli_join(d42, "/w/.herbert-planted.tmp"), cli_text(""), 420)
+    do cli_tally(k, "planted: a temporary left behind", cli_judge(k, d42, (0, 0), 0, cli_text("0\n"), ""), "a temporary file was left behind")
+    let snap = cli_snap(k, cli_aout(d42))
+    do linux_syscall6(90, buffer_address(cli_path(cli_aout(d42))), 448, 0, 0, 0, 0)
+    why = ""
+    if not cli_same(snap, cli_snap(k, cli_aout(d42))): why = "a.out is not as it was" end
+    do cli_tally(k, "planted: an a.out whose mode changed", why, "a.out is not as it was")
+
+    -- The runner's planted cases, run with the stand-in.
+    let r = cli_wait(k, runner_pid)
+    why = ""
+    let said = new_buffer()
+    do text_add_whole(said, planted.1)
+    do text_add(said, " cases, ")
+    do text_add_whole(said, planted.1)
+    do text_add(said, " gave their answers\n")
+    if r.0 != 0 or r.1 != 0: why = "the runner did not end with status 0" end
+    if length(why) == 0 and not cli_holds(cli_join(k.work, "/runner/out"), cli_text(freeze(said))): why = "the runner did not pass every planted case" end
+    if length(why) == 0 and not cli_holds(cli_join(k.work, "/runner/err"), cli_text("")): why = "the runner said something on standard error" end
+    do cli_tally(k, "the check runner finds each way the stand-in compiler breaks the contract", why, "")
+
+    let summary = new_buffer()
+    do text_add_whole(summary, k.passed + k.failed)
+    do text_add(summary, " compiler checks, ")
+    do text_add_whole(summary, k.passed)
+    do text_add(summary, " gave their answers")
+    if k.failed != 0:
+        do text_add(summary, ", ")
+        do text_add_whole(summary, k.failed)
+        do text_add(summary, " did not")
+    end
+    do text_add(summary, "\n")
+    do flogger(freeze(summary))
+    if k.failed == 0:
+        if folder_remove(own.3, cli_path(own.2)) == 0: do process_exit(0) end
+        do stderr_write("compiler checks: every check passed, and the check's own folder could not be removed\n")
+    end
+    do stderr_write("compiler checks: what the run left is in ")
+    do stderr_write(k.work)
+    do stderr_write("\n")
+    do process_exit(1)
+    return 0
+end

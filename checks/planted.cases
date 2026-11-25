@@ -45,6 +45,31 @@ end
 stdout 2
 42
 end
+case planted: the output stops short of the answer, its last newline missing
+planted the program's output is wrong
+source until ----
+func main():
+    do flogger("42")
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+42
+----
+end
+case planted: a program that writes nothing where an answer is expected
+planted the program's output is wrong
+source until ----
+func main():
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+42
+----
+end
 case planted: the exit status is wrong
 planted the program's exit status is wrong
 source until ----
@@ -169,4 +194,4 @@ source-file stack/native_compile_fragment.herb
 builds bootstrap/seed/gen1.seed
 memory 10240
 end
-cases 15
+cases 17

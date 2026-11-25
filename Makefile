@@ -7,13 +7,16 @@ BUILD   := build
 SCANNER := $(BUILD)/scan
 TRACKED := $(BUILD)/tracked.txt
 scan_SOURCES := lib/linux.herb tools/scan.herb
+# The scanner's own checks, written in Herbert (checks/scans.herb): it runs the
+# scanner on lists it makes, in a folder of its own under the one given here.
+scans_SOURCES := lib/linux.herb lib/text.herb lib/folder.herb lib/child.herb checks/scans.herb
 
 .PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync closed-loop-memory-diet reseed reseed-shell verify-local clean
 
 all: $(SCANNER)
 
-check: $(SCANNER) compiler-source-check
-	@python3 bootstrap/tests/check_scan.py --scanner $(SCANNER)
+check: $(SCANNER) $(BUILD)/scans compiler-source-check
+	@$(BUILD)/scans "$(CURDIR)/$(SCANNER)" "$${TMPDIR:-/tmp}"
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
 	@bash bootstrap/tests/run_tests.sh --check-pinned
@@ -24,7 +27,7 @@ check: $(SCANNER) compiler-source-check
 # and the runner holds a compiler (the seed, or COMPILER=/absolute/path) to
 # every case in the files below: it must rebuild itself byte for byte, and each
 # program must give its answer. VERIFYING.md says what a case is.
-ANSWERS := checks/rebuild.cases checks/first.cases checks/language.cases checks/libraries.cases checks/planted.cases
+ANSWERS := checks/rebuild.cases checks/first.cases checks/language.cases checks/libraries.cases checks/fragments.cases checks/planted.cases
 .PHONY: answers
 answers:
 	@work=$$(mktemp -d "$${TMPDIR:-/tmp}/herbert-answers.XXXXXX") && mkdir "$$work/build" "$$work/run" && \
@@ -36,14 +39,23 @@ answers:
 	  rm -rf "$${work:?}" || { echo "answers: FAILED; what it left is in $$work" >&2; exit 1; }
 
 # The window checks, written in Herbert (checks/hands.herb). The committed seed
-# builds Notes, Scope, the check and its stand-in; the check starts a display
-# nobody sees (Xvfb, a host tool as the desktop's own display server is), opens
-# the programs on it and presses their keys. It makes its own folder under the
-# one given here and, when every check passes, removes from it what it made,
-# name by name. VERIFYING.md says what it holds the programs to.
+# builds Notes, Scope, Maze, First steps, the check and its stand-in; the check
+# starts a display nobody sees (Xvfb, a host tool as the desktop's own display
+# server is), opens the programs on it and presses their keys. It makes its own
+# folder under the one given here and, when every check passes, removes from it
+# what it made, name by name. VERIFYING.md says what it holds the programs to.
 .PHONY: hands
-hands: notes scope $(BUILD)/hands $(BUILD)/stand-in
-	@$(BUILD)/hands "$(CURDIR)/$(BUILD)/notes" "$(CURDIR)/$(BUILD)/scope" "$(CURDIR)/$(BUILD)/stand-in" "$${TMPDIR:-/tmp}"
+hands: notes scope maze first-steps $(BUILD)/hands $(BUILD)/stand-in
+	@$(BUILD)/hands "$(CURDIR)/$(BUILD)/notes" "$(CURDIR)/$(BUILD)/scope" "$(CURDIR)/$(BUILD)/maze" "$(CURDIR)/$(BUILD)/first-steps" "$(CURDIR)/$(BUILD)/stand-in" "$${TMPDIR:-/tmp}"
+
+# Scope's helper's checks, written in Herbert (checks/helper.herb). The committed
+# seed builds the helper and the check; the check starts the helper on this
+# computer only (addresses in 127.77.0.0/16, ports 47700 to 47799), in a folder
+# it makes under the one given here and removes again when every check passes.
+# VERIFYING.md says what it holds the helper to.
+.PHONY: helper
+helper: $(BUILD)/scope-helper $(BUILD)/helper
+	@$(BUILD)/helper "$(CURDIR)/$(BUILD)/scope-helper" "$${TMPDIR:-/tmp}"
 
 # The seed maker's checks, written in Herbert (checks/seeds.herb). The committed
 # seed builds the seed maker, the check runner, the check and a stand-in
@@ -54,6 +66,23 @@ hands: notes scope $(BUILD)/hands $(BUILD)/stand-in
 .PHONY: seeds
 seeds: $(BUILD)/seeds $(BUILD)/reseed $(BUILD)/run $(BUILD)/seed-stand-in
 	@$(BUILD)/seeds "$(CURDIR)/$(BUILD)/reseed" "$(CURDIR)/$(BUILD)/run" "$(CURDIR)/$(BUILD)/seed-stand-in" "$(CURDIR)" "$${TMPDIR:-/tmp}"
+
+# The compiler's command-line checks, written in Herbert (checks/cli.herb).
+# The committed seed builds the check and the runner. The check starts the
+# compiler (a copy of the seed, or COMPILER=/absolute/path) itself, in each
+# state the runner never sets up: an old a.out, a link or a folder in its
+# place, standard input closed, a folder or a pipe, standard output closed or
+# full, a folder it cannot read or write in, a file-size or memory limit. It
+# also runs the runner over planted cases with a stand-in compiler (the check
+# itself, run with no arguments). It works in a folder it makes under the one
+# given here and removes it when every check passes. About a minute: one
+# planted compile waits out the runner's 60 seconds. VERIFYING.md says what
+# it holds the compiler to.
+.PHONY: cli
+cli: $(BUILD)/cli $(BUILD)/run
+	@cd bootstrap/seed && sha256sum -c --quiet gen1.seed.sha256
+	@cp bootstrap/seed/gen1.seed $(BUILD)/cli-seed && chmod u+x $(BUILD)/cli-seed
+	@$(BUILD)/cli "$${COMPILER:-$(CURDIR)/$(BUILD)/cli-seed}" "$(CURDIR)/$(BUILD)/run" "$(CURDIR)" "$${TMPDIR:-/tmp}"
 
 test:
 	@bash tools/check_full_test_host.sh
@@ -207,6 +236,8 @@ run_SOURCES := lib/linux.herb lib/text.herb checks/run.herb
 reseed_SOURCES := $(SEED_LIBS) tools/reseed.herb
 seeds_SOURCES := $(SEED_LIBS) checks/seeds.herb
 seed-stand-in_SOURCES := lib/linux.herb checks/seed_stand_in.herb
+cli_SOURCES := lib/linux.herb lib/text.herb lib/folder.herb checks/cli.herb
+helper_SOURCES := lib/linux.herb lib/text.herb lib/net.herb lib/figures.herb lib/fault.herb checks/helper.herb
 .PHONY: first-steps maze notes scope scope-helper knock hosted-apps hosted-memory-io check-desktop check-hosted-apps check-scope check-scope-helper check-net
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze
@@ -228,8 +259,11 @@ $(BUILD)/run: $(run_SOURCES)
 $(BUILD)/reseed: $(reseed_SOURCES)
 $(BUILD)/seeds: $(seeds_SOURCES)
 $(BUILD)/seed-stand-in: $(seed-stand-in_SOURCES)
+$(BUILD)/cli: $(cli_SOURCES)
+$(BUILD)/helper: $(helper_SOURCES)
+$(BUILD)/scans: $(scans_SOURCES)
 $(SCANNER): $(scan_SOURCES)
-$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/scope-helper $(BUILD)/knock $(BUILD)/hands $(BUILD)/stand-in $(BUILD)/run $(BUILD)/reseed $(BUILD)/seeds $(BUILD)/seed-stand-in $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
+$(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/scope-helper $(BUILD)/knock $(BUILD)/hands $(BUILD)/stand-in $(BUILD)/run $(BUILD)/reseed $(BUILD)/seeds $(BUILD)/seed-stand-in $(BUILD)/cli $(BUILD)/helper $(BUILD)/scans $(SCANNER): bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
 	@cd bootstrap/seed && sha256sum -c gen1.seed.sha256
 	@set -eu; \
 	  mkdir -p $@-work; \
@@ -413,7 +447,7 @@ reseed-shell: compiler-source-check
 # make test already dispatches the six fragment/mutation pairs, the closed-loop
 # memory diet and the error-vocab gate. Their standalone targets above remain for
 # diagnosis; error-vocab-native also runs that gate's mutation proof.
-verify-local: compiler-metadata check answers hands seeds verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
+verify-local: compiler-metadata check answers cli hands seeds helper verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
 
 clean:
 	rm -rf $(BUILD)

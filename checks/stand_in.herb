@@ -14,7 +14,9 @@
 --   wrong   FILE never holds what was typed: it holds "no" from the start,
 --           before the window opens, and Ctrl+S leaves it so
 --   crash   at its first key, is stopped by a signal (as a program that ran
---           out of stack is)
+--           out of stack is); it first marks itself not to be dumped, so
+--           that no core file and no crash reporter's report is made of it,
+--           whatever core limit it was started with
 --   fault   at its first key, reads past the end of its storage: Herbert's
 --           own located fault and exit status 1
 --   stay    saves rightly and does not close on Ctrl+Q
@@ -69,6 +71,7 @@ func main():
             if deaf:
                 key = 0
             elif crash:
+                do linux_syscall6(157, 4, 0, 0, 0, 0, 0)
                 do linux_syscall6(62, linux_syscall6(39, 0, 0, 0, 0, 0, 0), 11, 0, 0, 0, 0)
             elif fault:
                 do buffer_get(typed, 64 + n)

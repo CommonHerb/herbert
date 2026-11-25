@@ -1,0 +1,1269 @@
+case fragment: the lexer written in Herbert lists its probe's tokens as its key does
+source-file stack/lexer_fragment.herb
+stdout until ----
+[(0, "func"), (0, "pick"), (4, "("), (0, "c"), (4, ")"), (4, ":"), (0, "if"), (0, "c"), (5, "<"), (3, "'0'"), (4, ":"), (0, "return"), (1, "0"), (0, "elif"), (0, "c"), (5, ">="), (3, "'0'"), (0, "and"), (0, "c"), (5, "<="), (3, "'9'"), (4, ":"), (0, "return"), (1, "1"), (0, "elif"), (0, "c"), (5, "=="), (3, "'_'"), (4, ":"), (0, "return"), (1, "2"), (0, "else"), (4, ":"), (0, "return"), (1, "4"), (0, "end"), (0, "end"), (0, "func"), (0, "tally"), (4, "("), (0, "a"), (4, ","), (0, "i"), (4, ","), (0, "n"), (4, ","), (0, "acc"), (4, ")"), (4, ":"), (0, "if"), (0, "i"), (5, ">="), (0, "n"), (4, ":"), (0, "return"), (0, "acc"), (0, "end"), (0, "let"), (0, "v"), (5, "="), (0, "get"), (4, "("), (0, "a"), (4, ","), (0, "i"), (4, ")"), (0, "if"), (0, "v"), (5, "!="), (1, "0"), (4, ":"), (0, "return"), (0, "tally"), (4, "("), (0, "a"), (4, ","), (0, "i"), (5, "+"), (1, "1"), (4, ","), (0, "n"), (4, ","), (0, "acc"), (5, "+"), (1, "1"), (4, ")"), (0, "else"), (4, ":"), (0, "return"), (0, "tally"), (4, "("), (0, "a"), (4, ","), (0, "i"), (5, "+"), (1, "1"), (4, ","), (0, "n"), (4, ","), (0, "acc"), (4, ")"), (0, "end"), (0, "end"), (0, "func"), (0, "build"), (4, "("), (4, ")"), (4, ":"), (0, "let"), (0, "b"), (5, "="), (0, "new_buffer"), (4, "("), (4, ")"), (0, "do"), (0, "append"), (4, "("), (0, "b"), (4, ","), (3, "'h'"), (4, ")"), (0, "do"), (0, "append"), (4, "("), (0, "b"), (4, ","), (3, "'\\n'"), (4, ")"), (0, "let"), (0, "s"), (5, "="), (0, "freeze"), (4, "("), (0, "b"), (4, ")"), (0, "let"), (0, "label"), (5, "="), (2, "\"a\\nb\\\\c\""), (0, "let"), (0, "pair"), (5, "="), (4, "("), (0, "s"), (4, ","), (0, "length"), (4, "("), (0, "label"), (4, ")"), (4, ")"), (0, "return"), (0, "pair"), (4, "."), (1, "1"), (0, "end"), (0, "func"), (0, "main"), (4, "("), (4, ")"), (4, ":"), (0, "let"), (0, "total"), (5, "="), (0, "build"), (4, "("), (4, ")"), (5, "-"), (1, "1"), (0, "let"), (0, "ok"), (5, "="), (0, "total"), (5, "<="), (1, "8"), (0, "and"), (0, "total"), (5, ">"), (1, "0"), (0, "return"), (0, "ok"), (0, "end")]
+0
+----
+end
+case fragment: the parser written in Herbert prints its probe's tree as its key does
+source-file stack/parser_fragment.herb
+stdout until ----
+(program (func classify (params c) (body (if (clause (eq (name c) (int 32)) (body (return (int 0)))) (clause (and (ge (name c) (int 48)) (le (name c) (int 57))) (body (return (int 1)))) (clause (and (not (lt (name c) (int 65))) (le (name c) (int 90))) (body (return (int 2)))) (else (body (return (int 3))))))) (func sum_to (params n) (body (if (clause (eq (name n) (int 0)) (body (return (int 0)))) (else (body (return (add (name n) (call sum_to (sub (name n) (int 1)))))))))) (func sign_label (params n) (body (let result (int 0)) (if (clause (eq (name n) (int 0)) (body (assign result (int 1)))) (clause (gt (name n) (int 0)) (body (assign result (int 2))))) (return (name result)))) (func flags (params x y) (body (let lt (lt (name x) (name y))) (let gt (gt (name x) (name y))) (let le (le (name x) (name y))) (let ge (ge (name x) (name y))) (let eq (eq (name x) (name y))) (let ne (ne (name x) (name y))) (let some (or (or (name lt) (name gt)) (name le))) (let every (and (and (name ge) (name eq)) (name ne))) (let mixed (or (bool true) (and (bool false) (not (name lt))))) (return (name mixed)))) (func accumulate (params n) (body (let total (int 0)) (let step (int 1)) (assign total (add (name total) (name step))) (assign step (add (name step) (int 1))) (assign total (add (name total) (name step))) (if (clause (gt (name n) (int 0)) (body (let bump (sub (name n) (int 1))) (assign total (add (name total) (name bump)))))) (return (name total)))) (func depth (params a b) (body (let r (int 0)) (if (clause (gt (name a) (int 0)) (body (if (clause (gt (name b) (int 0)) (body (if (clause (gt (name a) (name b)) (body (assign r (sub (name a) (name b))))) (else (body (assign r (sub (name b) (name a)))))))) (else (body (assign r (name a))))))) (else (body (assign r (int 0))))) (return (name r)))) (func nested_tuple (params) (body (let inner (tuple (int 1) (int 2))) (let outer (tuple (name inner) (int 3) (tuple (int 4) (int 5)))) (return (dot (dot (name outer) 2) 0)))) (func build (params) (body (let s (str 3 97 98 99)) (let blank (str 0)) (let lined (str 6 97 92 98 34 99 10)) (let ch (char 97)) (let nl (char 10)) (let slash (char 92)) (let quote (char 39)) (let buf (call new_buffer)) (do (call append (name buf) (name ch))) (do (call append (name buf) (int 98))) (let frozen (call freeze (name buf))) (let n (call length (name frozen))) (let first (call index (name frozen) (int 0))) (let part (call slice (name frozen) (int 0) (name n))) (let same (call equal (name part) (name frozen))) (let arr (call new_array (type int))) (do (call add (name arr) (name n))) (do (call add (name arr) (call length (name s)))) (let got (call get (name arr) (int 0))) (let total (call count (name arr))) (return (name same)))) (func typed (params) (body (let a (call new_array (type bool))) (let b (call new_array (type string))) (let c (call new_array (type buffer))) (let d (call new_array (type-tuple (type int) (type bool)))) (let e (call new_array (type-array (type int)))) (let f (call new_array (type-tuple (type int) (type-tuple (type bool) (type string))))) (let g (call new_array (type-array (type-tuple (type int) (type int))))) (return (call count (name g))))) (func deep_expr (params x) (body (return (add (sub (add (sub (add (name x) (int 1)) (int 2)) (int 3)) (int 4)) (sub (sub (name x) (int 1)) (sub (add (name x) (int 2)) (add (name x) (int 3)))))))) (func combine (params x) (body (let inner (call sum_to (call classify (call sum_to (name x))))) (return (call depth (call sum_to (name inner)) (call classify (name inner)))))))
+0
+----
+end
+case fragment: the evaluator written in Herbert works out its probe's twelve answers
+source-file stack/evaluator_fragment.herb
+stdout until ----
+(42 900 15 2 55 210 227 106 21 234 103 100)
+0
+----
+end
+case fragment: the bytecode machine written in Herbert works out the same twelve answers
+source-file stack/vm_fragment.herb
+stdout until ----
+(42 900 15 2 55 210 227 106 21 234 103 100)
+0
+----
+end
+case fragment: the emitter written in Herbert lowers the evaluator probe to the listing it was checked against, returned as main's string
+source-file stack/emitter_fragment.herb
+stdout 7104
+"STRING_POOL\n0 \"herbert\"\n1 \"hi\"\n2 \"a\"\n3 \"b\"\n\nFUNCTIONS\n0 bit n_params=2 n_locals=2\n1 classify n_params=1 n_locals=1\n2 sum_to n_params=1 n_locals=1\n3 sum_tail n_params=2 n_locals=2\n4 witness n_params=1 n_locals=1\n5 grow n_params=1 n_locals=1\n6 test_arith n_params=0 n_locals=4\n7 test_branch n_params=0 n_locals=0\n8 test_compare n_params=0 n_locals=6\n9 test_shortcircuit n_params=0 n_locals=6\n10 test_recursion n_params=0 n_locals=0\n11 test_tail n_params=0 n_locals=0\n12 test_strings n_params=0 n_locals=6\n13 test_buffer n_params=0 n_locals=4\n14 test_tuples n_params=0 n_locals=7\n15 test_arrays n_params=0 n_locals=8\n16 test_refsem n_params=0 n_locals=6\n17 test_blockscope n_params=0 n_locals=3\n18 main n_params=0 n_locals=0\n\nCODE\nfn 0 bit\n0 LOAD_LOCAL 0\n1 BR_IF_FALSE 4\n2 LOAD_LOCAL 1\n3 RET\n4 PUSH_INT 0\n5 RET\nfn 1 classify\n0 LOAD_LOCAL 0\n1 PUSH_INT 0\n2 LT\n3 BR_IF_FALSE 6\n4 PUSH_INT 9000\n5 RET\n6 LOAD_LOCAL 0\n7 PUSH_INT 0\n8 EQ\n9 BR_IF_FALSE 12\n10 PUSH_INT 700\n11 RET\n12 LOAD_LOCAL 0\n13 PUSH_INT 10\n14 LT\n15 BR_IF_FALSE 18\n16 PUSH_INT 150\n17 RET\n18 PUSH_INT 50\n19 RET\nfn 2 sum_to\n0 LOAD_LOCAL 0\n1 PUSH_INT 0\n2 EQ\n3 BR_IF_FALSE 6\n4 PUSH_INT 0\n5 RET\n6 LOAD_LOCAL 0\n7 LOAD_LOCAL 0\n8 PUSH_INT 1\n9 SUB\n10 CALL 2 1\n11 ADD\n12 RET\nfn 3 sum_tail\n0 LOAD_LOCAL 0\n1 PUSH_INT 0\n2 EQ\n3 BR_IF_FALSE 6\n4 LOAD_LOCAL 1\n5 RET\n6 LOAD_LOCAL 0\n7 PUSH_INT 1\n8 SUB\n9 LOAD_LOCAL 1\n10 LOAD_LOCAL 0\n11 ADD\n12 CALL 3 2\n13 RET\nfn 4 witness\n0 LOAD_LOCAL 0\n1 PUSH_INT 1\n2 ARR_ADD\n3 PUSH_BOOL 1\n4 RET\nfn 5 grow\n0 LOAD_LOCAL 0\n1 PUSH_INT 7\n2 ARR_ADD\n3 LOAD_LOCAL 0\n4 COUNT\n5 RET\nfn 6 test_arith\n0 PUSH_INT 40\n1 PUSH_INT 5\n2 ADD\n3 STORE_LOCAL 0\n4 LOAD_LOCAL 0\n5 PUSH_INT 3\n6 SUB\n7 STORE_LOCAL 1\n8 PUSH_INT 0\n9 PUSH_INT 1\n10 SUB\n11 STORE_LOCAL 2\n12 LOAD_LOCAL 2\n13 PUSH_INT 1\n14 ADD\n15 STORE_LOCAL 3\n16 LOAD_LOCAL 1\n17 LOAD_LOCAL 3\n18 ADD\n19 RET\nfn 7 test_branch\n0 PUSH_INT 0\n1 CALL 1 1\n2 PUSH_INT 5\n3 CALL 1 1\n4 ADD\n5 PUSH_INT 99\n6 CALL 1 1\n7 ADD\n8 RET\nfn 8 test_compare\n0 PUSH_INT 3\n1 PUSH_INT 3\n2 EQ\n3 PUSH_INT 1\n4 CALL 0 2\n5 STORE_LOCAL 0\n6 PUSH_INT 5\n7 PUSH_INT 5\n8 NE\n9 PUSH_INT 2\n10 CALL 0 2\n11 STORE_LOCAL 1\n12 PUSH_INT 2\n13 PUSH_INT 9\n14 LT\n15 PUSH_INT 2\n16 CALL 0 2\n17 STORE_LOCAL 2\n18 PUSH_INT 4\n19 PUSH_INT 4\n20 LE\n21 PUSH_INT 4\n22 CALL 0 2\n23 STORE_LOCAL 3\n24 PUSH_INT 1\n25 PUSH_INT 8\n26 GT\n27 PUSH_INT 8\n28 CALL 0 2\n29 STORE_LOCAL 4\n30 PUSH_INT 8\n31 PUSH_INT 8\n32 GE\n33 PUSH_INT 8\n34 CALL 0 2\n35 STORE_LOCAL 5\n36 LOAD_LOCAL 0\n37 LOAD_LOCAL 1\n38 ADD\n39 LOAD_LOCAL 2\n40 ADD\n41 LOAD_LOCAL 3\n42 ADD\n43 LOAD_LOCAL 4\n44 ADD\n45 LOAD_LOCAL 5\n46 ADD\n47 RET\nfn 9 test_shortcircuit\n0 NEW_ARRAY\n1 STORE_LOCAL 0\n2 PUSH_BOOL 1\n3 BR_OR 6\n4 LOAD_LOCAL 0\n5 CALL 4 1\n6 STORE_LOCAL 1\n7 PUSH_BOOL 0\n8 BR_AND 11\n9 LOAD_LOCAL 0\n10 CALL 4 1\n11 STORE_LOCAL 2\n12 PUSH_BOOL 0\n13 BR_OR 16\n14 LOAD_LOCAL 0\n15 CALL 4 1\n16 STORE_LOCAL 3\n17 PUSH_BOOL 1\n18 BR_AND 21\n19 LOAD_LOCAL 0\n20 CALL 4 1\n21 STORE_LOCAL 4\n22 LOAD_LOCAL 1\n23 BR_AND 25\n24 LOAD_LOCAL 2\n25 NOT\n26 STORE_LOCAL 5\n27 LOAD_LOCAL 5\n28 BR_AND 30\n29 LOAD_LOCAL 3\n30 BR_AND 32\n31 LOAD_LOCAL 4\n32 BR_IF_FALSE 36\n33 LOAD_LOCAL 0\n34 COUNT\n35 RET\n36 PUSH_INT 999\n37 RET\nfn 10 test_recursion\n0 PUSH_INT 10\n1 CALL 2 1\n2 RET\nfn 11 test_tail\n0 PUSH_INT 20\n1 PUSH_INT 0\n2 CALL 3 2\n3 RET\nfn 12 test_strings\n0 PUSH_STR 0\n1 STORE_LOCAL 0\n2 LOAD_LOCAL 0\n3 LENGTH\n4 STORE_LOCAL 1\n5 LOAD_LOCAL 0\n6 PUSH_INT 0\n7 INDEX\n8 STORE_LOCAL 2\n9 LOAD_LOCAL 0\n10 PUSH_INT 1\n11 INDEX\n12 STORE_LOCAL 3\n13 PUSH_STR 1\n14 PUSH_STR 1\n15 EQUAL\n16 PUSH_INT 15\n17 CALL 0 2\n18 STORE_LOCAL 4\n19 PUSH_STR 2\n20 PUSH_STR 3\n21 EQUAL\n22 PUSH_INT 99\n23 CALL 0 2\n24 STORE_LOCAL 5\n25 LOAD_LOCAL 1\n26 LOAD_LOCAL 2\n27 ADD\n28 LOAD_LOCAL 3\n29 ADD\n30 LOAD_LOCAL 4\n31 ADD\n32 LOAD_LOCAL 5\n33 ADD\n34 RET\nfn 13 test_buffer\n0 NEW_BUFFER\n1 STORE_LOCAL 0\n2 LOAD_LOCAL 0\n3 PUSH_INT 104\n4 BUF_APPEND\n5 LOAD_LOCAL 0\n6 PUSH_INT 105\n7 BUF_APPEND\n8 LOAD_LOCAL 0\n9 FREEZE\n10 STORE_LOCAL 1\n11 LOAD_LOCAL 1\n12 LENGTH\n13 STORE_LOCAL 2\n14 LOAD_LOCAL 1\n15 PUSH_INT 0\n16 INDEX\n17 STORE_LOCAL 3\n18 LOAD_LOCAL 2\n19 LOAD_LOCAL 3\n20 ADD\n21 RET\nfn 14 test_tuples\n0 PUSH_INT 1\n1 PUSH_INT 2\n2 MAKE_TUPLE 2\n3 PUSH_INT 3\n4 PUSH_INT 4\n5 MAKE_TUPLE 2\n6 PUSH_INT 5\n7 PUSH_INT 6\n8 MAKE_TUPLE 2\n9 MAKE_TUPLE 3\n10 STORE_LOCAL 0\n11 LOAD_LOCAL 0\n12 TUPLE_GET 0\n13 TUPLE_GET 0\n14 STORE_LOCAL 1\n15 LOAD_LOCAL 0\n16 TUPLE_GET 0\n17 TUPLE_GET 1\n18 STORE_LOCAL 2\n19 LOAD_LOCAL 0\n20 TUPLE_GET 1\n21 TUPLE_GET 0\n22 STORE_LOCAL 3\n23 LOAD_LOCAL 0\n24 TUPLE_GET 1\n25 TUPLE_GET 1\n26 STORE_LOCAL 4\n27 LOAD_LOCAL 0\n28 TUPLE_GET 2\n29 TUPLE_GET 0\n30 STORE_LOCAL 5\n31 LOAD_LOCAL 0\n32 TUPLE_GET 2\n33 TUPLE_GET 1\n34 STORE_LOCAL 6\n35 LOAD_LOCAL 1\n36 LOAD_LOCAL 2\n37 ADD\n38 LOAD_LOCAL 3\n39 ADD\n40 LOAD_LOCAL 4\n41 ADD\n42 LOAD_LOCAL 5\n43 ADD\n44 LOAD_LOCAL 6\n45 ADD\n46 RET\nfn 15 test_arrays\n0 NEW_ARRAY\n1 STORE_LOCAL 0\n2 LOAD_LOCAL 0\n3 PUSH_INT 10\n4 ARR_ADD\n5 LOAD_LOCAL 0\n6 PUSH_INT 20\n7 ARR_ADD\n8 LOAD_LOCAL 0\n9 PUSH_INT 30\n10 ARR_ADD\n11 LOAD_LOCAL 0\n12 CALL 5 1\n13 STORE_LOCAL 1\n14 LOAD_LOCAL 0\n15 PUSH_INT 0\n16 GET\n17 LOAD_LOCAL 0\n18 PUSH_INT 1\n19 GET\n20 ADD\n21 LOAD_LOCAL 0\n22 PUSH_INT 2\n23 GET\n24 ADD\n25 LOAD_LOCAL 0\n26 PUSH_INT 3\n27 GET\n28 ADD\n29 STORE_LOCAL 2\n30 NEW_ARRAY\n31 STORE_LOCAL 3\n32 LOAD_LOCAL 3\n33 PUSH_INT 100\n34 PUSH_INT 1\n35 MAKE_TUPLE 2\n36 ARR_ADD\n37 LOAD_LOCAL 3\n38 PUSH_INT 50\n39 PUSH_INT 12\n40 MAKE_TUPLE 2\n41 ARR_ADD\n42 LOAD_LOCAL 3\n43 PUSH_INT 0\n44 GET\n45 STORE_LOCAL 4\n46 LOAD_LOCAL 3\n47 PUSH_INT 1\n48 GET\n49 STORE_LOCAL 5\n50 LOAD_LOCAL 4\n51 TUPLE_GET 0\n52 LOAD_LOCAL 4\n53 TUPLE_GET 1\n54 ADD\n55 LOAD_LOCAL 5\n56 TUPLE_GET 0\n57 ADD\n58 LOAD_LOCAL 5\n59 TUPLE_GET 1\n60 ADD\n61 STORE_LOCAL 6\n62 NEW_ARRAY\n63 COUNT\n64 NEW_ARRAY\n65 COUNT\n66 ADD\n67 NEW_ARRAY\n68 COUNT\n69 ADD\n70 NEW_ARRAY\n71 COUNT\n72 ADD\n73 STORE_LOCAL 7\n74 LOAD_LOCAL 2\n75 LOAD_LOCAL 6\n76 ADD\n77 LOAD_LOCAL 1\n78 ADD\n79 LOAD_LOCAL 7\n80 ADD\n81 RET\nfn 16 test_refsem\n0 NEW_ARRAY\n1 STORE_LOCAL 0\n2 LOAD_LOCAL 0\n3 PUSH_INT 5\n4 ARR_ADD\n5 LOAD_LOCAL 0\n6 STORE_LOCAL 1\n7 LOAD_LOCAL 1\n8 PUSH_INT 7\n9 ARR_ADD\n10 LOAD_LOCAL 0\n11 PUSH_INT 1\n12 GET\n13 STORE_LOCAL 2\n14 LOAD_LOCAL 0\n15 PUSH_INT 0\n16 MAKE_TUPLE 2\n17 STORE_LOCAL 3\n18 LOAD_LOCAL 3\n19 STORE_LOCAL 4\n20 LOAD_LOCAL 4\n21 TUPLE_GET 0\n22 PUSH_INT 93\n23 ARR_ADD\n24 LOAD_LOCAL 0\n25 PUSH_INT 2\n26 GET\n27 STORE_LOCAL 5\n28 LOAD_LOCAL 2\n29 LOAD_LOCAL 5\n30 ADD\n31 LOAD_LOCAL 0\n32 COUNT\n33 ADD\n34 RET\nfn 17 test_blockscope\n0 PUSH_INT 1\n1 STORE_LOCAL 0\n2 PUSH_INT 0\n3 STORE_LOCAL 1\n4 PUSH_BOOL 1\n5 BR_IF_FALSE 10\n6 PUSH_INT 99\n7 STORE_LOCAL 2\n8 LOAD_LOCAL 2\n9 STORE_LOCAL 1\n10 LOAD_LOCAL 0\n11 LOAD_LOCAL 1\n12 ADD\n13 RET\nfn 18 main\n0 CALL 6 0\n1 CALL 7 0\n2 CALL 8 0\n3 CALL 9 0\n4 CALL 10 0\n5 CALL 11 0\n6 CALL 12 0\n7 CALL 13 0\n8 CALL 14 0\n9 CALL 15 0\n10 CALL 16 0\n11 CALL 17 0\n12 MAKE_TUPLE 12\n13 RET\n"
+
+end
+case klondike compiles and runs a program given in a bundle: the compute probe on the input 5
+source-file stack/klondike_native.herb
+stdin 1154
+ HERB11142
+-- metacircular β-small compute probe: reads one ASCII digit via clogger;
+-- returns a tuple-of-ints computed from it (arith, multi-way branch,
+-- non-tail + tail recursion, growable array, tuple). Second clogger read
+-- must be "" (single-drain EOF). Uses only executable ops (no slice()).
+
+func tri(n):
+    if n == 0:
+        return 0
+    else:
+        return n + tri(n - 1)
+    end
+end
+
+func sum_tail(n, acc):
+    if n == 0:
+        return acc
+    else:
+        return sum_tail(n - 1, acc + n)
+    end
+end
+
+func band(n):
+    if n < 3:
+        return 100
+    elif n < 7:
+        return 200
+    else:
+        return 300
+    end
+end
+
+func first_digit(s):
+    if length(s) == 0:
+        return 0
+    end
+    let c = index(s, 0)
+    if c < '0' or c > '9':
+        return 0
+    end
+    return c - '0'
+end
+
+func main():
+    let incoming = clogger()
+    let second = clogger()
+    let n = first_digit(incoming)
+    let a = new_array(int)
+    do add(a, n)
+    do add(a, n + 1)
+    do add(a, n + 2)
+    let asum = get(a, 0) + get(a, 1) + get(a, 2)
+    do flogger("P2-OK\n")
+    return (n, tri(n), sum_tail(n, 0), band(n), asum, length(second))
+end
+5
+stdout until ----
+P2-OK
+(5 15 15 200 18 0)
+0
+----
+end
+case klondike gives the compute probe's answers for the input 8
+source-file stack/klondike_native.herb
+stdin 1154
+ HERB11142
+-- metacircular β-small compute probe: reads one ASCII digit via clogger;
+-- returns a tuple-of-ints computed from it (arith, multi-way branch,
+-- non-tail + tail recursion, growable array, tuple). Second clogger read
+-- must be "" (single-drain EOF). Uses only executable ops (no slice()).
+
+func tri(n):
+    if n == 0:
+        return 0
+    else:
+        return n + tri(n - 1)
+    end
+end
+
+func sum_tail(n, acc):
+    if n == 0:
+        return acc
+    else:
+        return sum_tail(n - 1, acc + n)
+    end
+end
+
+func band(n):
+    if n < 3:
+        return 100
+    elif n < 7:
+        return 200
+    else:
+        return 300
+    end
+end
+
+func first_digit(s):
+    if length(s) == 0:
+        return 0
+    end
+    let c = index(s, 0)
+    if c < '0' or c > '9':
+        return 0
+    end
+    return c - '0'
+end
+
+func main():
+    let incoming = clogger()
+    let second = clogger()
+    let n = first_digit(incoming)
+    let a = new_array(int)
+    do add(a, n)
+    do add(a, n + 1)
+    do add(a, n + 2)
+    let asum = get(a, 0) + get(a, 1) + get(a, 2)
+    do flogger("P2-OK\n")
+    return (n, tri(n), sum_tail(n, 0), band(n), asum, length(second))
+end
+8
+stdout until ----
+P2-OK
+(8 36 36 300 27 0)
+0
+----
+end
+case klondike runs the io probe on the input hello: its own line, then the input's length
+source-file stack/klondike_native.herb
+stdin 429
+ HERB1414
+func main():
+    let incoming = clogger()
+    let b = new_buffer()
+    do append(b, 'K')
+    do append(b, 'L')
+    do append(b, 'O')
+    do append(b, 'N')
+    do append(b, 'D')
+    do append(b, 'I')
+    do append(b, 'K')
+    do append(b, 'E')
+    do append(b, '-')
+    do append(b, 'I')
+    do append(b, 'O')
+    do append(b, '\n')
+    let marker = freeze(b)
+    do flogger(marker)
+    return length(incoming)
+end
+hello
+stdout until ----
+KLONDIKE-IO
+5
+0
+----
+end
+case klondike reports a byte that starts no token (lex_101, ERR 101)
+source-file stack/klondike_native.herb
+stdin 2
+$
+
+stdout until ----
+line 1: unexpected character (ERR 101)
+0
+----
+end
+case klondike reports a whole number too large for 64 bits (lex_103, ERR 103)
+source-file stack/klondike_native.herb
+stdin 49
+func main():
+    return 18446744073709551616
+end
+
+stdout until ----
+line 2: integer literal does not fit in 64 bits (ERR 103)
+0
+----
+end
+case klondike reports an unknown escape in a string (lex_104, ERR 104)
+source-file stack/klondike_native.herb
+stdin 33
+func main():
+    return "\q"
+end
+
+stdout until ----
+line 2: unknown escape sequence (ERR 104)
+0
+----
+end
+case klondike reports a backslash the source ends after (lex_105, ERR 105)
+source-file stack/klondike_native.herb
+stdin 26
+func main():
+    return "\
+stdout until ----
+line 2: unterminated escape (ERR 105)
+0
+----
+end
+case klondike reports a newline inside a string (lex_106, ERR 106)
+source-file stack/klondike_native.herb
+stdin 41
+func main():
+    return "line
+break"
+end
+
+stdout until ----
+line 2: newline in string literal (ERR 106)
+0
+----
+end
+case klondike reports a string the source ends inside (lex_107, ERR 107)
+source-file stack/klondike_native.herb
+stdin 37
+func main():
+    return "unterminated
+stdout until ----
+line 2: unterminated string literal (ERR 107)
+0
+----
+end
+case klondike reports an empty character literal (lex_108, ERR 108)
+source-file stack/klondike_native.herb
+stdin 31
+func main():
+    return ''
+end
+
+stdout until ----
+line 2: empty character literal (ERR 108)
+0
+----
+end
+case klondike reports a character literal not closed after one character (lex_109, ERR 109)
+source-file stack/klondike_native.herb
+stdin 33
+func main():
+    return 'ab'
+end
+
+stdout until ----
+line 2: character literal not closed (ERR 109)
+0
+----
+end
+case klondike reports a newline inside a character literal (lex_110, ERR 110)
+source-file stack/klondike_native.herb
+stdin 32
+func main():
+    return '
+'
+end
+
+stdout until ----
+line 2: newline in character literal (ERR 110)
+0
+----
+end
+case klondike reports a statement outside any function (parse_201, ERR 201)
+source-file stack/klondike_native.herb
+stdin 10
+let x = 1
+
+stdout until ----
+line 1: expected 'func' at top level (ERR 201)
+0
+----
+end
+case klondike reports a function header cut short (parse_202, ERR 202)
+source-file stack/klondike_native.herb
+stdin 11
+func main(
+
+stdout until ----
+line 2: invalid function header (ERR 202)
+0
+----
+end
+case klondike reports a function the source ends inside (parse_203, ERR 203)
+source-file stack/klondike_native.herb
+stdin 26
+func main():
+    return 0
+
+stdout until ----
+line 3: expected end (ERR 203)
+0
+----
+end
+case klondike reports a return with no expression (parse_204, ERR 204)
+source-file stack/klondike_native.herb
+stdin 28
+func main():
+    return
+end
+
+stdout until ----
+line 3: expected expression (ERR 204)
+0
+----
+end
+case klondike reports a bare number where a statement belongs (parse_205, ERR 205)
+source-file stack/klondike_native.herb
+stdin 23
+func main():
+    1
+end
+
+stdout until ----
+line 2: 'do' must be followed by a call (ERR 205)
+0
+----
+end
+case klondike reports a name after a dot where a position belongs (parse_206, ERR 206)
+source-file stack/klondike_native.herb
+stdin 39
+func main():
+    return (1, 2).foo
+end
+
+stdout until ----
+line 2: expected integer after '.' (ERR 206)
+0
+----
+end
+case klondike reports a parenthesis not closed (parse_207, ERR 207)
+source-file stack/klondike_native.herb
+stdin 31
+func main():
+    return (1
+end
+
+stdout until ----
+line 3: expected ')' (ERR 207)
+0
+----
+end
+case klondike reports new_array with no type (parse_208, ERR 208)
+source-file stack/klondike_native.herb
+stdin 40
+func main():
+    return new_array()
+end
+
+stdout until ----
+line 2: new_array requires a type argument (ERR 208)
+0
+----
+end
+case klondike reports a function with an empty body (parse_209, ERR 209)
+source-file stack/klondike_native.herb
+stdin 17
+func main():
+end
+
+stdout until ----
+line 1: function body must contain at least one statement (ERR 209)
+0
+----
+end
+case klondike reports an if arm with no statement (parse_210, ERR 210)
+source-file stack/klondike_native.herb
+stdin 51
+func main():
+    if true:
+    end
+    return 0
+end
+
+stdout until ----
+line 2: if/elif/else arm must contain at least one statement (ERR 210)
+0
+----
+end
+case klondike reports a type that is not a type (parse_211_bad_type, ERR 211)
+source-file stack/klondike_native.herb
+stdin 43
+func main():
+    return new_array(foo)
+end
+
+stdout until ----
+line 2: invalid type expression (ERR 211)
+0
+----
+end
+case klondike reports a tuple type of one type (parse_211_one_tuple_type, ERR 211)
+source-file stack/klondike_native.herb
+stdin 45
+func main():
+    return new_array((int))
+end
+
+stdout until ----
+line 2: invalid type expression (ERR 211)
+0
+----
+end
+case klondike reports a bare name where a statement belongs (parse_212_bad_assignment, ERR 212)
+source-file stack/klondike_native.herb
+stdin 36
+func main():
+    x
+    return 0
+end
+
+stdout until ----
+line 2: invalid assignment or name (ERR 212)
+0
+----
+end
+case klondike reports a type word used as a name (parse_212_reserved_type_name, ERR 212)
+source-file stack/klondike_native.herb
+stdin 46
+func main():
+    let int = 1
+    return 0
+end
+
+stdout until ----
+line 2: invalid assignment or name (ERR 212)
+0
+----
+end
+case klondike reports a name let twice in one scope (sem_301, ERR 301)
+source-file stack/klondike_native.herb
+stdin 58
+func main():
+    let x = 1
+    let x = 2
+    return x
+end
+
+stdout until ----
+line 3: duplicate let 'x' in this scope (ERR 301)
+0
+----
+end
+case klondike reports a name let twice in one scope, and names it (sem_301 renamed, ERR 301)
+source-file stack/klondike_native.herb
+stdin 94
+func main():
+    let zq_let_unique = 1
+    let zq_let_unique = 2
+    return zq_let_unique
+end
+
+stdout until ----
+line 3: duplicate let 'zq_let_unique' in this scope (ERR 301)
+0
+----
+end
+case klondike reports a name never defined (sem_302, ERR 302)
+source-file stack/klondike_native.herb
+stdin 30
+func main():
+    return x
+end
+
+stdout until ----
+line 2: undefined name 'x' (ERR 302)
+0
+----
+end
+case klondike reports a name never defined, and names it (sem_302 renamed, ERR 302)
+source-file stack/klondike_native.herb
+stdin 42
+func main():
+    return zq_use_unique
+end
+
+stdout until ----
+line 2: undefined name 'zq_use_unique' (ERR 302)
+0
+----
+end
+case klondike reports an assignment to a name never defined (sem_303, ERR 303)
+source-file stack/klondike_native.herb
+stdin 40
+func main():
+    x = 1
+    return 0
+end
+
+stdout until ----
+line 2: assignment to undefined name 'x' (ERR 303)
+0
+----
+end
+case klondike reports a call of a function never defined (sem_304, ERR 304)
+source-file stack/klondike_native.herb
+stdin 38
+func main():
+    return missing()
+end
+
+stdout until ----
+line 2: unknown function 'missing' (ERR 304)
+0
+----
+end
+case klondike reports a call of a function never defined, and names it (sem_304 renamed, ERR 304)
+source-file stack/klondike_native.herb
+stdin 45
+func main():
+    return zq_call_unique()
+end
+
+stdout until ----
+line 2: unknown function 'zq_call_unique' (ERR 304)
+0
+----
+end
+case klondike reports a call with too few arguments (sem_305, ERR 305)
+source-file stack/klondike_native.herb
+stdin 61
+func f(x):
+    return x
+end
+
+func main():
+    return f()
+end
+
+stdout until ----
+line 6: wrong number of arguments to 'f' (ERR 305)
+0
+----
+end
+case klondike reports a call with too few arguments, and names the function (sem_305 renamed, ERR 305)
+source-file stack/klondike_native.herb
+stdin 81
+func zq_fn_arity(x):
+    return x
+end
+
+func main():
+    return zq_fn_arity()
+end
+
+stdout until ----
+line 6: wrong number of arguments to 'zq_fn_arity' (ERR 305)
+0
+----
+end
+case klondike reports length given two arguments (sem_306, ERR 306)
+source-file stack/klondike_native.herb
+stdin 45
+func main():
+    return length("a", "b")
+end
+
+stdout until ----
+line 2: wrong number of arguments to 'length' (ERR 306)
+0
+----
+end
+case klondike reports append given one argument (sem_307, ERR 307)
+source-file stack/klondike_native.herb
+stdin 72
+func main():
+    let b = new_buffer()
+    do append(b)
+    return 0
+end
+
+stdout until ----
+line 3: wrong number of arguments to 'append' (ERR 307)
+0
+----
+end
+case klondike reports append used as a value (sem_308, ERR 308)
+source-file stack/klondike_native.herb
+stdin 52
+func main():
+    return append(new_buffer(), 1)
+end
+
+stdout until ----
+line 2: builtin 'append' has no value (ERR 308)
+0
+----
+end
+case klondike reports do with a call that has a value (sem_310, ERR 310)
+source-file stack/klondike_native.herb
+stdin 47
+func main():
+    do length(x)
+    return 0
+end
+
+stdout until ----
+line 2: 'do' requires a value-less call, got 'length' (ERR 310)
+0
+----
+end
+case klondike reports a parameter named twice (sem_311, ERR 311)
+source-file stack/klondike_native.herb
+stdin 34
+func main(x, x):
+    return 0
+end
+
+stdout until ----
+line 1: duplicate parameter 'x' (ERR 311)
+0
+----
+end
+case klondike reports a parameter named twice, and names it (sem_311 renamed, ERR 311)
+source-file stack/klondike_native.herb
+stdin 62
+func main(zq_param_unique, zq_param_unique):
+    return 0
+end
+
+stdout until ----
+line 1: duplicate parameter 'zq_param_unique' (ERR 311)
+0
+----
+end
+case klondike reports a function defined twice (sem_312, ERR 312)
+source-file stack/klondike_native.herb
+stdin 61
+func main():
+    return 0
+end
+
+func main():
+    return 1
+end
+
+stdout until ----
+line 5: duplicate function 'main' (ERR 312)
+0
+----
+end
+case klondike reports a function named after a builtin (sem_313, ERR 313)
+source-file stack/klondike_native.herb
+stdin 63
+func length():
+    return 0
+end
+
+func main():
+    return 0
+end
+
+stdout until ----
+line 1: function reuses built-in name 'length' (ERR 313)
+0
+----
+end
+case klondike reports a program with no main as the program's fault, with no line (sem_314, ERR 314)
+source-file stack/klondike_native.herb
+stdin 27
+func f():
+    return 0
+end
+
+stdout until ----
+program: no main function defined (ERR 314)
+0
+----
+end
+case klondike reports a main that takes a parameter (sem_315, ERR 315)
+source-file stack/klondike_native.herb
+stdin 31
+func main(x):
+    return x
+end
+
+stdout until ----
+line 1: function 'main' must take zero parameters (ERR 315)
+0
+----
+end
+case klondike reports a main that can finish without returning (sem_316, ERR 316)
+source-file stack/klondike_native.herb
+stdin 56
+func main():
+    if false:
+        return 1
+    end
+end
+
+stdout until ----
+line 1: function 'main' may complete without returning (ERR 316)
+0
+----
+end
+case klondike reports a let whose expression is missing at a line break (parse_204_split, ERR 204)
+source-file stack/klondike_native.herb
+stdin 41
+func main():
+    let x =
+        end
+end
+
+stdout until ----
+line 3: expected expression (ERR 204)
+0
+----
+end
+case klondike reports a do followed on the next line by a number (parse_205_split, ERR 205)
+source-file stack/klondike_native.herb
+stdin 47
+func main():
+    do
+        1
+    return 0
+end
+
+stdout until ----
+line 2: 'do' must be followed by a call (ERR 205)
+0
+----
+end
+case klondike reports new_array with no type, its parentheses on two lines (parse_208_split, ERR 208)
+source-file stack/klondike_native.herb
+stdin 45
+func main():
+    return new_array(
+    )
+end
+
+stdout until ----
+line 2: new_array requires a type argument (ERR 208)
+0
+----
+end
+case klondike reports an empty body that holds a blank line (parse_209_split, ERR 209)
+source-file stack/klondike_native.herb
+stdin 18
+func main():
+
+end
+
+stdout until ----
+line 1: function body must contain at least one statement (ERR 209)
+0
+----
+end
+case klondike reports an if arm that holds only a blank line (parse_210_split_empty_if, ERR 210)
+source-file stack/klondike_native.herb
+stdin 52
+func main():
+    if true:
+
+    end
+    return 0
+end
+
+stdout until ----
+line 2: if/elif/else arm must contain at least one statement (ERR 210)
+0
+----
+end
+case klondike reports an empty elif arm at the line of its if (parse_210_split_empty_elif, ERR 210)
+source-file stack/klondike_native.herb
+stdin 71
+func main():
+    if false:
+        return 0
+    elif true:
+    end
+end
+
+stdout until ----
+line 2: if/elif/else arm must contain at least one statement (ERR 210)
+0
+----
+end
+case klondike reports a tuple type of one type spread over three lines (parse_211_split, ERR 211)
+source-file stack/klondike_native.herb
+stdin 59
+func main():
+    return new_array((
+        int
+    ))
+end
+
+stdout until ----
+line 2: invalid type expression (ERR 211)
+0
+----
+end
+case klondike reports a call with too few arguments at its own line, after its return's (sem_305_split, ERR 305)
+source-file stack/klondike_native.herb
+stdin 69
+func f(x):
+    return x
+end
+
+func main():
+    return
+        f()
+end
+
+stdout until ----
+line 7: wrong number of arguments to 'f' (ERR 305)
+0
+----
+end
+case klondike reports length given two arguments at its own line, after its return's (sem_306_split, ERR 306)
+source-file stack/klondike_native.herb
+stdin 53
+func main():
+    return
+        length("a", "b")
+end
+
+stdout until ----
+line 3: wrong number of arguments to 'length' (ERR 306)
+0
+----
+end
+case klondike reports append given one argument at the line of its do (sem_307_split, ERR 307)
+source-file stack/klondike_native.herb
+stdin 80
+func main():
+    let b = new_buffer()
+    do
+        append(b)
+    return 0
+end
+
+stdout until ----
+line 3: wrong number of arguments to 'append' (ERR 307)
+0
+----
+end
+case klondike reports a do whose call is on the next line, at the call's line (sem_310_split, ERR 310)
+source-file stack/klondike_native.herb
+stdin 55
+func main():
+    do
+        length(x)
+    return 0
+end
+
+stdout until ----
+line 3: 'do' requires a value-less call, got 'length' (ERR 310)
+0
+----
+end
+case klondike counts two blank lines before a fault (count_blank_lines_before_fault, ERR 201)
+source-file stack/klondike_native.herb
+stdin 12
+
+
+let x = 1
+
+stdout until ----
+line 3: expected 'func' at top level (ERR 201)
+0
+----
+end
+case klondike counts lines that end in a carriage return and a newline (count_crlf_before_fault, ERR 302)
+source-file stack/klondike_native.herb
+stdin 39
+func main():
+    return missing
+end
+
+stdout until ----
+line 2: undefined name 'missing' (ERR 302)
+0
+----
+end
+case klondike counts a blank last line when end is missing (count_trailing_newline_missing_end, ERR 203)
+source-file stack/klondike_native.herb
+stdin 27
+func main():
+    return 0
+
+
+stdout until ----
+line 4: expected end (ERR 203)
+0
+----
+end
+case klondike counts a comment line before a fault (count_comment_then_newline, ERR 201)
+source-file stack/klondike_native.herb
+stdin 29
+-- leading comment
+let x = 1
+
+stdout until ----
+line 2: expected 'func' at top level (ERR 201)
+0
+----
+end
+case klondike counts a last line that is a comment with no newline (count_comment_at_eof, ERR 203)
+source-file stack/klondike_native.herb
+stdin 43
+func main():
+    return 0
+-- comment at eof
+stdout until ----
+line 3: expected end (ERR 203)
+0
+----
+end
+case lexer: a tab is blank space, as a space is
+source 28
+func main():
+	return	42
+end
+
+stdout 3
+42
+
+end
+case lexer: a name may hold a capital Z
+source 53
+func main():
+    let sizeZ = 42
+    return sizeZ
+end
+
+stdout 3
+42
+
+end
+case lexer: a name may start with an underscore
+source 47
+func main():
+    let _x = 42
+    return _x
+end
+
+stdout 3
+42
+
+end
+case lexer: a character literal with a newline where its closing quote belongs is refused as a newline in it (ERR 110)
+source 33
+func main():
+    return 'a
+'
+end
+
+refused 47
+line 2: newline in character literal (ERR 110)
+
+end
+case lexer: a character literal the source ends inside, after its one character, is refused as not closed (ERR 109)
+source 26
+func main():
+    return 'a
+refused 47
+line 2: character literal not closed (ERR 109)
+
+end
+case lexer: a source that ends right after a number is read to its end and refused for the missing end (ERR 203)
+source 25
+func main():
+    return 4
+refused 31
+line 2: expected end (ERR 203)
+
+end
+case lexer: a source that ends right after a minus is read to its end and refused for the missing expression (ERR 204)
+source 27
+func main():
+    return 4 -
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: a source that ends right after an = is read to its end and refused for the missing expression (ERR 204)
+source 24
+func main():
+    let x =
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: a source that ends right after a < is read to its end and refused for the missing expression (ERR 204)
+source 27
+func main():
+    return 1 <
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: a [ starts no token and is refused (ERR 101)
+source 33
+func main():
+    return 42 [
+end
+
+refused 39
+line 2: unexpected character (ERR 101)
+
+end
+case lexer: a ` starts no token and is refused (ERR 101)
+source 33
+func main():
+    return 42 `
+end
+
+refused 39
+line 2: unexpected character (ERR 101)
+
+end
+case lexer: a { starts no token and is refused (ERR 101)
+source 33
+func main():
+    return 42 {
+end
+
+refused 39
+line 2: unexpected character (ERR 101)
+
+end
+case lexer: a vertical tab is not blank space and is refused (ERR 101)
+source 31
+func main():
+    return42
+end
+
+refused 39
+line 2: unexpected character (ERR 101)
+
+end
+case lexer: a form feed is not blank space and is refused (ERR 101)
+source 31
+func main():
+    return42
+end
+
+refused 39
+line 2: unexpected character (ERR 101)
+
+end
+case lexer: a $ straight after a name is no part of it and is refused (ERR 101)
+source 45
+func main():
+    let a$ = 1
+    return 0
+end
+
+refused 39
+line 2: unexpected character (ERR 101)
+
+end
+case lexer: + then = are two operators, so 1 +=2 lacks the expression after the + (ERR 204)
+source 48
+func main():
+    let x = 1 +=2
+    return x
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: - then = are two operators, so 1 -=2 lacks the expression after the - (ERR 204)
+source 48
+func main():
+    let x = 1 -=2
+    return x
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: * then = are two operators, so 1 *=2 lacks the expression after the * (ERR 204)
+source 48
+func main():
+    let x = 1 *=2
+    return x
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: / then = are two operators, so 1 /=2 lacks the expression after the / (ERR 204)
+source 48
+func main():
+    let x = 1 /=2
+    return x
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: % then = are two operators, so 1 %=2 lacks the expression after the % (ERR 204)
+source 48
+func main():
+    let x = 1 %=2
+    return x
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: & then = are two operators, so 1 &=2 lacks the expression after the & (ERR 204)
+source 48
+func main():
+    let x = 1 &=2
+    return x
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: | then = are two operators, so 1 |=2 lacks the expression after the | (ERR 204)
+source 48
+func main():
+    let x = 1 |=2
+    return x
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: ^ then = are two operators, so 1 ^=2 lacks the expression after the ^ (ERR 204)
+source 48
+func main():
+    let x = 1 ^=2
+    return x
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: + then + are two operators, so 2 ++ 3 lacks the expression after the first + (ERR 204)
+source 35
+func main():
+    return 2 ++ 3
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: * then * are two operators, so 2 ** 3 lacks the expression after the first * (ERR 204)
+source 35
+func main():
+    return 2 ** 3
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: / then / are two operators, so 2 // 3 lacks the expression after the first / (ERR 204)
+source 35
+func main():
+    return 2 // 3
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: % then % are two operators, so 2 %% 3 lacks the expression after the first % (ERR 204)
+source 35
+func main():
+    return 2 %% 3
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: & then & are two operators, so 2 && 3 lacks the expression after the first & (ERR 204)
+source 35
+func main():
+    return 2 && 3
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: | then | are two operators, so 2 || 3 lacks the expression after the first | (ERR 204)
+source 35
+func main():
+    return 2 || 3
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: ^ then ^ are two operators, so 2 ^^ 3 lacks the expression after the first ^ (ERR 204)
+source 35
+func main():
+    return 2 ^^ 3
+end
+
+refused 38
+line 2: expected expression (ERR 204)
+
+end
+case lexer: the compiler, built from its own source, reads every kind of token for its ast-dump tree: names, numbers, a string's bytes, character values and each operator, past a tab, a carriage return and comments
+source-file stack/native_compile_fragment.herb
+stdin 368
+-- emit: ast-dump
+-- every kind of token the plain scan makes
+func f_Z9(a, b):
+	let s = "q\"r\\s\nt"
+    let c = '\''
+    let d = 'x'
+    let e = ((a << 3) >> 1) + (b * 2 - a / 4 % 5)
+    let g = ((a & 6) | (b ^ 7))
+    let h = ~a
+    if a <= b and a >= b or a != b and not (a == b) and a < 10 and b > 2: -- a comment
+        return (e, g.0)
+    end
+    return 0
+end
+
+stdout 576
+(program (func f_Z9 (params a b) (body (let s (str 7 113 34 114 92 115 10 116)) (let c (int 39)) (let d (int 120)) (let e (add (shr (shl (name a) (int 3)) (int 1)) (sub (mul (name b) (int 2)) (mod (div (name a) (int 4)) (int 5))))) (let g (bor (band (name a) (int 6)) (bxor (name b) (int 7)))) (let h (bnot (name a))) (if (clause (or (and (le (name a) (name b)) (ge (name a) (name b))) (and (and (and (ne (name a) (name b)) (not (eq (name a) (name b)))) (lt (name a) (int 10))) (gt (name b) (int 2)))) (body (return (tuple (name e) (dot (name g) 0)))))) (return (int 0)))))
+0
+
+end
+cases 98

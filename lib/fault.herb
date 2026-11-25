@@ -1,0 +1,136 @@
+-- Making chosen system calls fail on purpose, for checks. Requires
+-- lib/linux.herb; no main.
+--
+--   let f = fault_new()
+--   do fault_fail(f, 74, 5)
+--   do fault_start(fault_ready(f))
+--
+-- From then on every fsync (74) this program makes gives error 5 (EIO), and
+-- is not done. Linux does this with a seccomp filter: a short list of
+-- instructions Linux runs at every system call, which answers "give this
+-- error instead" or "go on". Only the calls named in a rule are touched.
+--
+-- What it assumes: Linux on x86-64 with seccomp filters built in, as stock
+-- Ubuntu and GitHub's runners have (Linux 4.14 or later); no administrator
+-- rights, since no_new_privs is set first; and no filter already on this
+-- program that refuses seccomp itself (a container's might). Once on, a
+-- filter stays for the rest of the program and for every process it starts
+-- and program those run, through fork and execve. Linux's own rules
+-- (seccomp(2)): it cannot be taken off, and a later fault_start adds another.
+-- Each call of a named number is answered the same way every time: there is
+-- no "only the second time" (put the filter on at the right moment, or test
+-- an argument, instead), no slower or shorter answer, and no record of the
+-- calls made. A rule on a call the program itself needs, such as write or
+-- close, needs an argument test (fault_fail_equal, fault_fail_above) to leave
+-- its other uses alone. Error 0 makes the call give 0 without being done. It
+-- is for checks, not a fence: it holds nothing against a program that tries
+-- to get round it.
+--
+-- Numbers from Linux's headers: linux/seccomp.h, linux/filter.h,
+-- linux/bpf_common.h, linux/audit.h, linux/prctl.h, asm/unistd_64.h.
+-- https://man7.org/linux/man-pages/man2/seccomp.2.html
+
+-- code holds the instructions, 8 bytes each (a 16-bit operation, two 8-bit
+-- jumps forward, a 32-bit value), room for 516; used is how many are written.
+-- program is the 16 bytes Linux is given: the count at 0, the address of
+-- code at 8.
+ref record Fault:
+    code: buffer
+    used: int
+    program: buffer
+end
+
+-- One instruction at the end of f. The operations used: 32 loads a 32-bit
+-- word of what Linux tells the filter (the call's number at 0, the kind of
+-- call at 4, argument i at 16 + 8i, its low half first); 21 jumps on equal,
+-- 37 on greater; 6 answers.
+func fault_put(f, operation, yes, no, value):
+    let at = f.used * 8
+    do linux_put16(f.code, at, operation)
+    do buffer_set(f.code, at + 2, yes)
+    do buffer_set(f.code, at + 3, no)
+    do linux_put32(f.code, at + 4, value)
+    f.used = f.used + 1
+    return 0
+end
+
+-- A new Fault that fails nothing yet. Its first three instructions stop a
+-- program that calls Linux the 32-bit way, which numbers its calls
+-- differently. Allocates.
+func fault_new():
+    let f = Fault(linux_buffer(4128), 0, linux_buffer(16))
+    do fault_put(f, 32, 0, 0, 4)
+    do fault_put(f, 21, 1, 0, 3221225534)
+    do fault_put(f, 6, 0, 0, 2147483648)
+    return f
+end
+
+-- Whether a rule of size instructions with error fits and can be answered.
+func fault_room(f, error, size):
+    return error <= 4095 and f.used + size < 516
+end
+
+-- Every call number makes gives error, and is not done. 0; or 0 - 22 when
+-- error is past 4095 or f is full (64 rules always fit).
+func fault_fail(f, number, error):
+    if not fault_room(f, error, 3): return 0 - 22 end
+    do fault_put(f, 32, 0, 0, 0)
+    do fault_put(f, 21, 0, 1, number)
+    do fault_put(f, 6, 0, 0, 327680 + error)
+    return 0
+end
+
+-- The same for only the calls whose argument arg (0 to 5, in the order of
+-- the call's man page) is exactly value, all 64 bits of it.
+func fault_fail_equal(f, number, error, arg, value):
+    if arg > 5 or not fault_room(f, error, 7): return 0 - 22 end
+    do fault_put(f, 32, 0, 0, 0)
+    do fault_put(f, 21, 0, 5, number)
+    do fault_put(f, 32, 0, 0, 20 + arg * 8)
+    do fault_put(f, 21, 0, 3, value >> 32)
+    do fault_put(f, 32, 0, 0, 16 + arg * 8)
+    do fault_put(f, 21, 0, 1, (value & 4294967295))
+    do fault_put(f, 6, 0, 0, 327680 + error)
+    return 0
+end
+
+-- The same for only the calls whose argument arg is above value, both read
+-- as unsigned 64-bit numbers: a descriptor above 2 is any but the first three.
+func fault_fail_above(f, number, error, arg, value):
+    if arg > 5 or not fault_room(f, error, 8): return 0 - 22 end
+    do fault_put(f, 32, 0, 0, 0)
+    do fault_put(f, 21, 0, 6, number)
+    do fault_put(f, 32, 0, 0, 20 + arg * 8)
+    do fault_put(f, 37, 3, 0, value >> 32)
+    do fault_put(f, 21, 0, 3, value >> 32)
+    do fault_put(f, 32, 0, 0, 16 + arg * 8)
+    do fault_put(f, 37, 0, 1, (value & 4294967295))
+    do fault_put(f, 6, 0, 0, 327680 + error)
+    return 0
+end
+
+-- The address of the finished filter, for fault_start: "go on" is put after
+-- the rules, so a call no rule names is done as usual. Rules may be added
+-- after, and fault_ready called again.
+func fault_ready(f):
+    do fault_put(f, 6, 0, 0, 2147418112)
+    f.used = f.used - 1
+    do linux_put64(f.program, 0, f.used + 1)
+    do linux_put64(f.program, 8, buffer_address(f.code))
+    return buffer_address(f.program)
+end
+
+-- Put the filter at program (fault_ready's answer) on this process for good:
+-- first no_new_privs, which lets a user who is not the administrator set a
+-- filter, then the filter. 0, or Linux's raw -errno, and then this filter is
+-- not on. It allocates nothing and touches no storage, so a new process made
+-- by fork can call it just before execve, to give the program it starts the
+-- filter: check its answer there, and do not start the program when it is
+-- not 0. The filter answers the execve too, and everything the new process
+-- does until then: a rule on write, say, also fails a starter's own report
+-- that the program could not be started.
+func fault_start(program):
+    let quiet = linux_syscall6(157, 38, 1, 0, 0, 0, 0)
+    if linux_error(quiet): return quiet end
+    return linux_syscall6(317, 1, 0, program, 0, 0, 0)
+end

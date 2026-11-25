@@ -1,0 +1,522 @@
+-- The allowlist scanner's checks. The scanner (tools/scan.herb) is the guard
+-- make check runs on every change: every tracked file whose name does not
+-- end in .herb must be listed in BOOTSTRAP-ALLOWLIST, and every listed path
+-- must be such a file, so no Python or shell file comes back unlisted. Here
+-- it is held to answers written out by hand below, never worked out by a
+-- model of the scanner. Needs lib/linux.herb, lib/text.herb, lib/folder.herb
+-- and lib/child.herb in front.
+--
+--   scans SCANNER UNDER
+--
+-- SCANNER is the built scanner and UNDER a folder to work under, both
+-- absolute paths. The check makes its own folder, UNDER/herbert-scans-NUMBER
+-- (called WORK below). When every check passes it removes WORK; after any
+-- failure WORK stays and the check says where it is.
+--
+-- Exit status 0 when every check gave its answer, 1 when one did not, 2 when
+-- the check could not do its own work.
+--
+-- Each check gets a folder of its own, WORK/1, WORK/2 and so on, holding the
+-- list of tracked files (tracked.txt) and the allowlist (BOOTSTRAP-ALLOWLIST)
+-- with the bytes the check gives, or a folder, or nothing, in their place.
+-- The scanner is started in that folder with the arguments the check gives,
+-- most often the one argument tracked.txt, and what it prints goes to
+-- WORK/N.out and WORK/N.err. It must end by itself within 30 seconds (60 for
+-- the two large lists), with the status expected and exactly the output
+-- expected. With status 0 or 1 it must say nothing on standard error; with
+-- status 2 its output must be empty and it must say something on standard
+-- error (the scanner promises a message there, not its words).
+--
+-- One large list goes to the scanner through a pipe, which can be read only
+-- once: the scanner is given /dev/stdin, and a copy of this check writes the
+-- list into the pipe and must get all of it written.
+--
+-- The last checks are planted: a finished run is judged again against an
+-- answer that is wrong on purpose, or after what it left was changed on
+-- purpose, once for each thing scans_judge can find, and the check passes
+-- only when exactly that is found. A judge that passed everything would fail
+-- them all.
+
+-- What a run needs. count is how many checks have their folder; how and value
+-- are how the scanner last ended, as lib/child.herb gives it, and fed is 0
+-- when the list through the pipe was all written (and for every run without
+-- one), 1 when it was not.
+ref record Scans:
+    child: Child
+    scanner: buffer
+    work: string
+    count: int
+    how: int
+    value: int
+    fed: int
+    passed: int
+    failed: int
+end
+
+func scans_die(message):
+    do stderr_write("scanner checks: ")
+    do stderr_write(message)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- The same once WORK is made: it says where WORK is, since it stays.
+func scans_lost(s, message):
+    do stderr_write("scanner checks: ")
+    do stderr_write(message)
+    do stderr_write("\nscanner checks: what the run left is in ")
+    do stderr_write(s.work)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- a and then b, as one string.
+func scans_join(a, b):
+    let out = new_buffer()
+    do text_add(out, a)
+    do text_add(out, b)
+    return freeze(out)
+end
+
+-- s as a path Linux can take (NUL-terminated).
+func scans_path(s): return linux_cstring(s) end
+
+-- A file's bytes are passed around as (the bytes, how many). Two counts
+-- below zero stand for what is not a file of bytes: (an empty buffer, 0 - 1)
+-- for no file there at all, and 0 - 2 for a folder in its place. These make
+-- bytes from a text, and from two lots of bytes one after the other.
+func scans_text(t): return (linux_cstring(t), length(t)) end
+
+func scans_then(f, g):
+    let b = linux_buffer(f.1 + g.1 + 1)
+    do buffer_copy(b, 0, f.0, 0, f.1)
+    do buffer_copy(b, f.1, g.0, 0, g.1)
+    return (b, f.1 + g.1)
+end
+
+func scans_nothing(): return (new_buffer(), 0 - 1) end
+func scans_a_folder(): return (new_buffer(), 0 - 2) end
+
+-- The two bytes of é in UTF-8 (both above 127), then the text t.
+func scans_accented(t):
+    let b = new_buffer()
+    do append(b, 195)
+    do append(b, 169)
+    do text_add(b, t)
+    return (b, buffer_length(b))
+end
+
+-- The file at path, of 64 MiB at most: (true, its bytes, how many), or
+-- (false, an empty buffer, 0) when it is not there or cannot be read.
+func scans_file(path):
+    let fd = linux_open(path, 524288, 0)
+    if linux_error(fd): return (false, new_buffer(), 0) end
+    let stat = linux_buffer(144)
+    if linux_error(linux_fstat(fd, stat)) or linux_u64(stat, 48) > 67108864:
+        do linux_close(fd)
+        return (false, new_buffer(), 0)
+    end
+    let size = linux_u64(stat, 48)
+    let b = linux_buffer(size + 1)
+    let used = 0
+    let fine = true
+    let more = true
+    while more:
+        let n = linux_read(fd, b, used, size + 1 - used)
+        if linux_error(n):
+            if n != 0 - 4:
+                fine = false
+                more = false
+            end
+        elif n == 0 or used + n > size:
+            used = used + n
+            more = false
+        else:
+            used = used + n
+        end
+    end
+    do linux_close(fd)
+    if not fine or used > size: return (false, new_buffer(), 0) end
+    return (true, b, used)
+end
+
+-- Whether the file at path holds exactly the bytes f.
+func scans_holds(path, f):
+    let got = scans_file(path)
+    if not got.0 or got.2 != f.1: return false end
+    let i = 0
+    while i < f.1:
+        if buffer_get(got.1, i) != buffer_get(f.0, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- All count bytes of b from at onward written to the descriptor fd: whether
+-- they were.
+func scans_write_all(fd, b, at, count):
+    let done = 0
+    while done < count:
+        let n = linux_write(fd, b, at + done, count - done)
+        if linux_error(n):
+            if n != 0 - 4: return false end
+        elif n == 0:
+            return false
+        else:
+            done = done + n
+        end
+    end
+    return true
+end
+
+-- A new file at path holding the bytes f; what is at path now is removed
+-- first.
+func scans_put(s, path, f):
+    do linux_syscall6(87, buffer_address(path), 0, 0, 0, 0, 0)
+    let fd = linux_open(path, 655553, 420)
+    if linux_error(fd): do scans_lost(s, "the check's own folder cannot be written in") end
+    if not scans_write_all(fd, f.0, 0, f.1): do scans_lost(s, "the check's own folder cannot be written in") end
+    do linux_close(fd)
+    return 0
+end
+
+-- What f says, at path: a file holding its bytes, a folder, or nothing.
+func scans_place(s, path, f):
+    if f.1 == 0 - 1: return 0 end
+    if f.1 == 0 - 2:
+        if linux_error(linux_syscall6(83, buffer_address(path), 448, 0, 0, 0, 0)): do scans_lost(s, "the check's own folder cannot be written in") end
+        return 0
+    end
+    do scans_put(s, path, f)
+    return 0
+end
+
+-- The folder of the next check, WORK/N, made new: its path.
+func scans_stage(s):
+    s.count = s.count + 1
+    let b = new_buffer()
+    do text_add(b, s.work)
+    do text_add(b, "/")
+    do text_add_whole(b, s.count)
+    let d = freeze(b)
+    if linux_error(linux_syscall6(83, buffer_address(scans_path(d)), 448, 0, 0, 0, 0)): do scans_lost(s, "the check's own folder cannot be written in") end
+    return d
+end
+
+-- Start a copy of this check that writes the count bytes of b into the
+-- descriptor fd, a pipe's end to write to, and then ends: with status 0 when
+-- it wrote them all, 1 when it could not. It ends when this check ends, and
+-- after 60 seconds whatever happens. Its process number.
+func scans_feeder(s, fd, reader, b, count):
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if linux_error(pid): do scans_lost(s, "Linux made no process to write into the pipe") end
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        do linux_syscall6(37, 60, 0, 0, 0, 0, 0)
+        do linux_close(reader)
+        if scans_write_all(fd, b, 0, count): do process_exit(0) end
+        do process_exit(1)
+    end
+    return pid
+end
+
+-- How the program numbered pid, started by this check, ended: 0 when it
+-- ended by itself with status 0, 1 otherwise.
+func scans_reap(pid):
+    let status = linux_buffer(8)
+    let w = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while w == 0 - 4:
+        w = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    end
+    if linux_error(w) or linux_u32(status, 0) != 0: return 1 end
+    return 0
+end
+
+-- Run the scanner in the check's folder d with the arguments args says: 0
+-- none; 1 tracked.txt; 2 tracked.txt twice; 3 one empty argument; 4
+-- /dev/stdin, with list written into a pipe that is its standard input. Its
+-- output goes to d.out and d.err, and how it ended is kept in s.
+func scans_run(s, d, args, list, seconds):
+    let given = 1
+    if args == 1 or args == 3 or args == 4: given = 2 end
+    if args == 2: given = 3 end
+    let argv = child_arguments(given)
+    do child_argument(argv, 0, s.scanner)
+    let tracked = scans_path("tracked.txt")
+    if args == 1 or args == 2: do child_argument(argv, 1, tracked) end
+    if args == 2: do child_argument(argv, 2, tracked) end
+    if args == 3: do child_argument(argv, 1, scans_path("")) end
+    if args == 4: do child_argument(argv, 1, scans_path("/dev/stdin")) end
+    let input = s.child.none
+    let pid = 0
+    let reader = 0
+    s.fed = 0
+    if args == 4:
+        let ends = linux_buffer(8)
+        if linux_error(linux_syscall6(293, buffer_address(ends), 524288, 0, 0, 0, 0)): do scans_lost(s, "Linux made no pipe") end
+        reader = linux_u32(ends, 0)
+        let writer = linux_u32(ends, 4)
+        pid = scans_feeder(s, writer, reader, list.0, list.1)
+        do linux_close(writer)
+        let named = new_buffer()
+        do text_add(named, "/proc/self/fd/")
+        do text_add_whole(named, reader)
+        input = scans_path(freeze(named))
+    end
+    let ran = child_run(s.child, scans_path(d), s.scanner, argv, input, scans_path(scans_join(d, ".out")), scans_path(scans_join(d, ".err")), seconds)
+    if args == 4:
+        do linux_close(reader)
+        s.fed = scans_reap(pid)
+    end
+    s.how = ran.0
+    s.value = ran.1
+    return 0
+end
+
+-- Judge the scanner's run in d: "" when everything is as expected, or the
+-- first thing that is not. status is the exit status expected and want the
+-- output, byte for byte.
+func scans_judge(s, d, status, want):
+    if s.how == 1 and s.value == 14: return "the scanner ran past its time limit" end
+    if s.how == 1: return "the scanner was stopped by a signal" end
+    if s.how != 0: return "the scanner could not be started" end
+    if s.value != status: return "the scanner's exit status is wrong" end
+    if not scans_holds(scans_path(scans_join(d, ".out")), want): return "the scanner's output is not the one expected" end
+    let err = scans_file(scans_path(scans_join(d, ".err")))
+    if not err.0: return "the scanner's error output cannot be read" end
+    if status == 2 and err.2 == 0: return "the scanner gave no message on standard error" end
+    if status != 2 and err.2 != 0: return "the scanner said something on standard error" end
+    if s.fed != 0: return "the list through the pipe was not all written to the scanner" end
+    return ""
+end
+
+-- Count one check and say so when it did not give its answer. planted is ""
+-- for a check that must pass, and otherwise what scans_judge must find; that
+-- check passes only on exactly that finding.
+func scans_tally(s, name, why, planted):
+    if equal(why, planted):
+        s.passed = s.passed + 1
+        return 0
+    end
+    s.failed = s.failed + 1
+    let line = new_buffer()
+    do text_add(line, "FAIL ")
+    do text_add(line, name)
+    do text_add(line, ": ")
+    if length(planted) == 0:
+        do text_add(line, why)
+    elif length(why) == 0:
+        do text_add(line, "this failure was planted and the check did not catch it")
+    else:
+        do text_add(line, "this failure was planted and the check found something else: ")
+        do text_add(line, why)
+    end
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+-- One check: tracked.txt and BOOTSTRAP-ALLOWLIST as tracked and listed say,
+-- the scanner run with the arguments args says (see scans_run), and held to
+-- status and the output want. Its folder, for a planted check to judge again.
+func scans_case(s, name, tracked, listed, args, status, want):
+    let d = scans_stage(s)
+    do scans_place(s, scans_path(scans_join(d, "/tracked.txt")), tracked)
+    do scans_place(s, scans_path(scans_join(d, "/BOOTSTRAP-ALLOWLIST")), listed)
+    do scans_run(s, d, args, tracked, 30)
+    do scans_tally(s, name, scans_judge(s, d, status, want), "")
+    return d
+end
+
+-- The scanner's line for a perfect match of count paths.
+func scans_ok(count):
+    let b = new_buffer()
+    do text_add(b, "OK: ")
+    do text_add_whole(b, count)
+    do text_add(b, " tracked non-.herb file(s) match BOOTSTRAP-ALLOWLIST\n")
+    return scans_text(freeze(b))
+end
+
+-- Path number i of the large lists: dir, i mod 7, /file-, i times 7919 mod
+-- 20000 in five digits, .txt; 7919 and 20000 share no factor, so the 20,000
+-- paths are all different.
+func scans_large_path(out, i):
+    do text_add(out, "dir")
+    do text_add_whole(out, i % 7)
+    do text_add(out, "/file-")
+    let v = (i * 7919) % 20000
+    do append(out, 48 + v / 10000)
+    do append(out, 48 + (v / 1000) % 10)
+    do append(out, 48 + (v / 100) % 10)
+    do append(out, 48 + (v / 10) % 10)
+    do append(out, 48 + v % 10)
+    do text_add(out, ".txt")
+    return 0
+end
+
+-- An argument that must be an absolute path.
+func scans_argument(args, k):
+    let a = linux_argument(args, k)
+    if length(a) == 0 or index(a, 0) != 47: do scans_die("usage: scans SCANNER UNDER (absolute paths)") end
+    return a
+end
+
+func main():
+    -- Standard input, output and error must be open: a file opened later would
+    -- otherwise be given one of their numbers and be taken for it.
+    let low = linux_open(linux_cstring("/dev/null"), 2, 0)
+    while low < 3: low = linux_open(linux_cstring("/dev/null"), 2, 0) end
+    do linux_close(low)
+    let args = linux_arguments()
+    if linux_argument_count(args) != 3: do scans_die("usage: scans SCANNER UNDER (absolute paths)") end
+    let scanner = linux_cstring(scans_argument(args, 1))
+    if linux_error(linux_syscall6(21, buffer_address(scanner), 1, 0, 0, 0, 0)): do scans_die("the scanner is not there, or may not be run") end
+    let under = scans_argument(args, 2)
+    -- Five minutes for everything; Linux then stops this check, and with it
+    -- every program it started.
+    do linux_syscall6(37, 300, 0, 0, 0, 0, 0)
+    let own = folder_own(under, "herbert-scans")
+    if own.0 != 0: do scans_die("the check's own folder cannot be made under the folder given") end
+    let s = Scans(child_new(), scanner, own.1, 0, 0, 0, 0, 0, 0)
+    let t = scans_text("")
+
+    -- Matches, unlisted and stale paths.
+    let d_clean = scans_case(s, "a match: two tracked files that do not end in .herb are both listed", scans_text("a.txt\nb/c.md\nx.herb\n"), scans_text("a.txt\nb/c.md\n"), 1, 0, scans_ok(2))
+    let d_unlisted = scans_case(s, "a tracked file that is not listed", scans_text("a.txt\nnew.py\n"), scans_text("a.txt\n"), 1, 1, scans_text("unlisted: new.py\n"))
+    do scans_case(s, "a listed path that is not tracked", scans_text("a.txt\n"), scans_text("a.txt\ngone.sh\n"), 1, 1, scans_text("stale: gone.sh\n"))
+    do scans_case(s, "unlisted and stale paths together: every unlisted line first, then every stale one, each group in byte order", scans_text("z.txt\nb.txt\nm.herb\nc.txt\n"), scans_text("y.txt\nb.txt\na.txt\n"), 1, 1, scans_text("unlisted: c.txt\nunlisted: z.txt\nstale: a.txt\nstale: y.txt\n"))
+
+    -- Byte order.
+    do scans_case(s, "byte order over punctuation, digits, case and a path's start; a path tracked twice is two lines; an allowlist of one # lists nothing", scans_text("b\nB\na\nA\n_\n-\n/\n.\n0\n~\nab\naB\na\n"), scans_text("#\n"), 1, 1, scans_text("unlisted: -\nunlisted: .\nunlisted: /\nunlisted: 0\nunlisted: A\nunlisted: B\nunlisted: _\nunlisted: a\nunlisted: a\nunlisted: aB\nunlisted: ab\nunlisted: b\nunlisted: ~\n"))
+    do scans_case(s, "inside a path, - and . sort before /", scans_text("dir/f\ndir.x/f\ndir-x/f\n"), t, 1, 1, scans_text("unlisted: dir-x/f\nunlisted: dir.x/f\nunlisted: dir/f\n"))
+    do scans_case(s, "bytes above 127 sort last", scans_then(scans_accented(".md\nz.md\n"), scans_text("Z.md\n")), t, 1, 1, scans_then(scans_text("unlisted: Z.md\nunlisted: z.md\nunlisted: "), scans_accented(".md\n")))
+    do scans_case(s, "stale paths are sorted too", t, scans_text("q\nQ\n-q\n"), 1, 1, scans_text("stale: -q\nstale: Q\nstale: q\n"))
+
+    -- Line ends, comments and blanks.
+    do scans_case(s, "CR LF line ends on both sides", scans_text("a.txt\r\nb.txt\r\n"), scans_text("a.txt\r\nb.txt\r\n"), 1, 0, scans_ok(2))
+    do scans_case(s, "several CRs at a line's end are all taken off, on both sides", scans_text("c.txt\r\r\n"), scans_text("c.txt\r\r\r\n"), 1, 0, scans_ok(1))
+    do scans_case(s, "a CR inside a path is part of it", scans_text("d\re.txt\n"), t, 1, 1, scans_text("unlisted: d\re.txt\n"))
+    do scans_case(s, "the allowlist's blank lines, lines of spaces and comment lines are passed over, a comment after a tab and a lone # among them, and so are empty tracked lines", scans_text("a.txt\n\n\n"), scans_text("# comment\n\n   \n\t# indented comment\n#\na.txt\n"), 1, 0, scans_ok(1))
+    do scans_case(s, "a # inside or after text is part of the path", scans_text("a#b\n"), scans_text("a#b\n"), 1, 0, scans_ok(1))
+    do scans_case(s, "the tracked list has no comments: a tracked line that starts with # is a path", scans_text("# not a comment\n"), t, 1, 1, scans_text("unlisted: # not a comment\n"))
+    do scans_case(s, "spaces and tabs around an allowlist path are taken off, and a CR after them", scans_text("a.txt\nb.txt\n"), scans_text("  a.txt  \n\tb.txt\t\r\n"), 1, 0, scans_ok(2))
+    do scans_case(s, "spaces around a tracked path are part of it, so they match no allowlist line", scans_text(" lead.txt\ntrail.txt \n"), scans_text(" lead.txt\ntrail.txt \n"), 1, 1, scans_text("unlisted:  lead.txt\nunlisted: trail.txt \nstale: lead.txt\nstale: trail.txt\n"))
+
+    -- Each side counted as a multiset.
+    do scans_case(s, "a path tracked twice and listed once is unlisted once", scans_text("a\na\n"), scans_text("a\n"), 1, 1, scans_text("unlisted: a\n"))
+    do scans_case(s, "a path listed twice and tracked once is stale once", scans_text("a\n"), scans_text("a\na\n"), 1, 1, scans_text("stale: a\n"))
+    do scans_case(s, "a path tracked twice and listed twice matches, and is counted twice", scans_text("a\na\nb.herb\nb.herb\n"), scans_text("a\na\n"), 1, 0, scans_ok(2))
+    do scans_case(s, "an empty tracked list and an empty allowlist match", t, t, 1, 0, scans_ok(0))
+    do scans_case(s, "with nothing tracked, a listed path is stale", t, scans_text("a\n"), 1, 1, scans_text("stale: a\n"))
+
+    -- What ends in .herb.
+    do scans_case(s, "tracked files that end in .herb need no line, one named just .herb among them", scans_text("x.herb\nsub/y.herb\n.herb\n"), scans_text("# nothing\n"), 1, 0, scans_ok(0))
+    do scans_case(s, "a listed .herb file is stale, though it is tracked", scans_text("x.herb\n"), scans_text("x.herb\n"), 1, 1, scans_text("stale: x.herb\n"))
+    do scans_case(s, "paths with .herb in them that do not end in exactly .herb must be listed", scans_text("x.herb.md\nx.herbx\nherb\nx.HERB\nx.herb/\nxherb\nx.her\nx.herb \n"), t, 1, 1, scans_text("unlisted: herb\nunlisted: x.HERB\nunlisted: x.her\nunlisted: x.herb \nunlisted: x.herb.md\nunlisted: x.herb/\nunlisted: x.herbx\nunlisted: xherb\n"))
+
+    -- Line ends that are not there, NUL and length.
+    do scans_case(s, "a last line with no newline counts, on both sides", scans_text("a.txt\nb.txt"), scans_text("a.txt\nb.txt"), 1, 0, scans_ok(2))
+    do scans_case(s, "a NUL byte ends a line's text, on both sides", scans_text("a.txt\0junk\n"), scans_text("a.txt\0\n"), 1, 0, scans_ok(1))
+    let long = new_buffer()
+    do buffer_fill(long, 5000, 97)
+    do append(long, 10)
+    do scans_case(s, "a path longer than 4095 bytes is one path", (long, 5001), (long, 5001), 1, 0, scans_ok(1))
+
+    -- Refusals: status 2, nothing on standard output and a message on
+    -- standard error.
+    let d_refused = scans_case(s, "a tracked list that is not there is refused", scans_nothing(), scans_text("a\n"), 1, 2, t)
+    do scans_case(s, "a tracked list that is a folder is refused", scans_a_folder(), scans_text("a\n"), 1, 2, t)
+    do scans_case(s, "an allowlist that is not there is refused", scans_text("a\n"), scans_nothing(), 1, 2, t)
+    do scans_case(s, "an allowlist that is a folder is refused", scans_text("a\n"), scans_a_folder(), 1, 2, t)
+    do scans_case(s, "no argument is refused", scans_text("a\n"), scans_text("a\n"), 0, 2, t)
+    do scans_case(s, "two arguments are refused", scans_text("a\n"), scans_text("a\n"), 2, 2, t)
+    do scans_case(s, "one empty argument is refused", scans_text("a\n"), scans_text("a\n"), 3, 2, t)
+
+    -- Lists larger than the scanner's first read of 64 KiB: 20,000 paths,
+    -- about 400 KB, and the allowlist the same paths the other way round
+    -- without the first. Once from a file, once through a pipe.
+    let tracked = new_buffer()
+    let i = 0
+    while i < 20000:
+        do scans_large_path(tracked, i)
+        do append(tracked, 10)
+        i = i + 1
+    end
+    let listed = new_buffer()
+    i = 19999
+    while i > 0:
+        do scans_large_path(listed, i)
+        do append(listed, 10)
+        i = i - 1
+    end
+    let large = (tracked, buffer_length(tracked))
+    let large_listed = (listed, buffer_length(listed))
+    let first_unlisted = scans_text("unlisted: dir0/file-00000.txt\n")
+    let d = scans_stage(s)
+    do scans_place(s, scans_path(scans_join(d, "/tracked.txt")), large)
+    do scans_place(s, scans_path(scans_join(d, "/BOOTSTRAP-ALLOWLIST")), large_listed)
+    do scans_run(s, d, 1, large, 60)
+    do scans_tally(s, "a large list from a file, the first of 20,000 paths not listed", scans_judge(s, d, 1, first_unlisted), "")
+    d = scans_stage(s)
+    do scans_place(s, scans_path(scans_join(d, "/BOOTSTRAP-ALLOWLIST")), large_listed)
+    do scans_run(s, d, 4, large, 60)
+    do scans_tally(s, "the same large list through a pipe, which can be read only once", scans_judge(s, d, 1, first_unlisted), "")
+    let d_pipe = d
+    let pipe_fed = s.fed
+
+    -- Planted. Each judges a finished run again with one thing wrong on
+    -- purpose, in the answer expected or in what the run left, and all else as
+    -- it was; how the run ended is set by hand to what it really was, or to
+    -- what is planted.
+    s.fed = 0
+    s.how = 1
+    s.value = 15
+    do scans_tally(s, "planted: a scanner stopped by a signal", scans_judge(s, d_clean, 0, scans_ok(2)), "the scanner was stopped by a signal")
+    s.value = 14
+    do scans_tally(s, "planted: a scanner that ran past its time limit", scans_judge(s, d_clean, 0, scans_ok(2)), "the scanner ran past its time limit")
+    s.how = 2
+    s.value = 0
+    do scans_tally(s, "planted: a scanner that could not be started", scans_judge(s, d_clean, 0, scans_ok(2)), "the scanner could not be started")
+    s.how = 0
+    do scans_tally(s, "planted: a mismatch where a match is expected", scans_judge(s, d_clean, 1, scans_ok(2)), "the scanner's exit status is wrong")
+    let short = scans_ok(2)
+    do scans_tally(s, "planted: an output one byte longer than expected", scans_judge(s, d_clean, 0, (short.0, short.1 - 1)), "the scanner's output is not the one expected")
+    do scans_tally(s, "planted: an output with another count", scans_judge(s, d_clean, 0, scans_ok(3)), "the scanner's output is not the one expected")
+    s.value = 1
+    do scans_put(s, scans_path(scans_join(d_unlisted, ".err")), scans_text("scan: a line nobody asked for\n"))
+    do scans_tally(s, "planted: a line on standard error beside a mismatch", scans_judge(s, d_unlisted, 1, scans_text("unlisted: new.py\n")), "the scanner said something on standard error")
+    s.value = 2
+    do scans_put(s, scans_path(scans_join(d_refused, ".err")), t)
+    do scans_tally(s, "planted: a refusal with no message", scans_judge(s, d_refused, 2, t), "the scanner gave no message on standard error")
+    s.value = 1
+    s.fed = 1
+    do scans_tally(s, "planted: a list through the pipe that was not all written", scans_judge(s, d_pipe, 1, first_unlisted), "the list through the pipe was not all written to the scanner")
+    s.fed = pipe_fed
+    s.value = 0
+    do linux_syscall6(87, buffer_address(scans_path(scans_join(d_clean, ".err"))), 0, 0, 0, 0, 0)
+    do scans_tally(s, "planted: an error output that is not there", scans_judge(s, d_clean, 0, scans_ok(2)), "the scanner's error output cannot be read")
+
+    let line = new_buffer()
+    do text_add_whole(line, s.passed + s.failed)
+    do text_add(line, " scanner checks, ")
+    do text_add_whole(line, s.passed)
+    do text_add(line, " gave their answers")
+    if s.failed != 0:
+        do text_add(line, ", ")
+        do text_add_whole(line, s.failed)
+        do text_add(line, " did not")
+    end
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    if s.failed == 0:
+        if folder_remove(own.3, scans_path(own.2)) == 0: do process_exit(0) end
+        do stderr_write("scanner checks: every check passed, and the check's own folder could not be removed\n")
+    end
+    do stderr_write("scanner checks: what the run left is in ")
+    do stderr_write(s.work)
+    do stderr_write("\n")
+    do process_exit(1)
+    return 0
+end

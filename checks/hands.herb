@@ -1,25 +1,31 @@
 -- The window checks: Herbert playing the user's hands. It starts a display
--- nobody sees (Xvfb), opens Notes and Scope on it, presses keys the way a
--- person would and says whether each program did what its owner would lose by
--- it not doing. Notes must put on disk exactly what was typed, keep what is
--- not yet saved in a copy beside the file, ask before it closes on an edit
--- that is not saved, and close. Scope must stay up and close. hands_notes and
--- hands_scope say it in full. Needs lib/linux.herb, lib/text.herb and
+-- nobody sees (Xvfb), opens Notes, Scope, Maze and First steps on it, presses
+-- keys the way a person would and says whether each program did what its
+-- owner would lose by it not doing. Notes must put on disk exactly what was
+-- typed, keep what is not yet saved in a copy beside the file, ask before it
+-- closes on an edit that is not saved, never save over what it must not, and
+-- close. Scope, Maze and First steps must stay up and close. Each check's own
+-- function says it in full. Needs lib/linux.herb, lib/text.herb and
 -- lib/x11.herb in front.
 --
---   hands NOTES SCOPE STAND-IN UNDER [XVFB]
+--   hands NOTES SCOPE MAZE FIRST-STEPS STAND-IN UNDER [XVFB]
 --
--- NOTES, SCOPE and STAND-IN are the built programs (STAND-IN from
--- checks/stand_in.herb), UNDER a folder to work under and XVFB the display
--- server (/usr/bin/Xvfb when not given). All are absolute paths. The check
--- makes its own folder, UNDER/herbert-hands-NUMBER (called WORK below), and
--- everything it and the programs write goes there. When every check passes it
--- removes what the run made, each file and folder by its name, and WORK last.
--- After any failure WORK stays as it is and the check says where it is.
+-- NOTES, SCOPE, MAZE and FIRST-STEPS are the built programs, STAND-IN the
+-- stand-in (checks/stand_in.herb), UNDER a folder to work under and XVFB the
+-- display server (/usr/bin/Xvfb when not given). All are absolute paths. The
+-- check makes its own folder, UNDER/herbert-hands-NUMBER (called WORK below),
+-- and everything it and the programs write goes there. Each check made after
+-- the first two works in a folder of its own in WORK and keeps the name of
+-- everything it makes there; when it passes, it removes those, each by its
+-- name, last first, and a name the program left that the check did not
+-- expect is then found because its folder cannot be removed. When every check
+-- passes the run removes what it made, each file and folder by its name, and
+-- WORK last. After any failure WORK stays as it is and the check says where.
 --
 -- Exit status 0 when every check gave its answer, 1 when one did not, 2 when
 -- the check could not do its own work: a program that is not there, a display
--- server that cannot be started, stops answering or stops. (A display that
+-- server that cannot be started, stops answering or stops, a program's
+-- memory that cannot be read in /proc. (A display that
 -- refuses this check's connection at the start ends it with lib/x11.herb's
 -- own message and status 1; WORK stays then too.)
 --
@@ -27,13 +33,28 @@
 -- each press as it takes a press of its own keyboard, and the program under
 -- check cannot tell. Nothing is read back from the screen. What a person can
 -- see with their own eyes is not checked here; what they would lose is: the
--- bytes on disk, and a program that stops, faults or will not close.
+-- bytes on disk, and a program that stops, faults, hangs or will not close.
 --
 -- A step's keys are kept and sent together by the hands_expect_ function that
 -- follows them, which then waits for the thing itself (a file's bytes, a
--- name, the program's end) and for no longer than its limit. Scope's six
--- seconds are the one pause. Before a program is asked to close it is also
--- watched for a tenth of a second (hands_expect_close says why).
+-- name, the program's end) and for no longer than its limit. The only
+-- pauses are the watches a check names (a program left running for six
+-- seconds, say, which must not end meanwhile). Before a program is asked to
+-- close it is also watched for a tenth of a second (hands_expect_close says
+-- why).
+--
+-- Where a check needs another program on the display, this check is that
+-- program too, over its own connection: it owns the clipboard and answers
+-- for it, or not; it asks Notes for the clipboard itself, twice, and Notes'
+-- second answer says that Notes has handled every key sent before the first
+-- (hands_ping); it changes the
+-- keyboard's map, sends Notes requests from a window that is gone, and cuts
+-- Notes off the display. Its own window is never shown. For Scope it listens
+-- on this machine's own addresses (127.88.x.y, ports 47800 to 47899), takes
+-- Scope's knocks and answers each as a helper would, or with something else,
+-- or not at all, and counts every byte Scope sends (there must be none). All
+-- of that is answered while the check waits (hands_wait), one thing at a
+-- time, never waiting on any of it.
 --
 -- The stand-in keeps these checks honest, as the planted cases keep the check
 -- runner honest. It is a small window program that can fail on purpose in
@@ -60,6 +81,20 @@
 -- was clicked. found is the path of the rescue copy hands_expect_name last
 -- found, and rescued and asked the two that Notes makes in a run: the first
 -- run's, and the one the second run makes at its close button's question.
+-- made and folders are every name a check made in WORK and whether it is a
+-- folder, mark the first of them not yet removed or left, extra how many
+-- checks' folders a failure left in WORK. socks are the sockets Scope knocks
+-- on (Sock), polls room to wait on them and the display together, near this
+-- run's address for them ("127.88.x.y"), opt, peer, size and net room for
+-- Linux's answers about them. stat is a file's status, link a link's text.
+-- offer is the text this check gives when it owns the clipboard (offered
+-- bytes of it), offering what it does when asked: 0 nothing owned, 1 never
+-- answer, 2 answer with offer. token numbers the last ping and pinged the
+-- latest ping Notes has answered; refused is set when the display refused a
+-- request outside a wait for an answer. clipboard, utf8 and pinging are the
+-- names (atoms) the clipboard needs; screen is DISPLAY=:N for a program's
+-- environment; third and fourth are the last two numbers of near, from this
+-- check's process number, so that two runs at once listen apart.
 ref record Hands:
     c: X11
     xtest: int
@@ -94,6 +129,62 @@ ref record Hands:
     asked: buffer
     passed: int
     failed: int
+    made: array(buffer)
+    folders: array(bool)
+    mark: int
+    extra: int
+    socks: array(Sock)
+    polls: buffer
+    near: string
+    opt: buffer
+    peer: buffer
+    size: buffer
+    net: buffer
+    stat: buffer
+    link: buffer
+    offer: buffer
+    offered: int
+    offering: int
+    token: int
+    pinged: int
+    refused: bool
+    clipboard: int
+    utf8: int
+    pinging: int
+    screen: buffer
+    third: int
+    fourth: int
+end
+
+-- A socket Scope knocks on. A listener (lis 0 - 1) answers each connection
+-- it takes as its role says: 1 a helper of version 2 whose n-th line (from
+-- 0) has the processor at 200n of 200n, memory and disk full and the drive
+-- at 999.999 C, so that from the second on its row is the widest there is;
+-- 3 257 bytes (a helper's line and spaces after it); 4 an SSH server's
+-- greeting, the connection then held open; 5 a helper's line one byte every
+-- 300 ms, held open; 6 nothing, held open; 7 a helper of version 1 whose
+-- processor is 40 % busy. 1, 3 and 7 then end their side, as a helper does.
+-- Role 8 is a listener whose queue is full (a filler connection, role 0,
+-- holds its one place), so Linux drops every knock in silence; 9 a port
+-- held but not listened on, so every knock is refused. port is where it
+-- listens, count how many connections it has taken, got the bytes Scope sent
+-- on them, shortest and longest the ms from taking one to Scope closing it,
+-- and last, when not 0, the number of connections after which it stops
+-- listening, so later knocks are refused. A connection (lis its listener's
+-- place in socks) was taken at since as the count-th, and sent bytes of a
+-- drip so far.
+ref record Sock:
+    fd: int
+    role: int
+    lis: int
+    port: int
+    count: int
+    got: int
+    since: int
+    sent: int
+    shortest: int
+    longest: int
+    last: int
 end
 
 func hands_die(message):
@@ -126,6 +217,15 @@ func hands_path(work, tail):
     return b
 end
 
+-- work/tail as text.
+func hands_join(work, tail):
+    let b = new_buffer()
+    do text_add(b, work)
+    do text_add(b, "/")
+    do text_add(b, tail)
+    return freeze(b)
+end
+
 -- name=value as one entry of an environment.
 func hands_setting(name, value):
     let b = new_buffer()
@@ -138,21 +238,46 @@ end
 
 func hands_now(h): return linux_clock_ms(h.clock) end
 
-func hands_wait(h, ms):
+func hands_sleep(h, ms):
     do linux_put64(h.nap, 0, ms / 1000)
     do linux_put64(h.nap, 8, (ms % 1000) * 1000000)
     do linux_sleep(h.nap)
     return 0
 end
 
+-- Wait at most ms, less when the display or a socket Scope knocks on has
+-- something for this check, and then deal with all of it (hands_pump).
+func hands_wait(h, ms):
+    let st = h.c.state
+    if st.fd == 0: return hands_sleep(h, ms) end
+    let n = linux_poll_entry(h.polls, 0, st.fd, 1)
+    let i = 0
+    while i < count(h.socks) and n < 64:
+        let s = get(h.socks, i)
+        if s.fd != 0 - 1 and (s.lis != 0 - 1 or (s.role >= 1 and s.role <= 7)):
+            n = linux_poll_entry(h.polls, n, s.fd, 1)
+        end
+        i = i + 1
+    end
+    do linux_poll_many(h.polls, n, ms)
+    return hands_pump(h)
+end
+
 -- Start the program at path with the arguments argv and the environment envp
 -- (each a list of addresses that ends with 0): its process number. Its output
--- and error output are added to the file at log and it reads nothing. It
--- leaves no core file, and Linux sends it signal when this check ends, however
--- this check ends, so no program or display outlives a run: 9 for a program
--- under check, which nothing can ignore, and 15 for the display server, which
--- takes it as a request and removes its own files first.
-func hands_start(h, path, argv, envp, log, signal):
+-- and error output are added to the file at log and it reads nothing. Its
+-- core limit is one byte (h.core): no core file, and no crash reporter (under
+-- 0 Linux hands a crash to one, which may send a report off). A hard limit of
+-- 0, as a plain `ulimit -c 0` sets, keeps the byte from being set: a program
+-- stopped by a signal then reaches the reporter (the stand-in's planted crash
+-- marks itself not to be dumped). Linux sends it signal when this check ends,
+-- however this check ends, so no program or display outlives a run: 9 for a
+-- program under check, which nothing can ignore, and 15 for the display
+-- server, which takes it as a request and removes its own files first. It
+-- gets no descriptor past 2 but keep (the display server's pipe, or 0 - 1):
+-- none this check holds, and none that whatever started the check left open,
+-- so the descriptors a check counts are the program's own.
+func hands_start(h, path, argv, envp, log, signal, keep):
     let me = linux_syscall6(39, 0, 0, 0, 0, 0, 0)
     let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
     if linux_error(pid): do hands_lost(h, "Linux started no new process") end
@@ -168,12 +293,25 @@ func hands_start(h, path, argv, envp, log, signal):
             do linux_syscall6(33, o, 2, 0, 0, 0, 0)
             do linux_close(i)
             do linux_close(o)
+            if keep == 0 - 1:
+                do linux_syscall6(436, 3, 4294967295, 0, 0, 0, 0)
+            else:
+                if keep > 3: do linux_syscall6(436, 3, keep - 1, 0, 0, 0, 0) end
+                do linux_syscall6(436, keep + 1, 4294967295, 0, 0, 0, 0)
+            end
             do linux_syscall6(59, buffer_address(path), buffer_address(argv), buffer_address(envp), 0, 0, 0)
         end
         do process_exit(127)
         return 0
     end
     return pid
+end
+
+-- How a status from Linux's wait4 says a process ended: (1, its exit status)
+-- when it ended by itself, (2, the signal) when a signal ended it.
+func hands_how(st):
+    if (st & 127) != 0: return (2, (st & 127)) end
+    return (1, ((st >> 8) & 255))
 end
 
 -- Whether the process pid has ended, without waiting: (0, 0) while it runs,
@@ -187,9 +325,7 @@ func hands_look(h, pid):
     end
     if linux_error(w): do hands_lost(h, "Linux lost a process the check started") end
     if w == 0: return (0, 0) end
-    let st = linux_u32(h.status, 0)
-    if (st & 127) != 0: return (2, (st & 127)) end
-    return (1, ((st >> 8) & 255))
+    return hands_how(linux_u32(h.status, 0))
 end
 
 -- Stop the process pid with the signal given and wait until it is gone. The
@@ -234,11 +370,38 @@ func hands_how_ended(h):
     return "the program closed before it was asked to"
 end
 
+-- Stop the program under check where it is (SIGSTOP), so that what is sent
+-- next waits for it, and wait until Linux says it has stopped (wait4 with
+-- WUNTRACED, for this check's own child). False when it ended instead; how is
+-- then in h.ended and h.value, as hands_gone keeps it.
+func hands_halt(h):
+    if h.app < 2 or h.app > 4194304: do hands_lost(h, "the check would have stopped a process it did not start") end
+    do linux_syscall6(62, h.app, 19, 0, 0, 0, 0)
+    let w = linux_syscall6(61, h.app, buffer_address(h.status), 2, 0, 0, 0)
+    while w == 0 - 4:
+        w = linux_syscall6(61, h.app, buffer_address(h.status), 2, 0, 0, 0)
+    end
+    if linux_error(w): do hands_lost(h, "Linux lost a process the check started") end
+    let st = linux_u32(h.status, 0)
+    if (st & 255) == 127: return true end
+    let e = hands_how(st)
+    h.app = 0
+    h.ended = e.0
+    h.value = e.1
+    return false
+end
+
+-- Let the stopped program go on (SIGCONT).
+func hands_resume(h):
+    if h.app >= 2 and h.app <= 4194304: do linux_syscall6(62, h.app, 18, 0, 0, 0, 0) end
+    return 0
+end
+
 -- Start the display server at xvfb on a display number of its own choosing,
 -- which it writes to a pipe once it takes connections: (its process number,
 -- that display number). Its screen is 1280 by 1024 in 24-bit colour and it
--- listens on this machine only.
-func hands_display(h, xvfb):
+-- listens on this machine only. Its own words go to WORK/log.
+func hands_display(h, xvfb, log):
     if linux_error(linux_syscall6(293, buffer_address(h.pipe), 0, 0, 0, 0, 0)): do hands_lost(h, "Linux gave no pipe") end
     let reader = linux_u32(h.pipe, 0)
     let writer = linux_u32(h.pipe, 4)
@@ -264,7 +427,7 @@ func hands_display(h, xvfb):
     let path = hands_setting("PATH", "/usr/bin:/bin")
     let envp = linux_buffer(16)
     do linux_put64(envp, 0, buffer_address(path))
-    let pid = hands_start(h, xvfb, argv, envp, hands_path(h.work, "display.log"), 15)
+    let pid = hands_start(h, xvfb, argv, envp, hands_path(h.work, log), 15, writer)
     do linux_close(writer)
     let used = 0
     let started = hands_now(h)
@@ -287,10 +450,11 @@ end
 -- This check's own connection to display number (its digits): no window, and
 -- the display's keyboard read once. The connection looks for its permission
 -- file in WORK/home, where there is none, so the owner's own display
--- permission is never read or sent.
+-- permission is never read or sent. Its requests have room for 128 KiB, so
+-- that text past the clipboard's bound can be offered in one.
 func hands_connect(work, number):
     let idle = X11Clip(false, false, 0, 0, 0, 0, 0, 0, 0, 0, new_buffer(), 0, new_buffer(), 0, false, 0, false, 0, 0, 0, 0, 0, 0, new_buffer(), 0, 0, false)
-    let c = X11(X11State(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, 0, false, false, 0, 0, 0, false, idle, false), linux_buffer(65536), linux_buffer(65536), linux_buffer(8), linux_buffer(16), linux_buffer(256), linux_buffer(1024), linux_buffer(1024), linux_buffer(4096))
+    let c = X11(X11State(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, 0, false, false, 0, 0, 0, false, idle, false), linux_buffer(131072), linux_buffer(65536), linux_buffer(8), linux_buffer(16), linux_buffer(256), linux_buffer(1024), linux_buffer(1024), linux_buffer(4096))
     let st = c.state
     let home = new_buffer()
     do text_add(home, "HOME=")
@@ -316,11 +480,47 @@ func hands_flush(h):
     return 0
 end
 
+-- An event the display sent this check (in c.replies): Notes' answer to a
+-- ping (hands_ping), or a request for the clipboard this check owns, which
+-- it answers with its offer when offering is 2 and leaves unanswered when
+-- it is 1. Every other event is passed over.
+func hands_event(h):
+    let c = h.c
+    let st = c.state
+    let r = c.replies
+    let kind = (buffer_get(r, 0) & 127)
+    if kind == 31 and linux_u32(r, 8) == st.window and linux_u32(r, 4) > h.pinged: h.pinged = linux_u32(r, 4) end
+    if kind == 30 and linux_u32(r, 8) == st.window and h.offering == 2:
+        let time = linux_u32(r, 4)
+        let requestor = linux_u32(r, 12)
+        let selection = linux_u32(r, 16)
+        let target = linux_u32(r, 20)
+        let property = linux_u32(r, 24)
+        let p = x11_request(c, 18, 0, 24 + x11_pad(h.offered))
+        do linux_put32(c.requests, p + 4, requestor)
+        do linux_put32(c.requests, p + 8, property)
+        do linux_put32(c.requests, p + 12, target)
+        do buffer_set(c.requests, p + 16, 8)
+        do linux_put32(c.requests, p + 20, h.offered)
+        do linux_copy(c.requests, p + 24, h.offer, 0, h.offered)
+        let q = x11_request(c, 25, 0, 44)
+        do linux_put32(c.requests, q + 4, requestor)
+        do buffer_set(c.requests, q + 12, 31)
+        do linux_put32(c.requests, q + 16, time)
+        do linux_put32(c.requests, q + 20, requestor)
+        do linux_put32(c.requests, q + 24, selection)
+        do linux_put32(c.requests, q + 28, target)
+        do linux_put32(c.requests, q + 32, property)
+        do hands_flush(h)
+    end
+    return 0
+end
+
 -- Send what is waiting and read the display's answer to the last request:
 -- (true, the bytes after its first 32), the answer being in c.replies; or
 -- (false, the display's error number) when it refused that request, as it
--- does for a window that has just gone. Events are passed over: this
--- connection asks for none.
+-- does for a window that has just gone. Events on the way are dealt with
+-- (hands_event).
 func hands_answer(h):
     let c = h.c
     let st = c.state
@@ -340,6 +540,7 @@ func hands_answer(h):
             if linux_u16(c.replies, 2) != want: do hands_lost(h, "the display refused a request the check did not ask about") end
             return (false, buffer_get(c.replies, 1))
         end
+        do hands_event(h)
     end
     return (false, 0)
 end
@@ -347,14 +548,16 @@ end
 -- Whether the display took everything sent so far. Requests that have no
 -- answer (a key, the keyboard given to a window) are refused, if at all, at
 -- some later time; this asks the display a question it always answers and
--- reads up to that answer, so a refusal before it is seen here.
+-- reads up to that answer, so a refusal before it is seen here (or one
+-- hands_pump saw already, kept in h.refused).
 func hands_settled(h):
     let c = h.c
     let st = c.state
     do x11_request(c, 43, 0, 4)
     do hands_flush(h)
     let want = st.sequence
-    let fine = true
+    let fine = not h.refused
+    h.refused = false
     while true:
         if linux_read_exact(st.fd, c.replies, 0, 32, c.poll, c.clock) != 0: do hands_lost(h, "the display stopped answering") end
         let kind = buffer_get(c.replies, 0)
@@ -362,9 +565,33 @@ func hands_settled(h):
             if linux_u16(c.replies, 2) != want or linux_u32(c.replies, 4) != 0: do hands_lost(h, "the display answered out of turn") end
             return fine
         end
-        if kind == 0: fine = false end
+        if kind == 0:
+            fine = false
+        else:
+            do hands_event(h)
+        end
     end
     return false
+end
+
+-- Everything waiting for this check, without waiting for more: the display's
+-- events (a refusal is kept in h.refused) and Scope's knocks (hands_serve).
+func hands_pump(h):
+    let c = h.c
+    let st = c.state
+    let ready = linux_poll(st.fd, h.opt, 1, 0)
+    while ready != 0 and ready != 0 - 4:
+        if linux_read_exact(st.fd, c.replies, 0, 32, c.poll, c.clock) != 0: do hands_lost(h, "the display stopped answering") end
+        let kind = buffer_get(c.replies, 0)
+        if kind == 1: do hands_lost(h, "the display answered out of turn") end
+        if kind == 0:
+            h.refused = true
+        else:
+            do hands_event(h)
+        end
+        ready = linux_poll(st.fd, h.opt, 1, 0)
+    end
+    return hands_serve(h)
 end
 
 -- The number the display gives the extension called name, or 0 without it.
@@ -460,6 +687,38 @@ func hands_type(h, s):
     return 0
 end
 
+-- A mouse button going down or coming up, through XTEST (4 and 5 are the
+-- wheel's two ways).
+func hands_button(h, button, down):
+    let c = h.c
+    let p = x11_request(c, h.xtest, 2, 36)
+    let kind = 5
+    if down: kind = 4 end
+    do buffer_set(c.requests, p + 4, kind)
+    do buffer_set(c.requests, p + 5, button)
+    return 0
+end
+
+-- One notch of the wheel, downward or not.
+func hands_notch(h, downward):
+    let button = 4
+    if downward: button = 5 end
+    do hands_button(h, button, true)
+    return hands_button(h, button, false)
+end
+
+-- The pointer moved to x, y on the screen (the programs' windows open at its
+-- top left corner).
+func hands_point(h, x, y):
+    let c = h.c
+    let p = x11_request(c, h.xtest, 2, 36)
+    do buffer_set(c.requests, p + 4, 6)
+    do linux_put32(c.requests, p + 12, c.state.root)
+    do linux_put16(c.requests, p + 24, x)
+    do linux_put16(c.requests, p + 26, y)
+    return 0
+end
+
 -- The window on the display that can be seen, or 0 while there is none. Only
 -- the program under check opens one, and only one.
 func hands_window(h):
@@ -549,15 +808,16 @@ func hands_entries(h, path):
     return total
 end
 
--- The recovery folder Notes makes beside desk/rundown.txt when the process
--- pid first edits it, with tail after it ("" for the folder itself). number
+-- The recovery folder Notes makes in WORK/folder when the process pid first
+-- edits a file there, with tail after it ("" for the folder itself). number
 -- is 1 unless a folder of that name was there already (Notes then takes the
--- next number): 2 for the second run when Linux gave it the first run's
--- process number again.
-func hands_session(h, pid, number, tail):
+-- next number), and counts on with each further file the same Notes edits.
+func hands_copy_path(h, folder, pid, number, tail):
     let b = new_buffer()
     do text_add(b, h.work)
-    do text_add(b, "/desk/.herbert-notes-")
+    do text_add(b, "/")
+    do text_add(b, folder)
+    do text_add(b, "/.herbert-notes-")
     do text_add_whole(b, pid)
     do text_add(b, "-")
     do text_add_whole(b, number)
@@ -565,6 +825,9 @@ func hands_session(h, pid, number, tail):
     do append(b, 0)
     return b
 end
+
+-- The same for WORK/desk, where the first Notes check works.
+func hands_session(h, pid, number, tail): return hands_copy_path(h, "desk", pid, number, tail) end
 
 -- Whether the path b ends with ".txt".
 func hands_txt(b):
@@ -583,13 +846,13 @@ func hands_same(a, b):
     return true
 end
 
--- The path of a name in WORK/desk that begins with prefix and ends with
+-- The path of a name in WORK/folder that begins with prefix and ends with
 -- ".txt", other than the path skip (h.none to skip none); h.none when there
 -- is no such name. Notes names a rescue copy herbert-rescue-PROCESS-NUMBER.txt
 -- and the number is its own to choose, so a copy is found by the start and
 -- the end of its name.
-func hands_name(h, prefix, skip):
-    let fd = linux_open(hands_path(h.work, "desk"), 589824, 0)
+func hands_name(h, folder, prefix, skip):
+    let fd = linux_open(hands_path(h.work, folder), 589824, 0)
     if linux_error(fd): return h.none end
     let hit = h.none
     let more = true
@@ -603,7 +866,9 @@ func hands_name(h, prefix, skip):
                 if text_starts(h.got, at + 19, r, prefix):
                     let b = new_buffer()
                     do text_add(b, h.work)
-                    do text_add(b, "/desk/")
+                    do text_add(b, "/")
+                    do text_add(b, folder)
+                    do text_add(b, "/")
                     let i = at + 19
                     while buffer_get(h.got, i) != 0:
                         do append(b, buffer_get(h.got, i))
@@ -631,30 +896,117 @@ func hands_remove(work, tail, folder):
     return not linux_error(linux_syscall6(call, buffer_address(hands_path(work, tail)), 0, 0, 0, 0, 0))
 end
 
--- Start program (with up to two arguments; h.none for one not given) and wait
--- at most limit ms for its window, then give that window the keyboard. "" when
--- it is up, or what went wrong. A window of the program before must be gone
--- first, so that the one found is this program's.
-func hands_show(h, program, a1, a2, limit):
+-- Keep path (NUL-terminated) as a name the check made, or one the program
+-- made that the check expects, to be removed when the check passes. A folder
+-- is kept before what is in it. path is given back.
+func hands_keep(h, path, folder):
+    do add(h.made, path)
+    do add(h.folders, folder)
+    return path
+end
+
+-- A new folder at WORK/tail, kept.
+func hands_dir(h, tail):
+    let path = hands_path(h.work, tail)
+    if linux_error(linux_syscall6(83, buffer_address(path), 448, 0, 0, 0, 0)): do hands_lost(h, "the check's own folder cannot be written in") end
+    return hands_keep(h, path, true)
+end
+
+-- A file at WORK/tail holding the first n bytes of b, its permission mode,
+-- kept (made again if it was there): its path.
+func hands_write(h, tail, b, n, mode):
+    let path = hands_path(h.work, tail)
+    let fd = linux_open(path, 524865, 384)
+    if linux_error(fd): do hands_lost(h, "the check's own folder cannot be written in") end
+    let done = 0
+    while done < n:
+        let r = linux_write(fd, b, done, n - done)
+        if linux_error(r) and r != 0 - 4: do hands_lost(h, "the check's own folder cannot be written in") end
+        if not linux_error(r): done = done + r end
+    end
+    do linux_close(fd)
+    do linux_syscall6(90, buffer_address(path), mode, 0, 0, 0, 0)
+    return hands_keep(h, path, false)
+end
+
+-- The same for the text s.
+func hands_put(h, tail, s, mode):
+    return hands_write(h, tail, linux_cstring(s), length(s), mode)
+end
+
+-- Give the file or folder at WORK/tail the permission mode.
+func hands_mode(h, tail, mode):
+    if linux_error(linux_syscall6(90, buffer_address(hands_path(h.work, tail)), mode, 0, 0, 0, 0)): do hands_lost(h, "the check could not change a permission in its own folder") end
+    return 0
+end
+
+-- The file at path as Linux sees it: (there, its inode, its permission and
+-- kind, its modification time in nanoseconds, its size).
+func hands_stat(h, path):
+    if linux_error(linux_syscall6(4, buffer_address(path), buffer_address(h.stat), 0, 0, 0, 0)): return (false, 0, 0, 0, 0) end
+    return (true, linux_u64(h.stat, 8), linux_u32(h.stat, 24), linux_u64(h.stat, 88) * 1000000000 + linux_u64(h.stat, 96), linux_u64(h.stat, 48))
+end
+
+-- Whether the file at path is the one before was (hands_stat), not written
+-- since: the same inode and modification time.
+func hands_untouched(h, path, before):
+    let now = hands_stat(h, path)
+    return now.0 and now.1 == before.1 and now.3 == before.3
+end
+
+-- Remove what the check made, last first, each by its name; a name already
+-- gone is fine. False when one could not be removed: then a folder held
+-- something the check did not make or expect.
+func hands_sweep(h):
+    let fine = true
+    let i = count(h.made)
+    while i > h.mark:
+        i = i - 1
+        let call = 87
+        if get(h.folders, i): call = 84 end
+        let r = linux_syscall6(call, buffer_address(get(h.made, i)), 0, 0, 0, 0, 0)
+        if linux_error(r) and r != 0 - 2: fine = false end
+    end
+    h.mark = count(h.made)
+    return fine
+end
+
+-- The number Notes gives the recovery folder it makes in WORK/folder for the
+-- process pid's first edit there: 1, or past every such folder already there.
+func hands_copy_number(h, folder, pid):
+    let n = 1
+    while hands_stat(h, hands_copy_path(h, folder, pid, n, "")).0: n = n + 1 end
+    return n
+end
+
+-- Keep the recovery folder (and its copy) Notes makes as the process pid's
+-- number-th in WORK/folder: the copy's path.
+func hands_keep_copy(h, folder, pid, number):
+    do hands_keep(h, hands_copy_path(h, folder, pid, number, ""), true)
+    return hands_keep(h, hands_copy_path(h, folder, pid, number, "/recovery.txt"), false)
+end
+
+-- Start program with the arguments args (each NUL-terminated, at most 14)
+-- and the environment envp, and wait at most limit ms for its window, then
+-- give that window the keyboard. "" when it is up, or what went wrong. A
+-- window of the program before must be gone first, so that the one found is
+-- this program's.
+func hands_launch(h, program, args, envp, limit):
     let started = hands_now(h)
     while hands_window(h) != 0:
         if hands_now(h) - started >= 20000: do hands_lost(h, "the window of the program before is still up") end
         do hands_wait(h, 20)
     end
     do linux_put64(h.argv, 0, buffer_address(program))
-    let n = 1
-    if buffer_length(a1) > 1:
-        do linux_put64(h.argv, 8, buffer_address(a1))
-        n = 2
-    end
-    if buffer_length(a2) > 1:
-        do linux_put64(h.argv, n * 8, buffer_address(a2))
+    let n = 0
+    while n < count(args) and n < 14:
+        do linux_put64(h.argv, (n + 1) * 8, buffer_address(get(args, n)))
         n = n + 1
     end
-    do linux_put64(h.argv, n * 8, 0)
+    do linux_put64(h.argv, (n + 1) * 8, 0)
     h.ended = 0
     h.value = 0
-    h.app = hands_start(h, program, h.argv, h.envp, h.log, 9)
+    h.app = hands_start(h, program, h.argv, envp, h.log, 9, 0 - 1)
     started = hands_now(h)
     while true:
         if hands_gone(h): return "the program ended before it showed a window" end
@@ -667,6 +1019,15 @@ func hands_show(h, program, a1, a2, limit):
         do hands_wait(h, 20)
     end
     return ""
+end
+
+-- The same with up to two arguments (h.none for one not given) and the usual
+-- environment.
+func hands_show(h, program, a1, a2, limit):
+    let args = new_array(buffer)
+    if buffer_length(a1) > 1: do add(args, a1) end
+    if buffer_length(a2) > 1: do add(args, a2) end
+    return hands_launch(h, program, args, h.envp, limit)
 end
 
 -- Send the keys that are waiting, then wait at most limit ms for the file at
@@ -690,15 +1051,15 @@ func hands_expect_file(h, path, want, limit):
 end
 
 -- Send the keys that are waiting, then wait at most limit ms for a name to
--- appear in WORK/desk that hands_name finds for prefix and skip; h.found is
+-- appear in WORK/folder that hands_name finds for prefix and skip; h.found is
 -- then its path. "" when it does. As with a file, a program that has ended is
 -- the finding.
-func hands_expect_name(h, prefix, skip, limit):
+func hands_expect_name(h, folder, prefix, skip, limit):
     if not hands_settled(h): return "the display refused what the check sent" end
     let started = hands_now(h)
     while true:
         if hands_gone(h): return hands_how_ended(h) end
-        let name = hands_name(h, prefix, skip)
+        let name = hands_name(h, folder, prefix, skip)
         if buffer_length(name) > 1:
             h.found = name
             return ""
@@ -734,6 +1095,18 @@ func hands_expect_close(h, limit):
     return ""
 end
 
+-- Send what is waiting and watch the program for ms: "" when it is still
+-- running at the end.
+func hands_expect_running(h, ms):
+    if not hands_settled(h): return "the display refused what the check sent" end
+    let started = hands_now(h)
+    while hands_now(h) - started < ms:
+        if hands_gone(h): return hands_how_ended(h) end
+        do hands_wait(h, 20)
+    end
+    return ""
+end
+
 -- step and why as one finding ("after the first save: the file was not
 -- written"); "" when why is.
 func hands_at(step, why):
@@ -752,6 +1125,150 @@ func hands_rescue(pid):
     do text_add_whole(b, pid)
     do text_add(b, "-")
     return freeze(b)
+end
+
+-- Ask Notes, as another program would, for the clipboard, into this check's
+-- own window (an event sent to Notes' window alone, so Notes answers whether
+-- or not it owns the clipboard). Notes answers such requests only between
+-- reading its keys and handling them, so once a second ping is answered,
+-- every key sent before the first has been handled, and the recovery copy
+-- that handling asks for has been tried. Notes passes over such a request
+-- until its clipboard is on, a moment after its window shows, so a ping not
+-- answered within half a second is sent again (any answer to one of them
+-- will do). "" then, or what went wrong. A ping the display refuses went to
+-- a window that is gone, so the program is on its way out: how it ends is
+-- the finding.
+func hands_ping(h, limit):
+    let c = h.c
+    let i = 0
+    while i < 2:
+        let mark = h.token + 1
+        let started = hands_now(h)
+        let asked = 0
+        while h.pinged < mark:
+            if hands_gone(h): return hands_how_ended(h) end
+            let now = hands_now(h)
+            if now - started >= limit: return "the program did not answer for its clipboard" end
+            if h.token < mark or now - asked >= 500:
+                h.token = h.token + 1
+                do hands_ask(h, c.state.window, h.pinging, h.token)
+                if not hands_settled(h):
+                    while not hands_gone(h) and hands_now(h) - now < limit: do hands_wait(h, 10) end
+                    if h.app == 0: return hands_how_ended(h) end
+                    return "the display refused what the check sent"
+                end
+                asked = now
+            end
+            do hands_wait(h, 10)
+        end
+        i = i + 1
+    end
+    return ""
+end
+
+-- An event, kept like a key, sent to the program's window alone: the place
+-- in c.requests where its 32 bytes go.
+func hands_send(h):
+    let c = h.c
+    let p = x11_request(c, 25, 0, 44)
+    do linux_put32(c.requests, p + 4, h.window)
+    return p + 12
+end
+
+-- A request for the program's clipboard as UTF-8 text from requestor into
+-- property, made at server time time, as the display sends one to the
+-- clipboard's owner.
+func hands_ask(h, requestor, property, time):
+    let c = h.c
+    let e = hands_send(h)
+    do buffer_set(c.requests, e, 30)
+    do linux_put32(c.requests, e + 4, time)
+    do linux_put32(c.requests, e + 8, h.window)
+    do linux_put32(c.requests, e + 12, requestor)
+    do linux_put32(c.requests, e + 16, h.clipboard)
+    do linux_put32(c.requests, e + 20, h.utf8)
+    do linux_put32(c.requests, e + 24, property)
+    return 0
+end
+
+-- A window made and taken away again, so its number names no window: as a
+-- program that asked for the clipboard and closed before the answer.
+func hands_vanish(h):
+    let c = h.c
+    let st = c.state
+    let p = x11_request(c, 1, 0, 32)
+    do linux_put32(c.requests, p + 4, st.pixmap)
+    do linux_put32(c.requests, p + 8, st.root)
+    do linux_put16(c.requests, p + 16, 1)
+    do linux_put16(c.requests, p + 18, 1)
+    do linux_put16(c.requests, p + 22, 2)
+    let q = x11_request(c, 4, 0, 8)
+    do linux_put32(c.requests, q + 4, st.pixmap)
+    return st.pixmap
+end
+
+-- What a program that went away leaves Notes to answer, all at once: two
+-- KeymapNotify events whose bytes 2 and 3 look like request numbers (0x1234
+-- and 0x9234; the display sets those bytes in every other event, and Notes
+-- must not take these for one), two requests from a window that is gone (so
+-- both answers are refused before the first refusal is read), and one from
+-- this check's window naming a property that is no name at all (0x1ffffff0).
+func hands_vanished(h):
+    let c = h.c
+    let gone = hands_vanish(h)
+    let e = hands_send(h)
+    do buffer_set(c.requests, e, 11)
+    do buffer_set(c.requests, e + 2, 52)
+    do buffer_set(c.requests, e + 3, 18)
+    e = hands_send(h)
+    do buffer_set(c.requests, e, 11)
+    do buffer_set(c.requests, e + 2, 52)
+    do buffer_set(c.requests, e + 3, 146)
+    do hands_ask(h, gone, h.pinging, 0)
+    do hands_ask(h, gone, h.pinging, 0)
+    return hands_ask(h, c.state.window, 536870896, 0)
+end
+
+-- Make window the clipboard's owner (0: no owner), at the display's own time.
+func hands_owner(h, window):
+    let c = h.c
+    let p = x11_request(c, 22, 0, 16)
+    do linux_put32(c.requests, p + 4, window)
+    do linux_put32(c.requests, p + 8, h.clipboard)
+    return 0
+end
+
+-- What this check answers when asked for its clipboard: the text s.
+func hands_offer(h, s):
+    do linux_copy(h.offer, 0, linux_cstring(s), 0, length(s))
+    h.offered = length(s)
+    h.offering = 2
+    return 0
+end
+
+-- The key code gives lower and, with Shift, upper from now on, for every
+-- program on the display (ChangeKeyboardMapping: one code, two symbols).
+func hands_remap(h, code, lower, upper):
+    let c = h.c
+    let p = x11_request(c, 100, 1, 16)
+    do buffer_set(c.requests, p + 4, code)
+    do buffer_set(c.requests, p + 5, 2)
+    do linux_put32(c.requests, p + 8, lower)
+    do linux_put32(c.requests, p + 12, upper)
+    return 0
+end
+
+-- Hold the key that gives symbol down for ms, sent by itself so the program
+-- sees it held, then let it go. "" when the program is still running.
+func hands_hold(h, symbol, ms):
+    let k = hands_find(h.c, symbol)
+    if k.0 == 0: do hands_lost(h, "the display's keyboard has no key for something the check types") end
+    do hands_key(h, k.0, true)
+    let why = hands_expect_running(h, ms)
+    do hands_key(h, k.0, false)
+    if length(why) != 0: return why end
+    if not hands_settled(h): return "the display refused what the check sent" end
+    return ""
 end
 
 -- Notes, on a file that is not there yet. Each sentence below is one thing
@@ -822,7 +1339,7 @@ func hands_notes(h, notes, limit):
     why = hands_at("after Ctrl+Q, then Ctrl+S, with an edit not saved", hands_expect_file(h, file, edited, limit))
     if length(why) != 0: return why end
     do hands_press(h, 83, true)
-    why = hands_at("the rescue copy (Ctrl+Shift+S)", hands_expect_name(h, hands_rescue(h.first), h.none, limit))
+    why = hands_at("the rescue copy (Ctrl+Shift+S)", hands_expect_name(h, "desk", hands_rescue(h.first), h.none, limit))
     if length(why) != 0: return why end
     h.rescued = h.found
     why = hands_at("the rescue copy (Ctrl+Shift+S)", hands_expect_file(h, h.rescued, edited, limit))
@@ -854,7 +1371,7 @@ func hands_notes(h, notes, limit):
     if length(why) != 0: return why end
     do hands_close_button(h)
     do hands_press(h, 83, true)
-    why = hands_at("the rescue copy at the close button's question", hands_expect_name(h, hands_rescue(h.second), h.rescued, limit))
+    why = hands_at("the rescue copy at the close button's question", hands_expect_name(h, "desk", hands_rescue(h.second), h.rescued, limit))
     if length(why) != 0: return why end
     h.asked = h.found
     why = hands_at("the rescue copy at the close button's question", hands_expect_file(h, h.asked, fifth, limit))
@@ -929,15 +1446,16 @@ end
 func hands_list(): return "here 127.0.0.1 9\n" end
 
 -- Whether the run left only what it made: "" when WORK holds its two folders
--- and its two logs, and the home only Scope's list, by its name and with the
--- bytes it was given; or else the finding. strict is for a run with no
--- failure so far: then the desk too must hold only what the Notes check
--- counted there, after the stand-in's file is removed by its name (every run
--- of the stand-in makes it anew). After a failure nothing is removed and the
--- desk, which that failure may have left in any state, is not counted.
+-- and its two logs (and the folder of each check that failed), and the home
+-- only Scope's list, by its name and with the bytes it was given; or else the
+-- finding. strict is for a run with no failure so far: then the desk too must
+-- hold only what the Notes check counted there, after the stand-in's file is
+-- removed by its name (every run of the stand-in makes it anew). After a
+-- failure nothing is removed and the desk, which that failure may have left
+-- in any state, is not counted.
 func hands_left(h, strict):
     if strict: do hands_remove(h.work, "desk/stand-in.txt", false) end
-    let fine = hands_entries(h, linux_cstring(h.work)) == 4
+    let fine = hands_entries(h, linux_cstring(h.work)) == 4 + h.extra
     if hands_file(h, hands_path(h.work, "display.log"), "") == 2 or hands_file(h, hands_path(h.work, "programs.log"), "") == 2: fine = false end
     if hands_entries(h, hands_path(h.work, "home")) != 1 or hands_entries(h, hands_path(h.work, "home/.config")) != 1: fine = false end
     if hands_entries(h, hands_path(h.work, "home/.config/herbert")) != 1: fine = false end
@@ -948,17 +1466,48 @@ func hands_left(h, strict):
     return "the run left something no check expected"
 end
 
+-- Close every socket Scope knocked on.
+func hands_hang_up(h):
+    let i = 0
+    while i < count(h.socks):
+        let s = get(h.socks, i)
+        if s.fd != 0 - 1:
+            do linux_close(s.fd)
+            s.fd = 0 - 1
+        end
+        i = i + 1
+    end
+    return 0
+end
+
 -- Count one check and say so when it did not give its answer. planted is ""
 -- for a check that must pass, and otherwise the finding a failure planted on
--- purpose must give; that check passes only on exactly that finding. A
--- display server that has stopped ends the run here instead, with status 2:
--- whatever the check found then is the display's doing, not the program's.
+-- purpose must give; that check passes only on exactly that finding. A check
+-- that passes then removes what it made (hands_sweep), and one that cannot is
+-- a finding too: the program left something there. A check that fails
+-- leaves what it made. A display server that has stopped ends the run here
+-- instead, with status 2: whatever the check found then is the display's
+-- doing, not the program's.
 func hands_tally(h, name, why, planted):
     if hands_look(h, h.server).0 != 0: do hands_lost(h, "the display server stopped during the run") end
     do hands_clear(h)
+    do hands_hang_up(h)
+    if h.offering != 0:
+        h.offering = 0
+        do hands_owner(h, 0)
+        do hands_settled(h)
+    end
     if equal(why, planted):
-        h.passed = h.passed + 1
-        return 0
+        if hands_sweep(h):
+            h.passed = h.passed + 1
+            return 0
+        end
+        h.extra = h.extra + 1
+        why = "the program left something beside its files that no check expected"
+        planted = ""
+    else:
+        if count(h.made) > h.mark: h.extra = h.extra + 1 end
+        h.mark = count(h.made)
     end
     h.failed = h.failed + 1
     let line = new_buffer()
@@ -978,10 +1527,1371 @@ func hands_tally(h, name, why, planted):
     return 0
 end
 
+-- An IPv4 address for Linux (a sockaddr_in, 16 bytes): this run's own
+-- 127.88.third.fourth and port.
+func hands_address(h, port):
+    let a = linux_buffer(16)
+    do linux_put16(a, 0, 2)
+    do buffer_set(a, 2, ((port >> 8) & 255))
+    do buffer_set(a, 3, (port & 255))
+    do buffer_set(a, 4, 127)
+    do buffer_set(a, 5, 88)
+    do buffer_set(a, 6, h.third)
+    do buffer_set(a, 7, h.fourth)
+    return a
+end
+
+-- A socket of this check at the first free port from 47800 to 47899, that
+-- listens with a queue of backlog and answers Scope's knocks as role says
+-- (Sock), or for role 9 is held there and never listens, so each knock is
+-- refused (and shares its port with no listener: only listeners may share).
+func hands_listen(h, role, backlog, last):
+    let fd = linux_socket(2, 526337, 0)
+    if linux_error(fd): do hands_lost(h, "Linux gave the check no socket") end
+    if role != 9: do linux_set_option(fd, 1, 2, h.opt, 1) end
+    let port = 47800
+    let bound = linux_bind(fd, hands_address(h, port), 16)
+    while bound == 0 - 98 and port < 47899:
+        port = port + 1
+        bound = linux_bind(fd, hands_address(h, port), 16)
+    end
+    if bound != 0: do hands_lost(h, "the check could not take a port from 47800 to 47899") end
+    if role != 9 and linux_error(linux_listen(fd, backlog)): do hands_lost(h, "the check could not listen on its port") end
+    let s = Sock(fd, role, 0 - 1, port, 0, 0, 0, 0, 0 - 1, 0, last)
+    do add(h.socks, s)
+    return s
+end
+
+-- A computer that never answers: a listener with no room in its queue but
+-- the one place a connection of this check's own holds, so Linux drops
+-- every knock in silence, as for a computer that is off.
+func hands_hole(h):
+    let s = hands_listen(h, 8, 0, 0)
+    let fd = linux_socket(2, 526337, 0)
+    if linux_error(fd): do hands_lost(h, "Linux gave the check no socket") end
+    let r = linux_connect(fd, hands_address(h, s.port), 16)
+    if r != 0 and r != 0 - 115: do hands_lost(h, "the check could not fill its own listener's queue") end
+    do linux_poll(fd, h.peer, 4, 2000)
+    do add(h.socks, Sock(fd, 0, 0 - 1, 0, 0, 0, 0, 0, 0, 0, 0))
+    return s
+end
+
+-- A helper's line of version 1 (the old check's R1).
+func hands_line_one(): return "herbert-scope 1 10000 1500 16384000 4096000\n" end
+
+-- What a listener of role sends on its n-th connection (from 0).
+func hands_reply(role, n):
+    let b = new_buffer()
+    if role == 1:
+        do text_add(b, "herbert-scope 2 ")
+        do text_add_whole(b, 200 * n)
+        do text_add(b, " ")
+        do text_add_whole(b, 200 * n)
+        do text_add(b, " 1 0 1 0 999999 0\n")
+    elif role == 3:
+        do text_add(b, hands_line_one())
+        while buffer_length(b) < 257: do append(b, 32) end
+    elif role == 4:
+        do text_add(b, "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.5\r\n")
+    elif role == 5:
+        do text_add(b, hands_line_one())
+    elif role == 7:
+        do text_add(b, "herbert-scope 1 ")
+        do text_add_whole(b, 10000 + 1000 * n)
+        do text_add(b, " ")
+        do text_add_whole(b, 1500 + 400 * n)
+        do text_add(b, " 16384000 4096000\n")
+    end
+    return freeze(b)
+end
+
+-- A connection's place in socks: a closed connection's, or a new one.
+func hands_slot(h, k):
+    let i = 0
+    while i < count(h.socks):
+        let s = get(h.socks, i)
+        if s.fd == 0 - 1 and s.lis != 0 - 1:
+            do set(h.socks, i, k)
+            return 0
+        end
+        i = i + 1
+    end
+    do add(h.socks, k)
+    return 0
+end
+
+-- What Scope did on the connection k at now: every byte it sent is counted
+-- (there must be none), and once it has closed the connection the time it
+-- was held is kept and this side closed too. A drip sends its next byte
+-- when it is due.
+func hands_talk(h, k, now):
+    let lis = get(h.socks, k.lis)
+    let going = true
+    while going:
+        let r = linux_receive(k.fd, h.net, 0, 1024, 64)
+        if r == 0 - 11:
+            going = false
+        elif r != 0 - 4:
+            if linux_error(r) or r == 0:
+                let held = now - k.since
+                if held > lis.longest: lis.longest = held end
+                if held < lis.shortest: lis.shortest = held end
+                do linux_close(k.fd)
+                k.fd = 0 - 1
+                going = false
+            else:
+                lis.got = lis.got + r
+            end
+        end
+    end
+    if k.fd != 0 - 1 and k.role == 5 and k.sent < length(hands_line_one()) and now - k.since >= 300 * k.sent:
+        do buffer_set(h.net, 0, index(hands_line_one(), k.sent))
+        do linux_send(k.fd, h.net, 0, 1, 16448)
+        k.sent = k.sent + 1
+    end
+    return 0
+end
+
+-- Take every knock waiting at the listener s (at place i in socks) and
+-- answer it as s's role says.
+func hands_take(h, s, i, now):
+    let more = true
+    while more:
+        do linux_put32(h.size, 0, 16)
+        let fd = linux_accept(s.fd, h.peer, h.size, 526336)
+        if linux_error(fd):
+            more = false
+        else:
+            let k = Sock(fd, s.role, i, s.port, s.count, 0, now, 0, 0, 0, 0)
+            s.count = s.count + 1
+            do hands_slot(h, k)
+            let reply = hands_reply(s.role, k.count)
+            if s.role == 5:
+                do buffer_set(h.net, 0, index(reply, 0))
+                do linux_send(fd, h.net, 0, 1, 16448)
+                k.sent = 1
+            elif length(reply) != 0:
+                do linux_send(fd, linux_cstring(reply), 0, length(reply), 16448)
+            end
+            if s.role == 1 or s.role == 3 or s.role == 7: do linux_syscall6(48, fd, 1, 0, 0, 0, 0) end
+            do hands_talk(h, k, now)
+            if s.last != 0 and s.count >= s.last:
+                do linux_close(s.fd)
+                s.fd = 0 - 1
+                more = false
+            end
+        end
+    end
+    return 0
+end
+
+-- Every knock and connection, without waiting.
+func hands_serve(h):
+    let now = hands_now(h)
+    let n = count(h.socks)
+    let i = 0
+    while i < n:
+        let s = get(h.socks, i)
+        if s.fd != 0 - 1:
+            if s.lis != 0 - 1:
+                do hands_talk(h, s, now)
+            elif s.role >= 1 and s.role <= 7:
+                do hands_take(h, s, i, now)
+            end
+        end
+        i = i + 1
+    end
+    return 0
+end
+
+-- One line of a list of computers: name, this run's address and port.
+func hands_computer(b, h, name, port):
+    do text_add(b, name)
+    do text_add(b, " ")
+    do text_add(b, h.near)
+    do text_add(b, " ")
+    do text_add_whole(b, port)
+    do text_add(b, "\n")
+    return 0
+end
+
+-- /proc/PID/tail as a path.
+func hands_proc(pid, tail):
+    let b = new_buffer()
+    do text_add(b, "/proc/")
+    do text_add_whole(b, pid)
+    do text_add(b, "/")
+    do text_add(b, tail)
+    do append(b, 0)
+    return b
+end
+
+-- The whole file at path into b, up to its room: how many bytes, or 0 - 1
+-- when it cannot be read.
+func hands_slurp(path, b):
+    let fd = linux_open(path, 524288, 0)
+    if linux_error(fd): return 0 - 1 end
+    let used = 0
+    let more = true
+    while more:
+        let r = linux_read(fd, b, used, buffer_length(b) - used)
+        if linux_error(r):
+            if r != 0 - 4:
+                used = 0 - 1
+                more = false
+            end
+        elif r == 0 or used + r == buffer_length(b):
+            used = used + r
+            more = false
+        else:
+            used = used + r
+        end
+    end
+    do linux_close(fd)
+    return used
+end
+
+-- The number after label at the start of a line of the file at path (a
+-- /proc file of a program under check), or 0 - 1 when there is none.
+func hands_figure(h, path, label):
+    let n = hands_slurp(path, h.got)
+    if n == 0 - 1: return 0 - 1 end
+    let at = 0
+    while at < n:
+        if text_starts(h.got, at, n, label):
+            let v = text_whole(h.got, text_skip(h.got, at + length(label), n), n)
+            if v.0: return v.1 end
+            return 0 - 1
+        end
+        while at < n and buffer_get(h.got, at) != 10: at = at + 1 end
+        at = at + 1
+    end
+    return 0 - 1
+end
+
+-- The memory of the process pid, in KiB: (its virtual size, from
+-- /proc/PID/status, which cannot move once the program has reserved its
+-- heap, and what it holds in memory, Rss from /proc/PID/smaps_rollup, which
+-- counts every page at once where status's VmRSS lags behind).
+func hands_memory(h, pid):
+    return (hands_figure(h, hands_proc(pid, "status"), "VmSize:"), hands_figure(h, hands_proc(pid, "smaps_rollup"), "Rss:"))
+end
+
+-- The process pid's descriptors: (how many past 0, 1 and 2 are not sockets,
+-- the inodes of its sockets other than its lowest-numbered one, which for
+-- Scope is the display's, opened before any knock). (0 - 1, none) when they
+-- cannot be listed.
+func hands_descriptors(h, pid):
+    let knocks = new_array(int)
+    let fd = linux_open(hands_proc(pid, "fd"), 589824, 0)
+    if linux_error(fd): return (0 - 1, knocks) end
+    let files = 0
+    let lowest = 0 - 1
+    let inode = 0
+    let more = true
+    while more:
+        let r = linux_syscall6(217, fd, buffer_address(h.got), h.cap, 0, 0, 0)
+        if linux_error(r) or r == 0:
+            more = false
+        else:
+            let at = 0
+            while at < r:
+                let name = text_whole(h.got, at + 19, r)
+                if name.0 and buffer_get(h.got, name.2) == 0:
+                    let link = new_buffer()
+                    do text_add(link, "fd/")
+                    do text_add_whole(link, name.1)
+                    let n = linux_syscall6(89, buffer_address(hands_proc(pid, freeze(link))), buffer_address(h.link), 256, 0, 0, 0)
+                    if not linux_error(n) and text_starts(h.link, 0, n, "socket:["):
+                        let number = text_whole(h.link, 8, n).1
+                        if name.1 < lowest:
+                            if lowest != 0 - 1: do add(knocks, inode) end
+                            lowest = name.1
+                            inode = number
+                        else:
+                            do add(knocks, number)
+                        end
+                    elif not linux_error(n) and name.1 > 2:
+                        files = files + 1
+                    end
+                end
+                at = at + linux_u16(h.got, at + 16)
+            end
+        end
+    end
+    do linux_close(fd)
+    return (files, knocks)
+end
+
+-- Whether the number n is in a.
+func hands_among(a, n):
+    let i = 0
+    while i < count(a):
+        if get(a, i) == n: return true end
+        i = i + 1
+    end
+    return false
+end
+
+-- The link WORK/tail now points at target, or is gone when target is "":
+-- made beside it and renamed over it, so a program reading through it finds
+-- the old target or the new one, never nothing on the way.
+func hands_aim(h, tail, target):
+    let link = hands_path(h.work, tail)
+    if length(target) == 0:
+        do linux_syscall6(87, buffer_address(link), 0, 0, 0, 0, 0)
+        return 0
+    end
+    let b = new_buffer()
+    do text_add(b, tail)
+    do text_add(b, ".new")
+    let spare = hands_path(h.work, freeze(b))
+    do linux_syscall6(87, buffer_address(spare), 0, 0, 0, 0, 0)
+    if linux_error(linux_syscall6(88, buffer_address(linux_cstring(target)), buffer_address(spare), 0, 0, 0, 0)): do hands_lost(h, "the check could not make a link in its own folder") end
+    if linux_error(linux_syscall6(82, buffer_address(spare), buffer_address(link), 0, 0, 0, 0)): do hands_lost(h, "the check could not make a link in its own folder") end
+    return 0
+end
+
+-- An environment for a program under check: the display, and HOME=home
+-- unless home is "".
+func hands_environment(h, home):
+    let envp = linux_buffer(24)
+    do linux_put64(envp, 0, buffer_address(h.screen))
+    if length(home) != 0: do linux_put64(envp, 8, buffer_address(hands_setting("HOME", home))) end
+    return envp
+end
+
+-- An argument list of up to ten words, "" for none past the last.
+func hands_words(a, b, c, d, e, f, g, i, j, k):
+    let args = new_array(buffer)
+    do hands_word(args, a)
+    do hands_word(args, b)
+    do hands_word(args, c)
+    do hands_word(args, d)
+    do hands_word(args, e)
+    do hands_word(args, f)
+    do hands_word(args, g)
+    do hands_word(args, i)
+    do hands_word(args, j)
+    do hands_word(args, k)
+    return args
+end
+
+func hands_word(args, s):
+    if length(s) != 0: do add(args, linux_cstring(s)) end
+    return 0
+end
+
+-- Notes on the file WORK/tail, holding text, that it must not save over:
+-- one its owner may not write, or, when outside is not "", one another
+-- program rewrites with outside once Notes has opened it. "zz" typed and
+-- Ctrl+S must write nothing: the file keeps its bytes and is the same file
+-- (the same inode and time: no new file put at its name). Ctrl+Shift+S after
+-- that Ctrl+S, and so the sign that Ctrl+S was dealt with, writes a rescue
+-- copy holding the edit, private to its owner (0600). The refused save leaves
+-- the edit unsaved, so the close button asks: it is sent by itself and Notes
+-- pinged after it (hands_ping), so that a Notes that closes there has closed
+-- before any key goes. Ctrl+S at its question is refused too, Ctrl+Shift+S
+-- there makes a second copy, and Y closes Notes with status 0, the file
+-- still as it was.
+func hands_refused(h, notes, tail, text, outside, limit):
+    let file = hands_path(h.work, tail)
+    let why = hands_at("opening it", hands_show(h, notes, file, h.none, limit))
+    if length(why) != 0: return why end
+    let pid = h.app
+    do hands_keep_copy(h, "locked", pid, hands_copy_number(h, "locked", pid))
+    let kept = text
+    if length(outside) != 0:
+        do hands_put(h, tail, outside, 384)
+        kept = outside
+    end
+    let before = hands_stat(h, file)
+    let b = new_buffer()
+    do text_add(b, "zz")
+    do text_add(b, text)
+    let edited = freeze(b)
+    do hands_type(h, "zz")
+    do hands_press(h, 115, true)
+    do hands_press(h, 83, true)
+    why = hands_at("a rescue copy after Ctrl+S", hands_expect_name(h, "locked", hands_rescue(pid), h.none, limit))
+    if length(why) != 0: return why end
+    let copy = hands_keep(h, h.found, false)
+    why = hands_at("a rescue copy after Ctrl+S", hands_expect_file(h, copy, edited, limit))
+    if length(why) != 0: return why end
+    if hands_file(h, file, kept) != 0 or not hands_untouched(h, file, before): return "Ctrl+S wrote over it" end
+    if (hands_stat(h, copy).2 & 511) != 384: return "the rescue copy may be read by others than its owner" end
+    do hands_close_button(h)
+    why = hands_at("the close button after the refused save", hands_ping(h, limit))
+    if length(why) != 0: return why end
+    do hands_press(h, 115, true)
+    do hands_press(h, 83, true)
+    why = hands_at("a rescue copy at the close button's question", hands_expect_name(h, "locked", hands_rescue(pid), copy, limit))
+    if length(why) != 0: return why end
+    let again = hands_keep(h, h.found, false)
+    why = hands_at("a rescue copy at the close button's question", hands_expect_file(h, again, edited, limit))
+    if length(why) != 0: return why end
+    if hands_file(h, file, kept) != 0 or not hands_untouched(h, file, before): return "Ctrl+S at the close button's question wrote over it" end
+    do hands_press(h, 121, false)
+    why = hands_at("Y at the close button's question", hands_expect_close(h, limit))
+    if length(why) != 0: return why end
+    if hands_file(h, file, kept) != 0 or not hands_untouched(h, file, before): return "closing changed it" end
+    return ""
+end
+
+-- Notes on files it must not save over (hands_refused): one its owner may not
+-- write (0464, which its group may), and one another program rewrote after
+-- Notes opened it. Then a third, writable when Notes opens it, is made
+-- read-only (0444) while it is open: Ctrl+S is refused the same way, and once
+-- the file is writable again (0600) Ctrl+S saves it.
+func hands_read_only(h, notes, limit):
+    do hands_dir(h, "locked")
+    do hands_put(h, "locked/protected.txt", "protected\n", 308)
+    let why = hands_at("a read-only file (0464)", hands_refused(h, notes, "locked/protected.txt", "protected\n", "", limit))
+    if length(why) != 0: return why end
+    do hands_put(h, "locked/changed.txt", "original\n", 384)
+    why = hands_at("a file another program changed", hands_refused(h, notes, "locked/changed.txt", "original\n", "changed outside\n", limit))
+    if length(why) != 0: return why end
+    let open = hands_put(h, "locked/open.txt", "open\n", 420)
+    why = hands_at("opening a writable file", hands_show(h, notes, open, h.none, limit))
+    if length(why) != 0: return why end
+    let pid = h.app
+    do hands_keep_copy(h, "locked", pid, hands_copy_number(h, "locked", pid))
+    do hands_type(h, "zz")
+    if not hands_settled(h): return "the display refused what the check sent" end
+    do hands_mode(h, "locked/open.txt", 292)
+    let made = hands_stat(h, open)
+    do hands_press(h, 115, true)
+    do hands_press(h, 83, true)
+    why = hands_at("a rescue copy after Ctrl+S on a file made read-only while open", hands_expect_name(h, "locked", hands_rescue(pid), h.none, limit))
+    if length(why) != 0: return why end
+    do hands_keep(h, h.found, false)
+    if hands_file(h, open, "open\n") != 0 or not hands_untouched(h, open, made): return "Ctrl+S wrote over a file made read-only while it was open" end
+    do hands_mode(h, "locked/open.txt", 384)
+    do hands_press(h, 115, true)
+    why = hands_at("Ctrl+S once the file is writable again", hands_expect_file(h, open, "zzopen\n", limit))
+    if length(why) != 0: return why end
+    do hands_press(h, 65307, false)
+    return hands_at("closing", hands_expect_close(h, limit))
+end
+
+-- Notes opening one file after another in its window (Ctrl+O, a name typed
+-- into its field after the open file's folder, Enter), each Ctrl+S saving
+-- into the file open then and no other. A file Notes refuses to open
+-- (invalid UTF-8), and a name in a folder that is not there, leave the open
+-- one in place: after Escape, what is typed and saved goes into the first
+-- file, and the refused one is not written. Then a CRLF file in a folder
+-- below: saved in its own CRLF style, the first file as it was, its
+-- recovery copy in a new folder beside it and the first file's copy as it
+-- was. Then a name not yet on disk beside it: Ctrl+S makes it, private to
+-- its owner, the file before as it was. Escape then closes Notes with status
+-- 0, and no file is
+-- left in either folder but these and the three recovery folders, one for
+-- each file edited (no folder made for the missing one, no file left by a
+-- save).
+func hands_switch(h, notes, limit):
+    do hands_dir(h, "open")
+    do hands_dir(h, "open/sub")
+    let first = hands_put(h, "open/a.txt", "first file\n", 384)
+    let second = hands_put(h, "open/sub/b.txt", "second\r\nfile\r\n", 384)
+    let bytes = new_buffer()
+    do append(bytes, 255)
+    do append(bytes, 10)
+    let bad = hands_write(h, "open/sub/bad.txt", bytes, 2, 384)
+    let why = hands_at("opening a file", hands_show(h, notes, first, h.none, limit))
+    if length(why) != 0: return why end
+    let pid = h.app
+    let n = hands_copy_number(h, "open", pid)
+    let kept = hands_keep_copy(h, "open", pid, n)
+    do hands_press(h, 111, true)
+    do hands_type(h, "sub/bad.txt\n")
+    do hands_press(h, 65307, false)
+    do hands_press(h, 111, true)
+    do hands_type(h, "missing/c.txt\n")
+    do hands_press(h, 65307, false)
+    do hands_type(h, "C")
+    do hands_press(h, 115, true)
+    why = hands_at("a save after Ctrl+O was refused", hands_expect_file(h, first, "Cfirst file\n", limit))
+    if length(why) != 0: return why end
+    if hands_file(h, bad, freeze(bytes)) != 0: return "the file Notes refused to open was written" end
+    do hands_press(h, 111, true)
+    do hands_type(h, "sub/b.txt\nB")
+    do hands_press(h, 115, true)
+    why = hands_at("a save after Ctrl+O opened a CRLF file", hands_expect_file(h, second, "Bsecond\r\nfile\r\n", limit))
+    if length(why) != 0: return why end
+    if hands_file(h, first, "Cfirst file\n") != 0: return "a save after Ctrl+O wrote the file open before" end
+    let copy = hands_keep_copy(h, "open/sub", pid, n + 1)
+    why = hands_at("the recovery copy beside the file opened", hands_expect_file(h, copy, "Bsecond\r\nfile\r\n", limit))
+    if length(why) != 0: return why end
+    if hands_file(h, kept, "Cfirst file\n") != 0: return "the recovery copy beside the file open before did not stay as it was" end
+    let fresh = hands_keep(h, hands_path(h.work, "open/sub/new.txt"), false)
+    do hands_press(h, 111, true)
+    do hands_type(h, "new.txt\nN")
+    do hands_press(h, 115, true)
+    why = hands_at("a save after Ctrl+O opened a name not yet on disk", hands_expect_file(h, fresh, "N", limit))
+    if length(why) != 0: return why end
+    if hands_file(h, second, "Bsecond\r\nfile\r\n") != 0: return "a save after Ctrl+O wrote the file open before" end
+    if (hands_stat(h, fresh).2 & 511) != 384: return "a new file may be read by others than its owner" end
+    do hands_keep_copy(h, "open/sub", pid, n + 2)
+    do hands_press(h, 65307, false)
+    return hands_at("closing", hands_expect_close(h, limit))
+end
+
+-- WORK/folder/.herbert-notes-PID-NUMBER as a name in WORK.
+func hands_copy_tail(folder, pid, number):
+    let b = new_buffer()
+    do text_add(b, folder)
+    do text_add(b, "/.herbert-notes-")
+    do text_add_whole(b, pid)
+    do text_add(b, "-")
+    do text_add_whole(b, number)
+    return freeze(b)
+end
+
+-- Send what is waiting, then wait at most limit ms for the program to end
+-- by itself with a status that says something went wrong (not 0, and not a
+-- signal). "" when it does.
+func hands_expect_failure(h, limit):
+    if not hands_settled(h): return "the display refused what the check sent" end
+    let started = hands_now(h)
+    while not hands_gone(h):
+        if hands_now(h) - started >= limit: return "the program did not end" end
+        do hands_wait(h, 10)
+    end
+    if h.ended == 2: return "the program was stopped by a signal" end
+    if h.value == 0: return "the program ended with status 0, as if nothing had gone wrong" end
+    return ""
+end
+
+-- Notes ended in the middle of an edit, before it is saved: the file and the
+-- recovery copy Notes keeps beside it must both be whole. Once killed
+-- outright (SIGKILL) after the edit reached the copy; once cut off from the
+-- display (KillClient on its window), when it must also end by itself, with
+-- a status that is not 0, instead of hanging. Then another program changes
+-- the file, and the second recovery copy opened as a document of its own is
+-- saved into itself: the copy gains what is typed and the file keeps the
+-- other program's bytes. Escape closes Notes with status 0.
+func hands_crash(h, notes, limit):
+    do hands_dir(h, "crash")
+    let file = hands_put(h, "crash/original.txt", "original text", 384)
+    let why = hands_at("opening a file", hands_show(h, notes, file, h.none, limit))
+    if length(why) != 0: return why end
+    let pid = h.app
+    let copy = hands_keep_copy(h, "crash", pid, hands_copy_number(h, "crash", pid))
+    do hands_type(h, "unsaved ")
+    why = hands_at("the recovery copy before a kill", hands_expect_file(h, copy, "unsaved original text", limit))
+    if length(why) != 0: return why end
+    do hands_clear(h)
+    if hands_file(h, copy, "unsaved original text") != 0 or hands_file(h, file, "original text") != 0: return "a kill in the middle of an edit did not leave the file and its recovery copy whole" end
+    why = hands_at("opening the file again", hands_show(h, notes, file, h.none, limit))
+    if length(why) != 0: return why end
+    pid = h.app
+    let n = hands_copy_number(h, "crash", pid)
+    copy = hands_keep_copy(h, "crash", pid, n)
+    do hands_type(h, "unsaved ")
+    why = hands_at("the recovery copy before the display cut Notes off", hands_expect_file(h, copy, "unsaved original text", limit))
+    if length(why) != 0: return why end
+    let c = h.c
+    let p = x11_request(c, 113, 0, 8)
+    do linux_put32(c.requests, p + 4, h.window)
+    why = hands_at("cut off from the display", hands_expect_failure(h, limit))
+    if length(why) != 0: return why end
+    if hands_file(h, copy, "unsaved original text") != 0 or hands_file(h, file, "original text") != 0: return "losing the display in the middle of an edit did not leave the file and its recovery copy whole" end
+    do hands_put(h, "crash/original.txt", "external original", 384)
+    why = hands_at("opening the recovery copy as a document", hands_show(h, notes, copy, h.none, limit))
+    if length(why) != 0: return why end
+    let inner = hands_copy_tail("crash", pid, n)
+    do hands_keep_copy(h, inner, h.app, hands_copy_number(h, inner, h.app))
+    do hands_press(h, 65367, true)
+    do hands_type(h, " recovered")
+    do hands_press(h, 115, true)
+    why = hands_at("saving the recovery copy", hands_expect_file(h, copy, "unsaved original text recovered", limit))
+    if length(why) != 0: return why end
+    if hands_file(h, file, "external original") != 0: return "saving the recovery copy wrote the original file" end
+    do hands_press(h, 65307, false)
+    return hands_at("closing", hands_expect_close(h, limit))
+end
+
+-- Notes on a file in a folder it may not write in (0500), so its first
+-- recovery copy cannot be made. Nothing is lost by that: once the folder is
+-- writable again (0700), the next edit makes the copy, holding both edits,
+-- and Ctrl+S saves them. In such a folder Ctrl+Q and Y still close Notes
+-- with status 0 and leave the file as it was. (The administrator may write
+-- in any folder, so this check cannot be run as the administrator.)
+func hands_checkpoint(h, notes, limit):
+    if linux_syscall6(107, 0, 0, 0, 0, 0, 0) == 0: return "this check needs a folder Notes may not write in, and the administrator may write in every folder: run it as an ordinary user" end
+    do hands_dir(h, "refused")
+    do hands_dir(h, "refused/locked")
+    let why = hands_unwritable(h, notes, limit)
+    do hands_mode(h, "refused/locked", 448)
+    return why
+end
+
+func hands_unwritable(h, notes, limit):
+    let file = hands_put(h, "refused/locked/doc.txt", "base", 384)
+    let other = hands_put(h, "refused/locked/other.txt", "base", 384)
+    do hands_mode(h, "refused/locked", 320)
+    let why = hands_at("opening a file in a folder Notes may not write in", hands_show(h, notes, file, h.none, limit))
+    if length(why) != 0: return why end
+    let pid = h.app
+    do hands_type(h, "x")
+    why = hands_at("an edit with no room for its recovery copy", hands_ping(h, limit))
+    if length(why) != 0: return why end
+    do hands_mode(h, "refused/locked", 448)
+    -- The first try took the folder number 1, so the copy is in number 2.
+    let copy = hands_keep_copy(h, "refused/locked", pid, 2)
+    do hands_type(h, "y")
+    why = hands_at("the next edit once the folder is writable", hands_expect_file(h, copy, "xybase", limit))
+    if length(why) != 0: return why end
+    do hands_press(h, 115, true)
+    why = hands_at("Ctrl+S once the folder is writable", hands_expect_file(h, file, "xybase", limit))
+    if length(why) != 0: return why end
+    do hands_press(h, 65307, false)
+    why = hands_at("closing", hands_expect_close(h, limit))
+    if length(why) != 0: return why end
+    do hands_mode(h, "refused/locked", 320)
+    why = hands_at("opening another file there", hands_show(h, notes, other, h.none, limit))
+    if length(why) != 0: return why end
+    do hands_type(h, "x")
+    do hands_press(h, 113, true)
+    do hands_press(h, 121, false)
+    why = hands_at("Ctrl+Q and Y with no recovery copy", hands_expect_close(h, limit))
+    if length(why) != 0: return why end
+    if hands_file(h, other, "base") != 0: return "closing without saving changed the file" end
+    return ""
+end
+
+-- Whether got (n bytes) is base (m bytes) with the text mark put in at one
+-- place, and nothing else changed.
+func hands_inserted(got, n, base, m, mark):
+    if n != m + length(mark): return false end
+    let p = 0
+    while p < m and buffer_get(got, p) == buffer_get(base, p): p = p + 1 end
+    let i = 0
+    while i < length(mark):
+        if buffer_get(got, p + i) != index(mark, i): return false end
+        i = i + 1
+    end
+    while p < m:
+        if buffer_get(got, p + length(mark)) != buffer_get(base, p): return false end
+        p = p + 1
+    end
+    return true
+end
+
+-- Whether got (n bytes) is base (m bytes) with cut bytes taken out at one
+-- place, and nothing else changed.
+func hands_removed(got, n, base, m, cut):
+    if n + cut != m: return false end
+    let p = 0
+    while p < n and buffer_get(got, p) == buffer_get(base, p): p = p + 1 end
+    while p < n:
+        if buffer_get(got, p) != buffer_get(base, p + cut): return false end
+        p = p + 1
+    end
+    return true
+end
+
+-- Send the keys that are waiting, then wait at most limit ms for the file
+-- at path to be base (m bytes) with mark put in at one place, or, when cut
+-- is not 0, with cut bytes taken out at one place; it is read into got.
+-- Then base becomes what the file holds. "" when it does.
+func hands_expect_long(h, path, base, m, got, mark, cut, limit):
+    if not hands_settled(h): return "the display refused what the check sent" end
+    let started = hands_now(h)
+    while true:
+        if hands_gone(h): return hands_how_ended(h) end
+        if hands_stat(h, path).4 + cut == m + length(mark):
+            let n = hands_slurp(path, got)
+            if (cut == 0 and hands_inserted(got, n, base, m, mark)) or (cut != 0 and hands_removed(got, n, base, m, cut)):
+                do linux_copy(base, 0, got, 0, n)
+                return ""
+            end
+        end
+        if hands_now(h) - started >= limit: return "the file holds something else" end
+        do hands_wait(h, 100)
+    end
+    return ""
+end
+
+-- Notes on one line of words 64 bytes short of its 4 MiB, where an edit
+-- moves megabytes of text the owner never sees. A mark typed near the end
+-- (Ctrl+End, Up three times, Home) and saved with Ctrl+S, and then one at
+-- the start (Ctrl+Home): each time the file is the line before with the mark
+-- put in at one place and nothing else changed, within 20 seconds; and then
+-- the same with 20 characters taken off its start (Ctrl+Home, Delete), so
+-- that the megabytes move the other way too.
+func hands_long_line(h, notes, limit):
+    do hands_dir(h, "line")
+    let size = 4194240
+    let base = linux_buffer(4194304)
+    let got = linux_buffer(4194305)
+    let at = 0
+    let k = 0
+    while at < size:
+        do buffer_set(base, at, 119)
+        at = linux_decimal(base, at + 1, k)
+        do buffer_set(base, at, 32)
+        at = at + 1
+        k = k + 1
+    end
+    let file = hands_write(h, "line/words.txt", base, size, 384)
+    let why = hands_at("opening a line of 4 MiB", hands_show(h, notes, file, h.none, limit))
+    if length(why) != 0: return why end
+    do hands_keep_copy(h, "line", h.app, hands_copy_number(h, "line", h.app))
+    do hands_press(h, 65367, true)
+    do hands_press(h, 65362, false)
+    do hands_press(h, 65362, false)
+    do hands_press(h, 65362, false)
+    do hands_press(h, 65360, false)
+    do hands_type(h, "Q1")
+    do hands_press(h, 115, true)
+    why = hands_at("a mark near the end, saved", hands_expect_long(h, file, base, size, got, "Q1", 0, 20000))
+    if length(why) != 0: return why end
+    do hands_press(h, 65360, true)
+    do hands_type(h, "Q2")
+    do hands_press(h, 115, true)
+    why = hands_at("a mark at the start, saved", hands_expect_long(h, file, base, size + 2, got, "Q2", 0, 20000))
+    if length(why) != 0: return why end
+    do hands_press(h, 65360, true)
+    let i = 0
+    while i < 20:
+        do hands_press(h, 65535, false)
+        i = i + 1
+    end
+    do hands_press(h, 115, true)
+    why = hands_at("20 characters taken off the start, saved", hands_expect_long(h, file, base, size + 4, got, "", 20, 20000))
+    if length(why) != 0: return why end
+    do hands_press(h, 65307, false)
+    return hands_at("closing", hands_expect_close(h, limit))
+end
+
+-- Notes' fields of fixed size, filled to their edge and pushed past it. Find
+-- takes 64 bytes: 62 a and an e with an acute accent (two bytes, through
+-- Ctrl+Shift+U, e9, Space) fill it, and a 4-byte emoji after them (1f600)
+-- must be refused whole, the query kept for F3. Unicode entry takes six
+-- digits: of 0000e90 the
+-- seventh is not taken, so Enter puts in the same accented e. Ctrl+S must
+-- then save the file with that one character added, and nothing else: Notes
+-- still running and nothing written past either field.
+func hands_fields(h, notes, limit):
+    do hands_dir(h, "fields")
+    let file = hands_put(h, "fields/f.txt", "fields\n", 384)
+    let why = hands_at("opening a file", hands_show(h, notes, file, h.none, limit))
+    if length(why) != 0: return why end
+    do hands_keep_copy(h, "fields", h.app, hands_copy_number(h, "fields", h.app))
+    do hands_press(h, 102, true)
+    let i = 0
+    while i < 62:
+        do hands_press(h, 97, false)
+        i = i + 1
+    end
+    do hands_press(h, 85, true)
+    do hands_type(h, "e9 ")
+    do hands_press(h, 85, true)
+    do hands_type(h, "1f600 ")
+    do hands_press(h, 65472, false)
+    do hands_press(h, 65307, false)
+    do hands_press(h, 85, true)
+    do hands_type(h, "0000e90\n")
+    do hands_press(h, 115, true)
+    let want = new_buffer()
+    do append(want, 195)
+    do append(want, 169)
+    do text_add(want, "fields\n")
+    why = hands_at("after both fields were filled and pushed past", hands_expect_file(h, file, freeze(want), limit))
+    if length(why) != 0: return why end
+    do hands_press(h, 65307, false)
+    return hands_at("closing", hands_expect_close(h, limit))
+end
+
+-- Notes through twelve rounds of what a long session does, each saved and
+-- checked: typing, undo and redo, Find and F3, Ctrl+A, Ctrl+C and Ctrl+V of
+-- its own copy and undo, a paste from another program and undo, the wheel, a
+-- click and a drag, Ctrl+S, and Ctrl+O between two files. Its memory must not
+-- grow: from the fourth round on, at every second, its virtual size the same,
+-- what it holds in memory (Rss) within 64 KiB and its descriptors as many.
+-- Escape then closes it with status 0.
+func hands_notes_memory(h, notes, limit):
+    do hands_dir(h, "memory")
+    let x = hands_put(h, "memory/x.txt", "x file\n", 384)
+    let y = hands_put(h, "memory/y.txt", "y file\n", 384)
+    let why = hands_at("opening a file", hands_show(h, notes, x, h.none, limit))
+    if length(why) != 0: return why end
+    let pid = h.app
+    let n = hands_copy_number(h, "memory", pid)
+    let own = h.c.state.window
+    do hands_point(h, 450, 300)
+    let size = 0
+    let low = 0 - 1
+    let high = 0
+    let files = 0
+    let k = 0
+    while k < 12:
+        do hands_keep_copy(h, "memory", pid, n + k)
+        do hands_type(h, "ab")
+        do hands_press(h, 122, true)
+        do hands_press(h, 121, true)
+        do hands_press(h, 102, true)
+        do hands_type(h, "file")
+        do hands_press(h, 65472, false)
+        do hands_press(h, 65307, false)
+        do hands_press(h, 97, true)
+        do hands_press(h, 99, true)
+        do hands_press(h, 65367, true)
+        do hands_press(h, 118, true)
+        do hands_press(h, 122, true)
+        why = hands_at("a round of edits", hands_ping(h, limit))
+        if length(why) != 0: return why end
+        do hands_offer(h, "pasted")
+        do hands_owner(h, own)
+        do hands_press(h, 118, true)
+        do hands_press(h, 122, true)
+        let i = 0
+        while i < 5:
+            do hands_notch(h, true)
+            i = i + 1
+        end
+        i = 0
+        while i < 5:
+            do hands_notch(h, false)
+            i = i + 1
+        end
+        do hands_point(h, 200, 110)
+        do hands_button(h, 1, true)
+        do hands_button(h, 1, false)
+        do hands_point(h, 100, 110)
+        do hands_button(h, 1, true)
+        do hands_point(h, 300, 150)
+        do hands_button(h, 1, false)
+        do hands_point(h, 450, 300)
+        do hands_press(h, 115, true)
+        let path = x
+        let want = new_buffer()
+        i = 0
+        while i <= k / 2:
+            do text_add(want, "ab")
+            i = i + 1
+        end
+        if k % 2 == 0:
+            do text_add(want, "x file\n")
+        else:
+            path = y
+            do text_add(want, "y file\n")
+        end
+        why = hands_at("a round of edits, saved", hands_expect_file(h, path, freeze(want), limit))
+        if length(why) != 0: return why end
+        if k >= 3 and k % 2 == 1:
+            let m = hands_memory(h, pid)
+            let fds = hands_entries(h, hands_proc(pid, "fd"))
+            if m.0 == 0 - 1 or m.1 == 0 - 1 or fds == 0 - 1: do hands_lost(h, "the check could not read Notes' memory and descriptors in /proc") end
+            if k == 3:
+                size = m.0
+                files = fds
+            end
+            if m.1 < low: low = m.1 end
+            if m.1 > high: high = m.1 end
+            if m.0 != size: return "its virtual size changed during the session" end
+            if high - low > 64: return "it held more memory as the session went on" end
+            if fds != files: return "it held more files open as the session went on" end
+        end
+        do hands_press(h, 111, true)
+        if k % 2 == 0: do hands_type(h, "y.txt\n") else: do hands_type(h, "x.txt\n") end
+        k = k + 1
+    end
+    do hands_press(h, 65307, false)
+    return hands_at("closing", hands_expect_close(h, limit))
+end
+
+-- Notes' keys and the clipboard. Ctrl+V with nothing on the clipboard
+-- pastes nothing. Then, while Notes is stopped, so that all of it waits for
+-- it at once: a request for the clipboard from a window that is gone, Ctrl+C
+-- (it takes the clipboard), Ctrl+End, Ctrl+V (Notes must ask the display
+-- whether its copy still holds the clipboard), 300 notches of the wheel, 300
+-- keys a and c in turn (the keyboard given to the screen and back after the
+-- first 40), a second request from the gone window, the keyboard's map
+-- changed (the a key giving b; Notes must ask for the new map while the
+-- clipboard's answer is on its way), Ctrl+V again with that question still
+-- unanswered, 260 keys more, a request from this check's own window, the map
+-- changed back (Notes must not ask again while it still waits for the first
+-- map) and 260 keys more: each change, request and paste so far apart that
+-- Notes reads them in turns, and far past the 256 keys Notes' queue holds,
+-- so each paste gives up and pastes nothing. The display's refusals of Notes'
+-- answer to the first request come after all of that, so Notes answers the
+-- other two before it reads them, and must still pass them over. Every key
+-- must reach the file in order once Notes goes on and Ctrl+S saves.
+-- Stopped again, the map changed and Ctrl+V together: the map's answer comes
+-- while the clipboard's question is under way, and Notes' own copy must be
+-- pasted once. Then the requests a program that went away leaves Notes to
+-- answer (hands_vanished), before and after Notes idles four seconds, past
+-- 65,536 requests of its own: each time Notes must stay up and save what is
+-- typed next. Then this check owns the
+-- clipboard and never answers: Ctrl+V must give up, and what is typed after
+-- it be saved, within 6 seconds. It answers with "ok", which is pasted; with
+-- text holding a control character, and with 70,000 bytes, past what a
+-- paste takes: each refused whole, so only what is typed after it is saved.
+-- Escape then closes Notes with status 0.
+func hands_clipboard(h, notes, limit):
+    do hands_dir(h, "clip")
+    let file = hands_put(h, "clip/c.txt", "copy me\n", 384)
+    let why = hands_at("opening a file", hands_show(h, notes, file, h.none, limit))
+    if length(why) != 0: return why end
+    do hands_keep_copy(h, "clip", h.app, hands_copy_number(h, "clip", h.app))
+    do hands_point(h, 450, 300)
+    do hands_press(h, 118, true)
+    do hands_press(h, 97, true)
+    why = hands_at("Ctrl+V with nothing on the clipboard", hands_ping(h, limit))
+    if length(why) != 0: return why end
+    if not hands_halt(h): return hands_at("stopping Notes", hands_how_ended(h)) end
+    let a = hands_find(h.c, 97).0
+    let typed = new_buffer()
+    do text_add(typed, "copy me\n")
+    let gone = hands_vanish(h)
+    do hands_ask(h, gone, h.pinging, 0)
+    do hands_press(h, 99, true)
+    do hands_press(h, 65367, true)
+    do hands_press(h, 118, true)
+    let i = 0
+    while i < 300:
+        do hands_notch(h, true)
+        i = i + 1
+    end
+    let moved = true
+    i = 0
+    while i < 820:
+        if i == 300: do hands_ask(h, gone, h.pinging, 0) end
+        if i == 560: do hands_ask(h, h.c.state.window, h.pinging, 0) end
+        if i == 40: moved = hands_focus(h, h.c.state.root) and hands_focus(h, h.window) end
+        if i == 300:
+            do hands_remap(h, a, 98, 66)
+            do hands_press(h, 118, true)
+        end
+        if i == 560: do hands_remap(h, a, 97, 65) end
+        let key = 97
+        if i % 2 == 1: key = 99 end
+        do hands_press(h, key, false)
+        do append(typed, key)
+        i = i + 1
+    end
+    let fine = hands_settled(h) and moved
+    do hands_resume(h)
+    if not fine: return "the display refused what the check sent" end
+    do hands_press(h, 115, true)
+    why = hands_at("820 keys, two pastes, three requests and two changes of the keyboard's map while Notes was stopped", hands_expect_file(h, file, freeze(typed), limit))
+    if length(why) != 0: return why end
+    why = hands_at("Ctrl+V and a change of the keyboard's map together", hands_ping(h, limit))
+    if length(why) != 0: return why end
+    if not hands_halt(h): return hands_at("stopping Notes", hands_how_ended(h)) end
+    do hands_remap(h, a, 97, 65)
+    do hands_press(h, 118, true)
+    fine = hands_settled(h)
+    do hands_resume(h)
+    if not fine: return "the display refused what the check sent" end
+    do hands_press(h, 115, true)
+    do text_add(typed, "copy me\n")
+    why = hands_at("Ctrl+V and a change of the keyboard's map together", hands_expect_file(h, file, freeze(typed), limit))
+    if length(why) != 0: return why end
+    do hands_vanished(h)
+    do hands_type(h, "!")
+    do hands_press(h, 115, true)
+    do append(typed, 33)
+    why = hands_at("requests from a program that went away", hands_expect_file(h, file, freeze(typed), limit))
+    if length(why) != 0: return why end
+    why = hands_at("four seconds idle", hands_expect_running(h, 4000))
+    if length(why) != 0: return why end
+    do hands_vanished(h)
+    do hands_type(h, "?")
+    do hands_press(h, 115, true)
+    do append(typed, 63)
+    why = hands_at("requests from a program that went away, after 65,536 requests of Notes' own", hands_expect_file(h, file, freeze(typed), limit))
+    if length(why) != 0: return why end
+    do hands_owner(h, h.c.state.window)
+    h.offering = 1
+    do hands_press(h, 118, true)
+    do hands_type(h, "Q")
+    do hands_press(h, 115, true)
+    do append(typed, 81)
+    why = hands_at("Ctrl+V when the clipboard's owner never answers", hands_expect_file(h, file, freeze(typed), 6000))
+    if length(why) != 0: return why end
+    do hands_offer(h, "ok")
+    do hands_press(h, 118, true)
+    do hands_press(h, 115, true)
+    do text_add(typed, "ok")
+    why = hands_at("Ctrl+V of another program's text", hands_expect_file(h, file, freeze(typed), limit))
+    if length(why) != 0: return why end
+    let odd = new_buffer()
+    do append(odd, 97)
+    do append(odd, 1)
+    do append(odd, 98)
+    do hands_offer(h, freeze(odd))
+    do hands_press(h, 118, true)
+    do hands_type(h, "R")
+    do hands_press(h, 115, true)
+    do append(typed, 82)
+    why = hands_at("Ctrl+V of text holding a control character", hands_expect_file(h, file, freeze(typed), limit))
+    if length(why) != 0: return why end
+    let big = new_buffer()
+    do buffer_fill(big, 70000, 120)
+    do hands_offer(h, freeze(big))
+    do hands_press(h, 118, true)
+    do hands_type(h, "T")
+    do hands_press(h, 115, true)
+    do append(typed, 84)
+    why = hands_at("Ctrl+V of 70,000 bytes", hands_expect_file(h, file, freeze(typed), limit))
+    if length(why) != 0: return why end
+    h.offering = 0
+    do hands_owner(h, 0)
+    do hands_press(h, 65307, false)
+    return hands_at("closing", hands_expect_close(h, limit))
+end
+
+-- Scope with args and envp: up, still up after watch ms, then closed by key
+-- (0: the close button). "" when it closed with status 0.
+func hands_scope_run(h, scope, args, envp, key, watch, limit):
+    let why = hands_launch(h, scope, args, envp, limit)
+    if length(why) != 0: return why end
+    why = hands_expect_running(h, watch)
+    if length(why) != 0: return why end
+    if key == 0: do hands_close_button(h) else: do hands_press(h, key, false) end
+    return hands_expect_close(h, limit)
+end
+
+-- Scope's list of other computers, read once at its start, as the owner may
+-- leave it: none at all (q closes Scope), a folder where the list should be
+-- (Shift+Q closes it), no HOME to find it by (the close button closes it), a
+-- pipe that nothing writes into (it must not hold Scope's start: Escape
+-- closes it), a list of 65,537 bytes, one past what Scope reads (Escape), and
+-- a list of every kind of line: a blank one, a comment, a line not
+-- understood, a name of 24 bytes and seven computers, the seventh one too
+-- many (Escape after six seconds: past the first knocks on a computer that
+-- takes the knock and says nothing, one that never answers, one that
+-- refuses, two helpers, and past the next knocks). Each time Scope must open
+-- its window, stay up and close with status 0.
+func hands_scope_lists(h, scope, limit):
+    do hands_dir(h, "lists")
+    do hands_dir(h, "lists/home")
+    do hands_dir(h, "lists/home/.config")
+    do hands_dir(h, "lists/home/.config/herbert")
+    let tail = "lists/home/.config/herbert/computers.txt"
+    let list = hands_path(h.work, tail)
+    let envp = hands_environment(h, hands_join(h.work, "lists/home"))
+    let none = new_array(buffer)
+    let why = hands_at("with no list, closed with q", hands_scope_run(h, scope, none, envp, 113, 1000, limit))
+    if length(why) != 0: return why end
+    do hands_dir(h, tail)
+    why = hands_at("with a folder for its list, closed with Shift+Q", hands_scope_run(h, scope, none, envp, 81, 1000, limit))
+    if length(why) != 0: return why end
+    do hands_remove(h.work, tail, true)
+    why = hands_at("with HOME not set, closed with the close button", hands_scope_run(h, scope, none, hands_environment(h, ""), 0, 1000, limit))
+    if length(why) != 0: return why end
+    if linux_error(linux_syscall6(133, buffer_address(list), 4516, 0, 0, 0, 0)): do hands_lost(h, "the check could not make a pipe in its own folder") end
+    do hands_keep(h, list, false)
+    why = hands_at("with a pipe for its list", hands_scope_run(h, scope, none, envp, 65307, 1000, limit))
+    if length(why) != 0: return why end
+    do hands_remove(h.work, tail, false)
+    let big = new_buffer()
+    do buffer_fill(big, 65536, 35)
+    do append(big, 10)
+    do hands_write(h, tail, big, 65537, 384)
+    why = hands_at("with a list of 65,537 bytes", hands_scope_run(h, scope, none, envp, 65307, 1000, limit))
+    if length(why) != 0: return why end
+    let silent = hands_listen(h, 6, 64, 0)
+    let hole = hands_hole(h)
+    let shut = hands_listen(h, 9, 0, 0)
+    let one = hands_listen(h, 7, 64, 0)
+    let two = hands_listen(h, 1, 64, 0)
+    let b = new_buffer()
+    do text_add(b, "\n# made by the window checks\nnot understood\n")
+    do hands_computer(b, h, "abcdefghijklmnopqrstuvwx", silent.port)
+    do hands_computer(b, h, "hole", hole.port)
+    do hands_computer(b, h, "shut", shut.port)
+    do text_add(b, "here 127.0.0.1 9\n")
+    do hands_computer(b, h, "one", one.port)
+    do hands_computer(b, h, "two", two.port)
+    do hands_computer(b, h, "seventh", silent.port)
+    do hands_put(h, tail, freeze(b), 384)
+    return hands_at("with a list of every kind of line", hands_scope_run(h, scope, none, envp, 65307, 6000, limit))
+end
+
+-- Scope knocking every half second, with a limit of two seconds, on six
+-- computers of this check's own: a helper whose second line makes the
+-- widest row there is (43 characters) and which then stops listening, so its
+-- later knocks are refused; one that sends 257 bytes, one more than a knock
+-- reads; one that greets as an SSH server and holds the connection; one that
+-- sends a helper's line a byte every 300 ms, too slowly; one that takes the
+-- knock and says nothing; and one that never answers. Scope must stay up
+-- through two knocks on each, and three on the silent one; never send a
+-- byte; give the silent one up at its limit, not before it nor long after;
+-- and close with status 0 within a second of Escape, pressed while knocks on
+-- the silent computer and on the one that never answers are under way (a
+-- window that waited on either would not close for up to two seconds).
+func hands_scope_knocks(h, scope, limit):
+    do hands_dir(h, "knock")
+    let stat = hands_put(h, "knock/stat", "cpu  10000 0 500 8000 500 0 0 0 0 0\n", 384)
+    let mem = hands_put(h, "knock/meminfo", "MemTotal: 16384000 kB\nMemAvailable: 4096000 kB\n", 384)
+    let host = hands_put(h, "knock/hostname", "hands\n", 384)
+    let widest = hands_listen(h, 1, 64, 2)
+    let long = hands_listen(h, 3, 64, 0)
+    let banner = hands_listen(h, 4, 64, 0)
+    let drip = hands_listen(h, 5, 64, 0)
+    let silent = hands_listen(h, 6, 64, 0)
+    let hole = hands_hole(h)
+    let b = new_buffer()
+    do hands_computer(b, h, "widest", widest.port)
+    do hands_computer(b, h, "long", long.port)
+    do hands_computer(b, h, "banner", banner.port)
+    do hands_computer(b, h, "drip", drip.port)
+    do hands_computer(b, h, "silent", silent.port)
+    do hands_computer(b, h, "hole", hole.port)
+    do hands_put(h, "knock/computers.txt", freeze(b), 384)
+    let w = h.work
+    let args = hands_words("--test", hands_join(w, "knock/stat"), hands_join(w, "knock/meminfo"), hands_join(w, "knock/hostname"), "200", hands_join(w, "knock/computers.txt"), "500", "2000", "", "")
+    let why = hands_at("opening", hands_launch(h, scope, args, h.envp, limit))
+    if length(why) != 0: return why end
+    let started = hands_now(h)
+    while silent.count < 3:
+        if hands_gone(h): return hands_at("while it knocked", hands_how_ended(h)) end
+        if hands_now(h) - started >= 20000: return "Scope did not knock on the silent computer a third time" end
+        do hands_wait(h, 10)
+    end
+    let shortest = silent.shortest
+    let longest = silent.longest
+    do hands_press(h, 65307, false)
+    why = hands_at("Escape while knocks were under way", hands_expect_close(h, 1000))
+    if length(why) != 0: return why end
+    if widest.count != 2 or long.count < 2 or banner.count < 2 or drip.count < 2: return "Scope did not knock on each computer twice" end
+    if widest.got + long.got + banner.got + drip.got + silent.got != 0: return "Scope sent bytes on a knock" end
+    if shortest < 1700 or longest > 3500: return "Scope did not give up the silent computer at its limit of two seconds" end
+    return ""
+end
+
+-- The six links Scope reads through in the long run (hands_scope_long)
+-- turned to one of four states: 0 the real files in /proc, readings in
+-- files and the disk holding /; 1 files without a final newline (memory
+-- under 1 GiB, a name of 60 bytes), readings in files, the disk holding
+-- WORK; 2 nothing at all; 3 files that make no sense, readings that are not
+-- numbers, and /proc for the disk.
+func hands_turn(h, state):
+    let w = h.work
+    if state == 0:
+        do hands_aim(h, "run/stat", "/proc/stat")
+        do hands_aim(h, "run/meminfo", "/proc/meminfo")
+        do hands_aim(h, "run/hostname", "/proc/sys/kernel/hostname")
+        do hands_aim(h, "run/drive", hands_join(w, "run/drive-short"))
+        do hands_aim(h, "run/cpu", hands_join(w, "run/cpu-short"))
+        return hands_aim(h, "run/disk", "/")
+    end
+    if state == 1:
+        do hands_aim(h, "run/stat", hands_join(w, "run/stat-short"))
+        do hands_aim(h, "run/meminfo", hands_join(w, "run/meminfo-short"))
+        do hands_aim(h, "run/hostname", hands_join(w, "run/name-short"))
+        do hands_aim(h, "run/drive", hands_join(w, "run/drive-short"))
+        do hands_aim(h, "run/cpu", hands_join(w, "run/cpu-short"))
+        return hands_aim(h, "run/disk", w)
+    end
+    if state == 2:
+        do hands_aim(h, "run/stat", "")
+        do hands_aim(h, "run/meminfo", "")
+        do hands_aim(h, "run/hostname", "")
+        do hands_aim(h, "run/drive", "")
+        do hands_aim(h, "run/cpu", "")
+        return hands_aim(h, "run/disk", "")
+    end
+    do hands_aim(h, "run/stat", hands_join(w, "run/stat-bad"))
+    do hands_aim(h, "run/meminfo", hands_join(w, "run/meminfo-bad"))
+    do hands_aim(h, "run/hostname", hands_join(w, "run/name-bad"))
+    do hands_aim(h, "run/drive", hands_join(w, "run/drive-bad"))
+    do hands_aim(h, "run/cpu", hands_join(w, "run/cpu-bad"))
+    return hands_aim(h, "run/disk", "/proc")
+end
+
+-- Scope for half a minute at a hundred times its rate of readings (every
+-- 10 ms) and 250 times its rate of knocks (every 20 ms, with a limit of
+-- 10 ms), its files, temperatures and disk turned every tenth of a second
+-- among the four states of hands_turn, its knocks on a helper of each
+-- version, a computer that says nothing, one that refuses and one that never
+-- answers. Every two seconds from the second on: its virtual size the same,
+-- what it holds in memory within 64 KiB, at most one file it reads open
+-- (and at least once none), at most five knocks under way, and none of them
+-- one seen two seconds before (no knock keeps its socket). Each computer that
+-- takes knocks must have taken a hundred or more, and the close button then
+-- closes Scope with status 0.
+func hands_scope_long(h, scope, limit):
+    let w = h.work
+    do hands_dir(h, "run")
+    do hands_put(h, "run/stat-short", "cpu  1300 0 600 8550 550 0 0 0 0 0", 384)
+    do hands_put(h, "run/stat-bad", "cpu  1 2 x 4\n", 384)
+    do hands_put(h, "run/meminfo-short", "MemTotal:  524288 kB\nMemAvailable:  104858 kB", 384)
+    do hands_put(h, "run/meminfo-bad", "MemTotal:  524288 kB\n", 384)
+    do hands_put(h, "run/name-short", "a-name-longer-than-48-bytes-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 384)
+    do hands_put(h, "run/name-bad", "", 384)
+    do hands_put(h, "run/drive-short", "35000", 384)
+    do hands_put(h, "run/drive-bad", "-5000\n", 384)
+    do hands_put(h, "run/cpu-short", "41500", 384)
+    do hands_put(h, "run/cpu-bad", "abc\n", 384)
+    do hands_keep(h, hands_path(w, "run/stat"), false)
+    do hands_keep(h, hands_path(w, "run/meminfo"), false)
+    do hands_keep(h, hands_path(w, "run/hostname"), false)
+    do hands_keep(h, hands_path(w, "run/drive"), false)
+    do hands_keep(h, hands_path(w, "run/cpu"), false)
+    do hands_keep(h, hands_path(w, "run/disk"), false)
+    do hands_dir(h, "run/hwmon")
+    do hands_dir(h, "run/hwmon/hwmon0")
+    do hands_put(h, "run/hwmon/hwmon0/name", "nvme\n", 384)
+    do hands_put(h, "run/hwmon/hwmon0/temp1_max", "83850\n", 384)
+    do hands_put(h, "run/hwmon/hwmon0/temp1_crit", "87850\n", 384)
+    do hands_keep(h, hands_path(w, "run/hwmon/hwmon0/temp1_input"), false)
+    do hands_aim(h, "run/hwmon/hwmon0/temp1_input", hands_join(w, "run/drive"))
+    do hands_dir(h, "run/hwmon/hwmon1")
+    do hands_put(h, "run/hwmon/hwmon1/name", "k10temp\n", 384)
+    do hands_keep(h, hands_path(w, "run/hwmon/hwmon1/temp1_input"), false)
+    do hands_aim(h, "run/hwmon/hwmon1/temp1_input", hands_join(w, "run/cpu"))
+    do hands_turn(h, 0)
+    let one = hands_listen(h, 7, 64, 0)
+    let two = hands_listen(h, 1, 64, 0)
+    let silent = hands_listen(h, 6, 64, 0)
+    let shut = hands_listen(h, 9, 0, 0)
+    let hole = hands_hole(h)
+    let b = new_buffer()
+    do hands_computer(b, h, "one", one.port)
+    do hands_computer(b, h, "two", two.port)
+    do hands_computer(b, h, "silent", silent.port)
+    do hands_computer(b, h, "shut", shut.port)
+    do hands_computer(b, h, "hole", hole.port)
+    do hands_put(h, "run/computers.txt", freeze(b), 384)
+    let args = hands_words("--test", hands_join(w, "run/stat"), hands_join(w, "run/meminfo"), hands_join(w, "run/hostname"), "10", hands_join(w, "run/computers.txt"), "20", "10", hands_join(w, "run/hwmon"), hands_join(w, "run/disk"))
+    let why = hands_at("opening", hands_launch(h, scope, args, h.envp, limit))
+    if length(why) != 0: return why end
+    let pid = h.app
+    let started = hands_now(h)
+    let turned = started
+    let next = started + 2000
+    let state = 0
+    let samples = 0
+    let size = 0
+    let low = 0 - 1
+    let high = 0
+    let idle = false
+    let before = new_array(int)
+    let counts = (0, 0, 0)
+    while samples < 15:
+        if hands_gone(h): return hands_at("while its files turned and it knocked", hands_how_ended(h)) end
+        let now = hands_now(h)
+        if now - turned >= 100:
+            state = (state + 1) % 4
+            do hands_turn(h, state)
+            turned = now
+        end
+        if now >= next:
+            let m = hands_memory(h, pid)
+            let fds = hands_descriptors(h, pid)
+            if m.0 == 0 - 1 or m.1 == 0 - 1 or fds.0 == 0 - 1: do hands_lost(h, "the check could not read Scope's memory and descriptors in /proc") end
+            if samples == 0:
+                size = m.0
+                counts = (one.count, two.count, silent.count)
+            end
+            if m.1 < low: low = m.1 end
+            if m.1 > high: high = m.1 end
+            if m.0 != size: return "its virtual size changed as it ran" end
+            if high - low > 64: return "it held more memory as it ran" end
+            if fds.0 > 1: return "more than one file it reads was open at once" end
+            if fds.0 == 0: idle = true end
+            if count(fds.1) > 5: return "more knocks were under way than it has computers" end
+            let i = 0
+            while i < count(fds.1):
+                if hands_among(before, get(fds.1, i)): return "a knock's socket was still open two seconds later" end
+                i = i + 1
+            end
+            before = fds.1
+            samples = samples + 1
+            next = next + 2000
+        end
+        do hands_wait(h, 10)
+    end
+    if not idle: return "a file it reads was open at every look" end
+    if one.count - counts.0 < 100 or two.count - counts.1 < 100 or silent.count - counts.2 < 100: return "it knocked too seldom to judge its memory" end
+    if one.got + two.got + silent.got != 0: return "Scope sent bytes on a knock" end
+    do hands_turn(h, 0)
+    do hands_close_button(h)
+    return hands_at("the close button", hands_expect_close(h, limit))
+end
+
+-- Maze on a small map of its own: moved into the walls, along the dots to the
+-- last one, and restarted with R, it must stay up; the close button must then
+-- close it with status 0, and on a second run Escape. Each move is a key held
+-- down for a while, as Maze reads held keys.
+func hands_maze(h, maze, limit):
+    do hands_dir(h, "maze")
+    let map = hands_put(h, "maze/small.txt", "#######\n#P..###\n###.###\n###...#\n#######\n", 384)
+    let why = hands_at("opening a small map", hands_show(h, maze, map, h.none, limit))
+    if length(why) != 0: return why end
+    why = hands_at("Left, into a wall", hands_hold(h, 65361, 300))
+    if length(why) != 0: return why end
+    why = hands_at("Up, into a wall", hands_hold(h, 65362, 300))
+    if length(why) != 0: return why end
+    why = hands_at("Right, over two dots", hands_hold(h, 65363, 700))
+    if length(why) != 0: return why end
+    why = hands_at("Down, over a dot", hands_hold(h, 65364, 700))
+    if length(why) != 0: return why end
+    why = hands_at("Right, over the last dots", hands_hold(h, 65363, 700))
+    if length(why) != 0: return why end
+    do hands_press(h, 114, false)
+    why = hands_at("R after the last dot", hands_expect_running(h, 500))
+    if length(why) != 0: return why end
+    do hands_close_button(h)
+    why = hands_at("the close button", hands_expect_close(h, limit))
+    if length(why) != 0: return why end
+    why = hands_at("opening the map again", hands_show(h, maze, map, h.none, limit))
+    if length(why) != 0: return why end
+    do hands_press(h, 65307, false)
+    return hands_at("Escape", hands_expect_close(h, limit))
+end
+
+-- First steps: with an arrow held for a moment, Escape must close it with
+-- status 0 within 3 seconds, and on a second run the close button. Then it
+-- runs on a second display of its own, which is stopped under it: it must
+-- end by itself within 3 seconds with status 1 (lib/x11.herb's own end for a
+-- display that has gone), not hang or spin.
+func hands_first_steps(h, first, xvfb, limit):
+    let why = hands_at("opening", hands_show(h, first, h.none, h.none, limit))
+    if length(why) != 0: return why end
+    why = hands_at("Right held", hands_hold(h, 65363, 300))
+    if length(why) != 0: return why end
+    do hands_press(h, 65307, false)
+    why = hands_at("Escape", hands_expect_close(h, 3000))
+    if length(why) != 0: return why end
+    why = hands_at("opening again", hands_show(h, first, h.none, h.none, limit))
+    if length(why) != 0: return why end
+    do hands_close_button(h)
+    why = hands_at("the close button", hands_expect_close(h, 3000))
+    if length(why) != 0: return why end
+    do hands_keep(h, hands_path(h.work, "display2.log"), false)
+    let other = hands_display(h, xvfb, "display2.log")
+    let mine = h.c
+    h.c = hands_connect(h.work, other.1)
+    let screen = new_buffer()
+    do text_add(screen, "DISPLAY=:")
+    do text_add(screen, other.1)
+    do append(screen, 0)
+    let envp = linux_buffer(16)
+    do linux_put64(envp, 0, buffer_address(screen))
+    why = hands_launch(h, first, new_array(buffer), envp, limit)
+    do linux_close(h.c.state.fd)
+    h.c = mine
+    do hands_stop(h, other.0, 15)
+    if length(why) != 0: return hands_at("opening on a second display", why) end
+    let started = hands_now(h)
+    while not hands_gone(h):
+        if hands_now(h) - started >= 3000: return "its display stopped and it did not end within 3 seconds" end
+        do hands_wait(h, 10)
+    end
+    if h.ended != 1 or h.value != 1: return "its display stopped and it did not end by itself with status 1" end
+    return ""
+end
+
 -- An argument that must be an absolute path.
 func hands_argument(args, k):
     let s = linux_argument(args, k)
-    if length(s) == 0 or index(s, 0) != 47: do hands_die("usage: hands NOTES SCOPE STAND-IN UNDER [XVFB] (absolute paths)") end
+    if length(s) == 0 or index(s, 0) != 47: do hands_die("usage: hands NOTES SCOPE MAZE FIRST-STEPS STAND-IN UNDER [XVFB] (absolute paths)") end
     return s
 end
 
@@ -1055,26 +2965,43 @@ func main():
     do linux_close(low)
     let args = linux_arguments()
     let given = linux_argument_count(args)
-    if given != 5 and given != 6: do hands_die("usage: hands NOTES SCOPE STAND-IN UNDER [XVFB] (absolute paths)") end
+    if given != 7 and given != 8: do hands_die("usage: hands NOTES SCOPE MAZE FIRST-STEPS STAND-IN UNDER [XVFB] (absolute paths)") end
     let notes = hands_program(hands_argument(args, 1))
     let scope = hands_program(hands_argument(args, 2))
-    let stand_in = hands_program(hands_argument(args, 3))
-    let under = hands_argument(args, 4)
+    let maze = hands_program(hands_argument(args, 3))
+    let first = hands_program(hands_argument(args, 4))
+    let stand_in = hands_program(hands_argument(args, 5))
+    let under = hands_argument(args, 6)
     let server = "/usr/bin/Xvfb"
-    if given == 6: server = hands_argument(args, 5) end
+    if given == 8: server = hands_argument(args, 7) end
     let xvfb = hands_program(server)
     -- Ten minutes for everything; Linux then stops this check, and with it
     -- every program it started.
     do linux_syscall6(37, 600, 0, 0, 0, 0, 0)
     let work = hands_work(under)
+    -- This run's address for Scope's knocks, 127.88.third.fourth, from this
+    -- process's number.
+    let me = linux_syscall6(39, 0, 0, 0, 0, 0, 0)
+    let third = 1 + (me / 250) % 250
+    let fourth = 1 + me % 250
+    let near = new_buffer()
+    do text_add(near, "127.88.")
+    do text_add_whole(near, third)
+    do text_add(near, ".")
+    do text_add_whole(near, fourth)
     -- Until the display is up and this check is connected to it, c is a
     -- connection to nothing; nothing uses it before then.
     let idle = X11Clip(false, false, 0, 0, 0, 0, 0, 0, 0, 0, new_buffer(), 0, new_buffer(), 0, false, 0, false, 0, 0, 0, 0, 0, 0, new_buffer(), 0, 0, false)
     let blank = X11(X11State(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false, 0, false, false, 0, 0, 0, false, idle, false), new_buffer(), new_buffer(), new_buffer(), new_buffer(), new_buffer(), new_buffer(), new_buffer(), new_buffer())
-    let h = Hands(blank, 0, 0, 0, work, linux_buffer(24), linux_buffer(32), linux_buffer(8), linux_buffer(8),
+    let h = Hands(blank, 0, 0, 0, work, linux_buffer(24), linux_buffer(128), linux_buffer(8), linux_buffer(8),
                   linux_buffer(16), linux_buffer(16), linux_buffer(256), linux_buffer(65536), 65536,
                   hands_path(work, "programs.log"), linux_cstring("/dev/null"), linux_cstring(""), linux_buffer(16),
-                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, linux_cstring(""), linux_cstring(""), linux_cstring(""), 0, 0)
+                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, linux_cstring(""), linux_cstring(""), linux_cstring(""), 0, 0,
+                  new_array(buffer), new_array(bool), 0, 0, new_array(Sock), linux_buffer(512), freeze(near),
+                  linux_buffer(8), linux_buffer(16), linux_buffer(8), linux_buffer(1024), linux_buffer(144),
+                  linux_buffer(256), linux_buffer(70016), 0, 0, 100, 0, false, 0, 0, 0, linux_cstring(""), third, fourth)
+    do linux_put64(h.core, 0, 1)
+    do linux_put64(h.core, 8, 1)
     do hands_folder(h, "home")
     do hands_folder(h, "home/.config")
     do hands_folder(h, "home/.config/herbert")
@@ -1083,17 +3010,17 @@ func main():
     let fd = linux_open(hands_path(work, "home/.config/herbert/computers.txt"), 524865, 420)
     if linux_error(fd) or linux_syscall6(1, fd, buffer_address(linux_cstring(list)), length(list), 0, 0, 0) != length(list): do hands_lost(h, "the check's own folder cannot be written in") end
     do linux_close(fd)
-    let display = hands_display(h, xvfb)
+    let display = hands_display(h, xvfb, "display.log")
     h.server = display.0
     let screen = new_buffer()
     do text_add(screen, ":")
     do text_add(screen, display.1)
-    let e1 = hands_setting("DISPLAY", freeze(screen))
+    h.screen = hands_setting("DISPLAY", freeze(screen))
     let home = new_buffer()
     do text_add(home, work)
     do text_add(home, "/home")
     let e2 = hands_setting("HOME", freeze(home))
-    do linux_put64(h.envp, 0, buffer_address(e1))
+    do linux_put64(h.envp, 0, buffer_address(h.screen))
     do linux_put64(h.envp, 8, buffer_address(e2))
     h.c = hands_connect(work, display.1)
     h.xtest = hands_extension(h, "XTEST")
@@ -1103,6 +3030,19 @@ func main():
     if h.shift == 0 or h.control == 0: do hands_lost(h, "the display's keyboard has no Shift or no Control key") end
     h.protocols = hands_atom(h, "WM_PROTOCOLS")
     h.delete = hands_atom(h, "WM_DELETE_WINDOW")
+    h.clipboard = hands_atom(h, "CLIPBOARD")
+    h.utf8 = hands_atom(h, "UTF8_STRING")
+    h.pinging = hands_atom(h, "HERBERT_HANDS")
+    -- This check's own window, never shown: where Notes answers it for the
+    -- clipboard, and what owns the clipboard when this check does.
+    let c = h.c
+    let p = x11_request(c, 1, 0, 32)
+    do linux_put32(c.requests, p + 4, c.state.window)
+    do linux_put32(c.requests, p + 8, c.state.root)
+    do linux_put16(c.requests, p + 16, 1)
+    do linux_put16(c.requests, p + 18, 1)
+    do linux_put16(c.requests, p + 22, 2)
+    if not hands_settled(h): do hands_lost(h, "the display would not make the check's own window") end
     do hands_tally(h, "Notes", hands_notes(h, notes, 20000), "")
     do hands_tally(h, "Scope", hands_scope(h, scope, 20000), "")
     do hands_tally(h, "the stand-in doing everything right", hands_stand_in(h, stand_in, "good", 20000, 20000, 20000), "")
@@ -1113,6 +3053,19 @@ func main():
     do hands_tally(h, "planted: a fault", hands_stand_in(h, stand_in, "fault", 20000, 20000, 20000), "the program ended with an error status")
     do hands_tally(h, "planted: a window that will not close", hands_stand_in(h, stand_in, "stay", 20000, 20000, 1000), "the program did not close")
     do hands_tally(h, "planted: a program that closes before it is asked", hands_stand_in(h, stand_in, "early", 20000, 20000, 20000), "the program closed before it was asked to")
+    do hands_tally(h, "Notes on a file it must not save over", hands_read_only(h, notes, 20000), "")
+    do hands_tally(h, "Notes opening files with Ctrl+O", hands_switch(h, notes, 20000), "")
+    do hands_tally(h, "Notes killed and cut off in the middle of an edit", hands_crash(h, notes, 20000), "")
+    do hands_tally(h, "Notes where no recovery copy can be made", hands_checkpoint(h, notes, 20000), "")
+    do hands_tally(h, "Notes on a line of 4 MiB", hands_long_line(h, notes, 20000), "")
+    do hands_tally(h, "Notes' fields filled to their edge", hands_fields(h, notes, 20000), "")
+    do hands_tally(h, "Notes' memory through a session", hands_notes_memory(h, notes, 20000), "")
+    do hands_tally(h, "Notes' keys and the clipboard", hands_clipboard(h, notes, 20000), "")
+    do hands_tally(h, "Scope's list of other computers", hands_scope_lists(h, scope, 20000), "")
+    do hands_tally(h, "Scope's knocks", hands_scope_knocks(h, scope, 20000), "")
+    do hands_tally(h, "Scope for half a minute", hands_scope_long(h, scope, 20000), "")
+    do hands_tally(h, "Maze", hands_maze(h, maze, 20000), "")
+    do hands_tally(h, "First steps", hands_first_steps(h, first, xvfb, 20000), "")
     do hands_tally(h, "nothing left behind", hands_left(h, h.failed == 0), "")
     let stray = hands_path(work, "home/planted.left")
     do linux_close(linux_open(stray, 524865, 384))

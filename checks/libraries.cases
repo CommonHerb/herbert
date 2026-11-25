@@ -7870,4 +7870,4016 @@ a program that is: 0 0
 the first wrote 0 bytes to its file, and the second: said by the program being run
 ----
 end
-cases 157
+case file: a save whose fsync fails is refused with error 5, the file stays the one it was with its bytes, and no temporary file is left
+libs linux text file_io fault
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- The inode of the file at path (Linux's struct stat has it at 8).
+func inode(path):
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    let answer = linux_buffer(144)
+    do linux_fstat(fd, answer)
+    do linux_close(fd)
+    return linux_u64(answer, 8)
+end
+
+-- How many names in the folder at path begin with prefix, "." and ".." not counted. Linux's
+-- getdents64 is 217; in each record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+func main():
+    -- A folder of its own (Linux's mkdir is 83) and one document in it.
+    do linux_syscall6(83, buffer_address(linux_cstring("fault-fsync.d")), 448, 0, 0, 0, 0)
+    do write_file("fault-fsync.d/doc.txt", "old\n")
+    let f = file_open("fault-fsync.d/doc.txt", 64)
+    let out = new_buffer()
+    do text_add(out, "a save: ")
+    do result(out, file_save(f, linux_cstring("first\n"), 6))
+    let before = inode("fault-fsync.d/doc.txt")
+    -- From here every fsync (74) of this program fails with EIO (5).
+    let fault = fault_new()
+    do fault_fail(fault, 74, 5)
+    do text_add(out, "\nthe filter: ")
+    do result(out, fault_start(fault_ready(fault)))
+    do text_add(out, "\na save while fsync fails: ")
+    do result(out, file_save(f, linux_cstring("second\n"), 7))
+    if holds("fault-fsync.d/doc.txt", "first\n"): do text_add(out, "\nthe file holds the first save") end
+    if inode("fault-fsync.d/doc.txt") == before: do text_add(out, "\nand is the same file") end
+    do text_add(out, "\nnames in the folder: ")
+    do text_add_whole(out, names("fault-fsync.d", ""))
+    do text_add(out, ", of them temporary files: ")
+    do text_add_whole(out, names("fault-fsync.d", ".herbert-save-"))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+a save: 0
+the filter: 0
+a save while fsync fails: error 5
+the file holds the first save
+and is the same file
+names in the folder: 1, of them temporary files: 0
+----
+end
+case file: a save whose folder's fsync fails after the rename gives 1, the file holds the new bytes, and no temporary file is left
+libs linux text file_io fault
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- How many names in the folder at path begin with prefix, "." and ".." not counted. Linux's
+-- getdents64 is 217; in each record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fault-dirsync.d")), 448, 0, 0, 0, 0)
+    do write_file("fault-dirsync.d/doc.txt", "old\n")
+    let f = file_open("fault-dirsync.d/doc.txt", 64)
+    -- Only an fsync (74) of the document's folder, the File's directory
+    -- descriptor, fails with EIO (5); the temporary file's fsync is done.
+    let fault = fault_new()
+    do fault_fail_equal(fault, 74, 5, 0, f.state.dirfd)
+    let out = new_buffer()
+    do text_add(out, "the filter: ")
+    do result(out, fault_start(fault_ready(fault)))
+    do text_add(out, "\na save while the folder's fsync fails: ")
+    do result(out, file_save(f, linux_cstring("new\n"), 4))
+    if holds("fault-dirsync.d/doc.txt", "new\n"): do text_add(out, "\nthe file holds the new bytes") end
+    do text_add(out, "\nnames in the folder: ")
+    do text_add_whole(out, names("fault-dirsync.d", ""))
+    do text_add(out, ", of them temporary files: ")
+    do text_add_whole(out, names("fault-dirsync.d", ".herbert-save-"))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the filter: 0
+a save while the folder's fsync fails: 1
+the file holds the new bytes
+names in the folder: 1, of them temporary files: 0
+----
+end
+case file: a save over a file that fails before its rename, at a write (28), fchmod (1), the rename (13) or the temporary file's close (5), gives that error, and the file keeps its bytes and stays the same file, with no temporary file left
+libs linux text file_io fault
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- The inode of the file at path (Linux's struct stat has it at 8).
+func inode(path):
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    let answer = linux_buffer(144)
+    do linux_fstat(fd, answer)
+    do linux_close(fd)
+    return linux_u64(answer, 8)
+end
+
+-- How many names in the folder at path begin with prefix, "." and ".." not counted. Linux's
+-- getdents64 is 217; in each record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- "folder/name".
+func within(folder, name):
+    let b = new_buffer()
+    do text_add(b, folder)
+    do text_add(b, "/")
+    do text_add(b, name)
+    return freeze(b)
+end
+
+-- One save of "new\n" over doc.txt, which holds "old\n", in a folder of its
+-- own, by a new process given a filter with one rule: kind 1 fails every call
+-- of number, kind 2 only those whose argument 0 is above the folder's
+-- descriptor (the temporary file's is; the program's own output is not). The
+-- new process ends with 100 plus the save's result; the file is looked at
+-- here, where there is no filter.
+func trial(out, label, folder, kind, number, error):
+    do linux_syscall6(83, buffer_address(linux_cstring(folder)), 448, 0, 0, 0, 0)
+    let path = within(folder, "doc.txt")
+    do write_file(path, "old\n")
+    let before = inode(path)
+    let status = linux_buffer(8)
+    -- fork (57); the new process is killed (9) if this one ends first (prctl
+    -- 157, PR_SET_PDEATHSIG 1).
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        let f = file_open(path, 64)
+        let fault = fault_new()
+        if kind == 1: do fault_fail(fault, number, error) end
+        if kind == 2: do fault_fail_above(fault, number, error, 0, f.state.dirfd) end
+        if file_status(f) != 0 or fault_start(fault_ready(fault)) != 0: do process_exit(1) end
+        do process_exit(100 + file_save(f, linux_cstring("new\n"), 4))
+        return 0
+    end
+    -- wait4 (61) until it ends.
+    let waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while waited == 0 - 4: waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0) end
+    let st = linux_u32(status, 0)
+    do text_add(out, label)
+    do text_add(out, ": ")
+    if (st & 127) != 0:
+        do text_add(out, "stopped by signal ")
+        do text_add_whole(out, (st & 127))
+    else:
+        do result(out, ((st >> 8) & 255) - 100)
+    end
+    if holds(path, "old\n"): do text_add(out, ", old bytes") end
+    if holds(path, "new\n"): do text_add(out, ", new bytes") end
+    if inode(path) == before: do text_add(out, ", same file") end
+    do text_add(out, ", names ")
+    do text_add_whole(out, names(folder, ""))
+    do text_add(out, ", temporary ")
+    do text_add_whole(out, names(folder, ".herbert-save-"))
+    do text_add(out, "\n")
+    return 0
+end
+
+func main():
+    let out = new_buffer()
+    -- write 1, fchmod 91, renameat 264, close 3.
+    do trial(out, "write ENOSPC", "fault-save-write.d", 2, 1, 28)
+    do trial(out, "fchmod EPERM", "fault-save-fchmod.d", 1, 91, 1)
+    do trial(out, "renameat EACCES", "fault-save-rename.d", 1, 264, 13)
+    do trial(out, "close of the temporary file EIO", "fault-save-close.d", 2, 3, 5)
+    do trial(out, "nothing failed", "fault-save-none.d", 0, 0, 0)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+write ENOSPC: error 28, old bytes, same file, names 1, temporary 0
+fchmod EPERM: error 1, old bytes, same file, names 1, temporary 0
+renameat EACCES: error 13, old bytes, same file, names 1, temporary 0
+close of the temporary file EIO: error 5, old bytes, same file, names 1, temporary 0
+nothing failed: 0, new bytes, names 1, temporary 0
+----
+end
+case file: a save of a new document whose stat after the rename fails gives 1, the file holds the new bytes, and no temporary file is left
+libs linux text file_io fault
+source until ----
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- How many names in the folder at path begin with prefix, "." and ".." not counted. Linux's
+-- getdents64 is 217; in each record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fault-stat.d")), 448, 0, 0, 0, 0)
+    let f = file_open("fault-stat.d/doc.txt", 64)
+    let out = new_buffer()
+    do text_add(out, "a new document: ")
+    do result(out, file_status(f))
+    -- From here every newfstatat (262) says nothing is there (ENOENT, 2). For
+    -- a new document that is the right answer to the checks before the
+    -- rename, and after the rename it is a stat that failed.
+    let fault = fault_new()
+    do fault_fail(fault, 262, 2)
+    do text_add(out, "\nthe filter: ")
+    do result(out, fault_start(fault_ready(fault)))
+    do text_add(out, "\na save whose stat after the rename fails: ")
+    do result(out, file_save(f, linux_cstring("new\n"), 4))
+    if holds("fault-stat.d/doc.txt", "new\n"): do text_add(out, "\nthe file holds the new bytes") end
+    do text_add(out, "\nnames in the folder: ")
+    do text_add_whole(out, names("fault-stat.d", ""))
+    do text_add(out, ", of them temporary files: ")
+    do text_add_whole(out, names("fault-stat.d", ".herbert-save-"))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+a new document: 0
+the filter: 0
+a save whose stat after the rename fails: 1
+the file holds the new bytes
+names in the folder: 1, of them temporary files: 0
+----
+end
+case file: a rescue copy whose fsync fails gives error 5 and leaves no copy; one whose folder's fsync fails after the rename gives 1 and its copy holds the edit; either way the document keeps its bytes and stays the same file, and no temporary file is left
+libs linux text file_io fault
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- The inode of the file at path (Linux's struct stat has it at 8).
+func inode(path):
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    let answer = linux_buffer(144)
+    do linux_fstat(fd, answer)
+    do linux_close(fd)
+    return linux_u64(answer, 8)
+end
+
+-- How many names in the folder at path begin with prefix, "." and ".." not
+-- counted, and the last of them; Linux's getdents64 is 217, and in each record
+-- the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let last = ""
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."):
+                found = found + 1
+                last = text_string(dents, name, stop)
+            end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return (found, last)
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- "folder/name".
+func within(folder, name):
+    let b = new_buffer()
+    do text_add(b, folder)
+    do text_add(b, "/")
+    do text_add(b, name)
+    return freeze(b)
+end
+
+-- One rescue copy of the edit, beside doc.txt in a folder of its own, by a new
+-- process given a filter: kind 1 fails every fsync (74) with EIO (5), kind 2
+-- only the fsync of the document's folder, the File's directory descriptor.
+-- The new process ends with 100 plus the copy's result; the folder is looked
+-- at here, where there is no filter.
+func trial(out, label, folder, kind):
+    do linux_syscall6(83, buffer_address(linux_cstring(folder)), 448, 0, 0, 0, 0)
+    let path = within(folder, "doc.txt")
+    do write_file(path, "original\r\ntext")
+    let before = inode(path)
+    let status = linux_buffer(8)
+    -- fork (57); the new process is killed (9) if this one ends first (prctl
+    -- 157, PR_SET_PDEATHSIG 1).
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        let f = file_open(path, 64)
+        let fault = fault_new()
+        if kind == 1: do fault_fail(fault, 74, 5) end
+        if kind == 2: do fault_fail_equal(fault, 74, 5, 0, f.state.dirfd) end
+        if file_status(f) != 0 or fault_start(fault_ready(fault)) != 0: do process_exit(1) end
+        do process_exit(100 + file_save_copy(f, linux_cstring("original\r\ntext\r\n!"), 17))
+        return 0
+    end
+    -- wait4 (61) until it ends.
+    let waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while waited == 0 - 4: waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0) end
+    let st = linux_u32(status, 0)
+    do text_add(out, label)
+    do text_add(out, ": ")
+    if (st & 127) != 0:
+        do text_add(out, "stopped by signal ")
+        do text_add_whole(out, (st & 127))
+    else:
+        do result(out, ((st >> 8) & 255) - 100)
+    end
+    if holds(path, "original\r\ntext") and inode(path) == before: do text_add(out, ", the document as it was") end
+    let copies = names(folder, "herbert-rescue-")
+    do text_add(out, ", rescue copies ")
+    do text_add_whole(out, copies.0)
+    if copies.0 == 1 and holds(within(folder, copies.1), "original\r\ntext\r\n!"): do text_add(out, ", holding the edit") end
+    do text_add(out, ", temporary ")
+    do text_add_whole(out, names(folder, ".herbert-save-").0)
+    do text_add(out, "\n")
+    return 0
+end
+
+func main():
+    let out = new_buffer()
+    do trial(out, "fsync EIO", "fault-copy-fsync.d", 1)
+    do trial(out, "the folder's fsync EIO", "fault-copy-folder.d", 2)
+    do trial(out, "nothing failed", "fault-copy-none.d", 0)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+fsync EIO: error 5, the document as it was, rescue copies 0, temporary 0
+the folder's fsync EIO: 1, the document as it was, rescue copies 1, holding the edit, temporary 0
+nothing failed: 0, the document as it was, rescue copies 1, holding the edit, temporary 0
+----
+end
+case recovery: a checkpoint whose fsync fails gives error 5 and the last checkpoint stays as it was; one whose session folder's fsync fails after the rename gives 1 and holds the edit; either way the document is left alone, there is one session folder, and no temporary file is left
+libs linux text file_io session_recovery fault
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- The inode of the file at path (Linux's struct stat has it at 8).
+func inode(path):
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    let answer = linux_buffer(144)
+    do linux_fstat(fd, answer)
+    do linux_close(fd)
+    return linux_u64(answer, 8)
+end
+
+-- How many names in the folder at path begin with prefix, "." and ".." not
+-- counted, and the last of them; Linux's getdents64 is 217, and in each record
+-- the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let last = ""
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."):
+                found = found + 1
+                last = text_string(dents, name, stop)
+            end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return (found, last)
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- "folder/name".
+func within(folder, name):
+    let b = new_buffer()
+    do text_add(b, folder)
+    do text_add(b, "/")
+    do text_add(b, name)
+    return freeze(b)
+end
+
+-- The document, a first checkpoint and the edit: UTF-8 text with CR LF.
+func document(): return "café — é 😀\r\ntext" end
+func checkpoint(): return "café — é 😀\r\ntext\r\n" end
+func edit(): return "café — é 😀\r\ntext\r\n!" end
+
+-- A first checkpoint of doc.txt, in a folder of its own, then a second, the
+-- edit, by a new process given a filter between the two: kind 1 fails every
+-- fsync (74) with EIO (5), kind 2 only the fsync of the session folder, the
+-- snapshot File's directory descriptor. The new process ends with 100 plus
+-- the second checkpoint's result; the folders are looked at here, where there
+-- is no filter.
+func trial(out, label, folder, kind):
+    do linux_syscall6(83, buffer_address(linux_cstring(folder)), 448, 0, 0, 0, 0)
+    let path = within(folder, "doc.txt")
+    do write_file(path, document())
+    let before = inode(path)
+    let status = linux_buffer(8)
+    -- fork (57); the new process is killed (9) if this one ends first (prctl
+    -- 157, PR_SET_PDEATHSIG 1).
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        let f = file_open(path, 64)
+        let r = recovery_new(64)
+        let first = recovery_save(r, f, linux_cstring(checkpoint()), length(checkpoint()))
+        let snapshot = r.0
+        let fault = fault_new()
+        if kind == 1: do fault_fail(fault, 74, 5) end
+        if kind == 2: do fault_fail_equal(fault, 74, 5, 0, snapshot.state.dirfd) end
+        if file_status(f) != 0 or first != 0 or fault_start(fault_ready(fault)) != 0: do process_exit(1) end
+        do process_exit(100 + recovery_save(r, f, linux_cstring(edit()), length(edit())))
+        return 0
+    end
+    -- wait4 (61) until it ends.
+    let waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while waited == 0 - 4: waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0) end
+    let st = linux_u32(status, 0)
+    do text_add(out, label)
+    do text_add(out, ": ")
+    if (st & 127) != 0:
+        do text_add(out, "stopped by signal ")
+        do text_add_whole(out, (st & 127))
+    else:
+        do result(out, ((st >> 8) & 255) - 100)
+    end
+    if holds(path, document()) and inode(path) == before: do text_add(out, ", the document as it was") end
+    let sessions = names(folder, ".herbert-notes-")
+    do text_add(out, ", session folders ")
+    do text_add_whole(out, sessions.0)
+    let session = within(folder, sessions.1)
+    if holds(within(session, "recovery.txt"), checkpoint()): do text_add(out, ", the first checkpoint") end
+    if holds(within(session, "recovery.txt"), edit()): do text_add(out, ", the edit") end
+    do text_add(out, ", temporary ")
+    do text_add_whole(out, names(session, ".herbert-save-").0)
+    do text_add(out, "\n")
+    return 0
+end
+
+func main():
+    let out = new_buffer()
+    do trial(out, "fsync EIO", "fault-recovery-fsync.d", 1)
+    do trial(out, "the session folder's fsync EIO", "fault-recovery-folder.d", 2)
+    do trial(out, "nothing failed", "fault-recovery-none.d", 0)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+fsync EIO: error 5, the document as it was, session folders 1, the first checkpoint, temporary 0
+the session folder's fsync EIO: 1, the document as it was, session folders 1, the edit, temporary 0
+nothing failed: 0, the document as it was, session folders 1, the edit, temporary 0
+----
+end
+case fault: a call a rule names gives the error chosen and is not done, each time it is made, while other calls are done as usual
+libs linux text fault
+source until ----
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- mkdir (83): a folder called name.
+func make(name): return linux_syscall6(83, buffer_address(linux_cstring(name)), 448, 0, 0, 0, 0) end
+
+-- Whether name is a folder: open(2) with O_DIRECTORY (65536) works.
+func folder(name):
+    let fd = linux_open(linux_cstring(name), 65536, 0)
+    if linux_error(fd): return false end
+    do linux_close(fd)
+    return true
+end
+
+func main():
+    let out = new_buffer()
+    do text_add(out, "mkdir before the filter: ")
+    do result(out, make("fault-named-before.d"))
+    -- Every mkdir from here gives EROFS (30).
+    let f = fault_new()
+    do text_add(out, "\nthe rule: ")
+    do result(out, fault_fail(f, 83, 30))
+    do text_add(out, "\nthe filter: ")
+    do result(out, fault_start(fault_ready(f)))
+    do text_add(out, "\nmkdir: ")
+    do result(out, make("fault-named-after.d"))
+    do text_add(out, "\nmkdir again: ")
+    do result(out, make("fault-named-after.d"))
+    if not folder("fault-named-after.d"): do text_add(out, "\nno folder was made") end
+    -- mkdirat (258), the same work under another number, is done.
+    do text_add(out, "\nmkdirat: ")
+    do result(out, linux_syscall6(258, 0 - 100, buffer_address(linux_cstring("fault-named-other.d")), 448, 0, 0, 0))
+    if folder("fault-named-other.d"): do text_add(out, ", and its folder is there") end
+    -- So are rmdir (84) and a file written and read back.
+    do text_add(out, "\nrmdir: ")
+    do result(out, linux_syscall6(84, buffer_address(linux_cstring("fault-named-before.d")), 0, 0, 0, 0, 0))
+    let fd = linux_open(linux_cstring("fault-named.txt"), 577, 420)
+    do linux_write(fd, linux_cstring("kept\n"), 0, 5)
+    do linux_close(fd)
+    let back = linux_read_file("fault-named.txt", 64)
+    if back.0 == 0 and text_is(back.1, 0, back.2, "kept\n"): do text_add(out, "\na file written is read back") end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+mkdir before the filter: 0
+the rule: 0
+the filter: 0
+mkdir: error 30
+mkdir again: error 30
+no folder was made
+mkdirat: 0, and its folder is there
+rmdir: 0
+a file written is read back
+----
+end
+case fault: error 0 makes a call give 0 without being done
+libs linux text fault
+source until ----
+func main():
+    let f = fault_new()
+    do fault_fail(f, 83, 0)
+    let started = fault_start(fault_ready(f))
+    let made = linux_syscall6(83, buffer_address(linux_cstring("fault-zero.d")), 448, 0, 0, 0, 0)
+    let fd = linux_open(linux_cstring("fault-zero.d"), 65536, 0)
+    let out = new_buffer()
+    do text_add(out, "the filter: ")
+    do text_add_whole(out, started)
+    do text_add(out, "\nmkdir: ")
+    do text_add_whole(out, made)
+    if linux_error(fd): do text_add(out, "\nand there is no folder") end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the filter: 0
+mkdir: 0
+and there is no folder
+----
+end
+case fault: an equal test fails only the calls whose argument is exactly the value, all 64 bits of it
+libs linux text fault
+source until ----
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- lseek (8) of fd to offset from the file's start: the new offset.
+func seek(out, fd, offset):
+    do text_add(out, "\n")
+    do text_add_whole(out, offset)
+    do text_add(out, ": ")
+    return result(out, linux_syscall6(8, fd, offset, 0, 0, 0, 0))
+end
+
+func main():
+    let fd = linux_open(linux_cstring("fault-equal.txt"), 66, 420)
+    -- lseek to 2^32 + 5 gives EDOM (33); its argument 1 is the offset.
+    let f = fault_new()
+    let out = new_buffer()
+    do text_add(out, "the rule: ")
+    do result(out, fault_fail_equal(f, 8, 33, 1, 4294967301))
+    do text_add(out, "\nthe filter: ")
+    do result(out, fault_start(fault_ready(f)))
+    do seek(out, fd, 5)
+    do seek(out, fd, 4294967301)
+    do seek(out, fd, 8589934597)
+    do seek(out, fd, 4294967302)
+    do seek(out, fd, 4294967300)
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the rule: 0
+the filter: 0
+5: 5
+4294967301: error 33
+8589934597: 8589934597
+4294967302: 4294967302
+4294967300: 4294967300
+----
+end
+case fault: an above test fails only the calls whose argument is above the value, both read as unsigned 64-bit numbers
+libs linux text fault
+source until ----
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- lseek (8) of fd to offset from the file's start: the new offset.
+func seek(out, fd, offset):
+    do text_add(out, "\n")
+    do text_add_whole(out, offset)
+    do text_add(out, ": ")
+    return result(out, linux_syscall6(8, fd, offset, 0, 0, 0, 0))
+end
+
+func main():
+    let fd = linux_open(linux_cstring("fault-above.txt"), 66, 420)
+    -- lseek past 2^32 + 10 gives EDOM (33). Linux itself refuses an offset
+    -- of 2^63 or more with EINVAL (22), reading it as a negative number.
+    let f = fault_new()
+    let out = new_buffer()
+    do text_add(out, "the rule: ")
+    do result(out, fault_fail_above(f, 8, 33, 1, 4294967306))
+    do text_add(out, "\nthe filter: ")
+    do result(out, fault_start(fault_ready(f)))
+    do seek(out, fd, 20)
+    do seek(out, fd, 4294967305)
+    do seek(out, fd, 4294967306)
+    do seek(out, fd, 4294967307)
+    do seek(out, fd, 8589934595)
+    do seek(out, fd, 9223372036854775808)
+    do seek(out, fd, 0 - 1)
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the rule: 0
+the filter: 0
+20: 20
+4294967305: 4294967305
+4294967306: 4294967306
+4294967307: error 33
+8589934595: error 33
+9223372036854775808: error 33
+18446744073709551615: error 33
+----
+end
+case fault: a write failed for descriptors above 2 leaves the program's own output and error output alone
+libs linux text fault
+source until ----
+func main():
+    let fd = linux_open(linux_cstring("fault-write.txt"), 577, 420)
+    -- write (1) to any descriptor above 2 gives ENOSPC (28).
+    let f = fault_new()
+    do fault_fail_above(f, 1, 28, 0, 2)
+    let started = fault_start(fault_ready(f))
+    let wrote = linux_write(fd, linux_cstring("lost\n"), 0, 5)
+    let answer = linux_buffer(144)
+    do linux_fstat(fd, answer)
+    do stderr_write("error output still arrives\n")
+    let out = new_buffer()
+    do text_add(out, "the filter: ")
+    do text_add_whole(out, started)
+    do text_add(out, "\nwrite to the file: error ")
+    do text_add_whole(out, 0 - wrote)
+    do text_add(out, "\nthe file's size: ")
+    do text_add_whole(out, linux_u64(answer, 48))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the filter: 0
+write to the file: error 28
+the file's size: 0
+----
+stderr until ----
+error output still arrives
+----
+end
+case fault: rules are tried in order, the first that fits a call answers it, and a call a rule's test passes over is tried by the rules after it
+libs linux text fault
+source until ----
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- lseek (8) of fd to offset from the file's start: the new offset.
+func seek(out, fd, offset):
+    do text_add(out, "\nlseek to ")
+    do text_add_whole(out, offset)
+    do text_add(out, ": ")
+    return result(out, linux_syscall6(8, fd, offset, 0, 0, 0, 0))
+end
+
+func main():
+    let fd = linux_open(linux_cstring("fault-order.txt"), 66, 420)
+    -- mkdir gives 30; lseek to exactly 2^32 + 5 gives 33, past 2^40 gives
+    -- 35, and any other lseek 34.
+    let f = fault_new()
+    do fault_fail(f, 83, 30)
+    do fault_fail_equal(f, 8, 33, 1, 4294967301)
+    do fault_fail_above(f, 8, 35, 1, 1099511627776)
+    do fault_fail(f, 8, 34)
+    let out = new_buffer()
+    do text_add(out, "the filter: ")
+    do result(out, fault_start(fault_ready(f)))
+    do seek(out, fd, 4294967301)
+    do seek(out, fd, 1099511627777)
+    do seek(out, fd, 7)
+    do text_add(out, "\nmkdir: ")
+    do result(out, linux_syscall6(83, buffer_address(linux_cstring("fault-order.d")), 448, 0, 0, 0, 0))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the filter: 0
+lseek to 4294967301: error 33
+lseek to 1099511627777: error 35
+lseek to 7: error 34
+mkdir: error 30
+----
+end
+case fault: rules added after fault_ready are in the filter once fault_ready is called again, and a second filter adds its rules to the first
+libs linux text fault
+source until ----
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- mkdir (83): a folder called name.
+func make(name): return linux_syscall6(83, buffer_address(linux_cstring(name)), 448, 0, 0, 0, 0) end
+
+func main():
+    let out = new_buffer()
+    do make("fault-again.d")
+    -- mkdir gives 30; then, after fault_ready, rmdir (84) gives 31.
+    let f = fault_new()
+    do fault_fail(f, 83, 30)
+    do fault_ready(f)
+    do fault_fail(f, 84, 31)
+    do text_add(out, "the filter: ")
+    do result(out, fault_start(fault_ready(f)))
+    do text_add(out, "\nmkdir: ")
+    do result(out, make("fault-again-2.d"))
+    do text_add(out, "\nrmdir: ")
+    do result(out, linux_syscall6(84, buffer_address(linux_cstring("fault-again.d")), 0, 0, 0, 0, 0))
+    -- A second filter: mkdirat (258) gives 32.
+    let g = fault_new()
+    do fault_fail(g, 258, 32)
+    do text_add(out, "\na second filter: ")
+    do result(out, fault_start(fault_ready(g)))
+    do text_add(out, "\nmkdir: ")
+    do result(out, make("fault-again-2.d"))
+    do text_add(out, "\nrmdir: ")
+    do result(out, linux_syscall6(84, buffer_address(linux_cstring("fault-again.d")), 0, 0, 0, 0, 0))
+    do text_add(out, "\nmkdirat: ")
+    do result(out, linux_syscall6(258, 0 - 100, buffer_address(linux_cstring("fault-again-3.d")), 448, 0, 0, 0))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the filter: 0
+mkdir: error 30
+rmdir: error 31
+a second filter: 0
+mkdir: error 30
+rmdir: error 31
+mkdirat: error 32
+----
+end
+case fault: a filter put on a new process just before execve holds in the program it starts, and the process that started it goes on without one
+libs linux text fault
+source until ----
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- mkdir (83): a folder called name.
+func make(name): return linux_syscall6(83, buffer_address(linux_cstring(name)), 448, 0, 0, 0, 0) end
+
+-- The program run a second time, as "child", in the new process.
+func child(out):
+    do text_add(out, "the program started: mkdir: ")
+    do result(out, make("fault-exec-child.d"))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+
+func main():
+    let out = new_buffer()
+    let args = linux_arguments()
+    if equal(linux_argument(args, 1), "child"): return child(out) end
+    -- The filter, every mkdir giving 30, is made here; the new process only
+    -- puts it on.
+    let f = fault_new()
+    do fault_fail(f, 83, 30)
+    let program = fault_ready(f)
+    let here = linux_cstring("./a.out")
+    let role = linux_cstring("child")
+    let argv = linux_buffer(24)
+    do linux_put64(argv, 0, buffer_address(here))
+    do linux_put64(argv, 8, buffer_address(role))
+    let status = linux_buffer(8)
+    -- fork (57); in the new process, killed (9) if this one ends first
+    -- (prctl 157, PR_SET_PDEATHSIG 1), then the filter, then execve (59).
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        if fault_start(program) == 0: do linux_syscall6(59, buffer_address(here), buffer_address(argv), 0, 0, 0, 0) end
+        do process_exit(99)
+        return 0
+    end
+    -- wait4 (61) until it ends.
+    let waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while waited == 0 - 4: waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0) end
+    do text_add(out, "it ended with status ")
+    do text_add_whole(out, ((linux_u32(status, 0) >> 8) & 255))
+    do text_add(out, "\nthe process that started it: mkdir: ")
+    do result(out, make("fault-exec-starter.d"))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the program started: mkdir: error 30
+it ended with status 0
+the process that started it: mkdir: 0
+----
+end
+case fault: a rule Linux cannot answer is refused with 22, a filter holds 64 rules of any kind and refuses one more that does not fit, and fault_start gives Linux's own refusal
+libs linux text fault
+source until ----
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- mkdir (83): a folder called name.
+func make(name): return linux_syscall6(83, buffer_address(linux_cstring(name)), 448, 0, 0, 0, 0) end
+
+func main():
+    let out = new_buffer()
+    -- No filter at address 0 can be read: Linux says EFAULT (14), and then
+    -- nothing fails.
+    do text_add(out, "a filter Linux cannot read: ")
+    do result(out, fault_start(0))
+    do text_add(out, "\nmkdir after it: ")
+    do result(out, make("fault-limits-1.d"))
+    let f = fault_new()
+    do text_add(out, "\nerror 4096: ")
+    do result(out, fault_fail(f, 83, 4096))
+    do text_add(out, "\nargument 6: ")
+    do result(out, fault_fail_equal(f, 83, 5, 6, 0))
+    do text_add(out, "\nargument 6 above: ")
+    do result(out, fault_fail_above(f, 83, 5, 6, 0))
+    -- 64 rules of the largest kind: mkdir with its mode (argument 1) above
+    -- 0 gives 4095, the largest error, then 63 for calls Linux does not have.
+    let taken = 0
+    if fault_fail_above(f, 83, 4095, 1, 0) == 0: taken = taken + 1 end
+    let i = 0
+    while i < 63:
+        if fault_fail_above(f, 2000 + i, 5, 0, 0) == 0: taken = taken + 1 end
+        i = i + 1
+    end
+    do text_add(out, "\nrules taken: ")
+    do text_add_whole(out, taken)
+    do text_add(out, "\none more: ")
+    do result(out, fault_fail(f, 84, 5))
+    -- Another: 63 rules of the largest kind and one of the smallest leave
+    -- room for one more of the smallest only. rmdir (84) gives 39.
+    let g = fault_new()
+    let j = 0
+    while j < 63:
+        do fault_fail_above(g, 3000 + j, 5, 0, 0)
+        j = j + 1
+    end
+    do text_add(out, "\n63 long and 1 short: ")
+    do result(out, fault_fail(g, 84, 39))
+    do text_add(out, "\nequal: ")
+    do result(out, fault_fail_equal(g, 3100, 5, 0, 0))
+    do text_add(out, "\nabove: ")
+    do result(out, fault_fail_above(g, 3101, 5, 0, 0))
+    do text_add(out, "\nshort: ")
+    do result(out, fault_fail(g, 3102, 5))
+    do text_add(out, "\nshort: ")
+    do result(out, fault_fail(g, 3103, 5))
+    do text_add(out, "\nthe filter: ")
+    do result(out, fault_start(fault_ready(f)))
+    do text_add(out, "\nmkdir: ")
+    do result(out, make("fault-limits-2.d"))
+    do text_add(out, "\nthe second filter: ")
+    do result(out, fault_start(fault_ready(g)))
+    do text_add(out, "\nrmdir: ")
+    do result(out, linux_syscall6(84, buffer_address(linux_cstring("fault-limits-1.d")), 0, 0, 0, 0, 0))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+a filter Linux cannot read: error 14
+mkdir after it: 0
+error 4096: error 22
+argument 6: error 22
+argument 6 above: error 22
+rules taken: 64
+one more: error 22
+63 long and 1 short: 0
+equal: error 22
+above: error 22
+short: 0
+short: error 22
+the filter: 0
+mkdir: error 4095
+the second filter: 0
+rmdir: error 39
+----
+end
+case fwriter: a publication whose getrandom fails with EIO or ENOSYS, or gives no bytes, ends with status 1 and its one line, keeps the old a.out and leaves no temporary file
+libs linux text fault
+source until ----
+-- How many names in the folder at path begin with prefix, "." and ".." not counted. Linux's
+-- getdents64 is 217; in each record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+-- One publication of "new\n" over a.out, which holds "old\n", in the folder
+-- fault-pub-random.d, by a new process given a filter with one rule: kind 0 none,
+-- 1 every call of number, 2 only those whose argument 0 is fwriter's
+-- temporary file, 3 only those whose argument 0 is fwriter's folder. Its
+-- error output goes to fault-pub-random.err, and Linux's alarm stops it after
+-- seconds. One line tells how it ended, what a.out holds, how many temporary
+-- files there are (when count is true) and what it said.
+func trial(out, label, kind, number, error, seconds, count):
+    let fd = linux_open(linux_cstring("fault-pub-random.d/a.out"), 577, 420)
+    do linux_write(fd, linux_cstring("old\n"), 0, 4)
+    do linux_close(fd)
+    let status = linux_buffer(8)
+    -- fork (57); in the new process: killed (9) if this one ends first
+    -- (prctl 157, PR_SET_PDEATHSIG 1), the alarm (37), the error output
+    -- moved (dup2, 33), the folder entered (chdir, 80), then the filter.
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        do linux_syscall6(37, seconds, 0, 0, 0, 0, 0)
+        let e = linux_open(linux_cstring("fault-pub-random.err"), 577, 420)
+        do linux_syscall6(33, e, 2, 0, 0, 0, 0)
+        do linux_close(e)
+        do linux_syscall6(80, buffer_address(linux_cstring("fault-pub-random.d")), 0, 0, 0, 0, 0)
+        -- Linux gives the lowest free numbers: fwriter's folder takes the
+        -- first and its temporary file the second.
+        let first = linux_open(linux_cstring("/dev/null"), 0, 0)
+        let temporary = linux_open(linux_cstring("/dev/null"), 0, 0)
+        do linux_close(first)
+        do linux_close(temporary)
+        let f = fault_new()
+        if kind == 1: do fault_fail(f, number, error) end
+        if kind == 2: do fault_fail_equal(f, number, error, 0, temporary) end
+        if kind == 3: do fault_fail_equal(f, number, error, 0, first) end
+        if fault_start(fault_ready(f)) != 0: do process_exit(99) end
+        do fwriter("new\n")
+        do process_exit(0)
+        return 0
+    end
+    -- wait4 (61) until it ends.
+    let waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while waited == 0 - 4: waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0) end
+    let st = linux_u32(status, 0)
+    do text_add(out, label)
+    if (st & 127) != 0:
+        do text_add(out, ": stopped by signal ")
+        do text_add_whole(out, (st & 127))
+    else:
+        do text_add(out, ": status ")
+        do text_add_whole(out, ((st >> 8) & 255))
+    end
+    let now = linux_read_file("fault-pub-random.d/a.out", 64)
+    if now.0 == 0 and text_is(now.1, 0, now.2, "old\n"):
+        do text_add(out, ", old a.out")
+    elif now.0 == 0 and text_is(now.1, 0, now.2, "new\n"):
+        do text_add(out, ", new a.out")
+    else:
+        do text_add(out, ", no a.out or another")
+    end
+    if count:
+        do text_add(out, ", temporaries ")
+        do text_add_whole(out, names("fault-pub-random.d", ".herbert"))
+    end
+    let said = linux_read_file("fault-pub-random.err", 256)
+    if said.2 > 0:
+        do text_add(out, ", ")
+        if buffer_get(said.1, said.2 - 1) == 10:
+            do text_add_span(out, said.1, 0, said.2 - 1)
+        else:
+            do text_add_span(out, said.1, 0, said.2)
+        end
+    end
+    do text_add(out, "\n")
+    return 0
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fault-pub-random.d")), 448, 0, 0, 0, 0)
+    let out = new_buffer()
+    -- getrandom is 318; error 0 makes it give 0 bytes.
+    do trial(out, "getrandom EIO", 1, 318, 5, 10, true)
+    do trial(out, "getrandom ENOSYS", 1, 318, 38, 10, true)
+    do trial(out, "getrandom gives 0 bytes", 1, 318, 0, 10, true)
+    do trial(out, "nothing failed", 0, 0, 0, 10, true)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+getrandom EIO: status 1, old a.out, temporaries 0, compiler: output publication failed
+getrandom ENOSYS: status 1, old a.out, temporaries 0, compiler: output publication failed
+getrandom gives 0 bytes: status 1, old a.out, temporaries 0, compiler: output publication failed
+nothing failed: status 0, new a.out, temporaries 0
+----
+limit 60
+end
+case fwriter: a publication whose write to its temporary file gives no bytes or fails with ENOSPC, or whose fsync fails with EIO, ends with status 1 and its one line, keeps the old a.out and leaves no temporary file
+libs linux text fault
+source until ----
+-- How many names in the folder at path begin with prefix, "." and ".." not counted. Linux's
+-- getdents64 is 217; in each record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+-- One publication of "new\n" over a.out, which holds "old\n", in the folder
+-- fault-pub-write.d, by a new process given a filter with one rule: kind 0 none,
+-- 1 every call of number, 2 only those whose argument 0 is fwriter's
+-- temporary file, 3 only those whose argument 0 is fwriter's folder. Its
+-- error output goes to fault-pub-write.err, and Linux's alarm stops it after
+-- seconds. One line tells how it ended, what a.out holds, how many temporary
+-- files there are (when count is true) and what it said.
+func trial(out, label, kind, number, error, seconds, count):
+    let fd = linux_open(linux_cstring("fault-pub-write.d/a.out"), 577, 420)
+    do linux_write(fd, linux_cstring("old\n"), 0, 4)
+    do linux_close(fd)
+    let status = linux_buffer(8)
+    -- fork (57); in the new process: killed (9) if this one ends first
+    -- (prctl 157, PR_SET_PDEATHSIG 1), the alarm (37), the error output
+    -- moved (dup2, 33), the folder entered (chdir, 80), then the filter.
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        do linux_syscall6(37, seconds, 0, 0, 0, 0, 0)
+        let e = linux_open(linux_cstring("fault-pub-write.err"), 577, 420)
+        do linux_syscall6(33, e, 2, 0, 0, 0, 0)
+        do linux_close(e)
+        do linux_syscall6(80, buffer_address(linux_cstring("fault-pub-write.d")), 0, 0, 0, 0, 0)
+        -- Linux gives the lowest free numbers: fwriter's folder takes the
+        -- first and its temporary file the second.
+        let first = linux_open(linux_cstring("/dev/null"), 0, 0)
+        let temporary = linux_open(linux_cstring("/dev/null"), 0, 0)
+        do linux_close(first)
+        do linux_close(temporary)
+        let f = fault_new()
+        if kind == 1: do fault_fail(f, number, error) end
+        if kind == 2: do fault_fail_equal(f, number, error, 0, temporary) end
+        if kind == 3: do fault_fail_equal(f, number, error, 0, first) end
+        if fault_start(fault_ready(f)) != 0: do process_exit(99) end
+        do fwriter("new\n")
+        do process_exit(0)
+        return 0
+    end
+    -- wait4 (61) until it ends.
+    let waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while waited == 0 - 4: waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0) end
+    let st = linux_u32(status, 0)
+    do text_add(out, label)
+    if (st & 127) != 0:
+        do text_add(out, ": stopped by signal ")
+        do text_add_whole(out, (st & 127))
+    else:
+        do text_add(out, ": status ")
+        do text_add_whole(out, ((st >> 8) & 255))
+    end
+    let now = linux_read_file("fault-pub-write.d/a.out", 64)
+    if now.0 == 0 and text_is(now.1, 0, now.2, "old\n"):
+        do text_add(out, ", old a.out")
+    elif now.0 == 0 and text_is(now.1, 0, now.2, "new\n"):
+        do text_add(out, ", new a.out")
+    else:
+        do text_add(out, ", no a.out or another")
+    end
+    if count:
+        do text_add(out, ", temporaries ")
+        do text_add_whole(out, names("fault-pub-write.d", ".herbert"))
+    end
+    let said = linux_read_file("fault-pub-write.err", 256)
+    if said.2 > 0:
+        do text_add(out, ", ")
+        if buffer_get(said.1, said.2 - 1) == 10:
+            do text_add_span(out, said.1, 0, said.2 - 1)
+        else:
+            do text_add_span(out, said.1, 0, said.2)
+        end
+    end
+    do text_add(out, "\n")
+    return 0
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fault-pub-write.d")), 448, 0, 0, 0, 0)
+    let out = new_buffer()
+    -- write is 1 and fsync 74; error 0 makes the write give 0 bytes.
+    do trial(out, "the write gives 0 bytes", 2, 1, 0, 10, true)
+    do trial(out, "the write ENOSPC", 2, 1, 28, 10, true)
+    do trial(out, "fsync EIO", 1, 74, 5, 10, true)
+    do trial(out, "nothing failed", 0, 0, 0, 10, true)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the write gives 0 bytes: status 1, old a.out, temporaries 0, compiler: output publication failed
+the write ENOSPC: status 1, old a.out, temporaries 0, compiler: output publication failed
+fsync EIO: status 1, old a.out, temporaries 0, compiler: output publication failed
+nothing failed: status 0, new a.out, temporaries 0
+----
+limit 60
+end
+case fwriter: a publication whose close of its temporary file fails with EIO, or with EINTR every time, or whose rename fails with EACCES, ends with status 1 and its one line, keeps the old a.out and leaves no temporary file
+libs linux text fault
+source until ----
+-- How many names in the folder at path begin with prefix, "." and ".." not counted. Linux's
+-- getdents64 is 217; in each record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+-- One publication of "new\n" over a.out, which holds "old\n", in the folder
+-- fault-pub-close.d, by a new process given a filter with one rule: kind 0 none,
+-- 1 every call of number, 2 only those whose argument 0 is fwriter's
+-- temporary file, 3 only those whose argument 0 is fwriter's folder. Its
+-- error output goes to fault-pub-close.err, and Linux's alarm stops it after
+-- seconds. One line tells how it ended, what a.out holds, how many temporary
+-- files there are (when count is true) and what it said.
+func trial(out, label, kind, number, error, seconds, count):
+    let fd = linux_open(linux_cstring("fault-pub-close.d/a.out"), 577, 420)
+    do linux_write(fd, linux_cstring("old\n"), 0, 4)
+    do linux_close(fd)
+    let status = linux_buffer(8)
+    -- fork (57); in the new process: killed (9) if this one ends first
+    -- (prctl 157, PR_SET_PDEATHSIG 1), the alarm (37), the error output
+    -- moved (dup2, 33), the folder entered (chdir, 80), then the filter.
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        do linux_syscall6(37, seconds, 0, 0, 0, 0, 0)
+        let e = linux_open(linux_cstring("fault-pub-close.err"), 577, 420)
+        do linux_syscall6(33, e, 2, 0, 0, 0, 0)
+        do linux_close(e)
+        do linux_syscall6(80, buffer_address(linux_cstring("fault-pub-close.d")), 0, 0, 0, 0, 0)
+        -- Linux gives the lowest free numbers: fwriter's folder takes the
+        -- first and its temporary file the second.
+        let first = linux_open(linux_cstring("/dev/null"), 0, 0)
+        let temporary = linux_open(linux_cstring("/dev/null"), 0, 0)
+        do linux_close(first)
+        do linux_close(temporary)
+        let f = fault_new()
+        if kind == 1: do fault_fail(f, number, error) end
+        if kind == 2: do fault_fail_equal(f, number, error, 0, temporary) end
+        if kind == 3: do fault_fail_equal(f, number, error, 0, first) end
+        if fault_start(fault_ready(f)) != 0: do process_exit(99) end
+        do fwriter("new\n")
+        do process_exit(0)
+        return 0
+    end
+    -- wait4 (61) until it ends.
+    let waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while waited == 0 - 4: waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0) end
+    let st = linux_u32(status, 0)
+    do text_add(out, label)
+    if (st & 127) != 0:
+        do text_add(out, ": stopped by signal ")
+        do text_add_whole(out, (st & 127))
+    else:
+        do text_add(out, ": status ")
+        do text_add_whole(out, ((st >> 8) & 255))
+    end
+    let now = linux_read_file("fault-pub-close.d/a.out", 64)
+    if now.0 == 0 and text_is(now.1, 0, now.2, "old\n"):
+        do text_add(out, ", old a.out")
+    elif now.0 == 0 and text_is(now.1, 0, now.2, "new\n"):
+        do text_add(out, ", new a.out")
+    else:
+        do text_add(out, ", no a.out or another")
+    end
+    if count:
+        do text_add(out, ", temporaries ")
+        do text_add_whole(out, names("fault-pub-close.d", ".herbert"))
+    end
+    let said = linux_read_file("fault-pub-close.err", 256)
+    if said.2 > 0:
+        do text_add(out, ", ")
+        if buffer_get(said.1, said.2 - 1) == 10:
+            do text_add_span(out, said.1, 0, said.2 - 1)
+        else:
+            do text_add_span(out, said.1, 0, said.2)
+        end
+    end
+    do text_add(out, "\n")
+    return 0
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fault-pub-close.d")), 448, 0, 0, 0, 0)
+    let out = new_buffer()
+    -- close is 3 and renameat 264. A close is never tried again, so one that
+    -- gives EINTR every time still ends.
+    do trial(out, "close EIO", 2, 3, 5, 10, true)
+    do trial(out, "close EINTR", 2, 3, 4, 10, true)
+    do trial(out, "renameat EACCES", 1, 264, 13, 10, true)
+    do trial(out, "nothing failed", 0, 0, 0, 10, true)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+close EIO: status 1, old a.out, temporaries 0, compiler: output publication failed
+close EINTR: status 1, old a.out, temporaries 0, compiler: output publication failed
+renameat EACCES: status 1, old a.out, temporaries 0, compiler: output publication failed
+nothing failed: status 0, new a.out, temporaries 0
+----
+limit 60
+end
+case fwriter: an interrupted call is tried again, so a publication whose open of its folder or its temporary file, getrandom, write, fsync or rename gives EINTR every time does not end, and its alarm stops it with the old a.out in place
+libs linux text fault
+source until ----
+-- How many names in the folder at path begin with prefix, "." and ".." not counted. Linux's
+-- getdents64 is 217; in each record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            let stop = linux_nul_end(dents, name, p + linux_u16(dents, p + 16))
+            if text_starts(dents, name, stop, prefix) and not text_is(dents, name, stop, ".") and not text_is(dents, name, stop, ".."): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+-- One publication of "new\n" over a.out, which holds "old\n", in the folder
+-- fault-pub-eintr.d, by a new process given a filter with one rule: kind 0 none,
+-- 1 every call of number, 2 only those whose argument 0 is fwriter's
+-- temporary file, 3 only those whose argument 0 is fwriter's folder. Its
+-- error output goes to fault-pub-eintr.err, and Linux's alarm stops it after
+-- seconds. One line tells how it ended, what a.out holds, how many temporary
+-- files there are (when count is true) and what it said.
+func trial(out, label, kind, number, error, seconds, count):
+    let fd = linux_open(linux_cstring("fault-pub-eintr.d/a.out"), 577, 420)
+    do linux_write(fd, linux_cstring("old\n"), 0, 4)
+    do linux_close(fd)
+    let status = linux_buffer(8)
+    -- fork (57); in the new process: killed (9) if this one ends first
+    -- (prctl 157, PR_SET_PDEATHSIG 1), the alarm (37), the error output
+    -- moved (dup2, 33), the folder entered (chdir, 80), then the filter.
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        do linux_syscall6(37, seconds, 0, 0, 0, 0, 0)
+        let e = linux_open(linux_cstring("fault-pub-eintr.err"), 577, 420)
+        do linux_syscall6(33, e, 2, 0, 0, 0, 0)
+        do linux_close(e)
+        do linux_syscall6(80, buffer_address(linux_cstring("fault-pub-eintr.d")), 0, 0, 0, 0, 0)
+        -- Linux gives the lowest free numbers: fwriter's folder takes the
+        -- first and its temporary file the second.
+        let first = linux_open(linux_cstring("/dev/null"), 0, 0)
+        let temporary = linux_open(linux_cstring("/dev/null"), 0, 0)
+        do linux_close(first)
+        do linux_close(temporary)
+        let f = fault_new()
+        if kind == 1: do fault_fail(f, number, error) end
+        if kind == 2: do fault_fail_equal(f, number, error, 0, temporary) end
+        if kind == 3: do fault_fail_equal(f, number, error, 0, first) end
+        if fault_start(fault_ready(f)) != 0: do process_exit(99) end
+        do fwriter("new\n")
+        do process_exit(0)
+        return 0
+    end
+    -- wait4 (61) until it ends.
+    let waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    while waited == 0 - 4: waited = linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0) end
+    let st = linux_u32(status, 0)
+    do text_add(out, label)
+    if (st & 127) != 0:
+        do text_add(out, ": stopped by signal ")
+        do text_add_whole(out, (st & 127))
+    else:
+        do text_add(out, ": status ")
+        do text_add_whole(out, ((st >> 8) & 255))
+    end
+    let now = linux_read_file("fault-pub-eintr.d/a.out", 64)
+    if now.0 == 0 and text_is(now.1, 0, now.2, "old\n"):
+        do text_add(out, ", old a.out")
+    elif now.0 == 0 and text_is(now.1, 0, now.2, "new\n"):
+        do text_add(out, ", new a.out")
+    else:
+        do text_add(out, ", no a.out or another")
+    end
+    if count:
+        do text_add(out, ", temporaries ")
+        do text_add_whole(out, names("fault-pub-eintr.d", ".herbert"))
+    end
+    let said = linux_read_file("fault-pub-eintr.err", 256)
+    if said.2 > 0:
+        do text_add(out, ", ")
+        if buffer_get(said.1, said.2 - 1) == 10:
+            do text_add_span(out, said.1, 0, said.2 - 1)
+        else:
+            do text_add_span(out, said.1, 0, said.2)
+        end
+    end
+    do text_add(out, "\n")
+    return 0
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fault-pub-eintr.d")), 448, 0, 0, 0, 0)
+    let out = new_buffer()
+    -- Each call gives EINTR (4) every time, and Linux's alarm (SIGALRM, 14)
+    -- stops the publication after 1 second. Both opens are openat (257): the
+    -- folder's is the first, so every openat fails for it; for the temporary
+    -- file's only those from the folder.
+    -- getrandom is 318, write 1, fsync 74, renameat 264. A killed
+    -- publication may leave its temporary file, so those are not counted.
+    do trial(out, "open of the folder", 1, 257, 4, 1, false)
+    do trial(out, "open of the temporary file", 3, 257, 4, 1, false)
+    do trial(out, "getrandom", 1, 318, 4, 1, false)
+    do trial(out, "write", 2, 1, 4, 1, false)
+    do trial(out, "fsync", 1, 74, 4, 1, false)
+    do trial(out, "renameat", 1, 264, 4, 1, false)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+open of the folder: stopped by signal 14, old a.out
+open of the temporary file: stopped by signal 14, old a.out
+getrandom: stopped by signal 14, old a.out
+write: stopped by signal 14, old a.out
+fsync: stopped by signal 14, old a.out
+renameat: stopped by signal 14, old a.out
+----
+limit 60
+end
+case file and text buffer: a file's own bytes go through the text and back to disk exactly, and an edit reaches a save, a rescue copy and a checkpoint in the file's own newline style
+libs linux text utf8 unicode_tables unicode_grapheme file_io text_buffer session_recovery
+source until ----
+-- The bytes of s, then the bytes h names in hex, two digits each with a space after.
+func bytes(b, s, h):
+    do text_add(b, s)
+    let i = 0
+    while i + 1 < length(h):
+        let hi = index(h, i) - 48
+        if hi > 9: hi = hi - 7 end
+        let lo = index(h, i + 1) - 48
+        if lo > 9: lo = lo - 7 end
+        do append(b, hi * 16 + lo)
+        i = i + 3
+    end
+    return b
+end
+
+-- A file at path holding count bytes of b, made without the library.
+func write_file(path, b, count):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, b, 0, count)
+    return linux_close(fd)
+end
+
+-- Whether count bytes of a and of b are the same.
+func same(a, b, count):
+    let i = 0
+    while i < count:
+        if buffer_get(a, i) != buffer_get(b, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+-- Whether the file at path holds exactly count bytes of b and then s, read without the library.
+func holds(path, b, count, s):
+    let file = linux_read_file(path, 8192)
+    return file.0 == 0 and file.2 == count + length(s) and same(file.1, b, count) and text_is(file.1, count, file.2, s)
+end
+
+-- The inode of the file at path (in Linux's stat at 8).
+func inode(path):
+    let stat = linux_buffer(144)
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    do linux_fstat(fd, stat)
+    do linux_close(fd)
+    return linux_u64(stat, 8)
+end
+
+func loaded(out, f, t, b, count):
+    do text_add(out, "opened ")
+    do text_add_whole(out, file_status(f))
+    do text_add(out, ", ")
+    do text_add_whole(out, file_count(f))
+    do text_add(out, " bytes; loaded ")
+    do text_add_whole(out, text_load(t, f.bytes, file_count(f)))
+    if text_crlf(t): do text_add(out, ", CRLF") else: do text_add(out, ", LF") end
+    do text_add(out, ", text ")
+    do text_add_whole(out, text_length(t))
+    do text_add(out, ", file ")
+    do text_add_whole(out, text_file_length(t))
+    if text_file_length(t) == count and same(text_file_bytes(t), b, count): do text_add(out, ", the file's own bytes") end
+    return text_add(out, "\n")
+end
+
+func main():
+    let out = new_buffer()
+    do linux_syscall6(83, buffer_address(linux_cstring("trip6.d")), 448, 0, 0, 0, 0)
+    -- A byte order mark, a precomposed and a combining accent, the noncharacter U+FFFE, a joined
+    -- emoji (woman, joiner, laptop), a tab, CR LF, and a last line with no newline: 35 bytes.
+    let doc = bytes(new_buffer(), "", "EF BB BF ")
+    do bytes(doc, "caf", "C3 A9 ")
+    do bytes(doc, " e", "CC 81 ")
+    do bytes(doc, " ", "EF BF BE ")
+    do bytes(doc, " ", "F0 9F 91 A9 E2 80 8D F0 9F 92 BB 09 0D 0A ")
+    do bytes(doc, "last", "")
+    do write_file("trip6.d/doc.txt", doc, 35)
+    let f = file_open("trip6.d/doc.txt", 4096)
+    let t = text_buffer(4096)
+    do loaded(out, f, t, doc, 35)
+    let before = inode("trip6.d/doc.txt")
+    do text_add(out, "saved as loaded: ")
+    do text_add_whole(out, file_save(f, text_file_bytes(t), text_file_length(t)))
+    if inode("trip6.d/doc.txt") != before: do text_add(out, ", a new file in its place") end
+    if holds("trip6.d/doc.txt", doc, 35, ""): do text_add(out, ", the same 35 bytes") end
+    -- At the end: a newline and !, typed.
+    do text_seek(t, text_length(t))
+    do text_insert(t, 10)
+    do text_insert(t, '!')
+    do text_add(out, "\nnewline and ! typed at the end, saved: ")
+    do text_add_whole(out, file_save(f, text_file_bytes(t), text_file_length(t)))
+    if holds("trip6.d/doc.txt", doc, 35, "\r\n!"): do text_add(out, ", the file is the 35 bytes, CR LF and !") end
+    let placed = inode("trip6.d/doc.txt")
+    do text_add(out, "\nrescue copy: ")
+    do text_add_whole(out, file_save_copy(f, text_file_bytes(t), text_file_length(t)))
+    let name = file_copy_name(f)
+    let copy = new_buffer()
+    do text_add(copy, "trip6.d/")
+    do text_add_span(copy, name, 0, linux_nul_end(name, 0, buffer_length(name)))
+    if holds(freeze(copy), doc, 35, "\r\n!"): do text_add(out, ", the copy is the 35 bytes, CR LF and !") end
+    let r = recovery_new(4096)
+    do text_add(out, "\ncheckpoints of the text as loaded and as edited: ")
+    do text_add_whole(out, recovery_save(r, f, doc, 35))
+    do text_add(out, ", ")
+    do text_add_whole(out, recovery_save(r, f, text_file_bytes(t), text_file_length(t)))
+    let s = file_scan_new()
+    let g = file_new(4096)
+    if file_scan(f, s, ".herbert-notes-") == 1 and file_load_inside(g, f, file_scan_name(s), "recovery.txt") == 0:
+        if file_count(g) == 38 and same(g.bytes, doc, 35) and text_is(g.bytes, 35, 38, "\r\n!"): do text_add(out, ", recovery.txt is the 35 bytes, CR LF and !") end
+    end
+    if inode("trip6.d/doc.txt") == placed and holds("trip6.d/doc.txt", doc, 35, "\r\n!"): do text_add(out, "\nthe document is the same file with the same bytes") end
+    -- Every newline deleted, then one typed at the start: the file's style stays.
+    let p = 0
+    while p < text_length(t):
+        if buffer_get(t.bytes, p) == 10:
+            do text_seek(t, p)
+            do text_delete(t)
+        else:
+            p = p + 1
+        end
+    end
+    do text_seek(t, 0)
+    do text_insert(t, 10)
+    let last = text_file_bytes(t)
+    do text_add(out, "\nevery newline deleted and one typed: ")
+    if text_crlf(t) and buffer_get(last, 0) == 13 and buffer_get(last, 1) == 10 and text_file_length(t) == text_length(t) + 1: do text_add(out, "written CR LF") end
+    -- x to exactly the capacity, the last two bytes CR LF.
+    let full = new_buffer()
+    do buffer_fill(full, 4094, 'x')
+    do bytes(full, "", "0D 0A ")
+    do write_file("trip6.d/full.txt", full, 4096)
+    let h = file_open("trip6.d/full.txt", 4096)
+    let u = text_buffer(4096)
+    do text_add(out, "\nat the capacity: ")
+    do loaded(out, h, u, full, 4096)
+    -- The first x made a y: still 4096 bytes, saved through the handle that opened them.
+    do text_seek(u, 0)
+    do text_delete(u)
+    do text_insert(u, 'y')
+    do text_add(out, "its first x made a y, saved: ")
+    do text_add_whole(out, file_save(h, text_file_bytes(u), text_file_length(u)))
+    do buffer_set(full, 0, 'y')
+    if holds("trip6.d/full.txt", full, 4096, ""): do text_add(out, ", read back exactly") end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+opened 0, 35 bytes; loaded 0, CRLF, text 34, file 35, the file's own bytes
+saved as loaded: 0, a new file in its place, the same 35 bytes
+newline and ! typed at the end, saved: 0, the file is the 35 bytes, CR LF and !
+rescue copy: 0, the copy is the 35 bytes, CR LF and !
+checkpoints of the text as loaded and as edited: 0, 0, recovery.txt is the 35 bytes, CR LF and !
+the document is the same file with the same bytes
+every newline deleted and one typed: written CR LF
+at the capacity: opened 0, 4096 bytes; loaded 0, CRLF, text 4095, file 4096, the file's own bytes
+its first x made a y, saved: 0, read back exactly
+----
+end
+case text buffer: in a CRLF text every newline takes two bytes of the capacity, an edit refused for room changes nothing, and undo and redo stay exact at the capacity
+libs linux text utf8 unicode_tables unicode_grapheme text_buffer
+source until ----
+-- The bytes of s, then the bytes h names in hex, two digits each with a space after.
+func bytes(s, h):
+    let b = new_buffer()
+    do text_add(b, s)
+    let i = 0
+    while i + 1 < length(h):
+        let hi = index(h, i) - 48
+        if hi > 9: hi = hi - 7 end
+        let lo = index(h, i + 1) - 48
+        if lo > 9: lo = lo - 7 end
+        do append(b, hi * 16 + lo)
+        i = i + 3
+    end
+    return b
+end
+
+-- What an edit gave (1 taken, 0 refused), then the file's bytes, CR as \r, LF as \n and any
+-- byte past ~ in hex, and the cursor.
+func step(out, what, r, t):
+    do text_add(out, what)
+    do text_add(out, ": ")
+    do text_add_whole(out, r)
+    do text_add(out, " [")
+    let b = text_file_bytes(t)
+    let i = 0
+    while i < text_file_length(t):
+        let ch = buffer_get(b, i)
+        if ch == 13: do text_add(out, "\\r") elif ch == 10: do text_add(out, "\\n") elif ch > 126: do text_add(out, "<") do text_add_whole(out, ch) do text_add(out, ">") else: do append(out, ch) end
+        i = i + 1
+    end
+    do text_add(out, "] ")
+    do text_add_whole(out, text_file_length(t))
+    do text_add(out, " bytes, cursor ")
+    do text_add_whole(out, text_cursor(t))
+    return text_add(out, "\n")
+end
+
+func main():
+    let out = new_buffer()
+    -- Room for six bytes: é, CR LF (four), the cursor after the newline.
+    let t = text_buffer(6)
+    do text_load(t, bytes("", "C3 A9 0D 0A "), 4)
+    do text_seek(t, 3)
+    do step(out, "é", text_insert(t, 233), t)
+    do step(out, "newline", text_insert(t, 10), t)
+    do step(out, "A", text_insert(t, 'A'), t)
+    do step(out, "undo", text_undo(t), t)
+    do step(out, "redo", text_redo(t), t)
+    -- Five of six bytes used: a newline needs two.
+    let u = text_buffer(6)
+    do text_load(u, bytes("xxx", "0D 0A "), 5)
+    do step(out, "newline", text_insert(u, 10), u)
+    do step(out, "A", text_insert(u, 'A'), u)
+    do step(out, "newline", text_insert(u, 10), u)
+    do step(out, "backspace", text_backspace(u), u)
+    do step(out, "newline", text_insert(u, 10), u)
+    do text_seek(u, text_length(u))
+    do step(out, "backspace at the end", text_backspace(u), u)
+    do step(out, "newline", text_insert(u, 10), u)
+    do step(out, "undo", text_undo(u), u)
+    do step(out, "redo", text_redo(u), u)
+    -- All six bytes used.
+    let v = text_buffer(6)
+    do text_load(v, bytes("xxxx", "0D 0A "), 6)
+    do step(out, "A", text_insert(v, 'A'), v)
+    do step(out, "newline", text_insert(v, 10), v)
+    do step(out, "backspace at the start", text_backspace(v), v)
+    do text_seek(v, text_length(v))
+    do step(out, "backspace at the end", text_backspace(v), v)
+    do step(out, "newline", text_insert(v, 10), v)
+    do step(out, "A", text_insert(v, 'A'), v)
+    do step(out, "undo", text_undo(v), v)
+    do step(out, "undo", text_undo(v), v)
+    do step(out, "redo", text_redo(v), v)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+é: 1 [<195><169>\r\n<195><169>] 6 bytes, cursor 5
+newline: 0 [<195><169>\r\n<195><169>] 6 bytes, cursor 5
+A: 0 [<195><169>\r\n<195><169>] 6 bytes, cursor 5
+undo: 1 [<195><169>\r\n] 4 bytes, cursor 3
+redo: 1 [<195><169>\r\n<195><169>] 6 bytes, cursor 5
+newline: 0 [xxx\r\n] 5 bytes, cursor 0
+A: 1 [Axxx\r\n] 6 bytes, cursor 1
+newline: 0 [Axxx\r\n] 6 bytes, cursor 1
+backspace: 1 [xxx\r\n] 5 bytes, cursor 0
+newline: 0 [xxx\r\n] 5 bytes, cursor 0
+backspace at the end: 1 [xxx] 3 bytes, cursor 3
+newline: 1 [xxx\r\n] 5 bytes, cursor 4
+undo: 1 [xxx] 3 bytes, cursor 3
+redo: 1 [xxx\r\n] 5 bytes, cursor 4
+A: 0 [xxxx\r\n] 6 bytes, cursor 0
+newline: 0 [xxxx\r\n] 6 bytes, cursor 0
+backspace at the start: 0 [xxxx\r\n] 6 bytes, cursor 0
+backspace at the end: 1 [xxxx] 4 bytes, cursor 4
+newline: 1 [xxxx\r\n] 6 bytes, cursor 5
+A: 0 [xxxx\r\n] 6 bytes, cursor 5
+undo: 1 [xxxx] 4 bytes, cursor 4
+undo: 1 [xxxx\r\n] 6 bytes, cursor 5
+redo: 1 [xxxx] 4 bytes, cursor 4
+----
+end
+case text buffer: a load refused for mixed newlines or bad bytes keeps the CRLF style, the text, the cursor and undo; a load taken empties undo and redo
+libs linux text utf8 unicode_tables unicode_grapheme text_buffer
+source until ----
+-- The bytes of s, then the bytes h names in hex, two digits each with a space after.
+func bytes(s, h):
+    let b = new_buffer()
+    do text_add(b, s)
+    let i = 0
+    while i + 1 < length(h):
+        let hi = index(h, i) - 48
+        if hi > 9: hi = hi - 7 end
+        let lo = index(h, i + 1) - 48
+        if lo > 9: lo = lo - 7 end
+        do append(b, hi * 16 + lo)
+        i = i + 3
+    end
+    return b
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+-- The style, the file's bytes (CR as \r, LF as \n, any byte past ~ in hex) and the cursor.
+func show(out, t):
+    if text_crlf(t): do text_add(out, " CRLF [") else: do text_add(out, " LF [") end
+    let b = text_file_bytes(t)
+    let i = 0
+    while i < text_file_length(t):
+        let ch = buffer_get(b, i)
+        if ch == 13: do text_add(out, "\\r") elif ch == 10: do text_add(out, "\\n") elif ch > 126: do text_add(out, "<") do text_add_whole(out, ch) do text_add(out, ">") else: do append(out, ch) end
+        i = i + 1
+    end
+    do text_add(out, "] cursor ")
+    do text_add_whole(out, text_cursor(t))
+    return text_add(out, "\n")
+end
+
+func load(out, t, what, b):
+    do text_add(out, what)
+    do text_add(out, ": ")
+    do result(out, text_load(t, b, buffer_length(b)))
+    return show(out, t)
+end
+
+func main():
+    let out = new_buffer()
+    -- é café, CR LF; then U+1F600 typed at the end.
+    let t = text_buffer(64)
+    do text_load(t, bytes("", "C3 A9 20 63 61 66 C3 A9 0D 0A "), 10)
+    do text_seek(t, text_length(t))
+    do text_insert(t, 128512)
+    do text_add(out, "typed")
+    do show(out, t)
+    do load(out, t, "CRLF then LF", bytes("a\r\nb\n", ""))
+    do load(out, t, "a surrogate's bytes", bytes("", "ED A0 80 "))
+    do load(out, t, "a C1 control", bytes("", "C3 A9 C2 85 "))
+    do text_add(out, "undo: ")
+    do text_add_whole(out, text_undo(t))
+    do show(out, t)
+    -- A text with plain newlines refused a file whose first newline is CR LF.
+    let u = text_buffer(64)
+    do text_load(u, bytes("a\nb", ""), 3)
+    do load(out, u, "plain newlines, then CR LF then LF", bytes("x\r\ny\n", ""))
+    -- An edit undone, so that it could be redone, then a load taken.
+    do text_insert(u, 'A')
+    do text_undo(u)
+    do load(out, u, "a load with a redo waiting", bytes("loaded", ""))
+    do text_add(out, "undo ")
+    do text_add_whole(out, text_undo(u))
+    do text_add(out, ", redo ")
+    do text_add_whole(out, text_redo(u))
+    do show(out, u)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+typed CRLF [<195><169> caf<195><169>\r\n<240><159><152><128>] cursor 13
+CRLF then LF: error 84 CRLF [<195><169> caf<195><169>\r\n<240><159><152><128>] cursor 13
+a surrogate's bytes: error 84 CRLF [<195><169> caf<195><169>\r\n<240><159><152><128>] cursor 13
+a C1 control: error 84 CRLF [<195><169> caf<195><169>\r\n<240><159><152><128>] cursor 13
+undo: 1 CRLF [<195><169> caf<195><169>\r\n] cursor 9
+plain newlines, then CR LF then LF: error 84 LF [a\nb] cursor 0
+a load with a redo waiting: 0 LF [loaded] cursor 0
+undo 0, redo 0 LF [loaded] cursor 0
+----
+end
+case file and recovery: a save, a rescue copy and a checkpoint whose write fails are refused and change nothing: the document, the earlier checkpoint, no copy and no temporary file left
+libs linux text file_io session_recovery
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- The inode of the file at path (in Linux's stat at 8).
+func inode(path):
+    let stat = linux_buffer(144)
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    do linux_fstat(fd, stat)
+    do linux_close(fd)
+    return linux_u64(stat, 8)
+end
+
+-- How many names in the folder at path begin with prefix. Linux's getdents64 is 217; in each
+-- record the length is at 16 and the name from 19.
+func names(path, prefix):
+    let fd = linux_open(linux_cstring(path), 65536, 0)
+    let dents = linux_buffer(4096)
+    let found = 0
+    let got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    while not linux_error(got) and got != 0:
+        let p = 0
+        while p < got:
+            let name = p + 19
+            if text_starts(dents, name, linux_nul_end(dents, name, p + linux_u16(dents, p + 16)), prefix): found = found + 1 end
+            p = p + linux_u16(dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(dents), 4096, 0, 0, 0)
+    end
+    do linux_close(fd)
+    return found
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("fail6.d")), 448, 0, 0, 0, 0)
+    do write_file("fail6.d/doc.txt", "the document\n")
+    let f = file_open("fail6.d/doc.txt", 4096)
+    let r = recovery_new(4096)
+    let first = recovery_save(r, f, linux_cstring("first checkpoint\n"), 17)
+    let before = inode("fail6.d/doc.txt")
+    let text = linux_cstring("a text longer than eight bytes\n")
+    -- The signal for a file grown past its limit ignored (Linux's rt_sigaction, 13: SIGXFSZ is 25,
+    -- and 1 is SIG_IGN), so that a write past the limit fails with 27 instead of ending the program.
+    let ignore = linux_buffer(32)
+    do linux_put64(ignore, 0, 1)
+    do linux_syscall6(13, 25, buffer_address(ignore), 0, 8, 0, 0)
+    -- No file may grow past eight bytes from here (Linux's prlimit64, 302; RLIMIT_FSIZE is 1).
+    let old = linux_buffer(16)
+    do linux_syscall6(302, 0, 1, 0, buffer_address(old), 0, 0)
+    let low = linux_buffer(16)
+    do linux_put64(low, 0, 8)
+    do linux_put64(low, 8, linux_u64(old, 8))
+    do linux_syscall6(302, 0, 1, buffer_address(low), 0, 0, 0)
+    let saved = file_save(f, text, 31)
+    let copied = file_save_copy(f, text, 31)
+    let checkpoint = recovery_save(r, f, text, 31)
+    -- The limit as it was, before anything is written out.
+    do linux_syscall6(302, 0, 1, buffer_address(old), 0, 0, 0)
+    let out = new_buffer()
+    do text_add(out, "first checkpoint: ")
+    do result(out, first)
+    do text_add(out, "\nwith nothing able to grow past eight bytes: a save ")
+    do result(out, saved)
+    do text_add(out, ", a rescue copy ")
+    do result(out, copied)
+    do text_add(out, ", a checkpoint ")
+    do result(out, checkpoint)
+    do text_add(out, "\n")
+    if holds("fail6.d/doc.txt", "the document\n") and inode("fail6.d/doc.txt") == before: do text_add(out, "the document is the same file with its bytes\n") end
+    let s = file_scan_new()
+    let g = file_new(4096)
+    if file_scan(f, s, ".herbert-notes-") == 1 and file_load_inside(g, f, file_scan_name(s), "recovery.txt") == 0:
+        if text_is(g.bytes, 0, file_count(g), "first checkpoint\n"): do text_add(out, "recovery.txt is the first checkpoint\n") end
+    end
+    let folder = new_buffer()
+    do text_add(folder, "fail6.d/")
+    do text_add_span(folder, file_scan_name(s), 0, linux_nul_end(file_scan_name(s), 0, 256))
+    do text_add(out, "rescue copies: ")
+    do text_add_whole(out, names("fail6.d", "herbert-rescue-"))
+    do text_add(out, ", temporary files beside the document: ")
+    do text_add_whole(out, names("fail6.d", ".herbert-save-"))
+    do text_add(out, ", in the session folder: ")
+    do text_add_whole(out, names(freeze(folder), ".herbert-save-"))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+first checkpoint: 0
+with nothing able to grow past eight bytes: a save error 27, a rescue copy error 27, a checkpoint error 27
+the document is the same file with its bytes
+recovery.txt is the first checkpoint
+rescue copies: 0, temporary files beside the document: 0, in the session folder: 0
+----
+end
+case file: after a save left unconfirmed, an outside rewrite of the same size with its time put back is still refused with 116, because the bytes are compared
+libs linux text file_io
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+func main():
+    do write_file("unsure6.txt", "old untouched\n")
+    let f = file_open("unsure6.txt", 64)
+    let out = new_buffer()
+    do text_add(out, "a save: ")
+    do result(out, file_save(f, linux_cstring("new\nnotes\t!\n"), 12))
+    -- What a save gives (1) when the check after its rename fails: the file it published is not yet
+    -- confirmed as the baseline.
+    let st = f.state
+    st.uncertain = true
+    -- The file's times now: access at 72 and modification at 88 in Linux's stat, sixteen bytes each.
+    let stat = linux_buffer(144)
+    let fd = linux_open(linux_cstring("unsure6.txt"), 0, 0)
+    do linux_fstat(fd, stat)
+    do linux_close(fd)
+    -- Another program rewrites the same file in place, twelve other bytes, and puts both times back
+    -- (Linux's utimensat, 280, from the current folder, -100).
+    do write_file("unsure6.txt", "BAD\nnotes\t!\n")
+    let times = linux_buffer(32)
+    do linux_copy(times, 0, stat, 72, 32)
+    do linux_syscall6(280, 0 - 100, buffer_address(linux_cstring("unsure6.txt")), buffer_address(times), 0, 0, 0)
+    do text_add(out, "\nthe next save: ")
+    do result(out, file_save(f, linux_cstring("new\nnotes\t!\n"), 12))
+    if holds("unsure6.txt", "BAD\nnotes\t!\n"): do text_add(out, ", the other program's bytes whole") end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+a save: 0
+the next save: error 116, the other program's bytes whole
+----
+end
+case file: an outside change seen only in the file's times is refused: a rewrite of the same size, its time put back, or a time moved by one nanosecond or by whole seconds alone with the bits made 600; bits made read-only alone are taken
+libs linux text file_io
+source until ----
+-- A file at path holding the bytes of s with the permission bits mode, made without the library.
+func write_file(path, s, mode):
+    let fd = linux_open(linux_cstring(path), 577, mode)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    do linux_close(fd)
+    return linux_syscall6(90, buffer_address(linux_cstring(path)), mode, 0, 0, 0, 0)
+end
+
+-- The file at path rewritten in place, its inode kept, with the bytes of s.
+func rewrite(path, s):
+    let fd = linux_open(linux_cstring(path), 513, 0)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- The status of the file at path, as Linux's fstat gives it.
+func stat_of(path):
+    let stat = linux_buffer(144)
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    do linux_fstat(fd, stat)
+    do linux_close(fd)
+    return stat
+end
+
+-- The file at path given its access time from stat and the modification time seconds and
+-- nanoseconds (Linux's utimensat, 280, from the current folder, -100).
+func date(path, stat, seconds, nanoseconds):
+    let times = linux_buffer(32)
+    do linux_copy(times, 0, stat, 72, 16)
+    do linux_put64(times, 16, seconds)
+    do linux_put64(times, 24, nanoseconds)
+    return linux_syscall6(280, 0 - 100, buffer_address(linux_cstring(path)), buffer_address(times), 0, 0, 0)
+end
+
+-- Linux's chmod, 90.
+func chmod(path, mode): return linux_syscall6(90, buffer_address(linux_cstring(path)), mode, 0, 0, 0, 0) end
+
+-- 20 ms (Linux's nanosleep, 35), so that the clock the file's times come from has moved on.
+func pause():
+    let wait = linux_buffer(16)
+    do linux_put64(wait, 8, 20000000)
+    return linux_sleep(wait)
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+func octal(out, bits):
+    do text_add_whole(out, (bits / 64) % 8)
+    do text_add_whole(out, (bits / 8) % 8)
+    return text_add_whole(out, bits % 8)
+end
+
+-- What file_recheck gives twice and the bits it found, what a save then gives, and whether the
+-- file holds s at the end, with its bits.
+func after(out, what, f, path, s):
+    do text_add(out, what)
+    do text_add(out, ": file_recheck ")
+    do result(out, file_recheck(f))
+    do text_add(out, " and mode ")
+    do octal(out, f.state.mode)
+    do text_add(out, ", again ")
+    do result(out, file_recheck(f))
+    do text_add(out, ", a save ")
+    do result(out, file_save(f, linux_cstring("mine\n"), 5))
+    if holds(path, s): do text_add(out, ", the file holds ") else: do text_add(out, ", the file does NOT hold ") end
+    if equal(s, "mine\n"): do text_add(out, "the save") else: do text_add(out, "the outside change") end
+    do text_add(out, " at mode ")
+    do octal(out, linux_u32(stat_of(path), 24))
+    return text_add(out, "\n")
+end
+
+func main():
+    let out = new_buffer()
+    do linux_syscall6(83, buffer_address(linux_cstring("seen6.d")), 448, 0, 0, 0, 0)
+    -- Rewritten in place, same size, nothing put back.
+    do write_file("seen6.d/a.txt", "original\n", 420)
+    let a = file_open("seen6.d/a.txt", 64)
+    do pause()
+    do rewrite("seen6.d/a.txt", "external\n")
+    do after(out, "the same size rewritten", a, "seen6.d/a.txt", "external\n")
+    -- The same, and made 600.
+    do write_file("seen6.d/b.txt", "old untouched\n", 416)
+    let b = file_open("seen6.d/b.txt", 64)
+    do pause()
+    do rewrite("seen6.d/b.txt", "OLD UNTOUCHED\n")
+    do chmod("seen6.d/b.txt", 384)
+    do after(out, "the same size rewritten, made 600", b, "seen6.d/b.txt", "OLD UNTOUCHED\n")
+    -- Rewritten in place, same size, the modification time put back, the bits kept: only the change
+    -- time tells (at 104 in Linux's stat).
+    do write_file("seen6.d/c.txt", "old untouched\n", 416)
+    let c = file_open("seen6.d/c.txt", 64)
+    let was = stat_of("seen6.d/c.txt")
+    do pause()
+    do rewrite("seen6.d/c.txt", "OLD UNTOUCHED\n")
+    do date("seen6.d/c.txt", was, linux_u64(was, 88), linux_u64(was, 96))
+    do after(out, "the same size rewritten, its time put back", c, "seen6.d/c.txt", "OLD UNTOUCHED\n")
+    -- Only the nanoseconds of the modification time moved, by one, and made 600.
+    do write_file("seen6.d/d.txt", "old untouched\n", 416)
+    let d = file_open("seen6.d/d.txt", 64)
+    let then = stat_of("seen6.d/d.txt")
+    let nanoseconds = linux_u64(then, 96) + 1
+    if nanoseconds == 1000000000: nanoseconds = linux_u64(then, 96) - 1 end
+    do date("seen6.d/d.txt", then, linux_u64(then, 88), nanoseconds)
+    do chmod("seen6.d/d.txt", 384)
+    do after(out, "the time moved by a nanosecond, made 600", d, "seen6.d/d.txt", "old untouched\n")
+    -- Only the seconds of the modification time moved, by one, and made 600.
+    do write_file("seen6.d/e.txt", "old untouched\n", 416)
+    let e = file_open("seen6.d/e.txt", 64)
+    let now = stat_of("seen6.d/e.txt")
+    do date("seen6.d/e.txt", now, linux_u64(now, 88) + 1, linux_u64(now, 96))
+    do chmod("seen6.d/e.txt", 384)
+    do after(out, "the time moved by a second, made 600", e, "seen6.d/e.txt", "old untouched\n")
+    -- Made read-only while open, nothing else.
+    do write_file("seen6.d/g.txt", "old untouched\n", 420)
+    let g = file_open("seen6.d/g.txt", 64)
+    do chmod("seen6.d/g.txt", 292)
+    do after(out, "made 444", g, "seen6.d/g.txt", "mine\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+the same size rewritten: file_recheck error 116 and mode 644, again error 116, a save error 116, the file holds the outside change at mode 644
+the same size rewritten, made 600: file_recheck error 116 and mode 600, again error 116, a save error 116, the file holds the outside change at mode 600
+the same size rewritten, its time put back: file_recheck error 116 and mode 640, again error 116, a save error 116, the file holds the outside change at mode 640
+the time moved by a nanosecond, made 600: file_recheck error 116 and mode 600, again error 116, a save error 116, the file holds the outside change at mode 600
+the time moved by a second, made 600: file_recheck error 116 and mode 600, again error 116, a save error 116, the file holds the outside change at mode 600
+made 444: file_recheck 0 and mode 444, again 0, a save 0, the file holds the save at mode 444
+----
+end
+case file: a rescue copy takes the next free name and never writes over a file there, leaves the document's outside change still refused, and gives 17 when every name it may try is taken
+libs linux text file_io
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+-- The inode of the file at path (in Linux's stat at 8).
+func inode(path):
+    let stat = linux_buffer(144)
+    let fd = linux_open(linux_cstring(path), 0, 0)
+    do linux_fstat(fd, stat)
+    do linux_close(fd)
+    return linux_u64(stat, 8)
+end
+
+-- herbert-rescue-PID-N.txt, PID being this program's (Linux's getpid, 39).
+func rescue_name(n):
+    let b = new_buffer()
+    do text_add(b, "herbert-rescue-")
+    do text_add_whole(b, linux_syscall6(39, 0, 0, 0, 0, 0, 0))
+    do text_add(b, "-")
+    do text_add_whole(b, n)
+    do text_add(b, ".txt")
+    return freeze(b)
+end
+
+func path(folder, name):
+    let b = new_buffer()
+    do text_add(b, folder)
+    do text_add(b, name)
+    return freeze(b)
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+func main():
+    let out = new_buffer()
+    do linux_syscall6(83, buffer_address(linux_cstring("name6.d")), 448, 0, 0, 0, 0)
+    do write_file("name6.d/doc.txt", "old\n")
+    let f = file_open("name6.d/doc.txt", 64)
+    -- Someone else's file at the first name a copy tries, and the document changed outside.
+    do write_file(path("name6.d/", rescue_name(1)), "preexisting rescue")
+    do write_file("name6.d/doc.txt", "external edit\n")
+    let before = inode("name6.d/doc.txt")
+    do text_add(out, "rescue copy: ")
+    do result(out, file_save_copy(f, linux_cstring("rescued\n"), 8))
+    let name = file_copy_name(f)
+    if text_is(name, 0, linux_nul_end(name, 0, buffer_length(name)), rescue_name(2)): do text_add(out, ", named herbert-rescue-PID-2.txt") end
+    if holds(path("name6.d/", rescue_name(2)), "rescued\n"): do text_add(out, ", holding the copy") end
+    do text_add(out, "\n")
+    if holds(path("name6.d/", rescue_name(1)), "preexisting rescue"): do text_add(out, "the file at herbert-rescue-PID-1.txt is whole\n") end
+    if holds("name6.d/doc.txt", "external edit\n") and inode("name6.d/doc.txt") == before: do text_add(out, "the document is the same file with the outside change\n") end
+    do text_add(out, "file_conflict after the copy: ")
+    do result(out, file_conflict(f))
+    -- Every name from herbert-rescue-PID-0.txt to -79.txt taken, each by an empty file.
+    do linux_syscall6(83, buffer_address(linux_cstring("full6.d")), 448, 0, 0, 0, 0)
+    do write_file("full6.d/doc.txt", "taken\n")
+    let g = file_open("full6.d/doc.txt", 64)
+    let n = 0
+    while n < 80:
+        do write_file(path("full6.d/", rescue_name(n)), "")
+        n = n + 1
+    end
+    do text_add(out, "\nwith 80 names taken, a rescue copy: ")
+    do result(out, file_save_copy(g, linux_cstring("mine\n"), 5))
+    let empty = 0
+    n = 0
+    while n < 80:
+        if holds(path("full6.d/", rescue_name(n)), ""): empty = empty + 1 end
+        n = n + 1
+    end
+    do text_add(out, "\n")
+    do text_add_whole(out, empty)
+    do text_add(out, " of the 80 still empty\n")
+    if holds("full6.d/doc.txt", "taken\n"): do text_add(out, "the document is as it was\n") end
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+rescue copy: 0, named herbert-rescue-PID-2.txt, holding the copy
+the file at herbert-rescue-PID-1.txt is whole
+the document is the same file with the outside change
+file_conflict after the copy: error 116
+with 80 names taken, a rescue copy: error 17
+80 of the 80 still empty
+the document is as it was
+----
+end
+case file: a file far larger than the capacity is read no further than one byte past it, opened or as a recovery copy, and refused with 27
+libs linux text file_io
+source until ----
+-- A file at path holding count bytes x, made without the library.
+func write_xs(path, count):
+    let b = new_buffer()
+    do buffer_fill(b, count, 'x')
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, b, 0, count)
+    return linux_close(fd)
+end
+
+func refused(out, what, r, f):
+    do text_add(out, what)
+    if linux_error(r):
+        do text_add(out, ": error ")
+        do text_add_whole(out, 0 - r)
+    else:
+        do text_add(out, ": ")
+        do text_add_whole(out, r)
+    end
+    do text_add(out, ", ")
+    do text_add_whole(out, file_count(f))
+    return text_add(out, " bytes read\n")
+end
+
+func main():
+    let out = new_buffer()
+    do linux_syscall6(83, buffer_address(linux_cstring("bound6.d")), 448, 0, 0, 0, 0)
+    do linux_syscall6(83, buffer_address(linux_cstring("bound6.d/.herbert-notes-1-1")), 448, 0, 0, 0, 0)
+    do write_xs("bound6.d/big.txt", 100)
+    do write_xs("bound6.d/.herbert-notes-1-1/recovery.txt", 100)
+    -- Room for seven bytes.
+    let f = file_open("bound6.d/big.txt", 7)
+    do refused(out, "100 bytes opened", file_status(f), f)
+    let doc = file_open("bound6.d/doc.txt", 64)
+    let g = file_new(7)
+    do refused(out, "100 bytes as a recovery copy", file_load_inside(g, doc, linux_cstring(".herbert-notes-1-1"), "recovery.txt"), g)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+100 bytes opened: error 27, 8 bytes read
+100 bytes as a recovery copy: error 27, 8 bytes read
+----
+end
+case file: file_scan lists a folder of 1500 other names over several reads and counts and names the session folders wherever they fall
+libs linux text file_io
+source until ----
+-- Linux's mkdir (83).
+func make_folder(path):
+    return linux_syscall6(83, buffer_address(linux_cstring(path)), 448, 0, 0, 0, 0)
+end
+
+-- What is at path given the modification time seconds (Linux's utimensat, 280, from the current
+-- folder, -100).
+func set_time(path, seconds):
+    let times = linux_buffer(32)
+    do linux_put64(times, 0, seconds)
+    do linux_put64(times, 16, seconds)
+    return linux_syscall6(280, 0 - 100, buffer_address(linux_cstring(path)), buffer_address(times), 0, 0, 0)
+end
+
+-- many6.d/ and n empty files with long names, from the number first.
+func fill(first, n):
+    let i = first
+    while i < first + n:
+        let b = new_buffer()
+        do text_add(b, "many6.d/unrelated-entry-with-a-longish-name-")
+        do text_add_whole(b, 10000 + i)
+        do linux_close(linux_open(linux_cstring(freeze(b)), 577, 420))
+        i = i + 1
+    end
+    return 0
+end
+
+func scan(out, f, s):
+    do text_add_whole(out, file_scan(f, s, ".herbert-notes-"))
+    do text_add(out, " [")
+    let name = file_scan_name(s)
+    do text_add_span(out, name, 0, linux_nul_end(name, 0, buffer_length(name)))
+    return text_add(out, "]\n")
+end
+
+func main():
+    do make_folder("many6.d")
+    -- Three session folders made among 1500 other names, each about 64 bytes of listing: a read of
+    -- 32 KiB holds about 500. A plain file wears the prefix too, with the latest time of all.
+    do make_folder("many6.d/.herbert-notes-1-1")
+    do fill(0, 500)
+    do make_folder("many6.d/.herbert-notes-2-1")
+    do fill(500, 500)
+    do linux_close(linux_open(linux_cstring("many6.d/.herbert-notes-9-9"), 577, 420))
+    do fill(1000, 500)
+    do make_folder("many6.d/.herbert-notes-3-1")
+    do set_time("many6.d/.herbert-notes-1-1", 1000)
+    do set_time("many6.d/.herbert-notes-2-1", 3000)
+    do set_time("many6.d/.herbert-notes-3-1", 2000)
+    do set_time("many6.d/.herbert-notes-9-9", 9000)
+    let f = file_open("many6.d/doc.txt", 64)
+    let s = file_scan_new()
+    let out = new_buffer()
+    do scan(out, f, s)
+    do scan(out, f, s)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+3 [.herbert-notes-2-1]
+3 [.herbert-notes-2-1]
+----
+end
+case file: a FIFO at the document's name is refused with 22 at once, opened or loaded into a handle, which keeps its own document; the FIFO stays
+libs linux text file_io
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+func result(out, r):
+    if not linux_error(r): return text_add_whole(out, r) end
+    do text_add(out, "error ")
+    return text_add_whole(out, 0 - r)
+end
+
+func main():
+    let out = new_buffer()
+    do linux_syscall6(83, buffer_address(linux_cstring("fifo6.d")), 448, 0, 0, 0, 0)
+    -- A FIFO (Linux's mknod, 133; 4480 is a FIFO with mode 600). Opening one for reading waits for
+    -- a writer that never comes, so a library that did would run past the limit below.
+    do linux_syscall6(133, buffer_address(linux_cstring("fifo6.d/pipe.txt")), 4480, 0, 0, 0, 0)
+    do write_file("fifo6.d/doc.txt", "kept\n")
+    do text_add(out, "opened: ")
+    do result(out, file_status(file_open("fifo6.d/pipe.txt", 64)))
+    let f = file_open("fifo6.d/doc.txt", 64)
+    do text_add(out, "\nloaded into a handle on doc.txt: ")
+    do result(out, file_load(f, linux_cstring("fifo6.d/pipe.txt"), 16))
+    do text_add(out, ", the handle still holds ")
+    do text_add_whole(out, file_count(f))
+    do text_add(out, " bytes of ")
+    do text_add_span(out, f.path, 0, linux_nul_end(f.path, 0, buffer_length(f.path)))
+    do text_add(out, "\na save through it: ")
+    do result(out, file_save(f, linux_cstring("saved\n"), 6))
+    if holds("fifo6.d/doc.txt", "saved\n"): do text_add(out, ", into doc.txt") end
+    -- Still a FIFO: the type bits of its stat (at 24 in Linux's stat; 4096 is a FIFO), not followed.
+    let stat = linux_buffer(144)
+    do linux_syscall6(262, 0 - 100, buffer_address(linux_cstring("fifo6.d/pipe.txt")), buffer_address(stat), 256, 0, 0)
+    if (linux_u32(stat, 24) & 61440) == 4096: do text_add(out, "\npipe.txt is still a FIFO") end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+opened: error 22
+loaded into a handle on doc.txt: error 22, the handle still holds 5 bytes of fifo6.d/doc.txt
+a save through it: 0, into doc.txt
+pipe.txt is still a FIFO
+----
+limit 5
+end
+case text buffer: through random edits, undo, redo, reloads and moves by screen rows on wrapped lines of accents, CJK and emoji, the cursor stays on the start of a character and the text stays UTF-8
+libs linux text utf8 unicode_tables unicode_grapheme text_buffer
+source until ----
+ref record Dice:
+    seed: int
+    rolls: int
+end
+
+-- A number from 0 to n - 1, the same sequence on every run.
+func roll(d, n):
+    d.seed = d.seed * 6364136223846793005 + 1442695040888963407
+    d.rolls = d.rolls + 1
+    return (d.seed >> 33) % n
+end
+
+-- Letters, a space, a tab, a newline, é, 漢, a combining acute that joins the character before
+-- it, and an emoji.
+func scalar(k):
+    if k < 6: return 'a' + k end
+    if k == 6: return ' ' end
+    if k == 7: return 9 end
+    if k == 8: return 10 end
+    if k == 9: return 233 end
+    if k == 10: return 28450 end
+    if k == 11: return 769 end
+    return 128512
+end
+
+-- 1 when the cursor is past the end of the text or on a byte that continues a character (10xxxxxx),
+-- or the text does not decode as UTF-8 to its end.
+func wrong(t):
+    let p = text_cursor(t)
+    if p > text_length(t): return 1 end
+    if p < text_length(t) and (buffer_get(t.bytes, p) & 192) == 128: return 1 end
+    p = 0
+    while p < text_length(t):
+        let d = utf8_decode(t.bytes, p, text_length(t))
+        if linux_error(d.0): return 1 end
+        p = d.1
+    end
+    return 0
+end
+
+-- One edit or move: a character typed, backspace, delete, undo, redo, the next two characters
+-- replaced by two typed, the cursor put at a random place, or Up, Down or End by screen rows.
+-- Now and then the text first loaded is loaded again.
+func step(t, d, scratch, first, count):
+    let what = roll(d, 24)
+    if what < 8: return text_insert(t, scalar(roll(d, 13))) end
+    if what < 10: return text_backspace(t) end
+    if what < 12: return text_delete(t) end
+    if what < 14: return text_undo(t) end
+    if what < 15: return text_redo(t) end
+    if what < 16:
+        let n = utf8_store(scratch, 0, scalar(roll(d, 13)))
+        n = utf8_store(scratch, n, scalar(roll(d, 13)))
+        let from = text_cursor(t)
+        return text_replace(t, from, text_next(t, text_next(t, from)), scratch, 0, n)
+    end
+    if what < 17: return text_seek(t, roll(d, text_length(t) + 1)) end
+    if what < 19: return text_wrap_vertical(t, true, 1 + roll(d, 3)) end
+    if what < 21: return text_wrap_vertical(t, false, 1 + roll(d, 3)) end
+    if what < 22: return text_wrap_vertical(t, roll(d, 2) == 0, 20) end
+    if what < 23: return text_seek(t, text_wrap_last(t, text_wrap_start(t, text_cursor(t)))) end
+    return text_load(t, first, count)
+end
+
+func main():
+    let d = Dice(31, 0)
+    let scratch = linux_buffer(8)
+    let first = linux_buffer(512)
+    let wrongs = 0
+    let run = 0
+    while run < 160:
+        -- Forty characters typed make the first text of this run; then rows 5 to 13 columns wide,
+        -- every first, second or third row remembered.
+        let t = text_buffer(512)
+        let i = 0
+        while i < 40:
+            do text_insert(t, scalar(roll(d, 13)))
+            i = i + 1
+        end
+        let count = text_length(t)
+        do linux_copy(first, 0, t.bytes, 0, count)
+        do text_load(t, first, count)
+        do text_wrap(t, 5 + roll(d, 9), 1 + roll(d, 3))
+        i = 0
+        while i < 300:
+            do step(t, d, scratch, first, count)
+            i = i + 1
+            -- The first step that goes wrong ends the run: an edit at a place inside a character
+            -- could go on wrong in any way.
+            if wrong(t) == 1:
+                wrongs = wrongs + 1
+                i = 300
+            end
+        end
+        run = run + 1
+    end
+    let out = new_buffer()
+    do text_add_whole(out, wrongs)
+    do text_add(out, " of 160 runs of 300 steps left the cursor inside a character or the text not UTF-8\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+0 of 160 runs of 300 steps left the cursor inside a character or the text not UTF-8
+----
+end
+case file, text buffer and recovery: a long session at the full capacity, typing, editing, finding, checkpointing and saving, takes no memory and no descriptor round after round, and its copies are the document's bytes
+libs linux text utf8 unicode_tables unicode_grapheme file_io text_buffer session_recovery
+source until ----
+-- What one look at this program's descriptors needs, made before the session starts: dents holds
+-- the listing of /proc/self/fd.
+record Look:
+    dents: buffer
+    fd_path: buffer
+end
+
+-- How many descriptors this program has open: the names in /proc/self/fd (getdents64, 217).
+func descriptors(k):
+    let fd = linux_syscall6(2, buffer_address(k.fd_path), 589824, 0, 0, 0, 0)
+    let count = 0
+    let got = linux_syscall6(217, fd, buffer_address(k.dents), buffer_length(k.dents), 0, 0, 0)
+    while got > 0 and not linux_error(got):
+        let p = 0
+        while p < got:
+            count = count + 1
+            p = p + linux_u16(k.dents, p + 16)
+        end
+        got = linux_syscall6(217, fd, buffer_address(k.dents), buffer_length(k.dents), 0, 0, 0)
+    end
+    do linux_close(fd)
+    return count
+end
+
+-- Where the next buffer would be made: the heap's high mark. A program's heap is one reservation
+-- made when it starts (docs/LANGUAGE.md), so this mark sees every byte the libraries take, and the
+-- process's mapped size could not show more.
+func heap_mark(): return buffer_address(new_buffer()) end
+
+-- One round as Notes goes: a character deleted, a letter typed and backspaced, all three undone,
+-- the delete redone and undone, a search, a checkpoint and a save of the whole text. How many of
+-- those did not give what they should.
+func round(f, r, t, query):
+    let missed = 0
+    do text_seek(t, 0)
+    if text_delete(t) != 1 or text_insert(t, 'A') != 1 or text_backspace(t) != 1 or text_undo(t) != 1 or text_undo(t) != 1 or text_undo(t) != 1 or text_redo(t) != 1 or text_undo(t) != 1: missed = missed + 1 end
+    if text_find(t, query, 1, 0, false) != 0: missed = missed + 1 end
+    let bytes = text_file_bytes(t)
+    if recovery_save(r, f, bytes, text_file_length(t)) != 0: missed = missed + 1 end
+    if file_save(f, bytes, text_file_length(t)) != 0: missed = missed + 1 end
+    return missed
+end
+
+func rounds(f, r, t, query, n):
+    let missed = 0
+    while n != 0:
+        missed = missed + round(f, r, t, query)
+        n = n - 1
+    end
+    return missed
+end
+
+-- Whether count bytes of b are those of doc.
+func full(b, count, doc):
+    if count != 65536: return false end
+    let i = 0
+    while i < 65536:
+        if buffer_get(b, i) != buffer_get(doc, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+func main():
+    do linux_syscall6(83, buffer_address(linux_cstring("long6.d")), 448, 0, 0, 0, 0)
+    -- 1024 lines of 62 A's and CR LF: 65536 bytes, the capacity.
+    let doc = new_buffer()
+    let line = 0
+    while line < 1024:
+        let i = 0
+        while i < 62:
+            do append(doc, 'A')
+            i = i + 1
+        end
+        do append(doc, 13)
+        do append(doc, 10)
+        line = line + 1
+    end
+    let fd = linux_open(linux_cstring("long6.d/doc.txt"), 577, 420)
+    do linux_write(fd, doc, 0, 65536)
+    do linux_close(fd)
+    let f = file_open("long6.d/doc.txt", 65536)
+    let r = recovery_new(65536)
+    let t = text_buffer(65536)
+    do text_load(t, f.bytes, file_count(f))
+    let query = linux_cstring("A")
+    let k = Look(linux_buffer(8192), linux_cstring("/proc/self/fd"))
+    let missed = rounds(f, r, t, query, 100)
+    let open = descriptors(k)
+    let m0 = heap_mark()
+    let m1 = heap_mark()
+    missed = missed + rounds(f, r, t, query, 300)
+    let m2 = heap_mark()
+    let out = new_buffer()
+    do text_add_whole(out, missed)
+    do text_add(out, " steps of 400 rounds did not give what they should\nheap taken by the last 300 rounds: ")
+    do text_add_whole(out, (m2 - m1) - (m1 - m0))
+    if descriptors(k) == open: do text_add(out, "\nthe same descriptors open") end
+    let s = file_scan_new()
+    let g = file_new(65536)
+    if file_scan(f, s, ".herbert-notes-") == 1 and file_load_inside(g, f, file_scan_name(s), "recovery.txt") == 0 and full(g.bytes, file_count(g), doc): do text_add(out, "\nthe last checkpoint is the 65536 bytes") end
+    let back = linux_read_file("long6.d/doc.txt", 65536)
+    if back.0 == 0 and full(back.1, back.2, doc): do text_add(out, "\nthe document is the 65536 bytes") end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+0 steps of 400 rounds did not give what they should
+heap taken by the last 300 rounds: 0
+the same descriptors open
+the last checkpoint is the 65536 bytes
+the document is the 65536 bytes
+----
+limit 60
+end
+case text: the readers and the fixed-buffer writers take no memory, call after call
+libs linux text
+source until ----
+-- Where the next buffer would be made: the heap's high mark.
+func heap_mark(): return buffer_address(new_buffer()) end
+
+-- Every reader and fixed-buffer writer once, on the line in b and into out: a sum of what they
+-- gave, so that none is left out.
+func round(b, s, out, n):
+    let stop = buffer_length(b)
+    let sum = 0
+    let field = text_field(b, 0, stop)
+    sum = sum + field.1 + text_skip(b, field.1, stop)
+    let w = text_whole(b, text_skip(b, field.1, stop), stop)
+    sum = sum + w.1 + w.2
+    let strict = text_whole_strict(b, 7, stop)
+    if strict.0: sum = sum + 1 end
+    let sw = text_string_whole(s, 0, length(s))
+    let ss = text_string_whole_strict(s, 0, length(s))
+    sum = sum + sw.1 + ss.1
+    if text_starts(b, 0, stop, "up") and text_is(b, 0, 2, "up") and text_digit(buffer_get(b, 3)) and text_blank(buffer_get(b, 2)) and text_fits(n, 5): sum = sum + 1 end
+    let at = text_put(out, 0, "up ")
+    at = text_put_whole(out, at, n)
+    at = text_put_padded(out, at, n % 100, 3)
+    at = text_put_tenths(out, at, n, 1024)
+    return sum + at
+end
+
+func main():
+    let b = linux_cstring("up 12345 07 ok")
+    let out = linux_buffer(64)
+    let total = 0
+    let n = 0
+    while n < 1000:
+        total = total + round(b, "4096", out, n)
+        n = n + 1
+    end
+    let m0 = heap_mark()
+    let m1 = heap_mark()
+    while n < 101000:
+        total = total + round(b, "4096", out, n)
+        n = n + 1
+    end
+    let m2 = heap_mark()
+    let report = new_buffer()
+    do text_add(report, "heap taken by 100000 rounds: ")
+    do text_add_whole(report, (m2 - m1) - (m1 - m0))
+    if total > 0: do text_add(report, "\nevery round worked") end
+    do text_add(report, "\n")
+    do flogger(freeze(report))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+heap taken by 100000 rounds: 0
+every round worked
+----
+end
+case utf8: a scalar at each edge of a byte count is stored as RFC 3629's own bytes and no others change, and those bytes decode to it
+libs linux text utf8
+source until ----
+-- The bytes h names in hex, two digits each with a space after.
+func hex(h):
+    let b = new_buffer()
+    let i = 0
+    while i + 1 < length(h):
+        let hi = index(h, i) - 48
+        if hi > 9: hi = hi - 7 end
+        let lo = index(h, i + 1) - 48
+        if lo > 9: lo = lo - 7 end
+        do append(b, hi * 16 + lo)
+        i = i + 3
+    end
+    return b
+end
+
+func hex_byte(out, v):
+    let digits = "0123456789ABCDEF"
+    do append(out, index(digits, v / 16))
+    do append(out, index(digits, v % 16))
+    return 0
+end
+
+-- cp stored at 1 in sixteen bytes of Z: what utf8_store gives and all sixteen bytes, a Z shown as
+-- Z. Then the bytes h decoded from 0 to their end: the scalar and the place after it.
+func check(out, cp, h):
+    let b = new_buffer()
+    do buffer_fill(b, 16, 'Z')
+    do text_add_whole(out, cp)
+    do text_add(out, ": next ")
+    do text_add_whole(out, utf8_store(b, 1, cp))
+    do text_add(out, " [")
+    let i = 0
+    while i < 16:
+        if i > 0: do text_add(out, " ") end
+        if buffer_get(b, i) == 'Z': do text_add(out, "Z") else: do hex_byte(out, buffer_get(b, i)) end
+        i = i + 1
+    end
+    let bytes = hex(h)
+    let d = utf8_decode(bytes, 0, buffer_length(bytes))
+    do text_add(out, "], ")
+    do text_add(out, h)
+    do text_add(out, "decodes to ")
+    do text_add_whole(out, d.0)
+    do text_add(out, ", next ")
+    do text_add_whole(out, d.1)
+    return text_add(out, "\n")
+end
+
+func main():
+    let out = new_buffer()
+    do check(out, 128, "C2 80 ")
+    do check(out, 2047, "DF BF ")
+    do check(out, 2048, "E0 A0 80 ")
+    do check(out, 55295, "ED 9F BF ")
+    do check(out, 57344, "EE 80 80 ")
+    do check(out, 65535, "EF BF BF ")
+    do check(out, 65536, "F0 90 80 80 ")
+    do check(out, 1114111, "F4 8F BF BF ")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+128: next 3 [Z C2 80 Z Z Z Z Z Z Z Z Z Z Z Z Z], C2 80 decodes to 128, next 2
+2047: next 3 [Z DF BF Z Z Z Z Z Z Z Z Z Z Z Z Z], DF BF decodes to 2047, next 2
+2048: next 4 [Z E0 A0 80 Z Z Z Z Z Z Z Z Z Z Z Z], E0 A0 80 decodes to 2048, next 3
+55295: next 4 [Z ED 9F BF Z Z Z Z Z Z Z Z Z Z Z Z], ED 9F BF decodes to 55295, next 3
+57344: next 4 [Z EE 80 80 Z Z Z Z Z Z Z Z Z Z Z Z], EE 80 80 decodes to 57344, next 3
+65535: next 4 [Z EF BF BF Z Z Z Z Z Z Z Z Z Z Z Z], EF BF BF decodes to 65535, next 3
+65536: next 5 [Z F0 90 80 80 Z Z Z Z Z Z Z Z Z Z Z], F0 90 80 80 decodes to 65536, next 4
+1114111: next 5 [Z F4 8F BF BF Z Z Z Z Z Z Z Z Z Z Z], F4 8F BF BF decodes to 1114111, next 4
+----
+end
+case text buffer: backspace, delete and Enter in a CRLF text take and give whole characters and whole CR LF newlines, a surrogate is refused, and undoing everything gives back the loaded bytes
+libs linux text utf8 unicode_tables unicode_grapheme text_buffer
+source until ----
+-- The bytes of s, then the bytes h names in hex, two digits each with a space after.
+func bytes(s, h):
+    let b = new_buffer()
+    do text_add(b, s)
+    let i = 0
+    while i + 1 < length(h):
+        let hi = index(h, i) - 48
+        if hi > 9: hi = hi - 7 end
+        let lo = index(h, i + 1) - 48
+        if lo > 9: lo = lo - 7 end
+        do append(b, hi * 16 + lo)
+        i = i + 3
+    end
+    return b
+end
+
+-- Whether the file's bytes decode as UTF-8 to their end with every CR followed by LF and every LF
+-- after a CR.
+func valid(t):
+    let b = text_file_bytes(t)
+    let n = text_file_length(t)
+    let p = 0
+    while p < n:
+        let d = utf8_decode(b, p, n)
+        if linux_error(d.0): return false end
+        if d.0 == 13 and (p + 1 == n or buffer_get(b, p + 1) != 10): return false end
+        if d.0 == 10 and (p == 0 or buffer_get(b, p - 1) != 13): return false end
+        p = d.1
+    end
+    return true
+end
+
+-- What an edit gave, the file's bytes (CR as \r, LF as \n, any byte past ~ by its number), and
+-- whether they are valid.
+func step(out, what, r, t):
+    do text_add(out, what)
+    do text_add(out, ": ")
+    do text_add_whole(out, r)
+    do text_add(out, " [")
+    let b = text_file_bytes(t)
+    let i = 0
+    while i < text_file_length(t):
+        let ch = buffer_get(b, i)
+        if ch == 13: do text_add(out, "\\r") elif ch == 10: do text_add(out, "\\n") elif ch > 126: do text_add(out, "<") do text_add_whole(out, ch) do text_add(out, ">") else: do append(out, ch) end
+        i = i + 1
+    end
+    if valid(t): return text_add(out, "] valid\n") end
+    return text_add(out, "] NOT valid\n")
+end
+
+func main():
+    let out = new_buffer()
+    -- A, é, an em dash, B, CR LF, x.
+    let loaded = bytes("A", "C3 A9 E2 80 94 42 0D 0A 78 ")
+    let t = text_buffer(64)
+    do text_load(t, loaded, 10)
+    do text_seek(t, 3)
+    do step(out, "backspace after é", text_backspace(t), t)
+    do text_seek(t, text_find(t, bytes("", "E2 80 94 "), 3, 0, false))
+    do step(out, "the dash found, delete", text_delete(t), t)
+    do text_seek(t, 2)
+    do step(out, "delete before the newline", text_delete(t), t)
+    do text_seek(t, text_length(t))
+    do step(out, "Enter at the end", text_insert(t, 10), t)
+    do step(out, "a surrogate, 55296", text_insert(t, 55296), t)
+    let undone = 0
+    while text_undo(t) == 1: undone = undone + 1 end
+    do text_add(out, "undone ")
+    do text_add_whole(out, undone)
+    if text_file_length(t) == 10 and text_is(text_file_bytes(t), 0, 10, freeze(loaded)): do text_add(out, " times, the bytes loaded") end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+backspace after é: 1 [A<226><128><148>B\r\nx] valid
+the dash found, delete: 1 [AB\r\nx] valid
+delete before the newline: 1 [ABx] valid
+Enter at the end: 1 [ABx\r\n] valid
+a surrogate, 55296: 0 [ABx\r\n] valid
+undone 4 times, the bytes loaded
+----
+end
+case file: beside earlier sessions' folders of a long name, an unreadable copy and a copy over the capacity, and a link and a file wearing the name, file_scan and file_load_inside give their answers and change nothing
+libs linux text file_io
+source until ----
+-- A file at path holding the bytes of s, made without the library.
+func write_file(path, s):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(s), 0, length(s))
+    return linux_close(fd)
+end
+
+-- Whether the file at path holds exactly s, read without the library.
+func holds(path, s):
+    let file = linux_read_file(path, 4096)
+    return file.0 == 0 and text_is(file.1, 0, file.2, s)
+end
+
+func join(a, b):
+    let out = new_buffer()
+    do text_add(out, a)
+    do text_add(out, b)
+    return freeze(out)
+end
+
+-- Linux's mkdir (83).
+func make_folder(path):
+    return linux_syscall6(83, buffer_address(linux_cstring(path)), 448, 0, 0, 0, 0)
+end
+
+-- What is at path given the modification time seconds (Linux's utimensat, 280, from the current
+-- folder, -100).
+func set_time(path, seconds):
+    let times = linux_buffer(32)
+    do linux_put64(times, 0, seconds)
+    do linux_put64(times, 16, seconds)
+    return linux_syscall6(280, 0 - 100, buffer_address(linux_cstring(path)), buffer_address(times), 0, 0, 0)
+end
+
+-- The type and permission bits of what is at path, not followed (Linux's newfstatat, 262).
+func mode(path):
+    let stat = linux_buffer(144)
+    do linux_syscall6(262, 0 - 100, buffer_address(linux_cstring(path)), buffer_address(stat), 256, 0, 0)
+    return linux_u32(stat, 24)
+end
+
+-- file_scan's count and the length of the newest folder's name, then file_load_inside of its
+-- recovery.txt.
+func look(out, f, s, g):
+    do text_add_whole(out, file_scan(f, s, ".herbert-notes-"))
+    do text_add(out, " folders, the newest named in ")
+    do text_add_whole(out, linux_nul_end(file_scan_name(s), 0, 256))
+    do text_add(out, " bytes, its copy: ")
+    let r = file_load_inside(g, f, file_scan_name(s), "recovery.txt")
+    if linux_error(r):
+        do text_add(out, "error ")
+        do text_add_whole(out, 0 - r)
+    else:
+        do text_add_whole(out, r)
+        if text_is(g.bytes, 0, file_count(g), "long name\n"): do text_add(out, ", its bytes") end
+    end
+    return text_add(out, "\n")
+end
+
+func main():
+    do make_folder("early6.d")
+    do write_file("early6.d/doc.txt", "alpha\n")
+    -- .herbert-notes- and 200 n's: a name of 215 bytes.
+    let long = new_buffer()
+    do text_add(long, "early6.d/.herbert-notes-")
+    do buffer_fill(long, 200, 'n')
+    let folder = freeze(long)
+    do make_folder(folder)
+    do write_file(join(folder, "/recovery.txt"), "long name\n")
+    -- A copy nobody may read (mode 000), and a copy one byte over the capacity of 64.
+    do make_folder("early6.d/.herbert-notes-1-2")
+    do write_file("early6.d/.herbert-notes-1-2/recovery.txt", "secret\n")
+    do linux_syscall6(90, buffer_address(linux_cstring("early6.d/.herbert-notes-1-2/recovery.txt")), 0, 0, 0, 0, 0)
+    do make_folder("early6.d/.herbert-notes-1-3")
+    let big = new_buffer()
+    do buffer_fill(big, 65, 'x')
+    do write_file("early6.d/.herbert-notes-1-3/recovery.txt", freeze(big))
+    -- A symbolic link to the long-named folder, and a plain file, wearing the name (symlink, 88).
+    do linux_syscall6(88, buffer_address(linux_cstring(text_string(long, 9, 224))), buffer_address(linux_cstring("early6.d/.herbert-notes-99-9")), 0, 0, 0, 0)
+    do write_file("early6.d/.herbert-notes-98-9", "")
+    do set_time(folder, 3000)
+    do set_time("early6.d/.herbert-notes-1-2", 2000)
+    do set_time("early6.d/.herbert-notes-1-3", 1000)
+    let f = file_open("early6.d/doc.txt", 64)
+    let s = file_scan_new()
+    let g = file_new(64)
+    let out = new_buffer()
+    do look(out, f, s, g)
+    do set_time("early6.d/.herbert-notes-1-2", 5000)
+    do look(out, f, s, g)
+    do set_time("early6.d/.herbert-notes-1-3", 6000)
+    do look(out, f, s, g)
+    if holds("early6.d/doc.txt", "alpha\n"): do text_add(out, "the document is as it was\n") end
+    if holds(join(folder, "/recovery.txt"), "long name\n") and holds("early6.d/.herbert-notes-1-3/recovery.txt", freeze(big)): do text_add(out, "the copies are as they were\n") end
+    if mode("early6.d/.herbert-notes-1-2/recovery.txt") == 32768:
+        do linux_syscall6(90, buffer_address(linux_cstring("early6.d/.herbert-notes-1-2/recovery.txt")), 384, 0, 0, 0, 0)
+        if holds("early6.d/.herbert-notes-1-2/recovery.txt", "secret\n"): do text_add(out, "the unreadable copy is as it was, still mode 000\n") end
+    end
+    if (mode("early6.d/.herbert-notes-99-9") & 61440) == 40960 and (mode("early6.d/.herbert-notes-98-9") & 61440) == 32768: do text_add(out, "the link is a link and the file a file\n") end
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+3 folders, the newest named in 215 bytes, its copy: 0, its bytes
+3 folders, the newest named in 18 bytes, its copy: error 13
+3 folders, the newest named in 18 bytes, its copy: error 27
+the document is as it was
+the copies are as they were
+the unreadable copy is as it was, still mode 000
+the link is a link and the file a file
+----
+end
+case text buffer: a whole text of 60002 bytes replaced by 60001 in one step, as Notes pastes over everything, is one undo step: undo gives back the 60002 bytes exactly and redo the 60001
+libs linux text utf8 unicode_tables unicode_grapheme text_buffer
+source until ----
+-- Whether the text is exactly count bytes of b.
+func is(t, b, count):
+    if text_length(t) != count: return false end
+    let i = 0
+    while i < count:
+        if buffer_get(t.bytes, i) != buffer_get(b, i): return false end
+        i = i + 1
+    end
+    return true
+end
+
+func show(out, what, r, t, old, new):
+    do text_add(out, what)
+    do text_add(out, ": ")
+    do text_add_whole(out, r)
+    do text_add(out, ", ")
+    do text_add_whole(out, text_length(t))
+    do text_add(out, " bytes")
+    if is(t, old, 60002): do text_add(out, ", the text before the paste") end
+    if is(t, new, 60001): do text_add(out, ", the text pasted") end
+    return text_add(out, "\n")
+end
+
+func main():
+    -- 30000 X's, a newline and 30000 Y's; then the same with ! typed at the end.
+    let new = new_buffer()
+    do buffer_fill(new, 30000, 'X')
+    do append(new, 10)
+    do buffer_fill(new, 30000, 'Y')
+    let old = new_buffer()
+    do text_add_span(old, new, 0, 60001)
+    do append(old, '!')
+    -- Notes' capacity and history: room for one replace of the whole text.
+    let t = text_buffer_history(65536, 131072)
+    do text_load(t, old, 60002)
+    let out = new_buffer()
+    do show(out, "everything replaced", text_replace(t, 0, 60002, new, 0, 60001), t, old, new)
+    do show(out, "undo", text_undo(t), t, old, new)
+    do show(out, "redo", text_redo(t), t, old, new)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+everything replaced: 1, 60001 bytes, the text pasted
+undo: 1, 60002 bytes, the text before the paste
+redo: 1, 60001 bytes, the text pasted
+----
+end
+case figures: an empty reply, from a computer that took the connection and closed it without a byte, is refused
+libs linux text figures
+source until ----
+func main():
+    let r = figures_reply_new()
+    if figures_reply_read(r, linux_cstring(""), 0):
+        do flogger("empty: taken\n")
+    else:
+        do flogger("empty: refused\n")
+    end
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+empty: refused
+----
+end
+case figures: with no drive among the sensors the helper's line says none, and a drive reading that is empty or gone is n/a
+libs linux text figures
+source until ----
+func folder(path):
+    return linux_syscall6(83, buffer_address(linux_cstring(path)), 448, 0, 0, 0, 0)
+end
+
+func put(path, text):
+    let fd = linux_open(linux_cstring(path), 577, 420)
+    do linux_write(fd, linux_cstring(text), 0, length(text))
+    return linux_close(fd)
+end
+
+-- Find the sensors under root and write the helper's line for them, with fixed processor, memory and disk.
+func line(out, root):
+    let heat = figures_heat_new()
+    do figures_heat_find(heat, root)
+    do figures_heat_read(heat)
+    let disk = figures_disk_new(".")
+    disk.state = 2
+    let b = linux_buffer(figures_reply_longest())
+    let n = figures_reply_put(b, (true, 10000, 1500), (true, 16384000, 4096000), disk, heat.drive)
+    do text_add(out, root)
+    do text_add(out, ": ")
+    return text_add_span(out, b, 0, n)
+end
+
+func drive(out, what, heat):
+    do figures_heat_read(heat)
+    do text_add(out, what)
+    if heat.drive.state != 1: return text_add(out, ": drive n/a\n") end
+    do text_add(out, ": drive ")
+    do text_add_whole(out, heat.drive.reading)
+    return text_add(out, "\n")
+end
+
+func main():
+    let out = new_buffer()
+    -- A computer with no hwmon devices at all, and one whose only device is not a drive.
+    do folder("none.d")
+    do line(out, "none.d")
+    do folder("other.d")
+    do folder("other.d/hwmon0")
+    do put("other.d/hwmon0/name", "acpitz\n")
+    do put("other.d/hwmon0/temp1_input", "27800\n")
+    do line(out, "other.d")
+    -- A drive whose reading file is emptied, and then taken away, while the program runs.
+    do folder("hw.d")
+    do folder("hw.d/hwmon1")
+    do put("hw.d/hwmon1/name", "nvme\n")
+    do put("hw.d/hwmon1/temp1_input", "35850\n")
+    let heat = figures_heat_new()
+    do figures_heat_find(heat, "hw.d")
+    do drive(out, "as found", heat)
+    do put("hw.d/hwmon1/temp1_input", "")
+    do drive(out, "emptied", heat)
+    do linux_syscall6(87, buffer_address(linux_cstring("hw.d/hwmon1/temp1_input")), 0, 0, 0, 0, 0)
+    do drive(out, "removed", heat)
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+none.d: herbert-scope 2 10000 1500 16384000 4096000 unavailable none
+other.d: herbert-scope 2 10000 1500 16384000 4096000 unavailable none
+as found: drive 35850
+emptied: drive n/a
+removed: drive n/a
+----
+end
+case net: an address with a part past 2^64, which would wrap round to a small number, or with an empty last part, is refused
+libs linux text net
+source until ----
+func address(out, s):
+    let a = net_ipv4(s)
+    do text_add(out, "[")
+    do text_add(out, s)
+    if not a.0: return text_add(out, "]: refused\n") end
+    do text_add(out, "]: ")
+    do text_add_whole(out, a.1)
+    return text_add(out, "\n")
+end
+
+func main():
+    let out = new_buffer()
+    -- 18446744073709551617 is 2^64 + 1: read carelessly it wraps to 1, and the address to 127.0.0.1.
+    do address(out, "127.0.0.18446744073709551617")
+    do address(out, "127.0.0.")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+[127.0.0.18446744073709551617]: refused
+[127.0.0.]: refused
+----
+end
+case x11: an Xauthority file whose first field claims more bytes than the file holds is refused in words that never show its bytes
+libs linux x11
+source until ----
+func main():
+    -- Family 256 (1, 0), then an address field that claims 65535 bytes (255, 255), then a secret in place of them.
+    let b = new_buffer()
+    do append(b, 1)
+    do append(b, 0)
+    do append(b, 255)
+    do append(b, 255)
+    let secret = "MARKER-THE-COOKIE-MUST-NEVER-BE-PRINTED"
+    let i = 0
+    while i < length(secret):
+        do append(b, index(secret, i))
+        i = i + 1
+    end
+    do x11_auth_find(b, 0, buffer_length(b), "0", "here")
+    do flogger("found\n")
+    return 0
+end
+----
+stdout 0
+
+stderr until ----
+desktop: truncated Xauthority field
+----
+status 1
+end
+case grid map: a carriage return as the input's very last byte is refused at its place, and the byte after the input is never read
+libs linux text grid_map
+source until ----
+func main():
+    -- The 18 bytes of three rows, the last ending in a carriage return alone, in a buffer exactly that long.
+    let s = "#####\n#P..#\n#####\r"
+    let b = new_buffer()
+    let i = 0
+    while i < length(s):
+        do append(b, index(s, i))
+        i = i + 1
+    end
+    let m = grid_map_parse(b, 18, 31, 19)
+    let out = new_buffer()
+    do text_add_whole(out, buffer_length(b))
+    do text_add(out, " bytes: ")
+    do text_add_whole(out, m.status)
+    do text_add(out, ", row ")
+    do text_add_whole(out, m.error_row)
+    do text_add(out, " column ")
+    do text_add_whole(out, m.error_column)
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+18 bytes: 12, row 3 column 6
+----
+end
+case grid map: Maze's own 25-by-17 map is read at Maze's limits, every one of its 198 dots reached from P along its corridors
+libs linux text grid_map
+source until ----
+func main():
+    let s = "#########################\n#P....#...........#.....#\n#.###.#.###.#####.#.###.#\n#...#...#...#...#...#...#\n###.#####.###.#.#####.###\n#...#.....#...#.....#...#\n#.###.#####.#######.###.#\n#.....#...........#.....#\n#.###.#.###.###.#.#.###.#\n#...#...#...#...#...#...#\n###.#####.###.#####.#.###\n#...#.....#...#.....#...#\n#.###.#####.#.#.#######.#\n#.....#.....#...#.......#\n#.###.#.#######.#.#####.#\n#...#...........#.......#\n#########################\n"
+    let m = grid_map_parse(linux_cstring(s), length(s), 31, 19)
+    let out = new_buffer()
+    do text_add_whole(out, m.status)
+    do text_add(out, ": ")
+    do text_add_whole(out, m.width)
+    do text_add(out, " by ")
+    do text_add_whole(out, m.height)
+    do text_add(out, ", P at cell ")
+    do text_add_whole(out, m.spawn)
+    do text_add(out, ", dots ")
+    do text_add_whole(out, m.dots)
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+0: 25 by 17, P at cell 26, dots 198
+----
+end
+case net: a reading knock stops at a full reply or at its time limit, a knock on a computer that never answers stops at its limit, neither waits when looked at, and none sends a byte
+libs linux text net
+source until ----
+-- The case plays the other computers on this one: at 127.77.0.1 a listener it accepts from, and at
+-- 127.77.0.3 a black hole (a listener whose queue of one is full and never taken from, so Linux drops every
+-- further connection to it without a word). Ports are the first free from 47700.
+ref record Lab:
+    poll: buffer
+    clock: buffer
+    sa: buffer
+    size: buffer
+    one: buffer
+    got: buffer
+    port: int
+end
+
+-- A socket bound at address to the first free port from 47700, listening with that queue when listen.
+func socket_at(lab, address, listen, queue):
+    let fd = linux_socket(2, 1 | 524288, 6)
+    if listen: do linux_set_option(fd, 1, 2, lab.one, 1) end
+    let port = 47700
+    while port < 47800:
+        do net_sockaddr(lab.sa, address, port)
+        if linux_bind(fd, lab.sa, 16) == 0 and (not listen or linux_listen(fd, queue) == 0):
+            lab.port = port
+            return fd
+        end
+        port = port + 1
+    end
+    do linux_die("no free port from 47700 to 47799\n")
+    return 0
+end
+
+-- The next connection on a listener, waiting at most 2 seconds: its descriptor, or an error.
+func take(lab, fd):
+    let ready = linux_poll(fd, lab.poll, 1, 2000)
+    if ready == 0 or linux_error(ready): return 0 - 110 end
+    do linux_put32(lab.size, 0, 16)
+    return linux_accept(fd, lab.sa, lab.size, 2048 | 524288)
+end
+
+-- The black hole: a listener with a queue of one, filled with connections of the case's own from
+-- 127.77.0.4 until one is not taken within 300 ms (that one is closed). Its port is lab.port.
+func hole(lab, address):
+    let fd = socket_at(lab, address, true, 0)
+    let k = 0
+    while k < 8:
+        let filler = linux_socket(2, 1 | 2048 | 524288, 6)
+        do net_sockaddr(lab.sa, net_ipv4("127.77.0.4").1, 0)
+        do linux_bind(filler, lab.sa, 16)
+        do net_sockaddr(lab.sa, address, lab.port)
+        do linux_connect(filler, lab.sa, 16)
+        if linux_poll(filler, lab.poll, 4, 300) == 0:
+            do linux_close(filler)
+            return fd
+        end
+        k = k + 1
+    end
+    do linux_die("no black hole: eight connections were all taken into a queue of one\n")
+    return 0
+end
+
+-- Scope's way of waiting for a knock begun without waiting: poll its socket, then look.
+func finish(lab, n):
+    let o = 5
+    while o == 5:
+        do linux_poll(n.state.fd, lab.poll, n.state.events, net_left(n))
+        o = net_check(n)
+    end
+    return o
+end
+
+
+-- Ten looks at a knock under way, each timed.
+func looks(out, lab, n):
+    let slow = 0
+    let ended = 0
+    let k = 0
+    while k < 10:
+        let before = linux_clock_us(lab.clock)
+        if net_check(n) != 5: ended = ended + 1 end
+        if linux_clock_us(lab.clock) - before >= 50000: slow = slow + 1 end
+        k = k + 1
+    end
+    do text_add(out, "; 10 looks, ")
+    do text_add_whole(out, slow)
+    do text_add(out, " slow, ")
+    do text_add_whole(out, ended)
+    return text_add(out, " ended")
+end
+
+func how(out, n, o):
+    do text_add(out, ": ")
+    do text_add(out, net_outcome_name(o))
+    do text_add(out, ", error ")
+    return text_add_whole(out, n.state.error)
+end
+
+func between(out, n, low, high):
+    let e = n.state.elapsed
+    if e >= low and e <= high:
+        do text_add(out, ", ")
+        do text_add_whole(out, low)
+        do text_add(out, " to ")
+        do text_add_whole(out, high)
+        return text_add(out, " ms")
+    end
+    do text_add(out, ", in ")
+    do text_add_whole(out, e)
+    return text_add(out, " ms")
+end
+
+-- What a reading knock read: how many bytes, and xs of them the byte x when that is not all of them.
+func read(out, n, xs):
+    do text_add(out, ", got ")
+    do text_add_whole(out, n.state.got)
+    if xs == n.state.got and xs != 0: do text_add(out, " x") end
+    if xs != n.state.got:
+        do text_add(out, ", ")
+        do text_add_whole(out, xs)
+        do text_add(out, " of them x")
+    end
+    if n.state.closed: return text_add(out, ", closed") end
+    return text_add(out, ", not closed")
+end
+
+-- What the case's end of a knock's connection hears once the knock has ended: the knock's close (end of
+-- file, or a reset when it closed with bytes it never read), and never a byte ("N bytes came").
+func far(out, lab, fd):
+    do text_add(out, "; far end: ")
+    if linux_poll(fd, lab.poll, 1, 1000) == 0:
+        do text_add(out, "still open\n")
+    else:
+        let r = linux_receive(fd, lab.got, 0, 512, 64)
+        if r == 0:
+            do text_add(out, "end of file\n")
+        elif r == 0 - 104:
+            do text_add(out, "a reset\n")
+        elif linux_error(r):
+            do text_add(out, "Linux error ")
+            do text_add_whole(out, 0 - r)
+            do text_add(out, "\n")
+        else:
+            do text_add_whole(out, r)
+            do text_add(out, " bytes came\n")
+        end
+    end
+    return linux_close(fd)
+end
+
+func main():
+    let lab = Lab(linux_buffer(8), linux_buffer(16), linux_buffer(16), linux_buffer(8), linux_buffer(8), linux_buffer(512), 0)
+    let out = new_buffer()
+    let n = net_new()
+    let here = net_ipv4("127.77.0.1").1
+    let talker = socket_at(lab, here, true, 16)
+    let port = lab.port
+    let away = net_ipv4("127.77.0.3").1
+    let silent = hole(lab, away)
+    let deaf = lab.port
+    -- A knock that waits, answered.
+    do text_add(out, "listener")
+    do how(out, n, net_knock(n, here, port, 5000))
+    do far(out, lab, take(lab, talker))
+    -- A reading knock on a computer that sends 300 bytes and keeps the connection: it stops at its 256.
+    do net_start_reading(n, here, port, 5000)
+    let peer = take(lab, talker)
+    let x = linux_buffer(300)
+    let i = 0
+    while i < 300:
+        do buffer_set(x, i, 120)
+        i = i + 1
+    end
+    do linux_send(peer, x, 0, 300, 16384)
+    do text_add(out, "300 bytes")
+    do how(out, n, finish(lab, n))
+    let xs = 0
+    i = 0
+    while i < 256:
+        if buffer_get(n.reply, i) == 120: xs = xs + 1 end
+        i = i + 1
+    end
+    do read(out, n, xs)
+    do between(out, n, 0, 999)
+    do far(out, lab, peer)
+    -- A reading knock on a computer that takes the connection and says nothing, limit 300 ms.
+    do net_start_reading(n, here, port, 300)
+    peer = take(lab, talker)
+    do text_add(out, "silence")
+    do looks(out, lab, n)
+    do how(out, n, finish(lab, n))
+    do read(out, n, 0)
+    do between(out, n, 300, 400)
+    do far(out, lab, peer)
+    -- The black hole, limit 300 ms: through net_knock, and through net_start with looks.
+    do text_add(out, "black hole")
+    do how(out, n, net_knock(n, away, deaf, 300))
+    do between(out, n, 300, 400)
+    do text_add(out, "\nblack hole, begun: ")
+    do text_add_whole(out, net_start(n, away, deaf, 300))
+    do looks(out, lab, n)
+    do how(out, n, finish(lab, n))
+    do between(out, n, 300, 400)
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+listener: answered, error 0; far end: end of file
+300 bytes: answered, error 0, got 256 x, not closed, 0 to 999 ms; far end: a reset
+silence; 10 looks, 0 slow, 0 ended: answered, error 0, got 0, not closed, 300 to 400 ms; far end: end of file
+black hole: no answer, error 0, 300 to 400 ms
+black hole, begun: 5; 10 looks, 0 slow, 0 ended: no answer, error 0, 300 to 400 ms
+----
+end
+case net: a reading knock on a computer that sends a line and ends its side, or sends two bytes and resets, ends answered, closes its socket and sends nothing
+libs linux text net
+source until ----
+-- The case plays the other computer on this one: a listener at 127.77.0.1, on the first free port from 47700.
+ref record Lab:
+    poll: buffer
+    sa: buffer
+    size: buffer
+    one: buffer
+    got: buffer
+    linger: buffer
+    null: buffer
+    port: int
+end
+
+func listener(lab, address):
+    let fd = linux_socket(2, 1 | 524288, 6)
+    do linux_set_option(fd, 1, 2, lab.one, 1)
+    let port = 47700
+    while port < 47800:
+        do net_sockaddr(lab.sa, address, port)
+        if linux_bind(fd, lab.sa, 16) == 0 and linux_listen(fd, 16) == 0:
+            lab.port = port
+            return fd
+        end
+        port = port + 1
+    end
+    do linux_die("no free port from 47700 to 47799\n")
+    return 0
+end
+
+-- The next connection on the listener, waiting at most 2 seconds: its descriptor, or an error.
+func take(lab, fd):
+    let ready = linux_poll(fd, lab.poll, 1, 2000)
+    if ready == 0 or linux_error(ready): return 0 - 110 end
+    do linux_put32(lab.size, 0, 16)
+    return linux_accept(fd, lab.sa, lab.size, 2048 | 524288)
+end
+
+-- Scope's way of waiting for a knock begun without waiting: poll its socket, then look.
+func finish(lab, n):
+    let o = 5
+    while o == 5:
+        do linux_poll(n.state.fd, lab.poll, n.state.events, net_left(n))
+        o = net_check(n)
+    end
+    return o
+end
+
+-- The lowest free descriptor: a socket a knock kept would hold it.
+func lowest(lab):
+    let fd = linux_open(lab.null, 0, 0)
+    do linux_close(fd)
+    return fd
+end
+
+func how(out, n, o):
+    do text_add(out, ": ")
+    do text_add(out, net_outcome_name(o))
+    do text_add(out, ", error ")
+    do text_add_whole(out, n.state.error)
+    if n.state.closed: return text_add(out, ", closed") end
+    return text_add(out, ", not closed")
+end
+
+func main():
+    let lab = Lab(linux_buffer(8), linux_buffer(16), linux_buffer(8), linux_buffer(8), linux_buffer(512), linux_buffer(8),
+                  linux_cstring("/dev/null"), 0)
+    let out = new_buffer()
+    let n = net_new()
+    let here = net_ipv4("127.77.0.1").1
+    let talker = listener(lab, here)
+    -- "hello" and a newline, then the end of its side (shutdown, call 48, its sending half), the connection kept:
+    -- the knock reads the line and the end and closes, and the far end then hears that end and not a byte.
+    do net_start_reading(n, here, lab.port, 5000)
+    let peer = take(lab, talker)
+    do linux_send(peer, linux_cstring("hello\n"), 0, 6, 16384)
+    do linux_syscall6(48, peer, 1, 0, 0, 0, 0)
+    do text_add(out, "a line, then its end")
+    do how(out, n, finish(lab, n))
+    do text_add(out, ", got ")
+    do text_add_whole(out, n.state.got)
+    do text_add(out, "; far end: ")
+    if linux_poll(peer, lab.poll, 1, 1000) == 0:
+        do text_add(out, "still open\n")
+    else:
+        let r = linux_receive(peer, lab.got, 0, 512, 64)
+        if r == 0:
+            do text_add(out, "end of file\n")
+        elif linux_error(r):
+            do text_add(out, "Linux error ")
+            do text_add_whole(out, 0 - r)
+            do text_add(out, "\n")
+        else:
+            do text_add_whole(out, r)
+            do text_add(out, " bytes came\n")
+        end
+    end
+    do linux_close(peer)
+    -- Two bytes, then a reset (SO_LINGER on, 0 seconds, then close) once the knock is reading: it ends answered with
+    -- error 104 (ECONNRESET) and closes its socket.
+    let free = lowest(lab)
+    do net_start_reading(n, here, lab.port, 5000)
+    peer = take(lab, talker)
+    do text_add(out, "two bytes, then a reset")
+    if net_check(n) != 5 or n.state.events != 1: do text_add(out, " (the knock was not reading yet)") end
+    do linux_send(peer, linux_cstring("ab"), 0, 2, 16384)
+    do linux_put32(lab.linger, 0, 1)
+    do linux_put32(lab.linger, 4, 0)
+    do linux_syscall6(54, peer, 1, 13, buffer_address(lab.linger), 8, 0)
+    do linux_close(peer)
+    do how(out, n, finish(lab, n))
+    if lowest(lab) == free: do text_add(out, ", its socket closed\n") else: do text_add(out, ", its socket left open\n") end
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+a line, then its end: answered, error 0, closed, got 6; far end: end of file
+two bytes, then a reset: answered, error 104, not closed, its socket closed
+----
+end
+case net: Scope's reading knock made thousands of times, on a computer that answers, one that refuses, one that never answers and with no network, leaves no socket open and takes no more memory
+libs linux text net fault
+source until ----
+-- The case plays the other computers on this one: at 127.77.0.1 a listener it accepts from, at 127.77.0.2
+-- a socket bound to a port and not listening (it refuses), and at 127.77.0.3 a black hole (a listener whose
+-- queue of one is full and never taken from, so Linux drops every further connection to it without a word).
+-- Ports are the first free from 47700. Everything the rounds use is made before them, and the looks at the
+-- descriptors and the memory read into buffers made then too. Last, Linux fails every connect at once with
+-- ENETUNREACH (101), as on a computer with no network, and the knocks go on.
+ref record Lab:
+    poll: buffer
+    clock: buffer
+    sa: buffer
+    size: buffer
+    one: buffer
+    got: buffer
+    line: buffer
+    null: buffer
+    status: buffer
+    rollup: buffer
+    port: int
+end
+
+-- A socket bound at address to the first free port from 47700, listening with that queue when listen.
+func socket_at(lab, address, listen, queue):
+    let fd = linux_socket(2, 1 | 524288, 6)
+    if listen: do linux_set_option(fd, 1, 2, lab.one, 1) end
+    let port = 47700
+    while port < 47800:
+        do net_sockaddr(lab.sa, address, port)
+        if linux_bind(fd, lab.sa, 16) == 0 and (not listen or linux_listen(fd, queue) == 0):
+            lab.port = port
+            return fd
+        end
+        port = port + 1
+    end
+    do linux_die("no free port from 47700 to 47799\n")
+    return 0
+end
+
+-- The next connection on a listener, waiting at most 2 seconds: its descriptor, or an error.
+func take(lab, fd):
+    let ready = linux_poll(fd, lab.poll, 1, 2000)
+    if ready == 0 or linux_error(ready): return 0 - 110 end
+    do linux_put32(lab.size, 0, 16)
+    return linux_accept(fd, lab.sa, lab.size, 2048 | 524288)
+end
+
+-- The black hole: a listener with a queue of one, filled with connections of the case's own from
+-- 127.77.0.4 until one is not taken within 300 ms (that one is closed). Its port is lab.port.
+func hole(lab, address):
+    let fd = socket_at(lab, address, true, 0)
+    let k = 0
+    while k < 8:
+        let filler = linux_socket(2, 1 | 2048 | 524288, 6)
+        do net_sockaddr(lab.sa, net_ipv4("127.77.0.4").1, 0)
+        do linux_bind(filler, lab.sa, 16)
+        do net_sockaddr(lab.sa, address, lab.port)
+        do linux_connect(filler, lab.sa, 16)
+        if linux_poll(filler, lab.poll, 4, 300) == 0:
+            do linux_close(filler)
+            return fd
+        end
+        k = k + 1
+    end
+    do linux_die("no black hole: eight connections were all taken into a queue of one\n")
+    return 0
+end
+
+-- Scope's way of waiting for a knock begun without waiting: poll its socket, then look.
+func finish(lab, n):
+    let o = 5
+    while o == 5:
+        do linux_poll(n.state.fd, lab.poll, n.state.events, net_left(n))
+        o = net_check(n)
+    end
+    return o
+end
+
+func knock(lab, n, address, port, limit):
+    do net_start_reading(n, address, port, limit)
+    return finish(lab, n)
+end
+
+-- The lowest free descriptor: a socket a knock kept would hold it.
+func lowest(lab):
+    let fd = linux_open(lab.null, 0, 0)
+    do linux_close(fd)
+    return fd
+end
+
+-- The number after name at the start of a line of the file at path (a size in KiB); 0 when there is none.
+func number(lab, path, name):
+    let fd = linux_open(path, 0, 0)
+    if linux_error(fd): return 0 end
+    let n = 0
+    let more = true
+    while more and n < buffer_length(lab.got):
+        let r = linux_read(fd, lab.got, n, buffer_length(lab.got) - n)
+        if r == 0 or linux_error(r): more = false else: n = n + r end
+    end
+    do linux_close(fd)
+    let at = 0
+    while at < n:
+        if text_starts(lab.got, at, n, name): return text_whole(lab.got, text_skip(lab.got, at + length(name), n), n).1 end
+        while at < n and buffer_get(lab.got, at) != 10: at = at + 1 end
+        at = at + 1
+    end
+    return 0
+end
+
+-- What the looks at the long run found: the lowest free descriptor before it, the size and the least and
+-- most resident memory from the first look on, and how many looks found the descriptor or the size moved.
+ref record Seen:
+    free: int
+    vm: int
+    low: int
+    high: int
+    looks: int
+    fds: int
+    vms: int
+end
+
+func look(lab, seen):
+    let f = lowest(lab)
+    let v = number(lab, lab.status, "VmSize:")
+    let rss = number(lab, lab.rollup, "Rss:")
+    if seen.looks == 0:
+        seen.vm = v
+        seen.low = rss
+        seen.high = rss
+    end
+    seen.looks = seen.looks + 1
+    if f != seen.free: seen.fds = seen.fds + 1 end
+    if v != seen.vm: seen.vms = seen.vms + 1 end
+    if rss < seen.low: seen.low = rss end
+    if rss > seen.high: seen.high = rss end
+    return 0
+end
+
+func main():
+    let lab = Lab(linux_buffer(8), linux_buffer(16), linux_buffer(16), linux_buffer(8), linux_buffer(8), linux_buffer(16384),
+                  linux_cstring("hello\n"), linux_cstring("/dev/null"), linux_cstring("/proc/self/status"),
+                  linux_cstring("/proc/self/smaps_rollup"), 0)
+    let n = net_new()
+    let here = net_ipv4("127.77.0.1").1
+    let talker = socket_at(lab, here, true, 16)
+    let port = lab.port
+    let shut = net_ipv4("127.77.0.2").1
+    let refuser = socket_at(lab, shut, false, 0)
+    let shut_port = lab.port
+    let away = net_ipv4("127.77.0.3").1
+    let silent = hole(lab, away)
+    let deaf = lab.port
+    let out = new_buffer()
+    let peer = 0
+    -- The long run: Scope's reading knock on the listener (which sends a line and closes), the refusing
+    -- port and the black hole at 1 ms, looking every 1,000 rounds; then with every connect failed at once by
+    -- Linux (ENETUNREACH, 101), as on a computer with no network. A knock that kept 8 bytes more each time
+    -- on one path alone would grow by about 34 bytes a round, past 200 KiB in the 7,000 rounds after the
+    -- first look.
+    let seen = Seen(lowest(lab), 0, 0, 0, 0, 0, 0)
+    let f = fault_new()
+    do fault_fail(f, 42, 101)
+    let program = fault_ready(f)
+    let rounds = 8000
+    let answered = 0
+    let refused = 0
+    let unanswered = 0
+    let other = 0
+    let r = 1
+    while r <= rounds:
+        do net_start_reading(n, here, port, 5000)
+        peer = take(lab, talker)
+        do linux_send(peer, lab.line, 0, 6, 16384)
+        do linux_close(peer)
+        if finish(lab, n) == 0 and n.state.error == 0 and n.state.got == 6 and n.state.closed: answered = answered + 1 else: other = other + 1 end
+        if knock(lab, n, shut, shut_port, 5000) == 1: refused = refused + 1 else: other = other + 1 end
+        if knock(lab, n, away, deaf, 1) == 2: unanswered = unanswered + 1 else: other = other + 1 end
+        if r % 1000 == 0: do look(lab, seen) end
+        r = r + 1
+    end
+    do text_add(out, "8000 rounds: answered with the line and closed ")
+    do text_add_whole(out, answered)
+    do text_add(out, ", refused ")
+    do text_add_whole(out, refused)
+    do text_add(out, ", no answer ")
+    do text_add_whole(out, unanswered)
+    do text_add(out, ", anything else ")
+    do text_add_whole(out, other)
+    let unreachable = 0
+    other = 0
+    if fault_start(program) == 0:
+        r = 1
+        while r <= rounds:
+            if knock(lab, n, here, port, 5000) == 3 and n.state.error == 101: unreachable = unreachable + 1 else: other = other + 1 end
+            if r % 1000 == 0: do look(lab, seen) end
+            r = r + 1
+        end
+    end
+    do text_add(out, "\nwith every connect failed at once: unreachable ")
+    do text_add_whole(out, unreachable)
+    do text_add(out, ", anything else ")
+    do text_add_whole(out, other)
+    do text_add(out, "\nlooks: ")
+    do text_add_whole(out, seen.looks)
+    do text_add(out, ", at which the lowest free descriptor had moved: ")
+    do text_add_whole(out, seen.fds)
+    do text_add(out, ", at which the size had changed: ")
+    do text_add_whole(out, seen.vms)
+    if seen.high - seen.low <= 64:
+        do text_add(out, "\nresident memory within 64 KiB")
+    else:
+        do text_add(out, "\nresident memory grew by ")
+        do text_add_whole(out, seen.high - seen.low)
+        do text_add(out, " KiB")
+    end
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+8000 rounds: answered with the line and closed 8000, refused 8000, no answer 8000, anything else 0
+with every connect failed at once: unreachable 8000, anything else 0
+looks: 16, at which the lowest free descriptor had moved: 0, at which the size had changed: 0
+resident memory within 64 KiB
+----
+limit 120
+end
+case net: a reading knock whose connect Linux refuses at once, with no route to the computer, no permission or an error no knock expects, ends at once with its outcome and its socket closed
+libs linux text net fault
+source until ----
+-- Each error in a process of its own (a filter Linux puts on cannot be taken off), Scope's reading knock
+-- to 127.77.0.1, with every connect failed by Linux with that error.
+func one(name, error):
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if pid == 0:
+        let n = net_new()
+        let poll = linux_buffer(8)
+        let null = linux_cstring("/dev/null")
+        let free = linux_open(null, 0, 0)
+        do linux_close(free)
+        let f = fault_new()
+        do fault_fail(f, 42, error)
+        if fault_start(fault_ready(f)) != 0: do linux_die("no filter\n") end
+        let o = net_start_reading(n, net_ipv4("127.77.0.1").1, 47799, 2000)
+        while o == 5:
+            do linux_poll(n.state.fd, poll, n.state.events, net_left(n))
+            o = net_check(n)
+        end
+        let after = linux_open(null, 0, 0)
+        let out = new_buffer()
+        do text_add(out, name)
+        do text_add(out, ": ")
+        do text_add(out, net_outcome_name(o))
+        do text_add(out, ", error ")
+        do text_add_whole(out, n.state.error)
+        if after == free: do text_add(out, ", its socket closed\n") else: do text_add(out, ", its socket left open\n") end
+        do flogger(freeze(out))
+        do process_exit(0)
+    end
+    let status = linux_buffer(8)
+    do linux_syscall6(61, pid, buffer_address(status), 0, 0, 0, 0)
+    if linux_u32(status, 0) != 0: do flogger("  that process did not end with status 0\n") end
+    return 0
+end
+
+func main():
+    do one("no route to the computer (EHOSTUNREACH)", 113)
+    do one("no permission (EACCES)", 13)
+    do one("an error no knock expects (EBADMSG)", 74)
+    do process_exit(0)
+    return 0
+end
+----
+stdout until ----
+no route to the computer (EHOSTUNREACH): unreachable, error 113, its socket closed
+no permission (EACCES): error, error 13, its socket closed
+an error no knock expects (EBADMSG): error, error 74, its socket closed
+----
+end
+cases 203

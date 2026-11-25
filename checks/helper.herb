@@ -1,0 +1,987 @@
+-- Scope's helper's checks. The helper (examples/scope_helper.herb) runs for
+-- weeks on another of the owner's computers and answers Scope's knocks. It is
+-- held here to what would cost him something: that it answers only the
+-- addresses it was given and listens only where it was told, that no client
+-- holds it up or ends it, that nothing in it grows over a long run, that it
+-- stops when asked, that a port it cannot have ends it (so systemd starts it
+-- again), and that a failed accept neither ends it nor spins. Its figures are
+-- lib/figures.herb's, held by the library cases. Needs lib/linux.herb,
+-- lib/text.herb, lib/net.herb, lib/figures.herb and lib/fault.herb in front.
+--
+--   helper HELPER UNDER
+--
+-- HELPER is the built helper and UNDER a folder to work under, both absolute
+-- paths. The check makes its own folder, UNDER/herbert-helper-NUMBER (called
+-- WORK below): a stand-in hwmon folder with one drive (35.000 °C, warning
+-- limit 83.850 °C), and what each start of the helper wrote (NAME.out and
+-- NAME.err). When every check passes it removes WORK; after any failure WORK
+-- stays and the check says where it is.
+--
+-- Every connection stays on this computer. The helper listens at 127.77.0.9,
+-- and every client this check makes is bound to an address of its own in
+-- 127.77.0.0/16, so the helper sees which address a connection comes from.
+-- Ports are the first free ones from 47700 to 47799. One start is also given
+-- 127.1.0.2 among the addresses it may answer: a number only, which no
+-- connection here comes from or goes to.
+--
+-- Exit status 0 when every check gave its answer, 1 when one did not, 2 when
+-- the check could not do its own work.
+
+-- What a run needs, made once. argv and envp are room for a start's
+-- arguments and its (empty) environment; status, poll, clock, nap, sa, size,
+-- linger, limits, core, way and link are room for Linux to read and answer
+-- in; got holds what a connection or a file gave, reply the line read back.
+-- pid is the helper while it runs (0 when none does), ended and value how it
+-- ended: ended 1 by itself with exit status value, 2 by signal value. at and
+-- port are where the helper under check listens; plain is true when it was
+-- started as on his other computer, reading this computer's own figures.
+ref record Chk:
+    helper: buffer
+    work: string
+    argv: buffer
+    envp: buffer
+    status: buffer
+    poll: buffer
+    clock: buffer
+    nap: buffer
+    sa: buffer
+    size: buffer
+    linger: buffer
+    limits: buffer
+    core: buffer
+    way: buffer
+    link: buffer
+    got: buffer
+    null: buffer
+    reply: FiguresReply
+    pid: int
+    ended: int
+    value: int
+    at: int
+    port: int
+    plain: bool
+    passed: int
+    failed: int
+end
+
+func chk_die(message):
+    do stderr_write("helper checks: ")
+    do stderr_write(message)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- The same once WORK is made: it says where WORK is, since it stays.
+func chk_lost(c, message):
+    do stderr_write("helper checks: ")
+    do stderr_write(message)
+    do stderr_write("\nhelper checks: what the run left is in ")
+    do stderr_write(c.work)
+    do stderr_write("\n")
+    do process_exit(2)
+    return 0
+end
+
+-- WORK/tail as a path Linux can take (NUL-terminated).
+func chk_path(c, tail):
+    let b = new_buffer()
+    do text_add(b, c.work)
+    do text_add(b, "/")
+    do text_add(b, tail)
+    do append(b, 0)
+    return b
+end
+
+func chk_now(c): return linux_clock_ms(c.clock) end
+
+func chk_wait(c, ms):
+    do linux_put64(c.nap, 0, ms / 1000)
+    do linux_put64(c.nap, 8, (ms % 1000) * 1000000)
+    do linux_sleep(c.nap)
+    return 0
+end
+
+func chk_ip(s): return net_ipv4(s).1 end
+
+-- A new file at WORK/tail holding text.
+func chk_put(c, tail, text):
+    let fd = linux_open(chk_path(c, tail), 524865, 384)
+    if linux_error(fd) or linux_write(fd, linux_cstring(text), 0, length(text)) != length(text): do chk_lost(c, "the check's own folder cannot be written in") end
+    do linux_close(fd)
+    return 0
+end
+
+-- A new folder at WORK/tail.
+func chk_folder(c, tail):
+    if linux_error(linux_syscall6(83, buffer_address(chk_path(c, tail)), 448, 0, 0, 0, 0)): do chk_lost(c, "the check's own folder cannot be written in") end
+    return 0
+end
+
+-- How many bytes the file at WORK/tail holds, or 0 - 1 when it cannot be read.
+func chk_bytes(c, tail):
+    let fd = linux_open(chk_path(c, tail), 524288, 0)
+    if linux_error(fd): return 0 - 1 end
+    let stat = linux_buffer(144)
+    let size = 0 - 1
+    if not linux_error(linux_fstat(fd, stat)): size = linux_u64(stat, 48) end
+    do linux_close(fd)
+    return size
+end
+
+-- Start the helper with args (its arguments after its own name), its output
+-- and error output going to the new files WORK/name.out and WORK/name.err, its
+-- input from /dev/null and no environment. files, when not 0, is its limit of
+-- open files (its hard limit then 64). filter, when not 0, is a filter made
+-- by lib/fault.herb (fault_ready), put on it just before it starts, so that
+-- Linux fails the calls the filter names. It leaves no core file; Linux stops
+-- it (signal 9) when this check ends, however this check ends; and its pipe
+-- and termination signals (13, 15) are Linux's own, whatever this check was
+-- given, since a signal ignored here would stay ignored in it.
+func chk_start(c, name, args, files, filter):
+    do linux_put64(c.argv, 0, buffer_address(c.helper))
+    let i = 0
+    while i < count(args):
+        do linux_put64(c.argv, i * 8 + 8, buffer_address(linux_cstring(get(args, i))))
+        i = i + 1
+    end
+    do linux_put64(c.argv, i * 8 + 8, 0)
+    let out = new_buffer()
+    do text_add(out, name)
+    do text_add(out, ".out")
+    let o_path = chk_path(c, freeze(out))
+    let err = new_buffer()
+    do text_add(err, name)
+    do text_add(err, ".err")
+    let e_path = chk_path(c, freeze(err))
+    do linux_put64(c.limits, 0, files)
+    do linux_put64(c.limits, 8, 64)
+    let me = linux_syscall6(39, 0, 0, 0, 0, 0, 0)
+    let pid = linux_syscall6(57, 0, 0, 0, 0, 0, 0)
+    if linux_error(pid): do chk_lost(c, "Linux started no new process") end
+    if pid == 0:
+        do linux_syscall6(157, 1, 9, 0, 0, 0, 0)
+        if linux_syscall6(110, 0, 0, 0, 0, 0, 0) != me: do process_exit(127) end
+        do linux_syscall6(160, 4, buffer_address(c.core), 0, 0, 0, 0)
+        do linux_syscall6(13, 13, buffer_address(c.way), 0, 8, 0, 0)
+        do linux_syscall6(13, 15, buffer_address(c.way), 0, 8, 0, 0)
+        let fi = linux_open(c.null, 0, 0)
+        let fo = linux_open(o_path, 577, 384)
+        let fe = linux_open(e_path, 577, 384)
+        if not linux_error(fi) and not linux_error(fo) and not linux_error(fe):
+            do linux_syscall6(33, fi, 0, 0, 0, 0, 0)
+            do linux_syscall6(33, fo, 1, 0, 0, 0, 0)
+            do linux_syscall6(33, fe, 2, 0, 0, 0, 0)
+            do linux_close(fi)
+            do linux_close(fo)
+            do linux_close(fe)
+            if files == 0 or linux_syscall6(160, 7, buffer_address(c.limits), 0, 0, 0, 0) == 0:
+                if filter == 0 or fault_start(filter) == 0:
+                    do linux_syscall6(59, buffer_address(c.helper), buffer_address(c.argv), buffer_address(c.envp), 0, 0, 0)
+                end
+            end
+        end
+        do process_exit(127)
+        return 0
+    end
+    c.pid = pid
+    return 0
+end
+
+-- Whether the helper has ended; how is kept in c.ended and c.value. Looks
+-- once, without waiting.
+func chk_gone(c):
+    if c.pid == 0: return true end
+    let w = linux_syscall6(61, c.pid, buffer_address(c.status), 1, 0, 0, 0)
+    while w == 0 - 4:
+        w = linux_syscall6(61, c.pid, buffer_address(c.status), 1, 0, 0, 0)
+    end
+    if linux_error(w): do chk_lost(c, "Linux lost the helper the check started") end
+    if w == 0: return false end
+    c.pid = 0
+    let st = linux_u32(c.status, 0)
+    c.ended = 1
+    c.value = (st >> 8) & 255
+    if (st & 127) != 0:
+        c.ended = 2
+        c.value = st & 127
+    end
+    return true
+end
+
+-- Wait at most ms for the helper to end: whether it has.
+func chk_ends(c, ms):
+    let until = chk_now(c) + ms
+    while not chk_gone(c):
+        if chk_now(c) >= until: return false end
+        do chk_wait(c, 10)
+    end
+    return true
+end
+
+-- Signal sig to the helper. Its number must be a process number, 2 to
+-- 4,194,304: Linux reads 0 and the numbers past that range as whole groups of
+-- processes.
+func chk_signal(c, sig):
+    if c.pid < 2 or c.pid > 4194304: do chk_lost(c, "the check would have signalled a process it did not start") end
+    do linux_syscall6(62, c.pid, sig, 0, 0, 0, 0)
+    return 0
+end
+
+-- The helper, if it still runs, stopped for good.
+func chk_clear(c):
+    if c.pid != 0:
+        do chk_signal(c, 9)
+        let w = linux_syscall6(61, c.pid, buffer_address(c.status), 0, 0, 0, 0)
+        while w == 0 - 4:
+            w = linux_syscall6(61, c.pid, buffer_address(c.status), 0, 0, 0, 0)
+        end
+        c.pid = 0
+    end
+    return 0
+end
+
+-- What it means that the helper ended.
+func chk_how(c):
+    if c.ended == 2: return "the helper was ended by a signal" end
+    return "the helper ended by itself"
+end
+
+-- Ask the helper to stop (signal 15) and wait at most a second. "" when it
+-- ended by that signal and wrote nothing, to its output or its error output,
+-- in the whole run named name; or what went wrong.
+func chk_stop(c, name):
+    if chk_gone(c): return chk_how(c) end
+    do chk_signal(c, 15)
+    if not chk_ends(c, 1000):
+        do chk_clear(c)
+        return "the helper did not stop within a second of being asked"
+    end
+    if c.ended != 2 or c.value != 15: return "the helper did not end by the signal that asked it to stop" end
+    let out = new_buffer()
+    do text_add(out, name)
+    do text_add(out, ".out")
+    let err = new_buffer()
+    do text_add(err, name)
+    do text_add(err, ".err")
+    if chk_bytes(c, freeze(out)) != 0 or chk_bytes(c, freeze(err)) != 0: return "the helper wrote something" end
+    return ""
+end
+
+-- A connection from source to address and port, both 32-bit addresses,
+-- waiting at most 5 seconds for it to be made: its descriptor, or Linux's
+-- raw error for it (0 - 110 when the time ran out).
+func chk_dial(c, source, address, port):
+    let fd = linux_socket(2, 1 | 2048 | 524288, 6)
+    if linux_error(fd): do chk_lost(c, "Linux made no socket for the check") end
+    do net_sockaddr(c.sa, source, 0)
+    let r = linux_bind(fd, c.sa, 16)
+    if r == 0:
+        do net_sockaddr(c.sa, address, port)
+        r = linux_connect(fd, c.sa, 16)
+    end
+    if r == 0 - 115:
+        let ready = linux_poll(fd, c.poll, 4, 5000)
+        if ready == 0:
+            r = 0 - 110
+        elif linux_error(ready):
+            r = ready
+        else:
+            do linux_get_option(fd, 1, 4, c.size)
+            r = 0 - linux_u32(c.size, 0)
+        end
+    end
+    if r != 0:
+        do linux_close(fd)
+        return r
+    end
+    return fd
+end
+
+-- Everything that comes on fd until the other end closes it, into c.got from
+-- 0, waiting at most ms in all; fd is closed after. (how, count): how is 0
+-- when the other end closed it, 0 - 110 when the time ran out first, or
+-- Linux's error (0 - 104 for a reset).
+func chk_drain(c, fd, ms):
+    let until = chk_now(c) + ms
+    let n = 0
+    let how = 1
+    while how == 1:
+        let now = chk_now(c)
+        if now >= until:
+            how = 0 - 110
+        else:
+            let ready = linux_poll(fd, c.poll, 1, until - now)
+            if ready != 0 and (ready == 0 - 4 or not linux_error(ready)):
+                let r = linux_receive(fd, c.got, n, buffer_length(c.got) - n, 64)
+                if r == 0:
+                    how = 0
+                elif linux_error(r):
+                    if r != 0 - 11 and r != 0 - 4: how = r end
+                else:
+                    n = n + r
+                    if n == buffer_length(c.got): how = 0 - 90 end
+                end
+            elif linux_error(ready):
+                how = ready
+            end
+        end
+    end
+    do linux_close(fd)
+    return (how, n)
+end
+
+-- Whether a connection gave got (as chk_drain gives it): one reply line that
+-- Scope takes, version 2, and then the end. Started as on his other computer
+-- (c.plain), the line must carry this computer's processor and memory
+-- figures, its disk and drive being whatever this computer has; otherwise it
+-- must carry the stand-in drive's reading and limit.
+func chk_line(c, got):
+    if got.0 != 0 or not figures_reply_read(c.reply, c.got, got.1) or c.reply.version != 2: return false end
+    if c.plain: return c.reply.cpu and c.reply.memory end
+    return c.reply.drive == 2 and c.reply.reading == 35000 and c.reply.limit == 83850
+end
+
+-- A connection from source to the helper, read to its end (2 seconds at
+-- most): what chk_drain gives, or (Linux's error, 0) when none was made.
+func chk_ask(c, source):
+    let fd = chk_dial(c, chk_ip(source), c.at, c.port)
+    if linux_error(fd): return (fd, 0) end
+    return chk_drain(c, fd, 2000)
+end
+
+-- /proc/PID/tail for the helper, as a path.
+func chk_proc(c, tail):
+    let b = new_buffer()
+    do text_add(b, "/proc/")
+    do text_add_whole(b, c.pid)
+    do text_add(b, "/")
+    do text_add(b, tail)
+    do append(b, 0)
+    return b
+end
+
+-- The helper's file /proc/PID/tail into c.got: how many bytes.
+func chk_read(c, tail):
+    let fd = linux_open(chk_proc(c, tail), 524288, 0)
+    if linux_error(fd): return 0 end
+    let n = 0
+    let more = true
+    while more and n < buffer_length(c.got):
+        let r = linux_read(fd, c.got, n, buffer_length(c.got) - n)
+        if r == 0 or (linux_error(r) and r != 0 - 4): more = false end
+        if not linux_error(r): n = n + r end
+    end
+    do linux_close(fd)
+    return n
+end
+
+-- The number after name at the start of a line of /proc/PID/tail (a size in
+-- KiB in status and smaps_rollup), or 0 when there is none.
+func chk_number(c, tail, name):
+    let n = chk_read(c, tail)
+    let at = 0
+    while at < n:
+        if text_starts(c.got, at, n, name): return text_whole(c.got, text_skip(c.got, at + length(name), n), n).1 end
+        while at < n and buffer_get(c.got, at) != 10: at = at + 1 end
+        at = at + 1
+    end
+    return 0
+end
+
+-- From /proc/PID/stat: the field number k (counted from 1), where the fields
+-- after the process's name (in parentheses) are 3 onward; a letter's byte for
+-- the state (3), a number for the others.
+func chk_stat(c, k):
+    let n = chk_read(c, "stat")
+    let at = n
+    while at > 0 and buffer_get(c.got, at - 1) != 41: at = at - 1 end
+    let field = 2
+    while field < k:
+        let f = text_field(c.got, at, n)
+        at = f.1
+        field = field + 1
+        if field == k:
+            if k == 3: return buffer_get(c.got, f.0) end
+            return text_whole(c.got, f.0, f.1).1
+        end
+    end
+    return 0
+end
+
+-- Whether the helper's descriptor whose name (NUL-terminated) is at c.got
+-- from at is a socket: its link in /proc/PID/fd reads socket:[NUMBER].
+func chk_socket(c, at):
+    let b = new_buffer()
+    do text_add(b, "/proc/")
+    do text_add_whole(b, c.pid)
+    do text_add(b, "/fd/")
+    while buffer_get(c.got, at) != 0:
+        do append(b, buffer_get(c.got, at))
+        at = at + 1
+    end
+    do append(b, 0)
+    let n = linux_syscall6(89, buffer_address(b), buffer_address(c.link), buffer_length(c.link), 0, 0, 0)
+    return not linux_error(n) and text_starts(c.link, 0, n, "socket:")
+end
+
+-- How many descriptors the helper has open, the names in /proc/PID/fd; or,
+-- when sockets is true, how many of them are sockets.
+func chk_fds(c, sockets):
+    let fd = linux_open(chk_proc(c, "fd"), 589824, 0)
+    if linux_error(fd): return 0 - 1 end
+    let total = 0
+    let more = true
+    while more:
+        let r = linux_syscall6(217, fd, buffer_address(c.got), buffer_length(c.got), 0, 0, 0)
+        if linux_error(r) or r == 0:
+            more = false
+        else:
+            let at = 0
+            while at < r:
+                if buffer_get(c.got, at + 19) != 46 and (not sockets or chk_socket(c, at + 19)): total = total + 1 end
+                at = at + linux_u16(c.got, at + 16)
+            end
+        end
+    end
+    do linux_close(fd)
+    return total
+end
+
+-- The first port from 47700 to 47799 that can be bound at address now: a
+-- port the helper may take. (A listener there, or a connection lingering on
+-- it, moves the search on.)
+func chk_free_port(c, address):
+    let port = 47700
+    while port < 47800:
+        let fd = linux_socket(2, 1 | 524288, 6)
+        do net_sockaddr(c.sa, address, port)
+        let bound = linux_bind(fd, c.sa, 16)
+        do linux_close(fd)
+        if bound == 0: return port end
+        port = port + 1
+    end
+    do chk_lost(c, "no port from 47700 to 47799 is free on this computer")
+    return 0
+end
+
+-- The helper started, wait at most 10 seconds until a connection to it can be
+-- made from 127.77.0.1: ("", that connection's descriptor), or (what went
+-- wrong, 0 - 1).
+func chk_up(c):
+    let until = chk_now(c) + 10000
+    while true:
+        if chk_gone(c): return (chk_how(c), 0 - 1) end
+        let fd = chk_dial(c, chk_ip("127.77.0.1"), c.at, c.port)
+        if not linux_error(fd): return ("", fd) end
+        if chk_now(c) >= until: return ("the helper took no connection within 10 seconds of starting", 0 - 1) end
+        do chk_wait(c, 20)
+    end
+    return ("", 0 - 1)
+end
+
+-- Each of the four addresses it was given gets one whole reply line and the
+-- end; every other gets the end and not a byte: one differing in the
+-- last part (.2, .6), the helper's own address, one differing in the third.
+func chk_whom(c):
+    let allowed = new_array(string)
+    do add(allowed, "127.77.0.1")
+    do add(allowed, "127.77.0.3")
+    do add(allowed, "127.77.0.4")
+    do add(allowed, "127.77.0.5")
+    let others = new_array(string)
+    do add(others, "127.77.0.2")
+    do add(others, "127.77.0.6")
+    do add(others, "127.77.0.9")
+    do add(others, "127.77.1.1")
+    let i = 0
+    while i < 4:
+        if not chk_line(c, chk_ask(c, get(allowed, i))):
+            let b = new_buffer()
+            do text_add(b, "a connection from ")
+            do text_add(b, get(allowed, i))
+            do text_add(b, ", which it was given, did not get one whole reply line and then the end")
+            return freeze(b)
+        end
+        let got = chk_ask(c, get(others, i))
+        if got.0 != 0 or got.1 != 0:
+            let b = new_buffer()
+            do text_add(b, "a connection from ")
+            do text_add(b, get(others, i))
+            do text_add(b, ", which it was not given, did not get the end without a byte")
+            return freeze(b)
+        end
+        i = i + 1
+    end
+    return ""
+end
+
+-- Its port at two other addresses of this computer is refused. And the
+-- helper, between connections, holds one socket: the one that answered at its
+-- address, which then listens at that address alone.
+func chk_where(c):
+    let to = new_array(string)
+    do add(to, "127.77.0.1")
+    do add(to, "127.77.0.10")
+    let i = 0
+    while i < 2:
+        let fd = chk_dial(c, chk_ip("127.77.0.1"), chk_ip(get(to, i)), c.port)
+        if fd != 0 - 111:
+            if not linux_error(fd): do linux_close(fd) end
+            let b = new_buffer()
+            do text_add(b, "its port at ")
+            do text_add(b, get(to, i))
+            do text_add(b, ", an address it was not given, was not refused")
+            return freeze(b)
+        end
+        i = i + 1
+    end
+    let sockets = chk_fds(c, true)
+    if sockets != 1:
+        let b = new_buffer()
+        do text_add(b, "it holds ")
+        do text_add_whole(b, sockets)
+        do text_add(b, " sockets between connections, not one")
+        return freeze(b)
+    end
+    return ""
+end
+
+-- While the helper is stopped (signal 19), a client from an address it was
+-- given connects, ends its side and closes with a reset, its connection
+-- waiting in the helper's queue: Linux then fails a send on that connection
+-- with EPIPE, which raises the pipe signal unless the send asks it not to.
+-- After the helper goes on (signal 18) it must still be running, and the
+-- next client must get its line.
+func chk_leaver(c):
+    do chk_signal(c, 19)
+    let until = chk_now(c) + 2000
+    while chk_stat(c, 3) != 84:
+        if chk_now(c) >= until:
+            do chk_signal(c, 18)
+            return "the helper did not stop when told to (signal 19), so this check proves nothing"
+        end
+        do chk_wait(c, 5)
+    end
+    let fd = chk_dial(c, chk_ip("127.77.0.1"), c.at, c.port)
+    if linux_error(fd):
+        do chk_signal(c, 18)
+        return "Linux did not take a connection for the helper while it was stopped"
+    end
+    do linux_syscall6(48, fd, 1, 0, 0, 0, 0)
+    do linux_put32(c.linger, 0, 1)
+    do linux_put32(c.linger, 4, 0)
+    do linux_syscall6(54, fd, 1, 13, buffer_address(c.linger), 8, 0)
+    do linux_close(fd)
+    do chk_wait(c, 20)
+    do chk_signal(c, 18)
+    let got = chk_ask(c, "127.77.0.1")
+    if chk_ends(c, 200): return chk_how(c) end
+    if not chk_line(c, got): return "the client after it did not get its reply line" end
+    return ""
+end
+
+-- The descriptors in a, closed.
+func chk_close_all(a):
+    let i = 0
+    while i < count(a):
+        do linux_close(get(a, i))
+        i = i + 1
+    end
+    return 0
+end
+
+-- 64 clients connect and never read. Once each has its reply waiting, ten
+-- more must each be answered within half a second, the helper must be back to
+-- the descriptors it had before within 2 seconds, and each of the 64 must
+-- then find its whole line.
+func chk_idle(c):
+    let before = chk_fds(c, false)
+    let idle = new_array(int)
+    while count(idle) < 64:
+        let fd = chk_dial(c, chk_ip("127.77.0.1"), c.at, c.port)
+        if linux_error(fd):
+            do chk_close_all(idle)
+            return "one of 64 clients that never read could not connect: the helper was held up"
+        end
+        do linux_poll_entry(c.poll, count(idle), fd, 1)
+        do add(idle, fd)
+    end
+    let until = chk_now(c) + 30000
+    while linux_poll_many(c.poll, 64, 100) != 64:
+        if chk_now(c) >= until:
+            do chk_close_all(idle)
+            return "not every one of 64 clients that never read had its reply waiting within 30 seconds"
+        end
+    end
+    let i = 0
+    while i < 10:
+        let started = chk_now(c)
+        if not chk_line(c, chk_ask(c, "127.77.0.1")) or chk_now(c) - started >= 500:
+            do chk_close_all(idle)
+            return "a client did not get its reply line within half a second while 64 others had not read theirs"
+        end
+        i = i + 1
+    end
+    let settle = chk_now(c) + 2000
+    while chk_fds(c, false) != before:
+        if chk_now(c) >= settle:
+            do chk_close_all(idle)
+            return "the helper kept descriptors open after its answers to clients that never read"
+        end
+        do chk_wait(c, 20)
+    end
+    let whole = 0
+    i = 0
+    while i < 64:
+        if chk_line(c, chk_drain(c, get(idle, i), 2000)): whole = whole + 1 end
+        i = i + 1
+    end
+    if whole != 64: return "a client that had not read found something other than its whole reply line" end
+    return ""
+end
+
+-- total connections, one in five from an address it was not given, each
+-- allowed one reading /proc, the disk holding / and the stand-in drive; the
+-- run stops at the first that does not get what it should. At every 2,500:
+-- its size (VmSize) must not have changed, its resident memory (Rss) must
+-- stay within 64 KiB, and its open descriptors must be as many.
+func chk_long(c, total):
+    let sources = new_array(string)
+    do add(sources, "127.77.0.1")
+    do add(sources, "127.77.0.3")
+    do add(sources, "127.77.0.4")
+    do add(sources, "127.77.0.5")
+    do add(sources, "127.77.0.2")
+    let wrong = 0
+    let vm = 0
+    let low = 0
+    let high = 0
+    let fds = 0
+    let changed = 0
+    let k = 1
+    while k <= total and wrong == 0:
+        let got = chk_ask(c, get(sources, k % 5))
+        if k % 5 == 4:
+            if got.0 != 0 or got.1 != 0: wrong = k end
+        elif not chk_line(c, got):
+            wrong = k
+        end
+        if k % 2500 == 0:
+            let v = chk_number(c, "status", "VmSize:")
+            let rss = chk_number(c, "smaps_rollup", "Rss:")
+            let f = chk_fds(c, false)
+            if k == 2500:
+                vm = v
+                low = rss
+                high = rss
+                fds = f
+            end
+            if v != vm or f != fds: changed = changed + 1 end
+            if rss < low: low = rss end
+            if rss > high: high = rss end
+        end
+        k = k + 1
+    end
+    if chk_gone(c): return chk_how(c) end
+    let b = new_buffer()
+    if wrong != 0:
+        do text_add(b, "connection ")
+        do text_add_whole(b, wrong)
+        do text_add(b, ", from ")
+        do text_add(b, get(sources, wrong % 5))
+        do text_add(b, ", did not get what it should")
+    elif changed != 0:
+        do text_add(b, "its size or its open descriptors changed")
+    elif high - low > 64:
+        do text_add(b, "its resident memory grew by ")
+        do text_add_whole(b, high - low)
+        do text_add(b, " KiB")
+    end
+    return freeze(b)
+end
+
+-- The helper was started at a port where this check already listens: it must
+-- end within a second with status 1, having written nothing to its output.
+func chk_taken(c):
+    if not chk_ends(c, 1000):
+        do chk_clear(c)
+        return "the helper did not end within a second"
+    end
+    if c.ended != 1 or c.value != 1: return "the helper did not end with status 1" end
+    if chk_bytes(c, "taken.out") != 0: return "the helper wrote to its output" end
+    return ""
+end
+
+-- The helper was started where every accept it tries fails. A client
+-- connects (Linux takes the connection for it) and waits. In 1.5 seconds the
+-- helper must keep running, leave the client unanswered, use at most 5 ticks
+-- of processor time (Linux counts 100 a second) and pause at least 5 times
+-- (each pause one of its voluntary_ctxt_switches in /proc/PID/status): it
+-- pauses briefly between tries, neither spinning nor stopping. ("", the
+-- client's descriptor), or (what went wrong, 0 - 1) with the client closed.
+func chk_paused(c):
+    let up = chk_up(c)
+    if length(up.0) != 0: return up end
+    let fd = up.1
+    do chk_wait(c, 200)
+    let first = chk_stat(c, 14) + chk_stat(c, 15)
+    let waited = chk_number(c, "status", "voluntary_ctxt_switches:")
+    do chk_wait(c, 1500)
+    let used = chk_stat(c, 14) + chk_stat(c, 15) - first
+    let pauses = chk_number(c, "status", "voluntary_ctxt_switches:") - waited
+    let b = new_buffer()
+    if chk_gone(c):
+        do text_add(b, chk_how(c))
+    elif linux_poll(fd, c.poll, 1, 0) != 0:
+        do text_add(b, "the client was answered while every accept should have failed, so this check proves nothing")
+    elif used > 5:
+        do text_add(b, "the helper used ")
+        do text_add_whole(b, used)
+        do text_add(b, " ticks of processor time in 1.5 seconds while it could not accept")
+    elif pauses < 5:
+        do text_add(b, "the helper paused ")
+        do text_add_whole(b, pauses)
+        do text_add(b, " times in 1.5 seconds while it could not accept: it stopped trying")
+    end
+    if buffer_length(b) == 0: return ("", fd) end
+    do linux_close(fd)
+    return (freeze(b), 0 - 1)
+end
+
+-- The helper was started with a limit of four open files, so that its
+-- listening socket is its last: every accept fails (EMFILE) while the limit
+-- holds, and it must wait as chk_paused says. Once the limit is raised to 64
+-- the waiting client must get its whole line within a second.
+func chk_limit(c):
+    let paused = chk_paused(c)
+    if length(paused.0) != 0: return paused.0 end
+    let fd = paused.1
+    do linux_put64(c.limits, 0, 64)
+    do linux_put64(c.limits, 8, 64)
+    if linux_error(linux_syscall6(302, c.pid, 7, buffer_address(c.limits), 0, 0, 0)):
+        do linux_close(fd)
+        do chk_lost(c, "Linux did not raise the helper's limit of open files")
+    end
+    if not chk_line(c, chk_drain(c, fd, 1000)): return "the waiting client did not get its whole line within a second of the limit being raised" end
+    return ""
+end
+
+-- A connection from 127.77.0.2, which differs from 127.1.0.2, an address the
+-- helper was given, only in its second part: the end, without a byte.
+func chk_second(c):
+    let got = chk_ask(c, "127.77.0.2")
+    if got.0 != 0 or got.1 != 0: return "a connection from 127.77.0.2, which it was not given, did not get the end without a byte" end
+    return ""
+end
+
+-- The helper was started with Linux failing its every accept as when a
+-- client gives up before it is taken (ECONNABORTED): it must wait as
+-- chk_paused says.
+func chk_abort(c):
+    let paused = chk_paused(c)
+    if length(paused.0) != 0: return paused.0 end
+    do linux_close(paused.1)
+    return ""
+end
+
+-- Count one check and say so when it did not give its answer.
+func chk_tally(c, name, why):
+    if length(why) == 0:
+        c.passed = c.passed + 1
+        return 0
+    end
+    c.failed = c.failed + 1
+    let line = new_buffer()
+    do text_add(line, "FAIL ")
+    do text_add(line, name)
+    do text_add(line, ": ")
+    do text_add(line, why)
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    return 0
+end
+
+-- The arguments for a start at address and port: unless plain, --test-all
+-- with /proc, the stand-in hwmon folder and /; then the address, the port
+-- and the allowed addresses. Plain is how it is started on his other
+-- computer.
+func chk_args(c, plain, at, port, allowed):
+    let a = new_array(string)
+    if not plain:
+        do add(a, "--test-all")
+        do add(a, "/proc/stat")
+        do add(a, "/proc/meminfo")
+        let hw = new_buffer()
+        do text_add(hw, c.work)
+        do text_add(hw, "/hwmon")
+        do add(a, freeze(hw))
+        do add(a, "/")
+    end
+    do add(a, at)
+    let p = new_buffer()
+    do text_add_whole(p, port)
+    do add(a, freeze(p))
+    let i = 0
+    while i < count(allowed):
+        do add(a, get(allowed, i))
+        i = i + 1
+    end
+    return a
+end
+
+-- An argument that must be an absolute path.
+func chk_argument(args, k):
+    let s = linux_argument(args, k)
+    if length(s) == 0 or index(s, 0) != 47: do chk_die("usage: helper HELPER UNDER (absolute paths)") end
+    return s
+end
+
+-- Make WORK, a new folder under the folder given: herbert-helper-NUMBER, the
+-- number being this process's, or that name with -2, -3 and so on up to -20
+-- when an earlier run that failed left a folder of the name.
+func chk_work(under):
+    let me = linux_syscall6(39, 0, 0, 0, 0, 0, 0)
+    let k = 1
+    while k <= 20:
+        let place = new_buffer()
+        do text_add(place, under)
+        do text_add(place, "/herbert-helper-")
+        do text_add_whole(place, me)
+        if k > 1:
+            do text_add(place, "-")
+            do text_add_whole(place, k)
+        end
+        let made = linux_syscall6(83, buffer_address(linux_cstring(freeze(place))), 448, 0, 0, 0, 0)
+        if made == 0: return freeze(place) end
+        if made != 0 - 17: do chk_die("the check's own folder cannot be made under the folder given") end
+        k = k + 1
+    end
+    do chk_die("twenty folders of earlier runs are in the way under the folder given")
+    return ""
+end
+
+-- Remove what a passing run made, each by its name, and WORK last. True when
+-- WORK is gone.
+func chk_tidy(c):
+    let files = new_array(string)
+    do add(files, "hwmon/hwmon0/name")
+    do add(files, "hwmon/hwmon0/temp1_input")
+    do add(files, "hwmon/hwmon0/temp1_max")
+    do add(files, "main.out")
+    do add(files, "main.err")
+    do add(files, "taken.out")
+    do add(files, "taken.err")
+    do add(files, "limit.out")
+    do add(files, "limit.err")
+    do add(files, "abort.out")
+    do add(files, "abort.err")
+    let i = 0
+    while i < count(files):
+        do linux_syscall6(87, buffer_address(chk_path(c, get(files, i))), 0, 0, 0, 0, 0)
+        i = i + 1
+    end
+    do linux_syscall6(84, buffer_address(chk_path(c, "hwmon/hwmon0")), 0, 0, 0, 0, 0)
+    do linux_syscall6(84, buffer_address(chk_path(c, "hwmon")), 0, 0, 0, 0, 0)
+    return not linux_error(linux_syscall6(84, buffer_address(linux_cstring(c.work)), 0, 0, 0, 0, 0))
+end
+
+func main():
+    -- Standard input, output and error must be open: a file opened later would
+    -- otherwise be given one of their numbers and be taken for it.
+    let low = linux_open(linux_cstring("/dev/null"), 2, 0)
+    while low < 3: low = linux_open(linux_cstring("/dev/null"), 2, 0) end
+    do linux_close(low)
+    let args = linux_arguments()
+    if linux_argument_count(args) != 3: do chk_die("usage: helper HELPER UNDER (absolute paths)") end
+    let helper = linux_cstring(chk_argument(args, 1))
+    if linux_error(linux_syscall6(21, buffer_address(helper), 1, 0, 0, 0, 0)): do chk_die("the helper is not there, or may not be run") end
+    let under = chk_argument(args, 2)
+    -- Five minutes for everything; Linux then stops this check, and with it
+    -- the helper it started.
+    do linux_syscall6(37, 300, 0, 0, 0, 0, 0)
+    let work = chk_work(under)
+    let envp = linux_buffer(8)
+    let c = Chk(helper, work, linux_buffer(160), envp, linux_buffer(8), linux_buffer(512), linux_buffer(16), linux_buffer(16),
+                linux_buffer(16), linux_buffer(8), linux_buffer(8), linux_buffer(16), linux_buffer(16), linux_buffer(32),
+                linux_buffer(64), linux_buffer(65536), linux_cstring("/dev/null"), figures_reply_new(), 0, 0, 0, 0, 0,
+                false, 0, 0)
+    do chk_folder(c, "hwmon")
+    do chk_folder(c, "hwmon/hwmon0")
+    do chk_put(c, "hwmon/hwmon0/name", "nvme\n")
+    do chk_put(c, "hwmon/hwmon0/temp1_input", "35000\n")
+    do chk_put(c, "hwmon/hwmon0/temp1_max", "83850\n")
+    let allowed = new_array(string)
+    do add(allowed, "127.77.0.1")
+    do add(allowed, "127.77.0.3")
+    do add(allowed, "127.77.0.4")
+    do add(allowed, "127.77.0.5")
+    -- One helper for most checks, at 127.77.0.9 with four allowed addresses,
+    -- reading the stand-in drive.
+    c.at = chk_ip("127.77.0.9")
+    c.port = chk_free_port(c, c.at)
+    do chk_start(c, "main", chk_args(c, false, "127.77.0.9", c.port, allowed), 0, 0)
+    let up = chk_up(c)
+    if length(up.0) == 0: do chk_drain(c, up.1, 2000) end
+    do chk_tally(c, "it starts and takes connections", up.0)
+    if length(up.0) == 0:
+        do chk_tally(c, "it answers the four addresses it was given, and closes any other without a byte", chk_whom(c))
+        do chk_tally(c, "it listens at exactly the address it was given", chk_where(c))
+        do chk_tally(c, "a client that closes before its reply, with a reset, does not end it", chk_leaver(c))
+        do chk_tally(c, "64 clients that connect and never read hold nothing up and leave nothing open in it", chk_idle(c))
+        do chk_tally(c, "20,000 connections leave its size, its memory and its open descriptors as they were", chk_long(c, 20000))
+    end
+    do chk_tally(c, "it stops when asked, and has written nothing", chk_stop(c, "main"))
+    -- A port this check already listens at.
+    let held = linux_socket(2, 1 | 524288, 6)
+    let taken_at = chk_ip("127.77.1.254")
+    let taken = chk_free_port(c, taken_at)
+    do net_sockaddr(c.sa, taken_at, taken)
+    if linux_error(linux_bind(held, c.sa, 16)) or linux_error(linux_listen(held, 1)): do chk_lost(c, "the check cannot listen at a port of its own") end
+    do chk_start(c, "taken", chk_args(c, false, "127.77.1.254", taken, allowed), 0, 0)
+    do chk_tally(c, "a port another program listens at ends it, with status 1 and nothing on its output", chk_taken(c))
+    do chk_clear(c)
+    do linux_close(held)
+    -- Started as on his other computer, reading this computer's own figures,
+    -- with a limit of four open files, and given 127.77.0.1 and 127.1.0.2.
+    let given = new_array(string)
+    do add(given, "127.77.0.1")
+    do add(given, "127.1.0.2")
+    c.plain = true
+    c.port = chk_free_port(c, c.at)
+    do chk_start(c, "limit", chk_args(c, true, "127.77.0.9", c.port, given), 4, 0)
+    do chk_tally(c, "started as on his other computer, while it can open no more files it waits and carries on, and answers once it may", chk_limit(c))
+    do chk_tally(c, "it closes without a byte a connection from an address that differs from one it was given only in its second part", chk_second(c))
+    do chk_tally(c, "it stops when asked after it could open no more files, and has written nothing", chk_stop(c, "limit"))
+    c.plain = false
+    -- Every accept failed by Linux with ECONNABORTED (103), as when a client
+    -- gives up before it is taken: accept4 is call 288.
+    let f = fault_new()
+    do fault_fail(f, 288, 103)
+    let filter = fault_ready(f)
+    c.port = chk_free_port(c, c.at)
+    do chk_start(c, "abort", chk_args(c, false, "127.77.0.9", c.port, allowed), 0, filter)
+    do chk_tally(c, "while every accept fails as when a client gave up first, it waits and carries on", chk_abort(c))
+    do chk_tally(c, "it stops when asked while its accepts fail, and has written nothing", chk_stop(c, "abort"))
+    let line = new_buffer()
+    do text_add_whole(line, c.passed + c.failed)
+    do text_add(line, " helper checks, ")
+    do text_add_whole(line, c.passed)
+    do text_add(line, " gave their answers")
+    if c.failed != 0:
+        do text_add(line, ", ")
+        do text_add_whole(line, c.failed)
+        do text_add(line, " did not")
+    end
+    do text_add(line, "\n")
+    do flogger(freeze(line))
+    if c.failed == 0:
+        if chk_tidy(c): do process_exit(0) end
+        do stderr_write("helper checks: every check passed, and the check's own folder could not be removed\n")
+    end
+    do stderr_write("helper checks: what the run left is in ")
+    do stderr_write(work)
+    do stderr_write("\n")
+    do process_exit(1)
+    return 0
+end

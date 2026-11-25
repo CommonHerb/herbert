@@ -58,7 +58,7 @@
 -- build checks the seed against its checksum first, and so does step 2 here.
 -- The new checksum is then still in the folder step 7 made, and the old seed
 -- and checksum are in WORK. The same holds when the second rename fails, and
--- the last line then says so.
+-- the first line then says so.
 --
 -- The cases should be every file of cases the checkout has for a compiler
 -- except checks/rebuild.cases, whose one case holds a compiler to building
