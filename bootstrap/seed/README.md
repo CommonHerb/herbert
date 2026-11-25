@@ -42,8 +42,9 @@ Edit the [compiler source stages](../../docs/COMPILER.md) and run
 `make check` stays red until it is current.
 Any change to `stack/native_compile_fragment.herb` that shifts gen-1's bytes —
 including a **comment edit that changes the net line count**, because the
-compiler embeds source line numbers — makes this seed stale and the michoi seed
-gate goes **RED**. That RED means *re-seed*, not *regression*:
+compiler embeds source line numbers — makes this seed stale, and the rebuild
+case of `make answers` (`checks/rebuild.cases`) goes **RED**. That RED means
+*re-seed*, not *regression*:
 
 ```
 make reseed          # the seed maker (tools/reseed.herb, a Herbert program the
@@ -54,8 +55,7 @@ make reseed          # the seed maker (tools/reseed.herb, a Herbert program the
                      # only then are gen1.seed and gen1.seed.sha256 replaced
 git add stack/compiler/*.herb stack/native_compile_fragment.herb \
         bootstrap/seed/gen1.seed bootstrap/seed/gen1.seed.sha256
-make check && make test
-make verify-local    # what make reseed's last line asks
+make verify-local    # every check; what make reseed's last line asks
 ```
 
 (Post-switchover — sovereignty link `castoff` — the C bootstrap is gone, so the
@@ -80,7 +80,4 @@ moved to the new form, then a compiler that drops the old one (reseed again).
 
 The steps the seed maker takes, and what it leaves after a refusal or a run cut
 off, are set out at the top of `tools/reseed.herb`; `make seeds` checks it
-([VERIFYING.md](../../VERIFYING.md)). Until the Python and shell checks leave,
-`make reseed-shell` still runs the shell script that made the seed before
-(`bootstrap/tests/reseed_gen1.sh`), which holds a new compiler to the Python
-conformance run instead.
+([VERIFYING.md](../../VERIFYING.md)).

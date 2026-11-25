@@ -905,7 +905,7 @@ end
 -- serialize the AST, and EMIT the canonical S-expression via flogger
 -- (main returns 0; see the flogger note in main below). The C interpreter
 -- and the native gen-1 compiler both write it to stdout line 1, and
--- stack/parser_probe.expected holds the RAW (unwrapped) S-expression key.
+-- checks/fragments.cases holds the RAW (unwrapped) S-expression key.
 -- ====================================================================
 
 func main():

@@ -17,16 +17,14 @@ not count as Herbert-native progress.
 | --- | --- | --- | --- |
 | `bootstrap/seed/gen1.seed` | Production compiler seed; Linux/x86_64 ELF | Required substrate | Preserve while pursuing textual-seed hardening and self-hosting fixpoints |
 | `stack/*.herb` and `stack/compiler/*.herb` | Herbert-owned lexer, parser, evaluator, VM, compiler, and probes | Native core | Expand only with executable proof |
-| `bootstrap/tests/*.sh` | Existing host harnesses for C-free proofs, goldens, mutation gates, and CI-local coordination | Required substrate | Replace gradually with Herbert-owned manifests and native runners after parity |
-| `tools/scan.herb` | Governance scanner for `BOOTSTRAP-ALLOWLIST`, built by the seed | Native core | Replaced the C scanner after a differential against it; checked by `bootstrap/tests/check_scan.py` |
-| `tools/reseed.herb` | The seed maker behind `make reseed`, built by the seed | Native core | Took over from the shell script `bootstrap/tests/reseed_gen1.sh` after both gave the same seeds; checked by `checks/seeds.herb` |
+| `checks/*.herb` and `checks/*.cases` | The checks and their cases: programs with their right answers, built and run by the seed | Native core | The Python and shell checks they replaced left on 2026-11-25 (tag `python-checks-2026-11-25`) |
+| `tools/scan.herb` | Governance scanner for `BOOTSTRAP-ALLOWLIST`, built by the seed | Native core | Replaced the C scanner after a differential against it; checked by `checks/scans.herb` |
+| `tools/reseed.herb` | The seed maker behind `make reseed`, built by the seed | Native core | Took over from a shell script after both gave the same seeds; checked by `checks/seeds.herb` |
 | `BOOTSTRAP-ALLOWLIST` | Explicit non-`.herb` boundary | Intentionally external for now | Keep strict; shrink only when replacements are verified |
 | `.github/workflows/*` | CI substrate | Required external substrate | Keep as public evidence, not Herbert-native code |
-| committed `.expected` and golden artifacts | Regression or oracle data | Required evidence | Keep until Herbert-native generation and checking can prove parity |
 
 ## Native Ledger Candidate
 
 `stack/native_surface_ledger.herb` is the first Herbert-authored surface ledger
-candidate. It does not replace `BOOTSTRAP-ALLOWLIST`, the allowlist scanner, or any
-shell/Python harness. It exists beside them until a future branch proves parity
-and makes deletion safe.
+candidate; a case in `checks/fragments.cases` holds what it lists. It does not
+replace `BOOTSTRAP-ALLOWLIST` or the allowlist scanner.

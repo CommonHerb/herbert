@@ -34,16 +34,15 @@ manually edited copy. `compiler-source` retains the previous assembled file in a
 `stack/.compiler-source.*` directory when it changes that file, and reports the
 path. Inspect both sets of edits before rebuilding; this preserves a mistaken
 direct edit for recovery. Failed composition candidates are retained and named.
-The seed remains independently pinned by its checksum. `make test` alone does
-not check composition; use `make check` or the aggregate `make verify-local`.
+The seed remains independently pinned by its checksum. `make check` checks
+composition, and so does the aggregate `make verify-local`.
 
 For a real compiler change, follow `VERIFYING.md`: qualify behavior and faults,
-run `make reseed`, prove the self-hosting fixpoint and run the hosted
-gates. Include `make compiler-metadata` when changing metadata or its
-consumers; `verify-local` includes that check. Expected output changes require independently justified expectations;
-do not regenerate frozen C-derived goldens from the seed as a new oracle.
-Mutation harnesses may deliberately alter a disposable assembled compiler;
-that is a test artifact, not a second authoring location.
+run `make reseed` (which proves the self-hosting fixpoint and gives every
+case of `make answers`), then `make verify-local`; `make cli` holds the
+compiler's peak memory on its five metadata shapes. Expected output changes
+require independently justified expectations: a case's answer is written from
+the guide, never regenerated from the compiler being checked.
 
 `make reseed` runs the seed maker, the Herbert program `tools/reseed.herb`, which
 the committed seed builds. It checks the seed against its checksum before running

@@ -383,4 +383,25 @@ stdout until ----
 600000
 ----
 end
-cases 12
+case the native-today example of arithmetic: a sum, a recursive Fibonacci and a test on both
+source-file examples/native_today_arithmetic.herb
+stdout until ----
+(42, 21, true)
+----
+end
+case the native-today example of collections: an array grown through a helper, a buffer frozen into a string
+source-file examples/native_today_collections.herb
+stdout until ----
+(3, 5, 13, 4, true)
+----
+end
+case the native-today example of input and output: a line written, then the input's length
+source-file examples/native_today_io.herb
+stdin 5
+hello
+stdout until ----
+HERBERT-NATIVE-TODAY
+5
+----
+end
+cases 15

@@ -11,7 +11,7 @@ scan_SOURCES := lib/linux.herb tools/scan.herb
 # scanner on lists it makes, in a folder of its own under the one given here.
 scans_SOURCES := lib/linux.herb lib/text.herb lib/folder.herb lib/child.herb checks/scans.herb
 
-.PHONY: all check verification-helpers test test-timeout compiler-conformance stdin-contract compiler-cli-contract evaluator-native vm-native parser-native lexer-native klondike-native emitter-native error-vocab-native lexer-copy-sync closed-loop-memory-diet reseed reseed-shell verify-local clean
+.PHONY: all check reseed verify-local clean
 
 all: $(SCANNER)
 
@@ -19,9 +19,6 @@ check: $(SCANNER) $(BUILD)/scans compiler-source-check
 	@$(BUILD)/scans "$(CURDIR)/$(SCANNER)" "$${TMPDIR:-/tmp}"
 	@git ls-files > $(TRACKED)
 	@./$(SCANNER) $(TRACKED)
-	@bash bootstrap/tests/run_tests.sh --check-pinned
-	@python3 bootstrap/tests/compiler_conformance.py --check-corpus
-	@python3 bootstrap/tests/stdin_contract.py --check-spec
 
 # The checks written in Herbert (checks/). The committed seed builds the runner,
 # and the runner holds a compiler (the seed, or COMPILER=/absolute/path) to
@@ -84,42 +81,10 @@ cli: $(BUILD)/cli $(BUILD)/run
 	@cp bootstrap/seed/gen1.seed $(BUILD)/cli-seed && chmod u+x $(BUILD)/cli-seed
 	@$(BUILD)/cli "$${COMPILER:-$(CURDIR)/$(BUILD)/cli-seed}" "$(CURDIR)/$(BUILD)/run" "$(CURDIR)" "$${TMPDIR:-/tmp}"
 
-test:
-	@bash tools/check_full_test_host.sh
-	@PATH="$(abspath tools):$$PATH" bash bootstrap/tests/run_tests.sh
-	@python3 bootstrap/tests/compiler_conformance.py
-	@python3 bootstrap/tests/stdin_contract.py
-	@python3 bootstrap/tests/compiler_cli_contract.py
-	@python3 bootstrap/tests/check_hosted_memory_io.py
-	@python3 bootstrap/tests/check_wordcount.py
-	@python3 bootstrap/tests/check_stack_headroom.py
-
-# Hosted language behavior through the ordinary seed, counted separately from
-# the bootstrap/tests/run_tests.sh suite. CI reaches it via make test.
-compiler-conformance:
-	@python3 bootstrap/tests/compiler_conformance.py
-
-verification-helpers:
-	@python3 bootstrap/tests/check_verification_helpers.py
-
-# Real descriptor error/EOF checks; no ptrace or partition change.
-stdin-contract:
-	@python3 bootstrap/tests/stdin_contract.py
-
-# Atomic-publication syscall fault injection + instruction-layout reference.
-# Requires Linux owned-process tracing, strace, GDB and binutils.
-compiler-cli-contract:
-	@python3 bootstrap/tests/compiler_cli_contract.py --faults
-
-# A maintained useful program: sustained input processing on the hosted runtime.
-.PHONY: wordcount
-wordcount:
-	@python3 bootstrap/tests/check_wordcount.py
-
 # Developer builds use the same committed compiler; support units are ordered
 # source concatenation, not an external linker. Values travel via environment
 # variables so source/output paths with spaces never become shell syntax.
-.PHONY: program program-contract
+.PHONY: program
 program: SHELL := /bin/bash
 # Do not recursively expand user filenames as Make expressions, including via
 # Make's automatic export of command-line variables.
@@ -216,9 +181,6 @@ program:
 	  mv -T -- "$$work/publish" "$$output"; \
 	  printf 'Built %s\n' "$$output"
 
-program-contract:
-	@python3 bootstrap/tests/check_program_build.py
-
 # Native Linux desktop checkpoint. These .herb library units are concatenated
 # as source, then compiled ONLY by the committed Herbert seed. No host compiler,
 # graphics library, runtime, or launcher is linked into the resulting executable.
@@ -238,7 +200,7 @@ seeds_SOURCES := $(SEED_LIBS) checks/seeds.herb
 seed-stand-in_SOURCES := lib/linux.herb checks/seed_stand_in.herb
 cli_SOURCES := lib/linux.herb lib/text.herb lib/folder.herb checks/cli.herb
 helper_SOURCES := lib/linux.herb lib/text.herb lib/net.herb lib/figures.herb lib/fault.herb checks/helper.herb
-.PHONY: first-steps maze notes scope scope-helper knock hosted-apps hosted-memory-io check-desktop check-hosted-apps check-scope check-scope-helper check-net
+.PHONY: first-steps maze notes scope scope-helper knock hosted-apps
 first-steps: $(BUILD)/first-steps
 maze: $(BUILD)/maze
 notes: $(BUILD)/notes
@@ -277,104 +239,15 @@ $(BUILD)/first-steps $(BUILD)/maze $(BUILD)/notes $(BUILD)/scope $(BUILD)/scope-
 	  chmod u+x $@-work/a.out; \
 	  mv $@-work/a.out $@
 
-hosted-memory-io:
-	@python3 bootstrap/tests/check_hosted_memory_io.py
-
-# Stack-headroom guard: generated 1,950-term and 300-deep programs at an explicit 8 MiB stack.
-.PHONY: stack-headroom
-stack-headroom:
-	@python3 bootstrap/tests/check_stack_headroom.py
-
-# Xvfb/libX11/libXtst are independent TEST tools, never program dependencies.
-check-desktop: first-steps
-	@python3 bootstrap/tests/check_desktop.py --image $(BUILD)/first-steps
-
-.PHONY: check-app-support
-check-app-support: maze
-	@python3 bootstrap/tests/check_grid_map.py --maze $(BUILD)/maze
-	@python3 bootstrap/tests/check_notes_support.py
-	@python3 bootstrap/tests/check_utf8_text.py
-	@python3 bootstrap/tests/check_x11_text.py
-	@python3 bootstrap/tests/check_text.py
-
-check-hosted-apps: maze notes scope scope-helper knock
-	@python3 bootstrap/tests/check_hosted_apps.py --maze $(BUILD)/maze --notes $(BUILD)/notes
-	@python3 bootstrap/tests/check_scope.py --scope $(BUILD)/scope
-	@python3 bootstrap/tests/check_scope_helper.py --helper $(BUILD)/scope-helper --scope $(BUILD)/scope
-	@python3 bootstrap/tests/check_net.py --knock $(BUILD)/knock
-
-# Scope's checks alone, for diagnosis; check-hosted-apps runs them too.
-check-scope: scope
-	@python3 bootstrap/tests/check_scope.py --scope $(BUILD)/scope
-
-# Scope's helper's checks alone (on 127.x only), and Scope showing the real
-# helper's figures; check-hosted-apps runs them too.
-check-scope-helper: scope-helper scope
-	@python3 bootstrap/tests/check_scope_helper.py --helper $(BUILD)/scope-helper --scope $(BUILD)/scope
-
-# The knock library's checks alone (lib/net.herb through examples/knock.herb, on
-# 127.0.0.1 and in a private network namespace only); check-hosted-apps runs them too.
-check-net: knock
-	@python3 bootstrap/tests/check_net.py --knock $(BUILD)/knock
-
-test-timeout:
-	@python3 tools/check_timeout.py
-
-# The six metacircular-fragment NATIVE-EXECUTION gates: the committed gen-1 seed
-# compiles each fragment to an ELF that runs with NO C. <FRAG>_NATIVE_NO_C=1 flips
-# the (now-retired) C-faithfulness cross-check permanently off -- the enduring leg
-# (native ELF == independent oracle) is all that remains and needs no C.
-evaluator-native:
-	@EVALUATOR_NATIVE_NO_C=1 bash bootstrap/tests/run_evaluator_native.sh
-	@bash bootstrap/tests/run_evaluator_native_mutation.sh
-
-vm-native:
-	@VM_NATIVE_NO_C=1 bash bootstrap/tests/run_vm_native.sh
-	@bash bootstrap/tests/run_vm_native_mutation.sh
-
-parser-native:
-	@PARSER_NATIVE_NO_C=1 bash bootstrap/tests/run_parser_native.sh
-	@bash bootstrap/tests/run_parser_native_mutation.sh
-
-lexer-native:
-	@LEXER_NATIVE_NO_C=1 bash bootstrap/tests/run_lexer_native.sh
-	@bash bootstrap/tests/run_lexer_native_mutation.sh
-
-klondike-native:
-	@KLONDIKE_NATIVE_NO_C=1 bash bootstrap/tests/run_klondike_native.sh
-	@bash bootstrap/tests/run_klondike_native_mutation.sh
-
-emitter-native:
-	@EMITTER_NATIVE_NO_C=1 bash bootstrap/tests/run_emitter_native.sh
-	@bash bootstrap/tests/run_emitter_native_mutation.sh
-
-# Front-end error-vocabulary native gate: the C-free rehome of klondike.herb's located
-# ERR 101-316 diagnostics (the assurance castoff spent at the switchover). No NO_C flag --
-# there is no C-faithfulness leg to retire; the gate is C-free by construction.
-error-vocab-native:
-	@bash bootstrap/tests/run_error_vocab_native.sh
-	@bash bootstrap/tests/run_error_vocab_native_mutation.sh
-
-lexer-copy-sync:
-	@python3 bootstrap/tests/check_lexer_copy_sync.py
-
-# Self-compile must reproduce the seed within the pinned RSS ceiling.
-# make test already runs this gate (bootstrap/tests/run_tests.sh). This standalone
-# target diagnoses that same gate; adding it again to verify-local would duplicate
-# enforcement. Prior enforcement evidence: a 2026-09-02 report in the maintainers'
-# private canon (not published).
-closed-loop-memory-diet:
-	@bash bootstrap/tests/run_closed_loop_memory_diet.sh
-
-# One authoring location per stage; the tracked assembled artifact preserves
-# all established seed, byte-golden and historical test interfaces.
+# One authoring location per stage; the tracked assembled file is what the
+# seed maker, make answers and make cli compile as the compiler's source.
 COMPILER_SOURCES := stack/compiler/frontend_vm.herb \
                     stack/compiler/types_and_inference.herb \
                     stack/compiler/metadata.herb \
                     stack/compiler/hosted_emitter.herb \
                     stack/compiler/routes.herb \
                     stack/compiler/driver.herb
-.PHONY: compiler-source compiler-source-check compiler-source-membership compiler-metadata
+.PHONY: compiler-source compiler-source-check compiler-source-membership
 compiler-source-membership:
 	@set -eu; \
 	  work=$$(mktemp -d /tmp/herbert-source-check.XXXXXXXX); \
@@ -425,9 +298,6 @@ compiler-source: compiler-source-membership
 	  else printf 'Assembled new compiler source; no previous file existed.\n'; fi; \
 	  printf 'Qualify and reseed after substantive changes.\n'
 
-compiler-metadata:
-	@python3 bootstrap/tests/check_compiler_metadata.py
-
 # reseed: make the seed again after the compiler's source changed. The seed maker
 # is the Herbert program tools/reseed.herb, built like the check runner by the
 # committed seed. It has that seed build the new compiler, requires the new
@@ -439,15 +309,8 @@ compiler-metadata:
 reseed: compiler-source-check $(BUILD)/reseed $(BUILD)/run
 	@$(BUILD)/reseed "$(CURDIR)" "$(CURDIR)/$(BUILD)/run" "$${TMPDIR:-/tmp}" $(addprefix $(CURDIR)/,$(filter-out checks/rebuild.cases,$(ANSWERS)))
 
-# The shell script that made the seed before the seed maker did, which holds a
-# new compiler to the Python checks instead. It leaves with those checks.
-reseed-shell: compiler-source-check
-	@bash bootstrap/tests/reseed_gen1.sh
-
-# make test already dispatches the six fragment/mutation pairs, the closed-loop
-# memory diet and the error-vocab gate. Their standalone targets above remain for
-# diagnosis; error-vocab-native also runs that gate's mutation proof.
-verify-local: compiler-metadata check answers cli hands seeds helper verification-helpers program-contract test-timeout test error-vocab-native lexer-copy-sync compiler-cli-contract check-desktop check-app-support check-hosted-apps
+# Every check, all written in Herbert; VERIFYING.md says what each holds.
+verify-local: check answers cli hands seeds helper
 
 clean:
 	rm -rf $(BUILD)

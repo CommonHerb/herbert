@@ -18,9 +18,9 @@ thin, and an everyday job takes many times the lines it would elsewhere. This st
 The yardstick is an ordinary small tool costing about what it would in Python. Each addition earns its place by making
 a real program here shorter, or a wanted one possible: Notes, Scope and the compiler itself are the measure.
 
-The checks move too. Herbert's tests were written in Python and shell; they are being replaced by a small set written
-in Herbert: the compiler rebuilds itself exactly, a folder of programs gives the right answers, and the applications
-are checked where a fault would cost their user something. No new Python or shell is added.
+The checks moved too. Herbert's tests were written in Python and shell; since 2026-11-25 they are all written in
+Herbert: the compiler rebuilds itself exactly, a folder of programs gives the right answers, and the applications are
+checked where a fault would cost their user something. The old ones are in git at the tag `python-checks-2026-11-25`.
 
 ## 2. The language things get built in
 

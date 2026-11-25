@@ -11750,8 +11750,8 @@ func nc_emit_stderr_write(buf):
 end
 
 func nc_emit_fwriter(buf):
-    -- Atomic Linux publication of a.out. The instruction-level reference is
-    -- bootstrap/tests/fixtures/fwriter_linux_x86_64.s (test-only assembly).
+    -- Atomic Linux publication of a.out. Its instruction-level reference, an
+    -- assembly listing, is in git at the tag python-checks-2026-11-25.
     -- Open the directory, create an unpredictable exclusive temporary, write
     -- all bytes, fsync, check close without retry, then renameat. Errors before
     -- rename preserve a.out and clean our temporary; successful concurrent

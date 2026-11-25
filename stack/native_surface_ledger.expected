@@ -1,7 +1,0 @@
-native: stack/*.herb + stack/compiler/*.herb
-required-substrate: bootstrap/seed/gen1.seed
-required-substrate: .github/workflows
-native: tools/scan.herb
-replace-later: bootstrap/tests/*.sh
-evidence: committed expected/golden artifacts
-6

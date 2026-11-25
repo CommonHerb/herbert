@@ -33,7 +33,7 @@ stdout 7104
 
 end
 case klondike compiles and runs a program given in a bundle: the compute probe on the input 5
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 1154
  HERB11142
 -- metacircular β-small compute probe: reads one ASCII digit via clogger;
@@ -98,7 +98,7 @@ P2-OK
 ----
 end
 case klondike gives the compute probe's answers for the input 8
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 1154
  HERB11142
 -- metacircular β-small compute probe: reads one ASCII digit via clogger;
@@ -163,7 +163,7 @@ P2-OK
 ----
 end
 case klondike runs the io probe on the input hello: its own line, then the input's length
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 429
  HERB1414
 func main():
@@ -193,7 +193,7 @@ KLONDIKE-IO
 ----
 end
 case klondike reports a byte that starts no token (lex_101, ERR 101)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 2
 $
 
@@ -203,7 +203,7 @@ line 1: unexpected character (ERR 101)
 ----
 end
 case klondike reports a whole number too large for 64 bits (lex_103, ERR 103)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 49
 func main():
     return 18446744073709551616
@@ -215,7 +215,7 @@ line 2: integer literal does not fit in 64 bits (ERR 103)
 ----
 end
 case klondike reports an unknown escape in a string (lex_104, ERR 104)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 33
 func main():
     return "\q"
@@ -227,7 +227,7 @@ line 2: unknown escape sequence (ERR 104)
 ----
 end
 case klondike reports a backslash the source ends after (lex_105, ERR 105)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 26
 func main():
     return "\
@@ -237,7 +237,7 @@ line 2: unterminated escape (ERR 105)
 ----
 end
 case klondike reports a newline inside a string (lex_106, ERR 106)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 41
 func main():
     return "line
@@ -250,7 +250,7 @@ line 2: newline in string literal (ERR 106)
 ----
 end
 case klondike reports a string the source ends inside (lex_107, ERR 107)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 37
 func main():
     return "unterminated
@@ -260,7 +260,7 @@ line 2: unterminated string literal (ERR 107)
 ----
 end
 case klondike reports an empty character literal (lex_108, ERR 108)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 31
 func main():
     return ''
@@ -272,7 +272,7 @@ line 2: empty character literal (ERR 108)
 ----
 end
 case klondike reports a character literal not closed after one character (lex_109, ERR 109)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 33
 func main():
     return 'ab'
@@ -284,7 +284,7 @@ line 2: character literal not closed (ERR 109)
 ----
 end
 case klondike reports a newline inside a character literal (lex_110, ERR 110)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 32
 func main():
     return '
@@ -297,7 +297,7 @@ line 2: newline in character literal (ERR 110)
 ----
 end
 case klondike reports a statement outside any function (parse_201, ERR 201)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 10
 let x = 1
 
@@ -307,7 +307,7 @@ line 1: expected 'func' at top level (ERR 201)
 ----
 end
 case klondike reports a function header cut short (parse_202, ERR 202)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 11
 func main(
 
@@ -317,7 +317,7 @@ line 2: invalid function header (ERR 202)
 ----
 end
 case klondike reports a function the source ends inside (parse_203, ERR 203)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 26
 func main():
     return 0
@@ -328,7 +328,7 @@ line 3: expected end (ERR 203)
 ----
 end
 case klondike reports a return with no expression (parse_204, ERR 204)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 28
 func main():
     return
@@ -340,7 +340,7 @@ line 3: expected expression (ERR 204)
 ----
 end
 case klondike reports a bare number where a statement belongs (parse_205, ERR 205)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 23
 func main():
     1
@@ -352,7 +352,7 @@ line 2: 'do' must be followed by a call (ERR 205)
 ----
 end
 case klondike reports a name after a dot where a position belongs (parse_206, ERR 206)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 39
 func main():
     return (1, 2).foo
@@ -364,7 +364,7 @@ line 2: expected integer after '.' (ERR 206)
 ----
 end
 case klondike reports a parenthesis not closed (parse_207, ERR 207)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 31
 func main():
     return (1
@@ -376,7 +376,7 @@ line 3: expected ')' (ERR 207)
 ----
 end
 case klondike reports new_array with no type (parse_208, ERR 208)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 40
 func main():
     return new_array()
@@ -388,7 +388,7 @@ line 2: new_array requires a type argument (ERR 208)
 ----
 end
 case klondike reports a function with an empty body (parse_209, ERR 209)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 17
 func main():
 end
@@ -399,7 +399,7 @@ line 1: function body must contain at least one statement (ERR 209)
 ----
 end
 case klondike reports an if arm with no statement (parse_210, ERR 210)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 51
 func main():
     if true:
@@ -413,7 +413,7 @@ line 2: if/elif/else arm must contain at least one statement (ERR 210)
 ----
 end
 case klondike reports a type that is not a type (parse_211_bad_type, ERR 211)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 43
 func main():
     return new_array(foo)
@@ -425,7 +425,7 @@ line 2: invalid type expression (ERR 211)
 ----
 end
 case klondike reports a tuple type of one type (parse_211_one_tuple_type, ERR 211)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 45
 func main():
     return new_array((int))
@@ -437,7 +437,7 @@ line 2: invalid type expression (ERR 211)
 ----
 end
 case klondike reports a bare name where a statement belongs (parse_212_bad_assignment, ERR 212)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 36
 func main():
     x
@@ -450,7 +450,7 @@ line 2: invalid assignment or name (ERR 212)
 ----
 end
 case klondike reports a type word used as a name (parse_212_reserved_type_name, ERR 212)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 46
 func main():
     let int = 1
@@ -463,7 +463,7 @@ line 2: invalid assignment or name (ERR 212)
 ----
 end
 case klondike reports a name let twice in one scope (sem_301, ERR 301)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 58
 func main():
     let x = 1
@@ -477,7 +477,7 @@ line 3: duplicate let 'x' in this scope (ERR 301)
 ----
 end
 case klondike reports a name let twice in one scope, and names it (sem_301 renamed, ERR 301)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 94
 func main():
     let zq_let_unique = 1
@@ -491,7 +491,7 @@ line 3: duplicate let 'zq_let_unique' in this scope (ERR 301)
 ----
 end
 case klondike reports a name never defined (sem_302, ERR 302)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 30
 func main():
     return x
@@ -503,7 +503,7 @@ line 2: undefined name 'x' (ERR 302)
 ----
 end
 case klondike reports a name never defined, and names it (sem_302 renamed, ERR 302)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 42
 func main():
     return zq_use_unique
@@ -515,7 +515,7 @@ line 2: undefined name 'zq_use_unique' (ERR 302)
 ----
 end
 case klondike reports an assignment to a name never defined (sem_303, ERR 303)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 40
 func main():
     x = 1
@@ -528,7 +528,7 @@ line 2: assignment to undefined name 'x' (ERR 303)
 ----
 end
 case klondike reports a call of a function never defined (sem_304, ERR 304)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 38
 func main():
     return missing()
@@ -540,7 +540,7 @@ line 2: unknown function 'missing' (ERR 304)
 ----
 end
 case klondike reports a call of a function never defined, and names it (sem_304 renamed, ERR 304)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 45
 func main():
     return zq_call_unique()
@@ -552,7 +552,7 @@ line 2: unknown function 'zq_call_unique' (ERR 304)
 ----
 end
 case klondike reports a call with too few arguments (sem_305, ERR 305)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 61
 func f(x):
     return x
@@ -568,7 +568,7 @@ line 6: wrong number of arguments to 'f' (ERR 305)
 ----
 end
 case klondike reports a call with too few arguments, and names the function (sem_305 renamed, ERR 305)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 81
 func zq_fn_arity(x):
     return x
@@ -584,7 +584,7 @@ line 6: wrong number of arguments to 'zq_fn_arity' (ERR 305)
 ----
 end
 case klondike reports length given two arguments (sem_306, ERR 306)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 45
 func main():
     return length("a", "b")
@@ -596,7 +596,7 @@ line 2: wrong number of arguments to 'length' (ERR 306)
 ----
 end
 case klondike reports append given one argument (sem_307, ERR 307)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 72
 func main():
     let b = new_buffer()
@@ -610,7 +610,7 @@ line 3: wrong number of arguments to 'append' (ERR 307)
 ----
 end
 case klondike reports append used as a value (sem_308, ERR 308)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 52
 func main():
     return append(new_buffer(), 1)
@@ -622,7 +622,7 @@ line 2: builtin 'append' has no value (ERR 308)
 ----
 end
 case klondike reports do with a call that has a value (sem_310, ERR 310)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 47
 func main():
     do length(x)
@@ -635,7 +635,7 @@ line 2: 'do' requires a value-less call, got 'length' (ERR 310)
 ----
 end
 case klondike reports a parameter named twice (sem_311, ERR 311)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 34
 func main(x, x):
     return 0
@@ -647,7 +647,7 @@ line 1: duplicate parameter 'x' (ERR 311)
 ----
 end
 case klondike reports a parameter named twice, and names it (sem_311 renamed, ERR 311)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 62
 func main(zq_param_unique, zq_param_unique):
     return 0
@@ -659,7 +659,7 @@ line 1: duplicate parameter 'zq_param_unique' (ERR 311)
 ----
 end
 case klondike reports a function defined twice (sem_312, ERR 312)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 61
 func main():
     return 0
@@ -675,7 +675,7 @@ line 5: duplicate function 'main' (ERR 312)
 ----
 end
 case klondike reports a function named after a builtin (sem_313, ERR 313)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 63
 func length():
     return 0
@@ -691,7 +691,7 @@ line 1: function reuses built-in name 'length' (ERR 313)
 ----
 end
 case klondike reports a program with no main as the program's fault, with no line (sem_314, ERR 314)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 27
 func f():
     return 0
@@ -703,7 +703,7 @@ program: no main function defined (ERR 314)
 ----
 end
 case klondike reports a main that takes a parameter (sem_315, ERR 315)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 31
 func main(x):
     return x
@@ -715,7 +715,7 @@ line 1: function 'main' must take zero parameters (ERR 315)
 ----
 end
 case klondike reports a main that can finish without returning (sem_316, ERR 316)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 56
 func main():
     if false:
@@ -729,7 +729,7 @@ line 1: function 'main' may complete without returning (ERR 316)
 ----
 end
 case klondike reports a let whose expression is missing at a line break (parse_204_split, ERR 204)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 41
 func main():
     let x =
@@ -742,7 +742,7 @@ line 3: expected expression (ERR 204)
 ----
 end
 case klondike reports a do followed on the next line by a number (parse_205_split, ERR 205)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 47
 func main():
     do
@@ -756,7 +756,7 @@ line 2: 'do' must be followed by a call (ERR 205)
 ----
 end
 case klondike reports new_array with no type, its parentheses on two lines (parse_208_split, ERR 208)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 45
 func main():
     return new_array(
@@ -769,7 +769,7 @@ line 2: new_array requires a type argument (ERR 208)
 ----
 end
 case klondike reports an empty body that holds a blank line (parse_209_split, ERR 209)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 18
 func main():
 
@@ -781,7 +781,7 @@ line 1: function body must contain at least one statement (ERR 209)
 ----
 end
 case klondike reports an if arm that holds only a blank line (parse_210_split_empty_if, ERR 210)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 52
 func main():
     if true:
@@ -796,7 +796,7 @@ line 2: if/elif/else arm must contain at least one statement (ERR 210)
 ----
 end
 case klondike reports an empty elif arm at the line of its if (parse_210_split_empty_elif, ERR 210)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 71
 func main():
     if false:
@@ -811,7 +811,7 @@ line 2: if/elif/else arm must contain at least one statement (ERR 210)
 ----
 end
 case klondike reports a tuple type of one type spread over three lines (parse_211_split, ERR 211)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 59
 func main():
     return new_array((
@@ -825,7 +825,7 @@ line 2: invalid type expression (ERR 211)
 ----
 end
 case klondike reports a call with too few arguments at its own line, after its return's (sem_305_split, ERR 305)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 69
 func f(x):
     return x
@@ -842,7 +842,7 @@ line 7: wrong number of arguments to 'f' (ERR 305)
 ----
 end
 case klondike reports length given two arguments at its own line, after its return's (sem_306_split, ERR 306)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 53
 func main():
     return
@@ -855,7 +855,7 @@ line 3: wrong number of arguments to 'length' (ERR 306)
 ----
 end
 case klondike reports append given one argument at the line of its do (sem_307_split, ERR 307)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 80
 func main():
     let b = new_buffer()
@@ -870,7 +870,7 @@ line 3: wrong number of arguments to 'append' (ERR 307)
 ----
 end
 case klondike reports a do whose call is on the next line, at the call's line (sem_310_split, ERR 310)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 55
 func main():
     do
@@ -884,7 +884,7 @@ line 3: 'do' requires a value-less call, got 'length' (ERR 310)
 ----
 end
 case klondike counts two blank lines before a fault (count_blank_lines_before_fault, ERR 201)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 12
 
 
@@ -896,7 +896,7 @@ line 3: expected 'func' at top level (ERR 201)
 ----
 end
 case klondike counts lines that end in a carriage return and a newline (count_crlf_before_fault, ERR 302)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 39
 func main():
     return missing
@@ -908,7 +908,7 @@ line 2: undefined name 'missing' (ERR 302)
 ----
 end
 case klondike counts a blank last line when end is missing (count_trailing_newline_missing_end, ERR 203)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 27
 func main():
     return 0
@@ -920,7 +920,7 @@ line 4: expected end (ERR 203)
 ----
 end
 case klondike counts a comment line before a fault (count_comment_then_newline, ERR 201)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 29
 -- leading comment
 let x = 1
@@ -931,7 +931,7 @@ line 2: expected 'func' at top level (ERR 201)
 ----
 end
 case klondike counts a last line that is a comment with no newline (count_comment_at_eof, ERR 203)
-source-file stack/klondike_native.herb
+source-file stack/klondike.herb
 stdin 43
 func main():
     return 0
@@ -1266,4 +1266,16 @@ stdout 576
 0
 
 end
-cases 98
+case fragment: the surface ledger written in Herbert lists what is Herbert's own and what is not
+source-file stack/native_surface_ledger.herb
+stdout until ----
+native: stack/*.herb + stack/compiler/*.herb
+required-substrate: bootstrap/seed/gen1.seed
+required-substrate: .github/workflows
+native: tools/scan.herb + tools/reseed.herb
+native: checks/*.herb
+evidence: checks/*.cases
+6
+----
+end
+cases 99

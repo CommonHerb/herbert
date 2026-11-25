@@ -4,9 +4,8 @@
 # Every git-tracked file whose name does not end in `.herb` must appear
 # below, by exact repository-relative path. `.herb` files are never listed.
 #
-# The list shrinks toward empty as Herbert becomes able to host itself:
-# bootstrap entries are deleted when the corresponding host-language code
-# is replaced by an equivalent `.herb` implementation.
+# No Python, shell or other host-language program is left in the tree;
+# what remains is build and CI configuration, the seed, documents and data.
 #
 # Adding a line here is a deliberate, reviewable act, never incidental.
 # `make check` enforces that this file and the tracked file set match
@@ -21,9 +20,6 @@ Makefile
 README.md
 VERIFYING.md
 docs/native-ecosystem.md
-examples/native_today_arithmetic.expected
-examples/native_today_collections.expected
-examples/native_today_io.expected
 examples/wordcount.md
 examples/first_steps.md
 examples/maze.md
@@ -33,6 +29,8 @@ examples/scope.md
 examples/knock.md
 examples/scope_helper.md
 lib/README.md
+stack/.gitkeep
+
 # The cases of the checks written in Herbert (checks/run.herb): programs and
 # their right answers. Data, not a host language; they stay.
 checks/rebuild.cases
@@ -41,275 +39,12 @@ checks/language.cases
 checks/libraries.cases
 checks/fragments.cases
 checks/planted.cases
-# Independent Linux syscall/memory and interactive desktop TEST tooling.
-bootstrap/tests/check_hosted_memory_io.py
-bootstrap/tests/check_desktop.py
-bootstrap/tests/check_hosted_apps.py
-bootstrap/tests/check_scope.py
-bootstrap/tests/check_net.py
-bootstrap/tests/check_scope_helper.py
-bootstrap/tests/check_grid_map.py
-bootstrap/tests/check_notes_support.py
-bootstrap/tests/notes_wrap_model.py
-bootstrap/tests/check_x11_text.py
-bootstrap/tests/check_text.py
-# Test tooling for the Herbert-authored sustained input utility.
-bootstrap/tests/check_wordcount.py
-# Hand-written answers for the Herbert allowlist scanner (tools/scan.herb).
-bootstrap/tests/check_scan.py
-# Stack-headroom guard: generated deep programs compiled at an explicit 8 MiB stack.
-bootstrap/tests/check_stack_headroom.py
-stack/native_surface_ledger.expected
-bootstrap/tests/check_lexer_copy_sync.py
-# Hosted conformance harness + hand-authored data: deliberate test-tool boundary.
-bootstrap/tests/compiler_conformance.py
-bootstrap/tests/fixtures/compiler_conformance.json
-# Bounded compiler CALL/tuple/heap scaling regression; Python/GNU time test tools.
-bootstrap/tests/check_compiler_metadata.py
-# Checked stdin real-descriptor gate + frozen data: deliberate test-tool boundary.
-bootstrap/tests/stdin_contract.py
-bootstrap/tests/fixtures/stdin_contract.json
-# Invocation/atomic-publication tests and assembly specification: test tooling only.
-bootstrap/tests/compiler_cli_contract.py
-bootstrap/tests/fixtures/fwriter_linux_x86_64.s
-bootstrap/tests/run_evaluator_native.sh
-bootstrap/tests/run_evaluator_native_mutation.sh
-bootstrap/tests/run_vm_native.sh
-bootstrap/tests/run_vm_native_mutation.sh
-bootstrap/tests/run_parser_native.sh
-bootstrap/tests/run_parser_native_mutation.sh
-bootstrap/tests/run_lexer_native.sh
-bootstrap/tests/run_lexer_native_mutation.sh
-bootstrap/tests/run_klondike_native.sh
-bootstrap/tests/run_klondike_native_mutation.sh
-bootstrap/tests/run_emitter_native.sh
-bootstrap/tests/run_emitter_native_mutation.sh
-bootstrap/tests/run_error_vocab_native.sh
-bootstrap/tests/run_error_vocab_native_mutation.sh
-bootstrap/tests/run_aggregate_render_native.sh
-bootstrap/tests/run_aggregate_render_native_mutation.sh
-bootstrap/tests/run_closed_loop_memory_diet.sh
-bootstrap/tests/run_native_codegen_link1.sh
-bootstrap/tests/run_native_codegen_link2.sh
-bootstrap/tests/run_native_codegen_link3.sh
-bootstrap/tests/run_native_codegen_link4.sh
-bootstrap/tests/run_native_codegen_link5.sh
-bootstrap/tests/run_native_codegen_link6.sh
-bootstrap/tests/run_native_codegen_link7.sh
-bootstrap/tests/run_native_codegen_link8.sh
-bootstrap/tests/run_native_codegen_link9.sh
-bootstrap/tests/run_native_codegen_link10.sh
-bootstrap/tests/run_native_codegen_link11.sh
-bootstrap/tests/run_native_codegen_link12.sh
-bootstrap/tests/run_native_codegen_link13.sh
-bootstrap/tests/run_native_codegen_link14.sh
-bootstrap/tests/run_native_codegen_link15.sh
-bootstrap/tests/run_native_codegen_link16.sh
-bootstrap/tests/run_native_codegen_rejects.sh
-bootstrap/tests/run_tests.sh
-bootstrap/tests/native_codegen_oracle.sh
-bootstrap/tests/reseed_gen1.sh
+
+# The seed: the compiler as a finished Linux x86-64 program, its checksum and
+# its guide.
 bootstrap/seed/gen1.seed
 bootstrap/seed/gen1.seed.sha256
 bootstrap/seed/README.md
-bootstrap/tests/native_codegen_goldens/artifacts/link10/link10_benign_complementary_if.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link11/link11_fanout_chain.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link11/link11_finite_poly.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link11/link11_id_int_string.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link11/link11_ignore20.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link11/link11_propagation.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link11/link11_three_types.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link12/link12_empty.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link12/link12_hi.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_append_256.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_get_oob.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_index_oob.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_large_index_oob.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link13/link13_partial_stdout_then_fault.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_bnot.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_branch_after_bitwise.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_lexer_longest.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_nonshortcircuit.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_parens_bit_cmp.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_parens_cross.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_parens_shift_arith.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_pte.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_shr.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link14/link14_xor.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link15/link15_adler32.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link15/link15_div.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link15/link15_div_wrap.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link15/link15_mod.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link15/link15_mul.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link15/link15_mul_wrap.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link15/link15_prec_mul_add.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link15/link15_prec_paren_add.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link16/link16_big_addr.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link16/link16_max_u64.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link16/link16_seq_bytes.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_accept_p1_add.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_accept_p2_lt.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_accept_p3_sub.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p1_0_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p1_0_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p1_127_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p1_128_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p1_255_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p1_255_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p1_65_66.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p2_0_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p2_0_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p2_128_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p2_1_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p2_1_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p2_255_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p2_255_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p3_0_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p3_128_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p3_255_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link2/link2_expected_p3_5_3.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_accept_bool_literal.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_accept_bool_local.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_accept_rebind.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_accept_ret_false.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_accept_ret_true.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_bool_0_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_bool_0_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_bool_127_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_bool_1_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_bool_1_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_bool_1_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_bool_255_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_if_0_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_if_127_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_if_128_127.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_if_1_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_if_1_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_if_255_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link3/link3_expected_p_if_255_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_bool_helper.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_recursive_diff_0_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_recursive_diff_0_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_recursive_diff_127_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_recursive_diff_128_127.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_recursive_diff_1_0.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_recursive_diff_1_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_recursive_diff_255_1.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_recursive_diff_255_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_wide_disp32.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link4/link4_zero_arg.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_diff_300.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_diff_A.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_diff_B.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_diff_empty.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_empty_input_oob.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_input_return.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_literal.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_literal_oob.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_nested.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_sret_tail.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link5/link5_wide_disp32.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_anti_over.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_append_256.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_array_int_string.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_composite_01.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_composite_0a.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_composite_c8.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_composite_empty.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_diff_00.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_diff_01.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_diff_0a.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_diff_c8.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_diff_empty.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link6/link6_get_oob.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_cudois_positive.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_data_dependent_A.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_data_dependent_xy.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_goddard_positive.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_literal.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_matrix.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_mercer_positive.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_multi.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link7/link7_renamed_accept.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_aa_src.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_fold_100k.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_fold_5.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_fold_src.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_idx200k.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_idx70k.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_len_100k.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_len_65535.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_len_65536.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_len_65537.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_len_empty.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_len_src.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link8/link8_twin_src.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_fie_10.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_fie_100.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_fie_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_fie_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_fie_32.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_fie_5.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_poly_10.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_poly_100.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_poly_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_poly_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_poly_32.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_poly_5.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_tb_10.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_tb_100.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_tb_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_tb_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_tb_32.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_accept_tb_5.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_twin_poly_10.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_twin_poly_100.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_twin_poly_128.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_twin_poly_255.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_twin_poly_32.bin
-bootstrap/tests/native_codegen_goldens/artifacts/link9/link9_twin_poly_5.bin
-bootstrap/tests/native_codegen_goldens/artifacts/rejects/rejects_frontier_clogger_arena_cap_obsolete_64k.bin
-bootstrap/tests/native_codegen_goldens/artifacts/rejects/rejects_frontier_clogger_arena_cap_old_exact_16M.bin
-bootstrap/tests/native_codegen_goldens/artifacts/rejects/rejects_frontier_clogger_arena_cap_old_over_16M.bin
-bootstrap/tests/native_codegen_goldens/fixtures/link8/i_100k
-bootstrap/tests/native_codegen_goldens/fixtures/link8/i_5
-bootstrap/tests/native_codegen_goldens/fixtures/link8/i_65535
-bootstrap/tests/native_codegen_goldens/fixtures/link8/i_65536
-bootstrap/tests/native_codegen_goldens/fixtures/link8/i_65537
-bootstrap/tests/native_codegen_goldens/fixtures/link8/i_empty
-bootstrap/tests/native_codegen_goldens/fixtures/link8/i_src
-bootstrap/tests/native_codegen_goldens/manifest.tsv
-bootstrap/tests/test_01_arith.expected
-bootstrap/tests/test_02_short_circuit.expected
-bootstrap/tests/test_03_if_elif.expected
-bootstrap/tests/test_04_recursion.expected
-bootstrap/tests/test_05_block_scope.expected
-bootstrap/tests/test_06_tuples.expected
-bootstrap/tests/test_07_array.expected
-bootstrap/tests/test_08_strings_buffer.expected
-bootstrap/tests/test_09_ref_vs_value.expected
-bootstrap/tests/test_10_tco.expected
-bootstrap/tests/test_11_non_tail_self_recursion.expected
-bootstrap/tests/test_12_non_tail_mutual_recursion.expected
-bootstrap/tests/test_13_cross_function_tail_call.expected
-bootstrap/tests/test_14a_bounded_heap.expected
-bootstrap/tests/test_14b_bounded_heap.expected
-stack/.gitkeep
-stack/emitter_probe.expected
-stack/error_probes.expected
-stack/error_probes_native.expected
-stack/evaluator_probe.expected
-stack/lexer_probe.expected
-stack/parser_probe.expected
-stack/klondike_native_probe.expected
-tools/check_timeout.py
-tools/check_full_test_host.sh
-tools/timeout
-
-# --- bootstrap (host-language Herbert implementation: shrinks to zero) ---
-# Shared verification machinery (test-only; no compiler/runtime dependency).
-bootstrap/tests/check_verification_helpers.py
-bootstrap/tests/check_program_build.py
 
 # Public language guide, canonical source for the parent pack.
 docs/LANGUAGE.md
@@ -320,10 +55,7 @@ docs/COMPILER.md
 # Developer source-build guide.
 docs/BUILDING.md
 
-# Unicode standardized data/license and focused development verification.
-# Generated runtime property tables are .herb assets; no foreign runtime is added.
+# Unicode standardized data/license notes. The property tables Notes uses are
+# .herb (lib/unicode_tables.herb); no foreign runtime is added.
 docs/UNICODE.md
 docs/UNICODE-LICENSE.txt
-tools/generate_unicode_tables.py
-bootstrap/tests/check_utf8_text.py
-bootstrap/tests/fixtures/unicode-18.0.0/GraphemeBreakTest.txt

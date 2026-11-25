@@ -89,24 +89,15 @@ The decoder, segmentation algorithm, editor and renderer are Herbert source.
 with exact arithmetic for Hangul syllables. Its compact hexadecimal range format
 and property bits are documented in its source header.
 
-`tools/generate_unicode_tables.py` is explicitly allowlisted development tooling.
-It checks the pinned source hashes and performs no downloads. Place the three
-property files and LICENSE.txt together, then run:
-
-```sh
-python3 tools/generate_unicode_tables.py --source-dir /path/to/unicode18 --check
-```
-
-Omit `--check` to regenerate the asset after deliberate review of any pin changes.
-Normal builds and verification need neither this source directory nor a network.
-The checked-in `GraphemeBreakTest.txt` is the independent boundary oracle consumed
-by `check_utf8_text.py`. The same test checks the generated table against its reviewed SHA256 before
-compilation. That is an asset-integrity regression pin, not a fresh derivation
-from upstream properties. The generator checks the three property files and
-license; the test checks the boundary fixture separately. Original property
-inputs and exact generation receipts are retained in the dated implementation
-evidence. The permanent font checks exercise declared scalar support and literal
-accent, symbol, fallback and scaled pixel geometry without an X server.
+The generator that made `unicode_tables.herb` from the three property files, and
+the check that ran the decoder and segmentation against all of
+`GraphemeBreakTest.txt` and pinned the table's SHA256, were Python. They left with
+the Python checks on 2026-11-25 and are in git at the tag
+`python-checks-2026-11-25`; moving to a new Unicode version needs a generator
+written in Herbert first. Normal builds and checks need neither the property
+files nor a network. The cases in `checks/libraries.cases` hold UTF-8 decoding,
+grapheme boundaries and what can be drawn on chosen text, not on the whole
+oracle. The pinned inputs were:
 
 | Input | SHA256 |
 | --- | --- |

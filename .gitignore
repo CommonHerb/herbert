@@ -1,6 +1,4 @@
 build/
-__pycache__/
-*.pyc
 
 # Retained developer compiler evidence stays on disk, outside version control.
 .herbert-build.*/

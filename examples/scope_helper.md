@@ -161,33 +161,20 @@ The build joins `lib/linux.herb`, `lib/text.herb`, `lib/net.herb`, `lib/figures.
 ## Verification
 
 ```sh
-make check-scope-helper
+make helper
 ```
 
-`make check-hosted-apps` runs the same checks (`bootstrap/tests/check_scope_helper.py`), and so do `make
-verify-local` and CI. Every connection in them goes to an address in 127.x on this computer. Malformed command lines
-must be refused before a socket is asked for (strace watches), and a socket or port it cannot have must end it with
-status 1 and a line saying why. Through `--test`, every `/proc/stat` and `/proc/meminfo` file of Scope's own checks
-must give exactly the figures Scope's hand-written answers give for them, `unavailable` parts included, and
-`unavailable none` for the disk and the drive; with the real `/proc`, `/sys/class/hwmon` and `/`, the figures must
-agree with the files read just before and after, the disk with `os.statvfs('/')` read just before and after (tried
-again, up to eight times, since other programs may be writing to the disk), and the drive's part must be there
-exactly when the check's own search finds an NVMe drive, with its limit. A probe compiled from `lib/figures.herb`
-writes the longest line, 155 bytes, into a buffer of exactly that size, byte for byte what Scope's checks read, and
-stops with the range message given one byte less; and it writes every form of the disk and the drive. Through
-`--test-all`, with a stand-in hwmon directory: the drive read again at every connection (73.849, 73.850, 83.849 and
-83.850 °C, 999.999 and 1000 °C, negative, malformed and missing readings), its limit and the search made at startup
-only, limits missing, zero, absurd and at 200 °C, the first of two drives, the drive at `hwmon63` and past `hwmon64`,
-and no drive; and the disk holding a link the check turns between `/`, `/proc` and nothing. Connections from four
-allowed 127.x addresses get the line; from others, the listening address itself included, a close with not one byte.
-Under strace, each connection gets one send that waits for nothing and close, or close alone, and never a read, even
-when the client sends bytes first. The same port at other 127.x addresses is refused. Stopped while a connection
-lingers on its port, it starts again at once. 64 clients that connect and never read hold nothing up. 20,000
-connections, each reading the real `/proc` and `/` and a stand-in drive, leave its size, its memory (within 64 KiB)
-and its open files as they were. With every accept failed by strace (too many files, a connection given up, a signal)
-it accepts at most 15 times a second, and with a real limit of four open files and a client waiting it uses next to
-no processor time, then answers the client once the limit is raised. Last, Scope's window shows its figures: exact
-ones from files the check changes (the disk `n/a` and no drive), `answers` once it is stopped; with `--test-all`, the
-drive green, amber, red and grey `n/a` as its stand-in reading changes and the disk's percent that of
-`os.statvfs('/')`; and with the real `/proc` and `/`, a memory figure that agrees with `/proc/meminfo`, a disk figure
-that agrees with `os.statvfs('/')`, and a drive's part when this computer has an NVMe drive.
+`checks/helper.herb` starts the helper on this computer only, at 127.77.0.9, with every client bound to an address of
+its own in 127.77.0.0/16 ([VERIFYING.md](../VERIFYING.md)), and holds it to what would cost its owner something: each
+of the four allowed addresses gets one whole line Scope takes, then the end; other addresses (differing in the last,
+third or second part, and its own) get the end without a byte; its port at other addresses is refused, and it holds one
+socket between connections. Started as on its owner's other computer, with its open files limited so every accept
+fails, it keeps running on next to no processor time, then answers once the limit is raised; the same with every accept
+failed as when a client gives up first. A client that resets while the helper is stopped does not end it. 64 clients
+that never read hold nothing up. 20,000 connections, one in five refused, leave its size, its memory (within 64 KiB)
+and its open files as they were. Asked to stop, it ends within a second, and at a port another program holds it ends
+with status 1. The line's figures and the drive's readings are held by the cases of `make answers`
+(`checks/libraries.cases`), and `make hands` has Scope read a version-2 helper's line.
+
+Not checked: the flags of each accept and send and that a connection is never read (those need the system calls
+watched), an accept failed by a signal, the command lines it refuses, and Scope's window showing the helper's figures.

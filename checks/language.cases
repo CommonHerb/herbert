@@ -28114,6 +28114,43 @@ dynamic no
 loader no
 ----
 end
+case a-compiled-program-has-one-program-header-and-no-section-table
+libs linux text
+source until ----
+-- This program reads its own ELF header and says what the seed's guide
+-- (bootstrap/seed/README.md, "Structure") says every program this compiler
+-- writes holds: a file to run as it is (type 2), its entry at 0x400078, one
+-- program header, and no table of sections (its offset, count and name index
+-- all 0).
+func main():
+    let f = linux_read_file("/proc/self/exe", 16777216)
+    let b = f.1
+    let out = new_buffer()
+    do text_add(out, "type ")
+    do text_add_whole(out, linux_u16(b, 16))
+    do text_add(out, "\nentry ")
+    do text_add_whole(out, linux_u64(b, 24))
+    do text_add(out, "\nprogram headers ")
+    do text_add_whole(out, linux_u16(b, 56))
+    do text_add(out, "\nsection table at ")
+    do text_add_whole(out, linux_u64(b, 40))
+    do text_add(out, ", sections ")
+    do text_add_whole(out, linux_u16(b, 60))
+    do text_add(out, ", their names' section ")
+    do text_add_whole(out, linux_u16(b, 62))
+    do text_add(out, "\n")
+    do flogger(freeze(out))
+    return 0
+end
+----
+stdout until ----
+type 2
+entry 4194424
+program headers 1
+section table at 0, sections 0, their names' section 0
+0
+----
+end
 case fwriter-of-nothing-replaces-a-regular-a-out-with-an-empty-file-and-leaves-no-temporary
 libs linux text folder
 source until ----
@@ -29093,4 +29130,4 @@ stdout until ----
 (0, 65537, 65, 90)
 ----
 end
-cases 903
+cases 904

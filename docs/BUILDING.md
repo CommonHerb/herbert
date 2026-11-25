@@ -49,9 +49,10 @@ image and hash. The image remains in that evidence directory after publication.
 These directories are Git-ignored and retained on success and failure; no automatic
 cleanup runs.
 
-`make program-contract` verifies this interface with the real seed, located source
-and library rejections, path/overwrite protection, malformed compiler envelopes
-and a failed publication command. It runs in `make verify-local` and hosted CI;
-its `/tmp/herbert-program-build-*` evidence is uploaded even if the check fails.
+No check runs `make program` itself: the Python check that did
+(`make program-contract`) left on 2026-11-25, and is in git at the tag
+`python-checks-2026-11-25`. Its guards (no writing over the source, a tracked
+file, the seed or the repository's own records) are in the recipe; anything it
+could write over in the checkout is in git.
 Make, Bash, coreutils, diffutils, awk and Git are development tooling. The resulting program
 has no added foreign compiler, language runtime or build-tool dependency.

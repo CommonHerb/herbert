@@ -68,12 +68,13 @@ people hit first. The editor's own limits are in [the Notes guide](examples/note
 ## Layout
 
 - `stack/`: Herbert source of the compiler (`stack/compiler/`, assembled into `stack/native_compile_fragment.herb`),
-  and the older interpreter and VM fragments the tests run.
+  and the older interpreter and VM fragments the checks run.
 - `lib/` and `examples/`: the support libraries and the programs.
-- `bootstrap/seed/`: the committed compiler and its checksum. `bootstrap/tests/`: the test harnesses and goldens.
-- `tools/`: `scan.herb`, the allowlist scanner, and `reseed.herb`, the seed maker, plus test helpers. No C source is
+- `bootstrap/seed/`: the committed compiler and its checksum.
+- `checks/`: the checks, written in Herbert, and their cases: programs with their right answers.
+- `tools/`: `scan.herb`, the allowlist scanner, and `reseed.herb`, the seed maker. No C, Python or shell source is
   left.
 - `BOOTSTRAP-ALLOWLIST`: every tracked file that is not `.herb`, checked by `make check`.
 
-A claim about Herbert counts when a test, a golden file or a runner shows it; start with
+A claim about Herbert counts when a check shows it; start with
 [VERIFYING.md](VERIFYING.md) before changing behavior.

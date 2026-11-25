@@ -281,95 +281,23 @@ graphics library is linked in.
 ## Verification
 
 ```sh
-make check-scope
+make hands
+make answers
 ```
 
-`make check-hosted-apps` runs the same checks (`bootstrap/tests/check_scope.py`), and so do `make verify-local` and CI.
-Every run of Scope in them has a home directory of the check's own, so none can read the owner's list, and every knock
-goes to an address in 127.x on this computer, to listeners and ports the check opens. First `--sample` runs on fixed
-files and every printed line must match an answer written by hand: one and 64 processors, an 18 KB line, a cpu line
-across two reads or after a 20 KB line, tabs, old kernels' four counters, guest, irq, softirq, steal and iowait each in
-its place, `meminfo` fields missing, reordered, repeated, look-alike or malformed, files at the 1 MiB bound, and the
-edges: 0 %, 100 %, half a percent and 99.5 % exactly, also with counts past 2^56, a zero-length interval after a figure,
-counters that did not move, a counter that went back, totals that went back, numbers at and past 2^64, tenths that
-carry, and missing or empty files. Then `--computers`, with the network closed to it (strace makes every request for a
-socket fail), on 86 lists, each line it prints against an answer written by hand: comments, blank lines, tabs, CRLF, no
-final newline, names of 1, 24 and 25 bytes and of every printable mark, bytes that are not printable ASCII, lines of
-one, two and four words, every malformed address and port knock refuses, the edges of each, 6, 7 and 8 computers, more
-problems than rows, line 40,000, empty lists, a list of exactly 64 KiB and one byte more; then a missing list, a
-dangling link, a directory, a FIFO and a link to `/dev/zero` (each within 2 seconds), a list it may not read, and the
-list in HOME, missing, and with HOME unset or empty. Then `--replies`, with the network closed to it, each row against
-an answer written by hand: 12 runs of well-formed version-1 replies (the dash, then the figure; an interval of no time,
-totals and busy counts that went back, 100 %, unavailable halves, the largest numbers, the longest line) and 46
-malformed ones, each between good ones so the row must drop its figures and its processor start again (no newline, bytes
-or a second newline after it, CRLF, two lines, other prefixes and versions, a version 2 with only version 1's parts,
-missing, doubled and trailing spaces, a tab, three and five numbers, leading zeros, signs, hexadecimal, letters, numbers
-at 2^64 and of 21 digits, a busy count above the total, a memory total of zero, a misspelt `unavailable`, a NUL byte, an
-SSH banner, an HTTP answer, 255, 256 and 257 bytes, and a good line followed by 300 bytes); then 14 runs of well-formed
-version-2 replies (the dash, then the figure; versions 1, 2 and 1 in turn keeping the processor going; the drive's
-colour at 73.849, 73.850, 83.849 and 83.850 °C under an 83.85 °C limit, no limit, limits of 5, 10, 10.001 and 200 °C,
-rounding at a half degree, the largest reading, 999.999 °C, a drive n/a and no drive sensor; the disk n/a, all kept
-back, half a percent either way, 99.5 % and the largest numbers; everything n/a; the widest row, 43 characters; the
-longest line, 155 bytes) and 43 malformed ones between good version-2 ones (version 3 and `02`, the disk or the drive
-missing, a number, `unavailable` or `none` too many, a part of one or three numbers, `none` for the disk, the processor
-or the memory, `none` with a number, glued or in capitals, `n/a`, a limit `unavailable` alone, doubled spaces, a tab
-before the disk and before the drive, the disk past 2^64 together or alone, a reading of 1000 °C and at 2^64, a limit
-above 200 °C and of 21 digits, leading zeros, a sign, a point, a busy count above the total, a memory total of zero, no
-newline, CRLF, two lines, 255, 256 and 257 bytes, and a good line followed by 300 bytes). Then `--readings` on 62
-stand-in hwmon directories the check writes and one that is not there, each line against an answer written by hand: this
-computer's own layout, the drive at `hwmon63`
-and past it at `hwmon64`, gaps in the numbering, `k10temp` after a `coretemp`, `coretemp` alone, the first of two drives
-and of two processors, none of either, look-alike names (`nvme0`, `NVME`, spaces, a carriage return, a NUL), names of 32
-bytes, a name that is a directory or a FIFO, devices behind links as in `/sys`; limits missing, zero, above 200 °C, at
-200 °C, malformed, a directory and a FIFO, and without a newline; the colour at each edge (73.849 and 73.850, 83.849 and
-83.850 °C, and limits of 5, 10 and 10.001 °C); rounding (34.499 is 34, 34.500 is 35, 0.499 is 0, 0.500 is 1), the
-largest number, readings of 31 and 32 bytes, missing readings, and 17 that are n/a (negative, signs, letters, a point,
-hexadecimal, empty, spaces, two newlines, CRLF, a NUL, 2^64 and 21 digits, a directory, a FIFO), every FIFO within 2
-seconds; then this computer's own `/sys/class/hwmon` against a search the check works out itself. Then `--disk-figures`
-on 23 sets of numbers against answers written by hand (this computer's disk, empty and full disks, every free block kept
-back, more free than there is, half a percent, 1 GiB and 1 KiB under it, tenths that carry, blocks of 1, 512, 1000, 1536
-and 2048 bytes, the largest disk that fits and one past it, no blocks and blocks of no bytes), and `--readings` on `/`,
-the evidence folder, a file, a link, `/proc` and `/sys` (no blocks), a missing path and one too long for Linux, the
-figures against `os.statvfs` of the same path read just before and after. Then, on a private Xvfb display with XTest
-input: with the real `/proc` the window must draw this computer's name, a processor figure, and memory figures that
-match `/proc/meminfo` read just before and after the frame that shows a new reading, the disk row matching
-`os.statvfs('/')` at a reading and this computer's own temperatures, and the two computers listed in its HOME answering
-(a listener and a closed port); it must quit on Escape, q, Shift+Q and the close button, with no list, a directory for a
-list and no HOME. Under a computer's name nothing may be drawn: every pixel from the panel's edge to the result's
-column, down to the next row, must be the panel's. With `--test`, the light must change at every reading while nothing
-else changes, and the exact text, inks and bars are read back from its pixels for known figures, a zero-length interval,
-MiB and GiB, names of 48 and 60 bytes, files that vanish (unavailable, in amber) and files that come back. With a
-stand-in hwmon directory and a link for the disk: the disk row against `os.statvfs('/')`, the drive green, amber, amber,
-red at 73.849, 73.850, 83.849 and 83.850 °C, nothing moving when the limit and the names are changed while it runs, n/a
-in grey for a negative, a malformed and a missing reading, the disk unavailable on `/proc` and with nothing there,
-each straight after a reading shown, and back, and the processor alone drawn where the line starts. The other
-computers, read back the same way: a computer that
-never answers (a listener whose queue the check fills, so Linux drops every knock in silence) and a helper that sends
-its line one byte every 300 ms show checking while their 10-second knocks are under way, while the light still changes
-at every reading (200 ms), Scope uses under a quarter of the processor's time and Escape closes the window within 300
-ms; eight rows of every kind, a row keeping no answer while its next knock is under way, and the seventh computer never
-knocked; unreachable, error with Linux's words, and error with a number, made by strace failing the knocks' connects.
-Fake helpers the check runs on 127.x, which count every byte Scope sends them (none): a dash after the first reply and
-40 % after the second, beside a wrong prefix, version 3, an extra space, no newline, a byte after it, a number at 2^64,
-257 bytes, a drip that misses the time limit, a helper that never sends and an SSH banner, each showing answers knock
-after knock; version-2 helpers read back from the pixels at the smaller size, the drive's part green, amber, amber and
-red at 73.849, 73.850, 83.849 and 83.850 °C, grey `n/a`, and left out for no drive, the disk `n/a`, and the widest
-row with nothing drawn after it up to the panel's edge, beside a version-1 helper at full size, a version-3 line, a
-line without its drive and one of 257 bytes, those three showing answers; and a helper that goes away (its port
-refused), comes back, goes silent and comes back, its row dropping its figures each time and its processor showing a
-dash first again. Under strace, with knocks every 700 ms and a limit
-of 300 ms: each computer's knocks start 700 ms apart, no answer comes only after a look at or past the limit and within
-100 ms of it, refusals and a helper's figures are seen within 50 ms, a listener that sends nothing is read from only
-without waiting and given up only after a read at or past the limit, within 100 ms of it, every wait of the window
-includes the knocks under way (for POLLOUT while connecting, POLLIN while reading), nothing is sent, and a knock under
-way at Escape is closed before Scope exits. Last, for 120 seconds it reads every 10 ms through links the check turns
-between the real `/proc`, files without a final newline (memory under 1 GiB, a 60-byte name), missing files and
-malformed files, with the temperatures and the disk turned with them (this computer's own sensors and `/`, readings in
-files, nothing, readings that are not numbers and `/proc`), while it knocks every 20 ms on a listener, a closed port,
-the silent listener and two helpers replying to every knock, one with version 1 of the line and one with version 2:
-its memory may not grow (the same virtual size throughout,
-resident memory within 64 KiB), its descriptors stay the same but for knocks under way (no socket outlives its knock)
-and the one file it may be reading at that moment, no file opened at startup stays open, and at least one look finds
-no file it reads open, and at the end the closed port is made silent and the silent listener
-starts answering, and both rows must follow. `make check-scope-helper` then shows the real helper's figures in the
-window (see [Scope's helper](scope_helper.md)).
+`make hands` runs Scope on a display nobody sees, with a home of the check's own so it never reads its owner's list,
+and every knock on this computer ([VERIFYING.md](../VERIFYING.md)). Scope must open, stay up and close with status 0
+as its owner starts it; with no list, a folder where the list should be, no HOME, a pipe nothing writes into, a list
+of 65,537 bytes and a list of every kind of line; knocking on six stand-in computers (a version-2 helper making the
+widest row, one sending 257 bytes, one sending an SSH greeting, one dripping a byte every 300 ms, one silent and one
+that never answers), where it must never send a byte, give the silent one up at its limit and close within a second of
+Escape; and for half a minute reading every 10 ms through files the check turns among the real `/proc`, short,
+missing and malformed ones, stand-in temperatures and the disk, while knocking every 20 ms, with the same size, its
+memory within 64 KiB, at most one file open and no knock left open. The cases of `make answers`
+(`checks/libraries.cases`) hold its arithmetic: the processor and memory figures, percents rounded at their edges, the
+disk, the drive's temperature and shade, the sensors found by name, the helper's line written and read back, the reply
+reader's verdicts, an empty reply, and the knock library.
+
+Not checked: anything drawn (its figures, colours, rows and light), its many readings of unusual `/proc`, sensor and
+list files against hand-written answers, and its knocks' exact timing and system calls. Those were the Python checks',
+which are in git at the tag `python-checks-2026-11-25`.

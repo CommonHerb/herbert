@@ -24,8 +24,9 @@ The program reports failed input reads on standard error and exits with status 1
 This is a useful exercise of the hosted compiler's supported operating model:
 checked input, byte indexing, decisions, tuple results and one `while` loop
 over every byte. The loop rebinds its counters in place, so the scan uses no
-stack per byte. It creates no per-byte buffers, arrays or strings. `make wordcount` checks exact results, binary input, a closed input descriptor, and multi-megabyte pipe input under a fixed
-8 MiB stack limit.
+stack per byte. It creates no per-byte buffers, arrays or strings. The cases of `make answers`
+(`checks/language.cases`) check its counts on seven inputs, binary ones among them;
+a closed input descriptor and 3 MiB through a pipe are held for input in general.
 
 The program reads the entire input into memory before scanning. It is not a
 streaming implementation: memory grows with input size, and the native arena

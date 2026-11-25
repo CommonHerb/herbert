@@ -3784,7 +3784,7 @@ end
 
 -- ====================================================================
 -- MAIN -- compile the embedded pipeline probe, adapt it, execute it in
--- the Herbert VM, and return the VM serialization as a string.
+-- the Herbert VM, and write the VM serialization and a newline.
 -- ====================================================================
 
 func main():
@@ -3826,5 +3826,7 @@ func main():
     let frame = (prog.3, 0, zero_locals(entry_info.2), new_array((int, int)))
     let frames = new_array((int, int, array((int, int)), array((int, int))))
     let result = vm_loop(frame, frames, pools, prog)
-    return serialize_value(result, pools)
+    do flogger(serialize_value(result, pools))
+    do flogger("\n")
+    return 0
 end

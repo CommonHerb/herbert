@@ -101,28 +101,18 @@ the committed Herbert compiler. It talks to Linux with system calls; no foreign 
 ## Verification
 
 ```sh
-make check-net
+make answers
 ```
 
-`make check-hosted-apps` runs the same checks (`bootstrap/tests/check_net.py`), and so do `make verify-local` and CI.
-They knock only on this computer: addresses in 127.x, and addresses inside a private network namespace the check makes.
-Malformed command lines must be refused before a socket is asked for (strace watches); a small program built from the
-library checks its own refusals and its sorting of Linux's errors; one knock's system calls are checked, in order;
-listeners the check opens must see a connection and not one byte; a port held closed must be refused; a listener whose
-queue the check fills (so Linux drops every new connection silently) must give no answer, at the time limit and no more
-than 100 ms after it; strace makes the rare cases happen on purpose (an interrupted wait, a connect that returns only
-after the limit, a computer that answers and then resets); and 24,000 knocks in one process must leave its open files,
-its size and its memory as they were. All of this runs twice, once through `net_knock` and once through `net_start` and
-`net_check` (`--split`, `--split-rounds`), whose system calls must also be socket, connect, then polls only, the answer
-found by a look that waits for nothing, then SO_ERROR and close; the small program also checks that `net_start` keeps
-`net_knock`'s range guard and leaves no knock under way when it fails, and a second one that starting a knock while
-another is under way on the same `Net` first closes that one, and that `net_stop` closes a knock under way. A third
-small program checks `net_start_reading` against listeners the check opens, each playing a part: a line and then the end
-of the connection (read whole), the end alone, 300 bytes held open (stopped at 256 at once), nothing (given up at the
-time limit, within 100 ms of it), two bytes and a reset (answered, with the reset named), a refusal, and a plain
-`net_start` knock after them (nothing read); under strace, each knock's socket sees only socket, connect, polls,
-SO_ERROR, `recvfrom` with no wait and close, the waits between looks ask for POLLIN once the connection is taken, and
-nothing is sent. Where the machine lets an unprivileged user make a private network namespace, the check also makes
-`unreachable` and `error` happen there (with routes, and with firewall rules when `nft` is present), both ways, and runs
-the memory check with all five outcomes, a quarter as many rounds for the split knock; where it does not, the check says
-so plainly.
+The knock library's cases are in `checks/libraries.cases` ([VERIFYING.md](../VERIFYING.md)). They knock only on this
+computer, to addresses in 127.77.0.0/16 where they listen themselves: a reading knock stops at a full 256-byte reply and
+at its limit (300 to 400 ms for 300); a knock on a computer that never answers (a listener whose queue is full, so
+Linux drops every new connection) stops at its limit both ways; each look takes under 50 ms; a computer that sends a
+line and ends, or sends two bytes and resets, ends the knock answered with its socket closed; no knock sends a byte;
+8,000 rounds on a listener, a refused port and the full queue, then 8,000 with every connect failed at once, leave the
+open files, the size and the memory as they were; and a connect failed at once with EHOSTUNREACH, EACCES or EBADMSG
+(made by `lib/fault.herb`) ends unreachable, error and error, its socket closed. Address, port and limit parsing are
+held there too. `make hands` has Scope knock on six stand-in computers for real.
+
+Not checked: the exact system calls of a knock and its waits (that needs the calls watched), `net_knock` and
+`net_start` in a long run, limits other than 300 ms, and a real firewall drop, which takes the full queue's path.

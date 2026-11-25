@@ -68,17 +68,15 @@ library checks its buffer spans before passing pointers to Linux.
 ## Verification
 
 ```sh
-make hosted-memory-io
-make check-desktop
+make hands
 ```
 
-`check-desktop` uses a private Xvfb display, real XTest keyboard events, pixel
-readback and Linux process-memory observations over sustained updates. Python,
-libX11, libXtst and Xvfb belong to the independent tests, not to the executable.
-`--desktop` on `bootstrap/tests/check_desktop.py` runs a narrower real-display
-smoke check: window, idle animation, held Right/release, and window-manager close.
-It addresses synthetic events only to its test window. The full control and
-sustained-memory checks run on the private display.
+`make hands` opens First steps on a display nobody sees (Xvfb) and presses its
+keys there ([VERIFYING.md](../VERIFYING.md)): an arrow held, then Escape, must
+close it within 3 seconds with status 0; a second run closes by the close
+button; and on a second display stopped under it, First steps must end by
+itself within 3 seconds with status 1. Nothing drawn is read back: what it
+shows can be seen. Xvfb belongs to the check, not to the executable.
 
 Build diagnostics refer to the combined source retained at
 `build/first-steps-work/source.herb`. Source ownership and the low-level interfaces

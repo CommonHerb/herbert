@@ -22,7 +22,7 @@
 --
 -- Raw rather than decoded text so that the byte length of `text`
 -- equals the number of source bytes consumed for that token, which
--- keeps the slicing trivial and makes the .expected diff legible.
+-- keeps the slicing trivial and makes a diff against the key legible.
 --
 -- Scope: well-formed Herbert source only. Bytes outside the
 -- recognized set are out of scope; the fragment does not error on
@@ -226,7 +226,7 @@ end
 -- subset requires `main` to return int/bool (a value-returning main is ERR 432),
 -- so the result is delivered on stdout. The native ELF and the C interpreter then
 -- produce byte-identical stdout, graded against the hand-authored answer key
--- `stack/lexer_probe.expected` (an oracle no lexer produced). This is the
+-- kept in `checks/fragments.cases` (an oracle no lexer produced). This is the
 -- sovereignty advance: the lexer self-description test runs C-free.
 
 -- append the decimal text of a non-negative int
@@ -310,14 +310,14 @@ end
 -- `main` runs `lex_source` on a byte-for-byte embedded copy of
 -- `stack/lexer_probe.herb` (the 786-byte hand-authored probe whose
 -- expected token sequence lives, in canonical form, in
--- `stack/lexer_probe.expected`). The embedded literal below, once
+-- its case in `checks/fragments.cases`). The embedded literal below, once
 -- Herbert decodes its `\n`, `\\`, and `\"` escapes, is byte-identical
 -- to the probe file. `main` serializes the resulting token array to its
 -- canonical form (`[(kind, "text"), ...]`) via `serialize_tokens`, emits it
 -- with `flogger` (then a trailing newline), and returns 0 — so the SAME
 -- fragment runs under the C interpreter AND as a native gen-1-compiled ELF,
 -- and the harness diffs stdout line 1 against the hand-authored answer key
--- `stack/lexer_probe.expected` (an oracle that was never produced by any lexer).
+-- in `checks/fragments.cases` (an oracle that was never produced by any lexer).
 
 func main():
     let probe = "-- lexer_probe: a small complete Herbert program.\n-- Exercises every token kind for the lexer forcing-function test.\n\nfunc pick(c):\n    if c < '0':\n        return 0\n    elif c >= '0' and c <= '9':\n        return 1\n    elif c == '_':\n        return 2\n    else:\n        return 4\n    end\nend\n\nfunc tally(a, i, n, acc):\n    if i >= n:\n        return acc\n    end\n    let v = get(a, i)\n    if v != 0:\n        return tally(a, i + 1, n, acc + 1)\n    else:\n        return tally(a, i + 1, n, acc)\n    end\nend\n\nfunc build():\n    let b = new_buffer()\n    do append(b, 'h')\n    do append(b, '\\n')\n    let s = freeze(b)\n    let label = \"a\\nb\\\\c\"\n    let pair = (s, length(label))\n    return pair.1\nend\n\nfunc main():\n    let total = build() - 1\n    let ok = total <= 8 and total > 0\n    return ok\nend\n"

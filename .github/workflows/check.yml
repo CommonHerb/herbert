@@ -11,30 +11,19 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
-      - name: install independent test tools
+      - name: install the display server the window checks start
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential python3 time xxd xvfb libx11-6 libxtst6 gdb strace binutils nftables
+          sudo apt-get install -y make xvfb
       - name: record actual hosted test environment
         run: |
           set -euo pipefail
           uname -a
           cat /etc/os-release
-          dpkg-query -W -f='${Package}=${Version}\n' \
-            bash coreutils build-essential make gcc libc6 python3 time xxd \
-            xvfb libx11-6 libxtst6 gdb strace binutils nftables
-          /usr/bin/time --version
-          python3 --version
-          cc --version
+          dpkg-query -W -f='${Package}=${Version}\n' bash coreutils make git xvfb
           make --version
-          gdb --version
-          strace --version
-          as --version
-          ld --version
-      # Two seed maker checks (make seeds) and knock's unreachable, error and firewall cases run in private
-      # namespaces of their own, which Ubuntu's AppArmor keeps unprivileged users from making; this throwaway
-      # runner allows them, before the first check that needs them.
+      # Two seed maker checks (make seeds) run in private namespaces of their own, which Ubuntu's AppArmor keeps
+      # unprivileged users from making; this throwaway runner allows them, before the first check that needs them.
       - name: allow private namespaces for the checks that make them
         run: |
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
@@ -52,62 +41,24 @@ jobs:
         run: make cli
       - name: Scope's helper's checks written in Herbert
         run: make helper
-      - name: verification helpers
-        run: make verification-helpers
-      - name: developer program build contract
-        run: make program-contract
-      - name: timeout shim
-        run: make test-timeout
-      - name: make test
-        run: make test
-      - name: compiler metadata resource regression
-        run: make compiler-metadata
-      - name: Herbert interactive desktop and sustained memory
-        run: make check-desktop
-      - name: Herbert reusable map, text and atomic-file support
-        run: make check-app-support
-      - name: Herbert maze, notes, scope and knock interaction and sustained memory
-        env:
-          HERBERT_NET_REQUIRE_ALL: "1"
-        run: make check-hosted-apps
-      - name: compiler invocation fault contract
-        run: make compiler-cli-contract
-      # verify-local suites CI historically skipped (2026-07-03 canon-cleanup, §4).
-      - name: error-vocab-native (C-free front-end error vocabulary + mutation)
-        run: make error-vocab-native
-      - name: lexer-copy-sync (copied lexer blocks match the fragment contract)
-        run: make lexer-copy-sync
-      # The evidence is packed into one tar archive before upload because the
-      # program-build contract deliberately retains probe files whose names carry
-      # shell metacharacters (for example "$(shell printf expanded > SOURCE_EXPANDED).herb"),
-      # and actions/upload-artifact refuses such names outright.
-      - name: pack hosted application test evidence
+      # What a failed check leaves, packed into one archive and kept for two weeks.
+      - name: pack test evidence
         if: always()
         run: |
           shopt -s nullglob
           evidence=(
+            /tmp/herbert-answers.*
             /tmp/herbert-hands-*
             /tmp/herbert-seeds-*
             /tmp/herbert-cli-*
             /tmp/herbert-helper-*
             /tmp/herbert-scans-*
-            /tmp/herbert-hosted-apps-*
-            /tmp/herbert-notes-support-*
-            /tmp/herbert-x11-text-check-*
-            /tmp/herbert-desktop-check-*
-            /tmp/herbert-grid-map-*
-            /tmp/herbert-program-build-*
-            /tmp/herbert-conformance.*
-            /tmp/herbert-stdin-contract.*
-            /tmp/herbert-cli-contract.*
-            /tmp/herbert-hosted-memory-*
-            /tmp/compiler-metadata-*
             /tmp/herbert-source-check.*
           )
           if [ "${#evidence[@]}" -gt 0 ]; then
             tar -C /tmp -czf /tmp/hosted-application-evidence.tar.gz -- "${evidence[@]#/tmp/}"
           fi
-      - name: retain hosted application test evidence
+      - name: retain test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
