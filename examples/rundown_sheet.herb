@@ -25,9 +25,10 @@
 --   rundown_sheet: line N: an estimate must be :ss, m:ss or h:mm:ss, under a day
 --   rundown_sheet: cannot read standard input
 --
--- It is written byte by byte on purpose, with only today's builtins. It is the
--- baseline that the work on real text (cutting, joining and formatting it)
--- will shorten, and that work must leave the page the same, byte for byte.
+-- It was first written byte by byte, with the builtins Herbert had then (178
+-- code lines), as the baseline that the work on real text (cutting, joining
+-- and formatting it) shortens step by step, leaving the page the same, byte for
+-- byte. slice now cuts its fields out of the show without copying them.
 -- Build and run, from the checkout:
 --   make program SOURCE=examples/rundown_sheet.herb SUPPORT="linux text"
 --   ./build/program < show.txt
@@ -89,37 +90,26 @@ func read_time(s, at, stop):
     return (ok, seconds, parts)
 end
 
--- The bytes of s from from up to stop as a new string. With capitals true, a
--- to z and the small letters à to þ (not ÷) become capitals. In UTF-8 those
--- are 195 then 160 to 190, and each capital is 195 then 32 less (é is 195
--- 169, É is 195 137), so the string keeps its length.
-func piece(s, from, stop, capitals):
-    let b = new_buffer()
-    let i = from
-    while i < stop:
-        let c = index(s, i)
-        let plain = c >= 'a' and c <= 'z'
-        let accented = i > from and index(s, i - 1) == 195 and c >= 160 and c <= 190 and c != 183
-        if capitals and (plain or accented): c = c - 32 end
-        do append(b, c)
-        i = i + 1
-    end
-    return freeze(b)
-end
-
 -- Whether the byte b continues a UTF-8 letter (128 to 191) rather than
 -- starting one.
 func continues(b): return b >= 128 and b < 192 end
 
 -- s added to out, cut or padded with spaces to width letters, then a space. A
 -- letter is one UTF-8 code point, a byte that starts it and the bytes that
--- continue it, so a cut never splits é.
-func add_cell(out, s, width):
+-- continue it, so a cut never splits é. With capitals true, a to z and the
+-- small letters à to þ (not ÷) are written as capitals. In UTF-8 those are
+-- 195 then 160 to 190, and each capital is 195 then 32 less (é is 195 169, É
+-- is 195 137), so a letter keeps its length.
+func add_cell(out, s, width, capitals):
     let shown = 0
     let i = 0
     while i < length(s) and (shown < width or continues(index(s, i))):
-        if not continues(index(s, i)): shown = shown + 1 end
-        do append(out, index(s, i))
+        let c = index(s, i)
+        if not continues(c): shown = shown + 1 end
+        let plain = c >= 'a' and c <= 'z'
+        let accented = i > 0 and index(s, i - 1) == 195 and c >= 160 and c <= 190 and c != 183
+        if capitals and (plain or accented): c = c - 32 end
+        do append(out, c)
         i = i + 1
     end
     while shown <= width:
@@ -193,11 +183,7 @@ func main():
             let f4 = field_end(s, f3 + 1, stop)
             let estimate = read_time(s, f4 + 1, stop)
             if not estimate.0: return refuse(line, "an estimate must be :ss, m:ss or h:mm:ss, under a day") end
-            let page = piece(s, at, f1, false)
-            let slug = piece(s, f1 + 1, f2, true)
-            let format = piece(s, f2 + 1, f3, false)
-            let talent = piece(s, f3 + 1, f4, true)
-            do add(stories, Story(page, slug, format, talent, estimate.1))
+            do add(stories, Story(slice(s, at, f1), slice(s, f1 + 1, f2), slice(s, f2 + 1, f3), slice(s, f3 + 1, f4), estimate.1))
             total = total + estimate.1
         end
         at = bounds.1
@@ -214,10 +200,10 @@ func main():
     let i = 0
     while i < count(stories):
         let story = get(stories, i)
-        do add_cell(out, story.page, 4)
-        do add_cell(out, story.slug, 16)
-        do add_cell(out, story.format, 7)
-        do add_cell(out, story.talent, 6)
+        do add_cell(out, story.page, 4, false)
+        do add_cell(out, story.slug, 16, true)
+        do add_cell(out, story.format, 7, false)
+        do add_cell(out, story.talent, 6, true)
         let estimate = length_text(story.estimate)
         let pad = length(estimate)
         while pad < 5:
