@@ -88,7 +88,7 @@
 -- the runner must report, and the runner must pass every one. The "sleep"
 -- case takes a minute, so that run starts first and is judged last.
 --
--- Five more words act only when the stand-in is started by a name that ends
+-- Eight more words act only when the stand-in is started by a name that ends
 -- "/other" (the runner gives a compiler its own path as its name), as the
 -- second compiler of a run --same; started as anything else, it writes
 -- itself and prints its marker as for any other source:
@@ -100,14 +100,20 @@
 --   failing    writes itself and prints its marker, as the first does, then
 --              ends with status 7
 --   absent     prints its marker and ends with status 0, writing no program
+--   linked     makes a.out a link to first.out, where the runner set the
+--              first compiler's program aside, and prints its marker
+--   hardlinked makes a.out a second name of first.out (a hard link), so that
+--              it is a plain file holding that program, and prints its marker
+--   folder     makes a.out an empty folder and prints its marker
 --   unbuilt    refuses the source in its own words and writes no program
--- RUNNER runs six cases with --same, a copy of the stand-in named other as
--- OTHER and the stand-in as COMPILER: the first four words planted; unbuilt
+-- RUNNER runs nine cases with --same, a copy of the stand-in named other as
+-- OTHER and the stand-in as COMPILER: the first seven words planted; unbuilt
 -- not planted, so that the runner must fail it and show the refusal's words;
 -- and a source with none of the words, whose program both write alike and
 -- which, run, prints the stand-in's marker. RUNNER must then stop with
--- status 2 and its one line when OTHER is a file that may not be run, and
--- when it is given no CASES.
+-- status 2 and its one line when OTHER is a file that may not be run, also
+-- when OTHER is not there and the one case is refused (so that no case asks
+-- OTHER for a program), and when it is given no CASES.
 --
 -- The last checks are planted, as the runner's are: a finished check's folder
 -- is judged again against an answer that is wrong on purpose, once for each
@@ -1088,7 +1094,10 @@ func cli_stand_in(input, name):
         do stderr_write("line 1: refused by the stand-in (ERR 1)\n")
         do process_exit(1)
     end
-    if cli_asks(source, "nothing") or (other and cli_asks(source, "absent")):
+    if other and cli_asks(source, "linked"): do linux_syscall6(88, buffer_address(cli_path("first.out")), buffer_address(cli_path("a.out")), 0, 0, 0, 0) end
+    if other and cli_asks(source, "hardlinked"): do linux_syscall6(86, buffer_address(cli_path("first.out")), buffer_address(cli_path("a.out")), 0, 0, 0, 0) end
+    if other and cli_asks(source, "folder"): do linux_syscall6(83, buffer_address(cli_path("a.out")), 448, 0, 0, 0, 0) end
+    if cli_asks(source, "nothing") or (other and (cli_asks(source, "absent") or cli_asks(source, "linked") or cli_asks(source, "hardlinked") or cli_asks(source, "folder"))):
         do flogger("0\n")
         do process_exit(0)
     end
@@ -1168,7 +1177,7 @@ func cli_planted_cases():
 end
 
 -- The cases for the runner with a second compiler (run --same), and how many:
--- four planted, one the runner must fail with the second compiler's words,
+-- seven planted, one the runner must fail with the second compiler's words,
 -- and one both compilers write alike.
 func cli_same_cases():
     let b = new_buffer()
@@ -1176,9 +1185,12 @@ func cli_same_cases():
     do cli_planted_case(b, "a second compiler whose program is one byte short", "short", "the two compilers wrote different programs", false)
     do cli_planted_case(b, "a second compiler that writes the same program and ends with an error status", "failing", "the other compiler did not build it", false)
     do cli_planted_case(b, "a second compiler that ends with status 0 and writes no program", "absent", "the other compiler did not build it", false)
+    do cli_planted_case(b, "a second compiler that leaves a.out a link to the first compiler's program", "linked", "the other compiler did not build it", false)
+    do cli_planted_case(b, "a second compiler that leaves a.out a second name of the first compiler's program", "hardlinked", "the other compiler did not build it", false)
+    do cli_planted_case(b, "a second compiler that leaves a.out an empty folder", "folder", "the other compiler did not build it", false)
     do text_add(b, "case a second compiler that refuses what the first builds\nsource until ----\n-- stand-in unbuilt\n----\nstdout until ----\n----\nend\n")
-    do text_add(b, "case two compilers that write the same program, which runs\nsource until ----\n-- no word: both write the stand-in itself\n----\nstdout until ----\n0\n----\nend\ncases 6\n")
-    return ((b, buffer_length(b)), 6)
+    do text_add(b, "case two compilers that write the same program, which runs\nsource until ----\n-- no word: both write the stand-in itself\n----\nstdout until ----\n0\n----\nend\ncases 9\n")
+    return ((b, buffer_length(b)), 9)
 end
 
 -- What RUNNER is started with for a run --same: --same (flag), OTHER, the
@@ -1411,14 +1423,19 @@ func main():
     if s.0 != 0 or s.1 != 1: why = "the runner did not end with status 1" end
     if length(why) == 0 and not cli_holds(cli_join(k.work, "/same/out"), cli_text(freeze(s_said))): why = "the runner did not give each case its answer or its finding, or miscounted the programs compared" end
     if length(why) == 0 and not cli_holds(cli_join(k.work, "/same/err"), cli_text("")): why = "the runner said something on standard error" end
-    do cli_tally(k, "the check runner, given a second compiler (run --same), finds a program that differs in its last byte or is a byte short, a second compiler that ends with an error status, writes no program or refuses (its words shown), and passes a program both write alike", why, "")
+    do cli_tally(k, "the check runner, given a second compiler (run --same), finds a program that differs in its last byte or is a byte short, a second compiler that ends with an error status, writes no program, leaves a link or a folder as a.out or refuses (its words shown), and passes a program both write alike", why, "")
 
-    -- The runner must stop, with status 2 and its one line, when OTHER may not
-    -- be run (here the cases file) and when no CASES are given.
+    -- The runner must stop, with status 2 and its one line, when OTHER cannot
+    -- be started (here a file of text that may be run, which Linux refuses to
+    -- start, so that it passes the look the runner takes before the first
+    -- case and fails when a case asks it for a program), when OTHER is not
+    -- there, and when no CASES are given.
     do cli_folder(k, cli_join(k.work, "/stops"))
     do cli_folder(k, cli_join(k.work, "/stops/work"))
     let t_work = cli_path(cli_join(k.work, "/stops/work"))
-    let t = cli_wait(k, cli_start(k, cli_join(k.work, "/stops"), k.runner, cli_same_argv(k, s_flag, s_cases, r_stand, t_work, r_root, s_cases), cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/stops/out")), cli_writing(k, cli_join(k.work, "/stops/err")), 18, 0, 0, 0, 120))
+    let t_text = cli_join(k.work, "/stops/text")
+    do cli_put(k, t_text, cli_text("not a program\n"), 448)
+    let t = cli_wait(k, cli_start(k, cli_join(k.work, "/stops"), k.runner, cli_same_argv(k, s_flag, cli_path(t_text), r_stand, t_work, r_root, s_cases), cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/stops/out")), cli_writing(k, cli_join(k.work, "/stops/err")), 18, 0, 0, 0, 120))
     why = ""
     if t.0 != 0 or t.1 != 2: why = "the runner did not stop with status 2 when the second compiler cannot be started" end
     if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/out"), cli_text("")): why = "the runner wrote to standard output when the second compiler cannot be started" end
@@ -1429,7 +1446,20 @@ func main():
         if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/out"), cli_text("")): why = "the runner wrote to standard output when given no CASES" end
         if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/err"), cli_text("check runner: usage: run [--same OTHER] COMPILER WORK ROOT CASES... (absolute paths)\n")): why = "the runner did not give its usage line when given no CASES" end
     end
-    do cli_tally(k, "the check runner stops with status 2 when the second compiler cannot be started, and when it is given no CASES", why, "")
+    if length(why) == 0:
+        -- OTHER not there, and one case, refused, so no case asks it for a
+        -- program: the runner must still stop.
+        let lone = new_buffer()
+        do cli_planted_case(lone, "a refusal, so that the second compiler is never asked for a program", "dangling", "the compiler refused it and still wrote a program", true)
+        do text_add(lone, "cases 1\n")
+        let lone_path = cli_join(k.work, "/stops/refused.cases")
+        do cli_put(k, lone_path, (lone, buffer_length(lone)), 420)
+        let v = cli_wait(k, cli_start(k, cli_join(k.work, "/stops"), k.runner, cli_same_argv(k, s_flag, cli_path(cli_join(k.work, "/stops/nowhere")), r_stand, t_work, r_root, cli_path(lone_path)), cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/stops/out")), cli_writing(k, cli_join(k.work, "/stops/err")), 18, 0, 0, 0, 120))
+        if v.0 != 0 or v.1 != 2: why = "the runner did not stop with status 2 when the second compiler is not there and no case asks it for a program" end
+        if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/out"), cli_text("")): why = "the runner wrote to standard output when the second compiler is not there" end
+        if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/err"), cli_text("check runner: the other compiler cannot be started\n")): why = "the runner did not say that the second compiler cannot be started when no case asks it for a program" end
+    end
+    do cli_tally(k, "the check runner stops with status 2 when the second compiler cannot be started, even when no case would ask it for a program, and when it is given no CASES", why, "")
 
     -- make answers itself, from the checkout's Makefile, with a copy of the
     -- stand-in as SAME: the stand-in writes itself for every source, so every

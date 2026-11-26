@@ -57,11 +57,15 @@
 -- With --same, a case that is not refused and whose program has passed every
 -- check above that comes before the run (builds included) is compiled again
 -- by OTHER, in WORK, with COMPILER's a.out set aside. OTHER must end with
--- status 0 and leave a file named a.out, which must hold COMPILER's program
--- byte for byte; nothing else of OTHER's is held (not its marker, its error
--- output or its memory). Then COMPILER's program is put back and run. A
--- refused case is judged on COMPILER alone. The run's last line says how many
--- programs were compared and how many of them differed.
+-- status 0 and leave a plain file named a.out with no other name (not a link,
+-- symbolic or hard, or a folder), which must hold COMPILER's program byte for
+-- byte; nothing else of OTHER's is held (not its marker, its error output or
+-- its memory). An empty folder OTHER left as a.out is removed, and COMPILER's
+-- program is put back and run. A refused case is judged on COMPILER alone.
+-- OTHER must be a file the runner may run, looked at before the first case,
+-- so that a run whose every case is refused still stops when it is not. The
+-- run's last line says how many programs were compared and how many of them
+-- differed.
 --
 -- The planted cases keep the runner honest. A runner that passed everything
 -- would fail every one of them, and one that failed a case for the wrong
@@ -456,7 +460,7 @@ func check_same(c):
     let built = check_spawn(c, c.other, c.p_source, c.p_cout, c.p_cerr, 60)
     if built.0 == 2: do check_die("the other compiler cannot be started") end
     let why = ""
-    if built.0 != 0 or built.1 != 0 or not check_named(c, c.p_aout):
+    if built.0 != 0 or built.1 != 0 or not check_named(c, c.p_aout) or (linux_u32(c.stat, 24) & 61440) != 32768 or linux_u64(c.stat, 16) != 1:
         do check_file_text(c, c.p_cerr, "")
         why = "the other compiler did not build it"
     else:
@@ -466,6 +470,9 @@ func check_same(c):
             why = "the two compilers wrote different programs"
         end
     end
+    -- An empty folder OTHER made as a.out goes (the rename below replaces a
+    -- file or a link, not a folder).
+    do linux_syscall6(84, buffer_address(c.p_aout), 0, 0, 0, 0, 0)
     if linux_error(linux_syscall6(82, buffer_address(c.p_first), buffer_address(c.p_aout), 0, 0, 0, 0)): do check_die("a program in WORK cannot be put back") end
     return why
 end
@@ -632,6 +639,11 @@ func main():
                   linux_cstring("program.out"), linux_cstring("program.err"), linux_cstring("first.out"))
     do linux_put64(c.core, 0, 1)
     do linux_put64(c.core, 8, 1)
+    -- OTHER is looked at now (access, X_OK), not only when a case first asks
+    -- it for a program: a run whose every case is refused never does.
+    if c.same:
+        if linux_error(linux_syscall6(21, buffer_address(c.other), 1, 0, 0, 0, 0)): do check_die("the other compiler cannot be started") end
+    end
     let work = linux_cstring(check_path(args, first + 1))
     if linux_error(linux_syscall6(80, buffer_address(work), 0, 0, 0, 0, 0)): do check_die("cannot enter WORK") end
     let k = first + 3
