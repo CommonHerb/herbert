@@ -1278,4 +1278,32 @@ evidence: checks/*.cases
 6
 ----
 end
-cases 99
+case lexer: the compiler, built from its own source, reads \x escapes in characters and a string for its ast-dump tree, with more tokens after each
+source-file stack/native_compile_fragment.herb
+stdin until ----
+-- emit: ast-dump
+func f(a):
+    let c = '\x7f' + '\xAb'
+    let s = "\x41\xff\x5cn"
+    return (c, s, '\x00')
+end
+----
+stdout until ----
+(program (func f (params a) (body (let c (add (int 127) (int 171))) (let s (str 4 65 255 92 110)) (return (tuple (name c) (name s) (int 0))))))
+0
+----
+end
+case lexer: the compiler, built from its own source, reads \x escapes in characters that touch the next token for its ast-dump tree
+source-file stack/native_compile_fragment.herb
+stdin until ----
+-- emit: ast-dump
+func f():
+    return ('\x41'+'\x42', '\n'+1)
+end
+----
+stdout until ----
+(program (func f (params) (body (return (tuple (add (int 65) (int 66)) (add (int 10) (int 1)))))))
+0
+----
+end
+cases 101

@@ -29783,4 +29783,325 @@ stdout until ----
 "ok"
 ----
 end
-cases 940
+case hex-escape-two-bytes-are-a-string-of-length-2
+source until ----
+func main():
+    return length("\x41\xff")
+end
+----
+stdout until ----
+2
+----
+end
+case hex-escape-ff-is-the-byte-255
+source until ----
+func main():
+    return index("\xff", 0)
+end
+----
+stdout until ----
+255
+----
+end
+case hex-escape-4A-is-the-letter-J
+source until ----
+func main():
+    return equal("\x4A", "J")
+end
+----
+stdout until ----
+true
+----
+end
+case hex-escape-00-is-a-nul-inside-a-string
+source until ----
+func main():
+    let s = "a\x00b"
+    return (length(s), index(s, 0), index(s, 1), index(s, 2))
+end
+----
+stdout until ----
+(3, 97, 0, 98)
+----
+end
+case hex-escape-7f-in-a-char-is-127
+source until ----
+func main():
+    return '\x7f'
+end
+----
+stdout until ----
+127
+----
+end
+case hex-escape-22-is-a-double-quote-and-renders-as-one
+source until ----
+func main():
+    return "\x22"
+end
+----
+stdout until ----
+"\""
+----
+end
+case hex-escape-with-one-digit-before-the-quote-is-refused
+source until ----
+func main():
+    return "\x4"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-g-for-its-first-digit-is-refused
+source until ----
+func main():
+    return "\xg0"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-no-digits-is-refused
+source until ----
+func main():
+    return "\x"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-each-digit-in-either-case-as-the-first-digit
+source until ----
+func main():
+    let s = "\x01\x23\x45\x67\x89\xab\xcd\xef\xAB\xCD\xEF"
+    return (length(s), index(s, 0), index(s, 1), index(s, 2), index(s, 3), index(s, 4), index(s, 5), index(s, 6), index(s, 7), index(s, 8), index(s, 9), index(s, 10))
+end
+----
+stdout until ----
+(11, 1, 35, 69, 103, 137, 171, 205, 239, 171, 205, 239)
+----
+end
+case hex-escape-each-digit-in-either-case-as-the-second-digit
+source until ----
+func main():
+    let s = "\x10\x32\x54\x76\x98\xba\xdc\xfe\xBA\xDC\xFE"
+    return (length(s), index(s, 0), index(s, 1), index(s, 2), index(s, 3), index(s, 4), index(s, 5), index(s, 6), index(s, 7), index(s, 8), index(s, 9), index(s, 10))
+end
+----
+stdout until ----
+(11, 16, 50, 84, 118, 152, 186, 220, 254, 186, 220, 254)
+----
+end
+case hex-escapes-in-chars
+source until ----
+func main():
+    return ('\xff', '\x00', '\x41', '\xAb')
+end
+----
+stdout until ----
+(255, 0, 65, 171)
+----
+end
+case hex-escape-5c-is-a-backslash-that-escapes-nothing
+source until ----
+func main():
+    let s = "\x5cn"
+    return (length(s), index(s, 0), index(s, 1))
+end
+----
+stdout until ----
+(2, 92, 110)
+----
+end
+case an-escaped-backslash-then-x41-is-no-hex-escape
+source until ----
+func main():
+    let s = "\\x41"
+    return (length(s), index(s, 0), index(s, 1))
+end
+----
+stdout until ----
+(4, 92, 120)
+----
+end
+case hex-escapes-c3-a9-are-the-two-bytes-of-e-acute
+source until ----
+func main():
+    let s = "\xc3\xa9"
+    return (length(s), equal(s, "é"))
+end
+----
+stdout until ----
+(2, true)
+----
+end
+case hex-escape-with-g-for-its-second-digit-is-refused
+source until ----
+func main():
+    return "\x4g"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-a-slash-the-byte-before-0-is-refused
+source until ----
+func main():
+    return "\x/0"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-a-colon-the-byte-after-9-is-refused
+source until ----
+func main():
+    return "\x9:"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-an-at-sign-the-byte-before-A-is-refused
+source until ----
+func main():
+    return "\x@0"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-G-the-byte-after-F-is-refused
+source until ----
+func main():
+    return "\xFG"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-a-backtick-the-byte-before-a-is-refused
+source until ----
+func main():
+    return "\x`0"
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-a-newline-for-its-second-digit-is-refused-as-a-hex-escape-at-its-line
+source until ----
+func main():
+    let a = 1
+    return "\x4
+"
+end
+----
+refused until ----
+line 3: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-at-the-end-of-the-source-in-a-string-is-refused
+source 27
+func main():
+    return "\x
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-one-digit-at-the-end-of-the-source-is-refused
+source 28
+func main():
+    return "\x4
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-both-digits-at-the-end-of-the-source-is-a-string-not-closed
+source 29
+func main():
+    return "\x41
+refused until ----
+line 2: unterminated string literal (ERR 107)
+----
+end
+case hex-escape-in-a-char-with-no-digits-is-refused
+source until ----
+func main():
+    return '\x'
+end
+----
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-in-a-char-with-one-digit-is-refused-at-its-line
+source until ----
+func main():
+    let a = 1
+    return a + '\x4'
+end
+----
+refused until ----
+line 3: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-in-a-char-with-a-newline-for-its-second-digit-is-refused-as-a-hex-escape-at-its-line
+source until ----
+func main():
+    let a = 1
+    return a + '\x4
+'
+end
+----
+refused until ----
+line 3: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-in-a-char-then-a-third-digit-is-a-char-not-closed
+source until ----
+func main():
+    return '\x414'
+end
+----
+refused until ----
+line 2: character literal not closed (ERR 109)
+----
+end
+case hex-escape-at-the-end-of-the-source-in-a-char-is-refused
+source 27
+func main():
+    return '\x
+refused until ----
+line 2: \x needs two hex digits (ERR 111)
+----
+end
+case hex-escape-with-both-digits-at-the-end-of-the-source-in-a-char-is-a-char-not-closed
+source 29
+func main():
+    return '\x41
+refused until ----
+line 2: character literal not closed (ERR 109)
+----
+end
+case a-capital-X-is-an-unknown-escape
+source until ----
+func main():
+    return "\X41"
+end
+----
+refused until ----
+line 2: unknown escape sequence '\X' (ERR 104)
+----
+end
+cases 972

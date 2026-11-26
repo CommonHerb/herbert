@@ -38,10 +38,10 @@ the one byte can then not be set.
 - `checks/first.cases`: thirty-three small programs covering the basics, each with the output it must print (three of
   them the native-today examples in `examples/`, and eighteen the rundown sheet, `examples/rundown_sheet.herb`: seven
   shows it times and eleven it must refuse).
-- `checks/language.cases`: 940 cases of what the compiler accepts and refuses: a program with the output, error output
+- `checks/language.cases`: 972 cases of what the compiler accepts and refuses: a program with the output, error output
   and exit status it must give, or the exact words the compiler must refuse it in. 588 came from the Python checks'
-  conformance corpus. The other 352 were written by hand from [the language guide](docs/LANGUAGE.md): 316 for what
-  the Python and shell checks held and these did not, and 36 for `slice`:
+  conformance corpus. The other 384 were written by hand from [the language guide](docs/LANGUAGE.md): 316 for what
+  the Python and shell checks held and these did not, 36 for `slice` and 32 for `\x`:
   - **Memory, output and Linux** (78): the out-of-memory message where a fill's count wraps and where input is larger
     than the heap left (with input that still fits beside it), the heap that cannot be reserved under an
     address-space limit, a result that cannot be written (a full device, a closed output, and a reader gone with the
@@ -99,6 +99,13 @@ the one byte can then not be set.
     second page. Its refusals: four arguments (420), a buffer (438), `true` in each place (430) and a function named
     `slice` (429). A call's arguments worked out left to right, and the guide's Example 6. The corpus case that refused
     `slice()` as deferred now refuses it for its count (420).
+  - **Bytes written `\xNN`** (32), 29 of them written before the compiler could read them. Each hex digit in either
+    case, in both places, as a string's bytes (a NUL inside, 255, the two bytes of é, a double quote rendered as `\"`)
+    and as a char's value; a byte written `\x5c` escapes nothing, and `"\\x41"` is four bytes. ERR 111 when the two
+    bytes after `\x` are not both hex digits: in a string none, one, the byte on each side of each digit range (`/`,
+    `:`, `@`, `G`, a backtick, `g`), a newline (at the literal's line) and the end of the source; in a char none, one,
+    a newline (at the literal's line) and the end of the source. Both digits and then the end of the source is a string
+    not closed (107) or a char not closed (109), `'\x414'` is a char not closed (109) and `\X` an unknown escape (104).
 
   Several of these programs run themselves a second time, to give that run a closed input, a pipe or a limit. They
   need `/dev/full`, a pipe with a name made in the runner's folder, stop and continue signals and a hard stack limit
@@ -155,10 +162,10 @@ the one byte can then not be set.
   knocks leave from 127.0.0.1). They expect an ordinary umask (022, 002 or 077), a user who is not the administrator
   (a mode-000 copy must be unreadable), Linux's seccomp filters (stock Ubuntu and GitHub's runners have them), a
   file clock that moves within 20 ms, and a file system that allows a position past 8 GiB.
-- `checks/fragments.cases`: 99 cases in two parts. The first holds the compiler to the large programs written in Herbert
-  in `stack/`: the lexer, parser, evaluator and bytecode-machine fragments, each printing its probe's answer as its key
-  says; the emitter returning its 482-line bytecode listing as `main`'s string (shown in double quotes, each newline,
-  double quote and backslash as an escape, as the guide's G10 says); and
+- `checks/fragments.cases`: 101 cases in two parts. The first holds the compiler to the large programs written in
+  Herbert in `stack/`: the lexer, parser, evaluator and bytecode-machine fragments, each printing its probe's answer as
+  its key says; the emitter returning its 482-line bytecode listing as `main`'s string (shown in double quotes, each
+  newline, double quote and backslash as an escape, as the guide's G10 says); and
   Klondike, the older front end with its own lowerer and bytecode machine, given the compute probe on 5 and on 8 and the
   io probe on `hello`, and reporting each of the 54 malformed programs in `stack/error_probes` with its line and its
   `ERR` code in its own words (five of them a second time with the offending name renamed, so the name in the report is
@@ -169,9 +176,11 @@ the one byte can then not be set.
   a `$` straight after a name is no part of it; `[`, a backtick and `{` start no token; an operator followed by `=` or
   by itself (other than `==`, `!=`, `<=`, `>=`, `<<`, `>>`) is two operators; a character literal left open is refused
   with ERR 110 at a newline and ERR 109 at the end of the source; and a source that ends right after a number, a minus,
-  an `=` or a `<` gets the parser's refusal, not a fault in the compiler. One case builds the compiler from the
-  checkout's source and has it dump (`-- emit: ast-dump`) a source holding every kind of token; it holds the scan only
-  that route uses, and fails when that scan changes in the checkout, as under `make reseed`.
+  an `=` or a `<` gets the parser's refusal, not a fault in the compiler. Three cases build the compiler from the
+  checkout's source and have it dump (`-- emit: ast-dump`) a source: one holding every kind of token, one holding `\x`
+  escapes in characters and a string with more tokens after each, and one holding `\x` characters that touch the next
+  token, so a scan that runs past a character's closing quote takes that token with it. They hold the scan only that
+  route uses, and fail when that scan changes in the checkout, as under `make reseed`.
 - `checks/planted.cases`: two cases that must pass and fifteen failures planted on purpose (a wrong answer, an answer
   one byte short, an output that stops short of its answer, an empty output, a wrong status, a fault, a signal, a
   program that never ends, a refusal in other words, a compiler that writes something else, a compiler held to
@@ -197,7 +206,7 @@ must end with status 0 and leave an `a.out` that holds the first's program byte 
 `the two compilers wrote different programs`, or `the other compiler did not build it` and what it said on standard
 error. Then the first's program is put back and run. A refused case is judged on the first compiler alone, and the
 second's marker, error output after a success and memory are not held. The runner's last line counts the programs
-compared and those that differed: with a copy of the seed as the second, 805 of the 1,293 cases, none differing, in
+compared and those that differed: with a copy of the seed as the second, 819 of the 1,327 cases, none differing, in
 about 60 seconds (2026-11-25). That line is the proof the comparison ran; a run given `SAME` that ends without it did
 not compare. Without `SAME` nothing changes. The runner is given a copy of the second compiler made executable, so the
 committed seed itself may be named; one that is not a program stops it with `the other compiler cannot be started`,

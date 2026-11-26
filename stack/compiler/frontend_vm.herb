@@ -67,6 +67,26 @@ func is_ws(c):
     return c == ' ' or c == '\n' or c == 9 or c == 13
 end
 
+func is_hex_digit(c):
+    return is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+end
+
+func hex_digit_value(c):
+    if is_digit(c):
+        return c - '0'
+    end
+    if c >= 'a':
+        return c - 'a' + 10
+    end
+    return c - 'A' + 10
+end
+
+-- The byte a \xNN escape writes: its two hex digits are s[i] and s[i + 1],
+-- which the checked lexer has seen are hex digits.
+func hex_pair(s, i):
+    return hex_digit_value(index(s, i)) * 16 + hex_digit_value(index(s, i + 1))
+end
+
 func is_two_byte_op_start(c):
     return c == '=' or c == '!' or c == '<' or c == '>'
 end
@@ -112,6 +132,8 @@ func end_of_line(src, i, n):
     end
 end
 
+-- A \xNN escape needs no arm of its own here: its two hex digits are never a
+-- quote or a backslash, so they pass as ordinary bytes.
 func end_of_string(src, i, n):
     let c = index(src, i)
     if c == '"':
@@ -125,6 +147,9 @@ end
 
 func end_of_char(src, i, n):
     if index(src, i) == '\\':
+        if index(src, i + 1) == 'x':
+            return i + 5
+        end
         return i + 3
     else:
         return i + 2
@@ -293,12 +318,16 @@ end
 -- CHAR / STRING LITERAL DECODING
 -- ====================================================================
 
--- s is the raw lexed CHAR text, e.g. "'a'" or "'\\n'" — three or four
--- bytes including the surrounding single quotes. Returns the byte value.
+-- s is the raw lexed CHAR text, e.g. "'a'", "'\\n'" or "'\\x41'" — three,
+-- four or six bytes including the surrounding single quotes. Returns the
+-- byte value.
 func decode_char(s):
     let c1 = index(s, 1)
     if c1 == '\\':
         let c2 = index(s, 2)
+        if c2 == 'x':
+            return hex_pair(s, 3)
+        end
         if c2 == 'n':
             return 10
         end
@@ -320,14 +349,18 @@ func decode_char(s):
 end
 
 -- s is the raw lexed STRING text including the surrounding double quotes.
--- Walk s[1 .. length(s)-1) decoding \n \\ \" \t \r \0 into a buffer; returns
--- the frozen byte string.
+-- Walk s[1 .. length(s)-1) decoding \n \\ \" \t \r \0 \xNN into a buffer;
+-- returns the frozen byte string.
 func decode_string_loop(s, i, end_i, buf):
     while i < end_i:
         let c = index(s, i)
         if c == '\\':
             let c2 = index(s, i + 1)
-            if c2 == 'n':
+            if c2 == 'x':
+                do append(buf, hex_pair(s, i + 2))
+                -- past the two digits here, and past the \x below
+                i = i + 2
+            elif c2 == 'n':
                 do append(buf, 10)
             elif c2 == '\\':
                 do append(buf, 92)
@@ -2388,6 +2421,9 @@ func diagnostic_message(code, payload):
     if code == 110:
         return "newline in character literal"
     end
+    if code == 111:
+        return "\\x needs two hex digits"
+    end
     if code == 201:
         return "expected 'func' at top level"
     end
@@ -2591,6 +2627,12 @@ func err_char_escape_ok(c):
     return c == 'n' or c == '\\' or c == '\'' or c == 't' or c == 'r' or c == '0'
 end
 
+-- i is at the x of a \x escape: the two bytes after it must be hex digits
+-- (ERR 111 otherwise, the end of the source included).
+func err_hex_escape_ok(src, i, n):
+    return i + 2 < n and is_hex_digit(index(src, i + 1)) and is_hex_digit(index(src, i + 2))
+end
+
 func err_end_of_string(src, i, n, line):
     if i >= n:
         return err_pos_fail(err_diag(107, line, ""))
@@ -2605,6 +2647,12 @@ func err_end_of_string(src, i, n, line):
     if c == '\\':
         if i + 1 >= n:
             return err_pos_fail(err_diag(105, line, ""))
+        end
+        if index(src, i + 1) == 'x':
+            if not err_hex_escape_ok(src, i + 1, n):
+                return err_pos_fail(err_diag(111, line, ""))
+            end
+            return err_end_of_string(src, i + 4, n, line)
         end
         if not err_string_escape_ok(index(src, i + 1)):
             return err_pos_fail(err_diag(104, line, slice_text(src, i + 1, i + 2)))
@@ -2641,6 +2689,12 @@ func err_end_of_char(src, i, n, line):
     if c == '\\':
         if i + 1 >= n:
             return err_pos_fail(err_diag(105, line, ""))
+        end
+        if index(src, i + 1) == 'x':
+            if not err_hex_escape_ok(src, i + 1, n):
+                return err_pos_fail(err_diag(111, line, ""))
+            end
+            return err_check_char_close(src, i + 4, n, line)
         end
         if not err_char_escape_ok(index(src, i + 1)):
             return err_pos_fail(err_diag(104, line, slice_text(src, i + 1, i + 2)))
