@@ -4,15 +4,17 @@
 -- the compiler its source in a file, an empty folder and files for its
 -- output. Needs lib/linux.herb, lib/text.herb and lib/folder.herb in front.
 --
---   cli COMPILER RUNNER ROOT UNDER
+--   cli COMPILER RUNNER ROOT UNDER MAKE
 --
 -- COMPILER is the compiler to check, RUNNER the built check runner, ROOT the
 -- checkout, whose compiler source (stack/native_compile_fragment.herb) is read
--- and never written, and UNDER a folder to work under. All are absolute
--- paths. The check makes its own folder, UNDER/herbert-cli-NUMBER (called WORK
--- below), and removes it when every check passes; after any failure it stays
--- and the check says where it is. Exit status 0 when every check gave its
--- answer, 1 when one did not, 2 when the check could not do its own work.
+-- and never written, UNDER a folder to work under, and MAKE the make that
+-- runs this check, with which it runs the checkout's make answers once (see
+-- below). All are absolute paths. The check makes its own folder,
+-- UNDER/herbert-cli-NUMBER (called WORK below), and removes it when every
+-- check passes; after any failure it stays and the check says where it is.
+-- Exit status 0 when every check gave its answer, 1 when one did not, 2 when
+-- the check could not do its own work.
 --
 -- Each check gets a folder of its own, WORK/1, WORK/2 and so on (d below).
 -- The compiler runs in d/w, where it writes a.out; its source is d/source.herb
@@ -48,7 +50,16 @@
 --     seconds of processor time and 30 seconds in all, and each program run
 --     the same way, giving its answer within 128 MiB;
 --   - the check runner itself: given a stand-in compiler that breaks the
---     compiler's contract one way at a time, it must find each (see below).
+--     compiler's contract one way at a time, it must find each (see below);
+--     and given a second compiler (run --same), it must find a program that
+--     differs from the first's in one byte or is one byte short, and each way
+--     the second does not build it, pass a program both write alike, and stop
+--     when the second cannot be started;
+--   - make answers itself: the checkout's Makefile, run by MAKE with no
+--     environment over checks/first.cases, given a copy of the stand-in as
+--     SAME, must fail, its runner's last line counting every program it
+--     compared as differing, so a Makefile that does not hand SAME on to the
+--     runner is found.
 --
 -- Run with no arguments, this program is that stand-in compiler: it reads a
 -- source on standard input, and the source's first line, "-- stand-in WORD",
@@ -76,6 +87,27 @@
 -- run them with the stand-in as the compiler: each case names the finding
 -- the runner must report, and the runner must pass every one. The "sleep"
 -- case takes a minute, so that run starts first and is judged last.
+--
+-- Five more words act only when the stand-in is started by a name that ends
+-- "/other" (the runner gives a compiler its own path as its name), as the
+-- second compiler of a run --same; started as anything else, it writes
+-- itself and prints its marker as for any other source:
+--   differs    writes itself with its last byte changed, so that its program
+--              differs from the first compiler's in that byte alone (the
+--              last, so that a runner comparing only the start misses it)
+--   short      writes itself without its last byte, so that a runner that
+--              does not compare the two lengths misses it
+--   failing    writes itself and prints its marker, as the first does, then
+--              ends with status 7
+--   absent     prints its marker and ends with status 0, writing no program
+--   unbuilt    refuses the source in its own words and writes no program
+-- RUNNER runs six cases with --same, a copy of the stand-in named other as
+-- OTHER and the stand-in as COMPILER: the first four words planted; unbuilt
+-- not planted, so that the runner must fail it and show the refusal's words;
+-- and a source with none of the words, whose program both write alike and
+-- which, run, prints the stand-in's marker. RUNNER must then stop with
+-- status 2 and its one line when OTHER is a file that may not be run, and
+-- when it is given no CASES.
 --
 -- The last checks are planted, as the runner's are: a finished check's folder
 -- is judged again against an answer that is wrong on purpose, once for each
@@ -1023,11 +1055,26 @@ func cli_header_word(source):
     return (0, 0)
 end
 
-func cli_stand_in(input):
+-- Whether the stand-in was started by the name name as the second compiler of
+-- a run --same: one that ends "/other".
+func cli_other(name):
+    let n = length(name)
+    return n >= 6 and equal(slice(name, n - 6, n), "/other")
+end
+
+func cli_stand_in(input, name):
     if input.0 != 0: do linux_die("stand-in compiler: cannot read standard input\n") end
     let source = input.1
     let self = cli_file("/proc/self/exe")
     if not self.0: do linux_die("stand-in compiler: cannot read its own program\n") end
+    let other = cli_other(name)
+    if other and cli_asks(source, "unbuilt"):
+        do stderr_write("line 1: refused by the stand-in (ERR 1)\n")
+        do process_exit(1)
+    end
+    if other and cli_asks(source, "differs"): do buffer_set(self.1, self.2 - 1, 255 - buffer_get(self.1, self.2 - 1)) end
+    let size = self.2
+    if other and cli_asks(source, "short"): size = self.2 - 1 end
     if cli_asks(source, "sleep"):
         let wait = linux_buffer(16)
         do linux_put64(wait, 0, 70)
@@ -1041,7 +1088,7 @@ func cli_stand_in(input):
         do stderr_write("line 1: refused by the stand-in (ERR 1)\n")
         do process_exit(1)
     end
-    if cli_asks(source, "nothing"):
+    if cli_asks(source, "nothing") or (other and cli_asks(source, "absent")):
         do flogger("0\n")
         do process_exit(0)
     end
@@ -1056,7 +1103,7 @@ func cli_stand_in(input):
         do buffer_set(self.1, header.0, header.1)
         do fwriter(text_string(self.1, 0, self.2))
     else:
-        do fwriter(text_string(self.1, 0, self.2))
+        do fwriter(text_string(self.1, 0, size))
     end
     if cli_asks(source, "link"):
         do linux_syscall6(82, buffer_address(cli_path("a.out")), buffer_address(cli_path("image.elf")), 0, 0, 0, 0)
@@ -1071,7 +1118,7 @@ func cli_stand_in(input):
         do flogger("0\n")
     end
     if cli_asks(source, "crash"): do linux_syscall6(62, linux_syscall6(39, 0, 0, 0, 0, 0, 0), 15, 0, 0, 0, 0) end
-    if cli_asks(source, "status"): do process_exit(7) end
+    if cli_asks(source, "status") or (other and cli_asks(source, "failing")): do process_exit(7) end
     do process_exit(0)
     return 0
 end
@@ -1120,10 +1167,56 @@ func cli_planted_cases():
     return ((b, buffer_length(b)), 19)
 end
 
+-- The cases for the runner with a second compiler (run --same), and how many:
+-- four planted, one the runner must fail with the second compiler's words,
+-- and one both compilers write alike.
+func cli_same_cases():
+    let b = new_buffer()
+    do cli_planted_case(b, "a second compiler whose program differs in its last byte", "differs", "the two compilers wrote different programs", false)
+    do cli_planted_case(b, "a second compiler whose program is one byte short", "short", "the two compilers wrote different programs", false)
+    do cli_planted_case(b, "a second compiler that writes the same program and ends with an error status", "failing", "the other compiler did not build it", false)
+    do cli_planted_case(b, "a second compiler that ends with status 0 and writes no program", "absent", "the other compiler did not build it", false)
+    do text_add(b, "case a second compiler that refuses what the first builds\nsource until ----\n-- stand-in unbuilt\n----\nstdout until ----\n----\nend\n")
+    do text_add(b, "case two compilers that write the same program, which runs\nsource until ----\n-- no word: both write the stand-in itself\n----\nstdout until ----\n0\n----\nend\ncases 6\n")
+    return ((b, buffer_length(b)), 6)
+end
+
+-- What RUNNER is started with for a run --same: --same (flag), OTHER, the
+-- stand-in as COMPILER, WORK, ROOT and one CASES, or none when cases is empty;
+-- each NUL-terminated, and the list closed by a zero.
+func cli_same_argv(k, flag, other, compiler, work, root, cases):
+    let argv = linux_buffer(64)
+    do linux_put64(argv, 0, buffer_address(k.runner))
+    do linux_put64(argv, 8, buffer_address(flag))
+    do linux_put64(argv, 16, buffer_address(other))
+    do linux_put64(argv, 24, buffer_address(compiler))
+    do linux_put64(argv, 32, buffer_address(work))
+    do linux_put64(argv, 40, buffer_address(root))
+    if buffer_length(cases) != 0: do linux_put64(argv, 48, buffer_address(cases)) end
+    return argv
+end
+
+-- Whether the bytes f end with the runner's line "M programs compared with
+-- the other compiler's, M differed", for one M of at least 1: it compared M
+-- programs, and every one differed.
+func cli_all_differed(f):
+    if f.1 == 0 or buffer_get(f.0, f.1 - 1) != 10: return false end
+    let start = f.1 - 1
+    while start > 0 and buffer_get(f.0, start - 1) != 10: start = start - 1 end
+    let m = text_whole_strict(f.0, start, f.1 - 1)
+    if not m.0 or m.1 == 0: return false end
+    let line = new_buffer()
+    do text_add_whole(line, m.1)
+    do text_add(line, " programs compared with the other compiler's, ")
+    do text_add_whole(line, m.1)
+    do text_add(line, " differed")
+    return text_is(f.0, start, f.1 - 1, freeze(line))
+end
+
 -- An argument that must be an absolute path.
 func cli_argument(args, k):
     let a = linux_argument(args, k)
-    if length(a) == 0 or index(a, 0) != 47: do cli_die("usage: cli COMPILER RUNNER ROOT UNDER (absolute paths)") end
+    if length(a) == 0 or index(a, 0) != 47: do cli_die("usage: cli COMPILER RUNNER ROOT UNDER MAKE (absolute paths)") end
     return a
 end
 
@@ -1138,18 +1231,19 @@ func main():
     let args = linux_arguments()
     if linux_argument_count(args) == 1:
         let input = stdin_read()
-        return cli_stand_in(input)
+        return cli_stand_in(input, linux_argument(args, 0))
     end
     -- Standard input, output and error must be open: a file opened later would
     -- otherwise be given one of their numbers and be taken for it.
     let low = linux_open(linux_cstring("/dev/null"), 2, 0)
     while low < 3: low = linux_open(linux_cstring("/dev/null"), 2, 0) end
     do linux_close(low)
-    if linux_argument_count(args) != 5: do cli_die("usage: cli COMPILER RUNNER ROOT UNDER (absolute paths)") end
+    if linux_argument_count(args) != 6: do cli_die("usage: cli COMPILER RUNNER ROOT UNDER MAKE (absolute paths)") end
     let compiler = cli_program_path(cli_argument(args, 1))
     let runner = cli_program_path(cli_argument(args, 2))
     let root = cli_argument(args, 3)
     let under = cli_argument(args, 4)
+    let maker = cli_program_path(cli_argument(args, 5))
     -- Ten minutes for everything; Linux then stops this check, and with it
     -- every program it started.
     do linux_syscall6(37, 600, 0, 0, 0, 0, 0)
@@ -1291,6 +1385,90 @@ func main():
     why = ""
     if not cli_same(snap, cli_snap(k, cli_aout(d42))): why = "a.out is not as it was" end
     do cli_tally(k, "planted: an a.out whose mode changed", why, "a.out is not as it was")
+
+    -- The runner with a second compiler (run --same): a copy of the stand-in
+    -- named other, beside the stand-in as the first, in a folder of its own.
+    do cli_folder(k, cli_join(k.work, "/same"))
+    do cli_folder(k, cli_join(k.work, "/same/work"))
+    let other = cli_join(k.work, "/same/other")
+    do cli_put(k, other, (me.1, me.2), 448)
+    let alike = cli_same_cases()
+    let alike_path = cli_join(k.work, "/same/same.cases")
+    do cli_put(k, alike_path, alike.0, 420)
+    let s_flag = cli_path("--same")
+    let s_other = cli_path(other)
+    let s_work = cli_path(cli_join(k.work, "/same/work"))
+    let s_cases = cli_path(alike_path)
+    let s_argv = cli_same_argv(k, s_flag, s_other, r_stand, s_work, r_root, s_cases)
+    let s = cli_wait(k, cli_start(k, cli_join(k.work, "/same"), k.runner, s_argv, cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/same/out")), cli_writing(k, cli_join(k.work, "/same/err")), 18, 0, 0, 0, 120))
+    why = ""
+    let s_said = new_buffer()
+    do text_add(s_said, "FAIL a second compiler that refuses what the first builds: the other compiler did not build it\n  it gave: line 1: refused by the stand-in (ERR 1)\n")
+    do text_add_whole(s_said, alike.1)
+    do text_add(s_said, " cases, ")
+    do text_add_whole(s_said, alike.1 - 1)
+    do text_add(s_said, " gave their answers, 1 did not\n3 programs compared with the other compiler's, 2 differed\n")
+    if s.0 != 0 or s.1 != 1: why = "the runner did not end with status 1" end
+    if length(why) == 0 and not cli_holds(cli_join(k.work, "/same/out"), cli_text(freeze(s_said))): why = "the runner did not give each case its answer or its finding, or miscounted the programs compared" end
+    if length(why) == 0 and not cli_holds(cli_join(k.work, "/same/err"), cli_text("")): why = "the runner said something on standard error" end
+    do cli_tally(k, "the check runner, given a second compiler (run --same), finds a program that differs in its last byte or is a byte short, a second compiler that ends with an error status, writes no program or refuses (its words shown), and passes a program both write alike", why, "")
+
+    -- The runner must stop, with status 2 and its one line, when OTHER may not
+    -- be run (here the cases file) and when no CASES are given.
+    do cli_folder(k, cli_join(k.work, "/stops"))
+    do cli_folder(k, cli_join(k.work, "/stops/work"))
+    let t_work = cli_path(cli_join(k.work, "/stops/work"))
+    let t = cli_wait(k, cli_start(k, cli_join(k.work, "/stops"), k.runner, cli_same_argv(k, s_flag, s_cases, r_stand, t_work, r_root, s_cases), cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/stops/out")), cli_writing(k, cli_join(k.work, "/stops/err")), 18, 0, 0, 0, 120))
+    why = ""
+    if t.0 != 0 or t.1 != 2: why = "the runner did not stop with status 2 when the second compiler cannot be started" end
+    if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/out"), cli_text("")): why = "the runner wrote to standard output when the second compiler cannot be started" end
+    if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/err"), cli_text("check runner: the other compiler cannot be started\n")): why = "the runner did not say that the second compiler cannot be started" end
+    if length(why) == 0:
+        let u = cli_wait(k, cli_start(k, cli_join(k.work, "/stops"), k.runner, cli_same_argv(k, s_flag, s_other, r_stand, t_work, r_root, new_buffer()), cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/stops/out")), cli_writing(k, cli_join(k.work, "/stops/err")), 18, 0, 0, 0, 120))
+        if u.0 != 0 or u.1 != 2: why = "the runner did not stop with status 2 when given no CASES" end
+        if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/out"), cli_text("")): why = "the runner wrote to standard output when given no CASES" end
+        if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/err"), cli_text("check runner: usage: run [--same OTHER] COMPILER WORK ROOT CASES... (absolute paths)\n")): why = "the runner did not give its usage line when given no CASES" end
+    end
+    do cli_tally(k, "the check runner stops with status 2 when the second compiler cannot be started, and when it is given no CASES", why, "")
+
+    -- make answers itself, from the checkout's Makefile, with a copy of the
+    -- stand-in as SAME: the stand-in writes itself for every source, so every
+    -- program the seed builds from checks/first.cases differs from the
+    -- second's, and make answers must fail, the runner counting every program
+    -- it compared as differing. A Makefile that does not hand SAME on compares
+    -- nothing, or the seed with itself, and passes. make gets no environment,
+    -- as every program this check starts, and TMPDIR on its command line, so
+    -- what the failed run leaves is under WORK/answers and goes with WORK.
+    do cli_folder(k, cli_join(k.work, "/answers"))
+    let a_quiet = cli_path("--no-print-directory")
+    let a_in = cli_path("-C")
+    let a_goal = cli_path("answers")
+    let a_cases = cli_path("ANSWERS=checks/first.cases")
+    let a_same = cli_path(cli_join("SAME=", stand))
+    let a_under = cli_join(k.work, "/answers")
+    let a_tmp = cli_path(cli_join("TMPDIR=", a_under))
+    let a_argv = linux_buffer(72)
+    do linux_put64(a_argv, 0, buffer_address(maker))
+    do linux_put64(a_argv, 8, buffer_address(a_quiet))
+    do linux_put64(a_argv, 16, buffer_address(a_in))
+    do linux_put64(a_argv, 24, buffer_address(r_root))
+    do linux_put64(a_argv, 32, buffer_address(a_goal))
+    do linux_put64(a_argv, 40, buffer_address(a_cases))
+    do linux_put64(a_argv, 48, buffer_address(a_same))
+    do linux_put64(a_argv, 56, buffer_address(a_tmp))
+    let a = cli_wait(k, cli_start(k, a_under, maker, a_argv, cli_reading(k, "/dev/null"), cli_writing(k, cli_join(a_under, "/out")), cli_writing(k, cli_join(a_under, "/err")), 18, 0, 0, 0, 120))
+    why = ""
+    if a.0 != 0 or a.1 != 2: why = "make answers did not end with make's status 2" end
+    if length(why) == 0:
+        let a_out = cli_file(cli_join(a_under, "/out"))
+        if not a_out.0 or not cli_all_differed((a_out.1, a_out.2)): why = "make answers did not end with the runner counting every program it compared as differing" end
+    end
+    if length(why) == 0:
+        let a_err = cli_file(cli_join(a_under, "/err"))
+        let a_left = cli_join(cli_join("answers: FAILED; what it left is in ", a_under), "/herbert-answers.")
+        if not a_err.0 or not text_starts(a_err.1, 0, a_err.2, a_left): why = "make answers did not say it failed, with what it left under the TMPDIR given" end
+    end
+    do cli_tally(k, "make answers, given as SAME a second compiler whose every program differs from the seed's, fails, its runner counting every program compared as differing", why, "")
 
     -- The runner's planted cases, run with the stand-in.
     let r = cli_wait(k, runner_pid)

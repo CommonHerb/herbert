@@ -189,6 +189,22 @@ every case passed and 1 when one did not. It is 2, with one line on standard err
 own work: a cases file it cannot follow, a file a case names that is not there, a compiler that cannot be started, or
 a file's closing count of cases that does not match the cases it held. `make verify-local` and CI run it.
 
+`make answers SAME=/absolute/path` (the runner's `run --same OTHER`) adds a second compiler, such as the committed seed
+beside a candidate given as `COMPILER`, to show that a change leaves the programs it should not touch byte for byte as
+they were. Every case that is not refused, once its program has passed every check made before it runs (`builds`
+included), is compiled again by the second compiler in the same folder, with the first's `a.out` set aside. The second
+must end with status 0 and leave an `a.out` that holds the first's program byte for byte; otherwise the case fails with
+`the two compilers wrote different programs`, or `the other compiler did not build it` and what it said on standard
+error. Then the first's program is put back and run. A refused case is judged on the first compiler alone, and the
+second's marker, error output after a success and memory are not held. The runner's last line counts the programs
+compared and those that differed: with a copy of the seed as the second, 805 of the 1,293 cases, none differing, in
+about 60 seconds (2026-11-25). That line is the proof the comparison ran; a run given `SAME` that ends without it did
+not compare. Without `SAME` nothing changes. The runner is given a copy of the second compiler made executable, so the
+committed seed itself may be named; one that is not a program stops it with `the other compiler cannot be started`,
+and a `SAME` that names nothing stops `make answers` before the runner, with `cp`'s words and `answers: FAILED`.
+`make cli` runs `make answers` once with a second compiler whose every program differs, so a Makefile that stops
+handing `SAME` on to the runner is found there.
+
 What it does not check: the planted cases here run with the real compiler; the findings about a compiler that breaks
 its own side (no program, a wrong marker, a program that cannot be started) are planted by `make cli`, which runs the
 runner over them with a stand-in compiler. The `memory` field holds a compile's peak, and that counts what the runner
@@ -446,7 +462,7 @@ of inotify instances ends the check with status 2.
 ## make cli (about a minute): the compiler's command-line checks, written in Herbert
 
 `checks/cli.herb` starts the compiler itself (a copy of the seed, or `make cli COMPILER=/absolute/path`), in states
-the runner never sets up, and holds it to `docs/LANGUAGE.md` sections 4(e), G9, G11 and 8. 44 checks:
+the runner never sets up, and holds it to `docs/LANGUAGE.md` sections 4(e), G9, G11 and 8. 47 checks:
 
 - **Publishing `a.out`**: a good compile writes a plain-file x86-64 program, mode 0644 under umask 022 and 0600 under
   077; it replaces a plain `a.out` (its old 0755 mode reset), a link (what it pointed at untouched) and a second hard
@@ -471,6 +487,17 @@ the runner never sets up, and holds it to `docs/LANGUAGE.md` sections 4(e), G9, 
   past 60 seconds; an error status; words on standard error; a marker without its newline, with a carriage return, or
   missing; no program; a script; a link; a program whose ELF header is wrong at any byte the runner reads; a program
   Linux will not start; a signal; and a refusal that leaves a link named `a.out` that leads nowhere.
+- **The runner with a second compiler** (`run --same`), a copy of the stand-in named `other`: four planted cases, a
+  program that differs from the first compiler's in its last byte alone (today past the runner's first 64 KiB piece),
+  one a byte short, and a second compiler that writes the same program but ends with status 7, or ends with status 0
+  and writes none; one it refuses, which the runner must fail with the refusal's words shown; and a program both write
+  alike, which then runs. The runner must count 3 programs compared and 2 that differed. It must stop with status 2
+  and its one line when the second compiler may not be run, and when it is given no cases files.
+- **`make answers` given `SAME`**: the checkout's own `make answers`, started with no environment over
+  `checks/first.cases`, with a copy of the stand-in as `SAME` (it writes itself, so every program differs from the
+  seed's). It must end with make's status 2, its runner's last line counting every program compared as differing, and
+  leave what it made under the `TMPDIR` it was given. A Makefile that does not hand `SAME` on, or hands on the seed or
+  `COMPILER` in its place, compares nothing or finds nothing differing, and fails this check.
 - **Seven planted judge checks.**
 
 The `fwriter` failures (getrandom, a write, fsync, the temporary's close, the rename, and every interrupted call tried
@@ -541,12 +568,12 @@ its own.
 ## Bite proofs
 
 A check that cannot fail proves nothing, so each check carries failures planted on purpose, and each planted failure
-passes only on exactly the finding it plants: the runner's fifteen (`checks/planted.cases`) and nineteen more that
+passes only on exactly the finding it plants: the runner's fifteen (`checks/planted.cases`) and twenty-four more that
 `make cli` plants with a stand-in compiler, beside its seven for its own judge; the scanner's ten; the seed maker's
 forty-seven; the window check's eight. Every case and check written to replace the Python and shell checks was also
 shown to fail on a one-line fault planted in the code it holds, and the faults the old checks refused were tried on
 it. `make answers COMPILER=/absolute/path` and `make cli COMPILER=/absolute/path` hold another compiler, such as an
-old seed or a mutant, to the same cases.
+old seed or a mutant, to the same cases, and `make answers SAME=/absolute/path` holds two compilers to the same bytes.
 
 ## CI
 

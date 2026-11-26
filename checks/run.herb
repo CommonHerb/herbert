@@ -3,9 +3,13 @@
 -- give their answer. Needs lib/linux.herb and lib/text.herb in front.
 --
 --   run COMPILER WORK ROOT CASES...
+--   run --same OTHER COMPILER WORK ROOT CASES...
 --
 -- COMPILER is the compiler to check, ROOT the checkout the cases name files in
 -- and each CASES a file of cases; WORK is an empty folder the runner may fill.
+-- With --same, OTHER is a second compiler: a case that is not refused, once
+-- COMPILER's program has passed the checks made before it runs, is compiled
+-- by OTHER too, and the two programs must be the same, byte for byte (below).
 -- All are absolute paths. Exit status 0 when every case gave its answer, 1
 -- when one did not, 2 when the runner could not do its own work: a cases file
 -- it cannot read or follow, a file a case names that is not there, a compiler
@@ -50,6 +54,15 @@
 -- needs refused, stdout or builds. Each compile gets 60 seconds and each
 -- program its limit, then Linux stops it.
 --
+-- With --same, a case that is not refused and whose program has passed every
+-- check above that comes before the run (builds included) is compiled again
+-- by OTHER, in WORK, with COMPILER's a.out set aside. OTHER must end with
+-- status 0 and leave a file named a.out, which must hold COMPILER's program
+-- byte for byte; nothing else of OTHER's is held (not its marker, its error
+-- output or its memory). Then COMPILER's program is put back and run. A
+-- refused case is judged on COMPILER alone. The run's last line says how many
+-- programs were compared and how many of them differed.
+--
 -- The planted cases keep the runner honest. A runner that passed everything
 -- would fail every one of them, and one that failed a case for the wrong
 -- reason would fail it too, because the reason is part of the case.
@@ -62,9 +75,16 @@
 -- peak memory in KiB; core is the core limit each program gets (one byte,
 -- soft and hard) and pipe two descriptors.
 -- stat is where Linux describes a name in WORK (its struct stat).
--- The eight paths are NUL-terminated names inside WORK.
+-- same is true for --same, other is then OTHER, and compared and differed
+-- count the programs compared and those that differed.
+-- The nine paths are NUL-terminated names inside WORK; p_first is where
+-- COMPILER's program waits while OTHER compiles.
 ref record Check:
     compiler: buffer
+    same: bool
+    other: buffer
+    compared: int
+    differed: int
     root: string
     data: buffer
     size: int
@@ -91,6 +111,7 @@ ref record Check:
     p_stdin: buffer
     p_pout: buffer
     p_perr: buffer
+    p_first: buffer
 end
 
 func check_die(message):
@@ -225,11 +246,13 @@ func check_file_text(c, path, s):
     return true
 end
 
--- Whether the file at made, which the compiler wrote, holds the same bytes as
--- the file at named, which the case names and which must be there.
-func check_files_same(c, made, named):
+-- Whether the file at made, which a compiler wrote, holds the same bytes as
+-- the file at named, which must be there (missing says why the runner stops
+-- when it is not): the file the case names, or COMPILER's program set aside
+-- (--same).
+func check_files_same(c, made, named, missing):
     let fn = linux_open(named, 0, 0)
-    if linux_error(fn): do check_die("cases file: 'builds' names a file that cannot be read") end
+    if linux_error(fn): do check_die(missing) end
     let fm = linux_open(made, 0, 0)
     if linux_error(fm):
         do linux_close(fn)
@@ -424,6 +447,29 @@ func check_put_source(c, libs, file, from, count):
     return 0
 end
 
+-- With --same: OTHER compiles the source too, into a WORK with no a.out, since
+-- COMPILER's is set aside meanwhile, and put back after. "" when OTHER wrote
+-- COMPILER's program byte for byte, or what the runner found. When OTHER did
+-- not build it, what it said on standard error is shown.
+func check_same(c):
+    if linux_error(linux_syscall6(82, buffer_address(c.p_aout), buffer_address(c.p_first), 0, 0, 0, 0)): do check_die("a program in WORK cannot be set aside") end
+    let built = check_spawn(c, c.other, c.p_source, c.p_cout, c.p_cerr, 60)
+    if built.0 == 2: do check_die("the other compiler cannot be started") end
+    let why = ""
+    if built.0 != 0 or built.1 != 0 or not check_named(c, c.p_aout):
+        do check_file_text(c, c.p_cerr, "")
+        why = "the other compiler did not build it"
+    else:
+        c.compared = c.compared + 1
+        if not check_files_same(c, c.p_aout, c.p_first, "the first compiler's program, set aside in WORK, cannot be read"):
+            c.differed = c.differed + 1
+            why = "the two compilers wrote different programs"
+        end
+    end
+    if linux_error(linux_syscall6(82, buffer_address(c.p_first), buffer_address(c.p_aout), 0, 0, 0, 0)): do check_die("a program in WORK cannot be put back") end
+    return why
+end
+
 -- Run one case. "" when it gave its answer, or what the runner found wrong.
 func check_judge(c, libs, file, from, count, input, refused, out, err, status, builds, capped, ceiling, seconds):
     c.show = false
@@ -448,7 +494,11 @@ func check_judge(c, libs, file, from, count, input, refused, out, err, status, b
     if not check_program(c, c.p_aout): return "what the compiler wrote is not a plain file holding a Linux x86-64 program" end
     if capped and c.peak > ceiling: return "the compiler used more memory than the case allows" end
     if builds.0:
-        if not check_files_same(c, c.p_aout, check_root_path(c, "", builds.1, builds.2, "")): return "what the compiler wrote differs from the file named" end
+        if not check_files_same(c, c.p_aout, check_root_path(c, "", builds.1, builds.2, ""), "cases file: 'builds' names a file that cannot be read"): return "what the compiler wrote differs from the file named" end
+    end
+    if c.same:
+        let why = check_same(c)
+        if length(why) != 0: return why end
     end
     if not out.0: return "" end
     do linux_syscall6(90, buffer_address(c.p_aout), 448, 0, 0, 0, 0)
@@ -561,25 +611,30 @@ end
 -- An argument that must be an absolute path.
 func check_path(args, k):
     let s = linux_argument(args, k)
-    if length(s) == 0 or index(s, 0) != 47: do check_die("usage: run COMPILER WORK ROOT CASES... (absolute paths)") end
+    if length(s) == 0 or index(s, 0) != 47: do check_die("usage: run [--same OTHER] COMPILER WORK ROOT CASES... (absolute paths)") end
     return s
 end
 
 func main():
     let args = linux_arguments()
     let given = linux_argument_count(args)
-    if given < 5: do check_die("usage: run COMPILER WORK ROOT CASES... (absolute paths)") end
-    let c = Check(linux_cstring(check_path(args, 1)), check_path(args, 3), new_buffer(), 0,
+    -- first is where COMPILER is among the arguments: 3 after --same OTHER.
+    let first = 1
+    if equal(linux_argument(args, 1), "--same"): first = 3 end
+    if given < first + 4: do check_die("usage: run [--same OTHER] COMPILER WORK ROOT CASES... (absolute paths)") end
+    let other = new_buffer()
+    if first == 3: other = linux_cstring(check_path(args, 2)) end
+    let c = Check(linux_cstring(check_path(args, first)), first == 3, other, 0, 0, check_path(args, first + 2), new_buffer(), 0,
                   linux_buffer(65536), linux_buffer(65536), 65536, linux_buffer(400), 0, false,
                   linux_buffer(16), linux_buffer(8), linux_buffer(144), linux_buffer(16), linux_buffer(8), linux_buffer(144), 0, 0, 0,
                   linux_cstring("in.herb"), linux_cstring("compile.out"), linux_cstring("compile.err"),
                   linux_cstring("a.out"), linux_cstring("./a.out"), linux_cstring("program.in"),
-                  linux_cstring("program.out"), linux_cstring("program.err"))
+                  linux_cstring("program.out"), linux_cstring("program.err"), linux_cstring("first.out"))
     do linux_put64(c.core, 0, 1)
     do linux_put64(c.core, 8, 1)
-    let work = linux_cstring(check_path(args, 2))
+    let work = linux_cstring(check_path(args, first + 1))
     if linux_error(linux_syscall6(80, buffer_address(work), 0, 0, 0, 0, 0)): do check_die("cannot enter WORK") end
-    let k = 4
+    let k = first + 3
     while k < given:
         do check_file(c, check_path(args, k))
         k = k + 1
@@ -595,6 +650,12 @@ func main():
         do text_add(line, " did not")
     end
     do text_add(line, "\n")
+    if c.same:
+        do text_add_whole(line, c.compared)
+        do text_add(line, " programs compared with the other compiler's, ")
+        do text_add_whole(line, c.differed)
+        do text_add(line, " differed\n")
+    end
     do flogger(freeze(line))
     if c.failed != 0: do process_exit(1) end
     do process_exit(0)

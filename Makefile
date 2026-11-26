@@ -23,16 +23,21 @@ check: $(SCANNER) $(BUILD)/scans compiler-source-check
 # The checks written in Herbert (checks/). The committed seed builds the runner,
 # and the runner holds a compiler (the seed, or COMPILER=/absolute/path) to
 # every case in the files below: it must rebuild itself byte for byte, and each
-# program must give its answer. VERIFYING.md says what a case is.
+# program must give its answer. With SAME=/absolute/path, a copy of that second
+# compiler made executable (so the committed seed may be named) also builds
+# every case that is not refused, and its program must be the first's byte for
+# byte (run --same); with SAME unset, build/same is a copy of the seed that is
+# never run. VERIFYING.md says what a case is.
 ANSWERS := checks/rebuild.cases checks/first.cases checks/language.cases checks/libraries.cases checks/fragments.cases checks/planted.cases
 .PHONY: answers
 answers:
 	@work=$$(mktemp -d "$${TMPDIR:-/tmp}/herbert-answers.XXXXXX") && mkdir "$$work/build" "$$work/run" && \
 	  (cd bootstrap/seed && sha256sum -c --quiet gen1.seed.sha256) && \
 	  cp bootstrap/seed/gen1.seed "$$work/build/seed" && chmod u+x "$$work/build/seed" && \
+	  cp "$${SAME:-$$work/build/seed}" "$$work/build/same" && chmod u+x "$$work/build/same" && \
 	  cat lib/linux.herb lib/text.herb checks/run.herb > "$$work/build/run.herb" && \
 	  (cd "$$work/build" && ./seed < run.herb > marker 2> errors) && chmod u+x "$$work/build/a.out" && \
-	  "$$work/build/a.out" "$${COMPILER:-$$work/build/seed}" "$$work/run" "$(CURDIR)" $(addprefix $(CURDIR)/,$(ANSWERS)) && \
+	  "$$work/build/a.out" $${SAME:+--same "$$work/build/same"} "$${COMPILER:-$$work/build/seed}" "$$work/run" "$(CURDIR)" $(addprefix $(CURDIR)/,$(ANSWERS)) && \
 	  rm -rf "$${work:?}" || { echo "answers: FAILED; what it left is in $$work" >&2; exit 1; }
 
 # The window checks, written in Herbert (checks/hands.herb). The committed seed
@@ -71,15 +76,18 @@ seeds: $(BUILD)/seeds $(BUILD)/reseed $(BUILD)/run $(BUILD)/seed-stand-in
 # place, standard input closed, a folder or a pipe, standard output closed or
 # full, a folder it cannot read or write in, a file-size or memory limit. It
 # also runs the runner over planted cases with a stand-in compiler (the check
-# itself, run with no arguments). It works in a folder it makes under the one
-# given here and removes it when every check passes. About a minute: one
-# planted compile waits out the runner's 60 seconds. VERIFYING.md says what
-# it holds the compiler to.
+# itself, run with no arguments), and with a copy of it as a second compiler
+# (run --same); and it runs this make's answers target once, with a copy of
+# it as SAME, which must fail with every program compared differing (the
+# make is named last here, by MAKE_COMMAND, so that make -n does not run this
+# line). It works in a folder it makes under the one given here and removes
+# it when every check passes. About a minute: one planted compile waits out
+# the runner's 60 seconds. VERIFYING.md says what it holds the compiler to.
 .PHONY: cli
 cli: $(BUILD)/cli $(BUILD)/run
 	@cd bootstrap/seed && sha256sum -c --quiet gen1.seed.sha256
 	@cp bootstrap/seed/gen1.seed $(BUILD)/cli-seed && chmod u+x $(BUILD)/cli-seed
-	@$(BUILD)/cli "$${COMPILER:-$(CURDIR)/$(BUILD)/cli-seed}" "$(CURDIR)/$(BUILD)/run" "$(CURDIR)" "$${TMPDIR:-/tmp}"
+	@$(BUILD)/cli "$${COMPILER:-$(CURDIR)/$(BUILD)/cli-seed}" "$(CURDIR)/$(BUILD)/run" "$(CURDIR)" "$${TMPDIR:-/tmp}" "$$(command -v $(MAKE_COMMAND))"
 
 # Developer builds use the same committed compiler; support units are ordered
 # source concatenation, not an external linker. Values travel via environment

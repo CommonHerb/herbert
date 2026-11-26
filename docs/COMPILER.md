@@ -40,7 +40,14 @@ composition, and so does the aggregate `make verify-local`.
 For a real compiler change, follow `VERIFYING.md`: qualify behavior and faults,
 run `make reseed` (which proves the self-hosting fixpoint and gives every
 case of `make answers`), then `make verify-local`; `make cli` holds the
-compiler's peak memory on its five metadata shapes. Expected output changes
+compiler's peak memory on its five metadata shapes. When a change should leave
+the programs that do not use it byte for byte as they were, show that with
+`make answers COMPILER=/absolute/new SAME=/absolute/old` (the committed seed may
+be named as the old): its last line counts the programs both compilers built
+and those that differed. `make reseed` cannot show this: its fixpoint holds
+only the machine code the compiler's own program is made of, so emitter code
+written only for other programs (a rewrite of the emitter's bytes included) is
+held by this comparison and by what the cases' programs do. Expected output changes
 require independently justified expectations: a case's answer is written from
 the guide, never regenerated from the compiler being checked.
 
