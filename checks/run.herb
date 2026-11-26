@@ -62,10 +62,12 @@
 -- byte; nothing else of OTHER's is held (not its marker, its error output or
 -- its memory). An empty folder OTHER left as a.out is removed, and COMPILER's
 -- program is put back and run. A refused case is judged on COMPILER alone.
--- OTHER must be a file the runner may run, looked at before the first case,
--- so that a run whose every case is refused still stops when it is not. The
--- run's last line says how many programs were compared and how many of them
--- differed.
+-- OTHER must be a plain file (or a link to one) the runner may run, looked at
+-- before the first case, so that a run whose every case is refused still
+-- stops when it is not. The run's last line says how many programs were
+-- compared and how many of them differed. The comparison is for a second
+-- compiler's mistakes: first.out sits in WORK, so one that copies it into
+-- a.out on purpose passes.
 --
 -- The planted cases keep the runner honest. A runner that passed everything
 -- would fail every one of them, and one that failed a case for the wrong
@@ -250,14 +252,14 @@ func check_file_text(c, path, s):
     return true
 end
 
--- Whether the file at made, which a compiler wrote, holds the same bytes as
--- the file at named, which must be there (missing says why the runner stops
--- when it is not): the file the case names, or COMPILER's program set aside
--- (--same).
+-- Whether the file at made, which a compiler wrote (opened without following
+-- a link), holds the same bytes as the file at named, which must be there
+-- (missing says why the runner stops when it is not): the file the case names,
+-- or COMPILER's program set aside (--same).
 func check_files_same(c, made, named, missing):
     let fn = linux_open(named, 0, 0)
     if linux_error(fn): do check_die(missing) end
-    let fm = linux_open(made, 0, 0)
+    let fm = linux_open(made, 131072, 0)
     if linux_error(fm):
         do linux_close(fn)
         return false
@@ -639,10 +641,13 @@ func main():
                   linux_cstring("program.out"), linux_cstring("program.err"), linux_cstring("first.out"))
     do linux_put64(c.core, 0, 1)
     do linux_put64(c.core, 8, 1)
-    -- OTHER is looked at now (access, X_OK), not only when a case first asks
-    -- it for a program: a run whose every case is refused never does.
+    -- OTHER is looked at now, not only when a case first asks it for a
+    -- program (a run whose every case is refused never does): it must be a
+    -- plain file, or a link to one (stat follows links), that the runner may
+    -- run (access, X_OK, which a folder also passes).
     if c.same:
-        if linux_error(linux_syscall6(21, buffer_address(c.other), 1, 0, 0, 0, 0)): do check_die("the other compiler cannot be started") end
+        let looked = linux_syscall6(4, buffer_address(c.other), buffer_address(c.stat), 0, 0, 0, 0)
+        if linux_error(looked) or (linux_u32(c.stat, 24) & 61440) != 32768 or linux_error(linux_syscall6(21, buffer_address(c.other), 1, 0, 0, 0, 0)): do check_die("the other compiler cannot be started") end
     end
     let work = linux_cstring(check_path(args, first + 1))
     if linux_error(linux_syscall6(80, buffer_address(work), 0, 0, 0, 0, 0)): do check_die("cannot enter WORK") end

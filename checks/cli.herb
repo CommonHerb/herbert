@@ -111,9 +111,10 @@
 -- not planted, so that the runner must fail it and show the refusal's words;
 -- and a source with none of the words, whose program both write alike and
 -- which, run, prints the stand-in's marker. RUNNER must then stop with
--- status 2 and its one line when OTHER is a file that may not be run, also
--- when OTHER is not there and the one case is refused (so that no case asks
--- OTHER for a program), and when it is given no CASES.
+-- status 2 and its one line when OTHER is a file of text it may run but
+-- Linux will not start; when the one case is refused (so that no case asks
+-- OTHER for a program) and OTHER is not there, a file it may not run or a
+-- folder; and when it is given no CASES.
 --
 -- The last checks are planted, as the runner's are: a finished check's folder
 -- is judged again against an answer that is wrong on purpose, once for each
@@ -1447,19 +1448,35 @@ func main():
         if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/err"), cli_text("check runner: usage: run [--same OTHER] COMPILER WORK ROOT CASES... (absolute paths)\n")): why = "the runner did not give its usage line when given no CASES" end
     end
     if length(why) == 0:
-        -- OTHER not there, and one case, refused, so no case asks it for a
-        -- program: the runner must still stop.
+        -- One case, refused, so that no case asks OTHER for a program: the
+        -- runner must still stop when OTHER is not there, is a file it may
+        -- not run, or is a folder (which access with X_OK passes).
         let lone = new_buffer()
         do cli_planted_case(lone, "a refusal, so that the second compiler is never asked for a program", "dangling", "the compiler refused it and still wrote a program", true)
         do text_add(lone, "cases 1\n")
         let lone_path = cli_join(k.work, "/stops/refused.cases")
         do cli_put(k, lone_path, (lone, buffer_length(lone)), 420)
-        let v = cli_wait(k, cli_start(k, cli_join(k.work, "/stops"), k.runner, cli_same_argv(k, s_flag, cli_path(cli_join(k.work, "/stops/nowhere")), r_stand, t_work, r_root, cli_path(lone_path)), cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/stops/out")), cli_writing(k, cli_join(k.work, "/stops/err")), 18, 0, 0, 0, 120))
-        if v.0 != 0 or v.1 != 2: why = "the runner did not stop with status 2 when the second compiler is not there and no case asks it for a program" end
-        if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/out"), cli_text("")): why = "the runner wrote to standard output when the second compiler is not there" end
-        if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/err"), cli_text("check runner: the other compiler cannot be started\n")): why = "the runner did not say that the second compiler cannot be started when no case asks it for a program" end
+        do cli_put(k, cli_join(k.work, "/stops/plain"), cli_text("not a program\n"), 420)
+        do cli_folder(k, cli_join(k.work, "/stops/folder"))
+        let which = 0
+        while length(why) == 0 and which < 3:
+            let name = "/stops/nowhere"
+            let what = "is not there"
+            if which == 1:
+                name = "/stops/plain"
+                what = "is a file it may not run"
+            elif which == 2:
+                name = "/stops/folder"
+                what = "is a folder"
+            end
+            let v = cli_wait(k, cli_start(k, cli_join(k.work, "/stops"), k.runner, cli_same_argv(k, s_flag, cli_path(cli_join(k.work, name)), r_stand, t_work, r_root, cli_path(lone_path)), cli_reading(k, "/dev/null"), cli_writing(k, cli_join(k.work, "/stops/out")), cli_writing(k, cli_join(k.work, "/stops/err")), 18, 0, 0, 0, 120))
+            if v.0 != 0 or v.1 != 2: why = cli_join("the runner did not stop with status 2, no case asking for a program, when the second compiler ", what) end
+            if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/out"), cli_text("")): why = cli_join("the runner wrote to standard output when the second compiler ", what) end
+            if length(why) == 0 and not cli_holds(cli_join(k.work, "/stops/err"), cli_text("check runner: the other compiler cannot be started\n")): why = cli_join("the runner did not say that the second compiler cannot be started when it ", what) end
+            which = which + 1
+        end
     end
-    do cli_tally(k, "the check runner stops with status 2 when the second compiler cannot be started, even when no case would ask it for a program, and when it is given no CASES", why, "")
+    do cli_tally(k, "the check runner stops with status 2 when the second compiler cannot be started, even when no case would ask it for a program (not there, a file it may not run, a folder), and when it is given no CASES", why, "")
 
     -- make answers itself, from the checkout's Makefile, with a copy of the
     -- stand-in as SAME: the stand-in writes itself for every source, so every

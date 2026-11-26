@@ -210,10 +210,11 @@ compiler alone, and the second's marker, error output after a success and memory
 counts the programs compared and those that differed: with a copy of the seed as the second, 819 of the 1,327 cases,
 none differing, in about 60 seconds (2026-11-25). That line is the proof the comparison ran; a run given `SAME` that
 ends without it did not compare. Without `SAME` nothing changes. The runner is given a copy of the second compiler
-made executable, so the committed seed itself may be named. A second compiler the runner may not run stops it before
-the first case, even a run whose every case is refused, and one Linux will not start stops it at the first case that
-asks it for a program, both with `the other compiler cannot be started`; a `SAME` that names nothing stops `make
-answers` before the runner, with `cp`'s words and `answers: FAILED`.
+made executable, so the committed seed itself may be named. A second compiler that is not a plain file the runner may
+run stops it before the first case, even a run whose every case is refused, and one Linux will not start stops it at
+the first case that asks it for a program, both with `the other compiler cannot be started`; a `SAME` that names
+nothing stops `make answers` before the runner, with `cp`'s words and `answers: FAILED`. The comparison is for a
+second compiler's mistakes: the first's program waits in the same folder, so one that copies it on purpose passes.
 `make cli` runs `make answers` once with a second compiler whose every program differs, so a Makefile that stops
 handing `SAME` on to the runner is found there.
 
@@ -505,8 +506,8 @@ the runner never sets up, and holds it to `docs/LANGUAGE.md` sections 4(e), G9, 
   and writes none, or leaves `a.out` a link to the first's program set aside (symbolic or hard), or an empty folder;
   one it refuses, which the runner must fail with the refusal's words shown; and a program both write alike, which
   then runs. The runner must count 3 programs compared and 2 that differed. It must stop with status 2 and its one
-  line when the second compiler is a file of text Linux will not start, when it is not there in a run whose one case
-  is refused, and when it is given no cases files.
+  line when the second compiler is a file of text Linux will not start; in a run whose one case is refused, when it
+  is not there, a file it may not run, or a folder; and when it is given no cases files.
 - **`make answers` given `SAME`**: the checkout's own `make answers`, started with no environment over
   `checks/first.cases`, with a copy of the stand-in as `SAME` (it writes itself, so every program differs from the
   seed's). It must end with make's status 2, its runner's last line counting every program compared as differing, and
